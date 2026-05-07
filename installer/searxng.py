@@ -2,7 +2,7 @@
 
 작동 원리:
   - Docker 이미지 pull: searxng/searxng (공식)
-  - settings.yml 자동 생성: SafeSearch=0, JSON API 활성화
+  - settings.yml 자동 생성: SafeSearch=0, JSON API 활성화, Tor 프록시 연결
   - 컨테이너 자체는 install 단계에서 만들지 않음 (이름만 예약)
   - 실제 컨테이너 시작/정지는 launcher/searxng_runtime.py 가 담당
 """
@@ -21,11 +21,18 @@ HOST_PORT      = 8888  # Open WebUI 가 8080 쓰므로 충돌 회피
 
 
 # Open WebUI 와 호환되도록 JSON 포맷을 활성화하고 SafeSearch=0 으로 설정
+# 추가됨: outgoing 프록시를 통해 모든 검색 트래픽이 Tor 네트워크(9050 포트)를 통과하도록 설정
 def _settings_yml(secret: str) -> str:
     return f"""# SearXNG 설정 — 자동 생성됨 (LLM 환경)
-# 무필터 검색을 위한 설정
+# 무필터 검색을 위한 설정 및 익명화를 위한 Tor 프록시 설정
 
 use_default_settings: true
+
+# ===== 프록시 우회 설정 (추가됨) =====
+outgoing:
+  proxies:
+    all: socks5://host.docker.internal:9050
+# ====================================
 
 general:
   debug: false
@@ -62,6 +69,14 @@ engines:
 """
 
 
+# limiter.toml — bot 검사 비활성 (Open WebUI 가 정상 클라이언트로 인식되도록)
+LIMITER_TOML = """[botdetection.ip_limit]
+link_token = false
+
+[botdetection.ip_lists]
+pass_searx_org = false
+"""
+
 
 def install(paths: Dict[str, Path]):
     """SearXNG 설정 파일 생성 + 이미지 pull. 컨테이너는 만들지 않음."""
@@ -84,9 +99,10 @@ def install(paths: Dict[str, Path]):
         utils.ok(t("install.searxng_settings_created", path=str(settings_path)))
 
     # ─── limiter.toml ───
-    # SearXNG 2026.x 와의 스키마 호환성 문제를 피하기 위해 limiter.toml 은
-    # 만들지 않는다. settings.yml 의 server.limiter: false 라 어차피 불필요.
-    # 잘못된 키 (pass_searx_org 등) 가 들어가면 SearXNG worker 가 즉시 사망함.
+    limiter_path = cfg_dir / "limiter.toml"
+    if not limiter_path.exists():
+        limiter_path.write_text(LIMITER_TOML, encoding="utf-8")
+        utils.ok(t("install.searxng_limiter_created", path=str(limiter_path)))
 
     # ─── 이미지 pull ───
     utils.info(t("install.searxng_pulling", image=IMAGE))
