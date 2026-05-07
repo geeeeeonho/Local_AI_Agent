@@ -18,6 +18,7 @@ llm_environment/
 launcher/settings/user_config.json
 launcher/settings/*.json
 !launcher/settings/.gitkeep
+.webui_secret_key
 
 
 # ─────────────────────────────────────────────

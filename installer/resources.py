@@ -99,7 +99,16 @@ def _get_ram_gb() -> tuple[float, float]:
                 if len(parts) >= 2:
                     mem[parts[0].rstrip(":")] = int(parts[1])  # kB
             total = mem.get("MemTotal", 0) / (1024 ** 2)
-            avail = mem.get("MemAvailable", mem.get("MemFree", 0)) / (1024 ** 2)
+            # MemAvailable 우선, 없으면 MemFree + Buffers + Cached 로 근사
+            if "MemAvailable" in mem:
+                avail = mem["MemAvailable"] / (1024 ** 2)
+            else:
+                approx = (
+                    mem.get("MemFree", 0)
+                    + mem.get("Buffers", 0)
+                    + mem.get("Cached", 0)
+                )
+                avail = approx / (1024 ** 2)
             return (total, avail)
         except Exception:
             return (0.0, 0.0)

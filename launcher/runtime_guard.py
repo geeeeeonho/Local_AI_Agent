@@ -75,9 +75,21 @@ def _get_available_ram_gb() -> float:
     else:
         try:
             with open("/proc/meminfo") as f:
-                for line in f:
-                    if line.startswith("MemAvailable:"):
-                        return int(line.split()[1]) / (1024 ** 2)
+                lines = f.readlines()
+            mem = {}
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mem[parts[0].rstrip(":")] = int(parts[1])  # kB
+            if "MemAvailable" in mem:
+                return mem["MemAvailable"] / (1024 ** 2)
+            # 폴백: MemFree + Buffers + Cached
+            approx = (
+                mem.get("MemFree", 0)
+                + mem.get("Buffers", 0)
+                + mem.get("Cached", 0)
+            )
+            return approx / (1024 ** 2) if approx else -1.0
         except Exception:
             return -1.0
 
@@ -251,9 +263,14 @@ class ResourceWatchdog:
         while not self._stop_event.is_set():
             try:
                 self._check_once()
-            except Exception:
-                # 감시 자체의 오류로 정상 동작을 망치지 않음
-                pass
+            except Exception as e:
+                # 감시 자체의 오류로 정상 동작을 망치지 않음.
+                # 환경변수 LLM_GUARD_DEBUG=1 일 때만 로그 (디버깅용).
+                if os.environ.get("LLM_GUARD_DEBUG") == "1":
+                    try:
+                        self.log(f"[guard-debug] {type(e).__name__}: {e}")
+                    except Exception:
+                        pass
             self._stop_event.wait(POLL_INTERVAL_SEC)
 
     def _check_once(self):

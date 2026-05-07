@@ -1,4 +1,12 @@
 @echo off
+REM ============================================================
+REM   LLM Local Setup - Run
+REM
+REM   ASCII-only + chcp 65001 = safe across zip extractions
+REM   on any Korean / Japanese / Western Windows.
+REM ============================================================
+chcp 65001 >nul 2>&1
+
 setlocal EnableDelayedExpansion
 
 title LLM Environment - Run
@@ -6,7 +14,17 @@ cd /d "%~dp0"
 
 echo.
 echo Starting LLM Environment...
+echo Working directory: %CD%
 echo.
+
+REM ----- Sanity: required folders -----
+if not exist "launcher\__main__.py" (
+    echo [ERROR] Cannot find launcher package next to this BAT file.
+    echo         Make sure you extracted the entire archive without renaming folders.
+    echo         Current dir: %CD%
+    pause
+    exit /b 1
+)
 
 REM ----- Docker detect -----
 set "DOCKER_OK=0"
@@ -15,30 +33,40 @@ call :detect_docker
 if "%DOCKER_OK%"=="1" (
     echo [INFO] Docker available
 ) else (
-    echo [INFO] Docker not available
+    echo [INFO] Docker not available - sandbox/search will be limited
 )
 
 REM ----- Check install -----
 if not exist "llm_environment" (
-    echo [ERROR] Installation not found
+    echo [ERROR] Installation folder not found: llm_environment
+    echo         Run INSTALL.bat first.
     pause
     exit /b 1
 )
 
-where python >nul 2>&1 || (
-    echo [ERROR] Python not found
+REM ----- Check Python -----
+where python >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Python not found in PATH.
+    echo         Install Python 3.11+ from https://www.python.org/downloads/
     pause
     exit /b 1
 )
 
+REM ----- Run launcher -----
 python -m launcher
+set "PY_RC=%ERRORLEVEL%"
 
 echo.
+if not "%PY_RC%"=="0" (
+    echo [WARN] Launcher exited with code %PY_RC%
+)
 pause
-exit /b %errorlevel%
+exit /b %PY_RC%
+
 
 REM ============================================================
-REM   Docker detection (same as INSTALL)
+REM   Subroutine: Docker detection (same logic as INSTALL.bat)
 REM ============================================================
 
 :detect_docker
@@ -54,7 +82,6 @@ if not errorlevel 1 (
 )
 
 set "DOCKER_EXE=C:\Program Files\Docker\Docker\resources\bin\docker.exe"
-
 if exist "%DOCKER_EXE%" (
     "%DOCKER_EXE%" --version >nul 2>&1
     if not errorlevel 1 (

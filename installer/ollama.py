@@ -70,16 +70,22 @@ def start_service(paths: Dict[str, Path]):
         return
 
     log = paths["logs"] / "ollama_install.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
     utils.info(t("install.ollama_starting_bg", path=str(log)))
 
     CREATE_NO_WINDOW = 0x08000000
+
+    # 자식 프로세스에 fd 전달 후 호스트 핸들은 즉시 닫아 누수 방지.
     f = open(log, "ab")
-    subprocess.Popen(
-        [str(_exe(paths)), "serve"],
-        stdout=f, stderr=f,
-        env=env_for(paths),
-        creationflags=CREATE_NO_WINDOW,
-    )
+    try:
+        subprocess.Popen(
+            [str(_exe(paths)), "serve"],
+            stdout=f, stderr=f,
+            env=env_for(paths),
+            creationflags=CREATE_NO_WINDOW,
+        )
+    finally:
+        f.close()
 
     for i in range(30):
         if is_running():

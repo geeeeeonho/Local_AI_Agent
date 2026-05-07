@@ -5,11 +5,13 @@
 """
 from __future__ import annotations
 
+import datetime
 import os
 import secrets
 import subprocess
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -36,7 +38,13 @@ def _ollama_running() -> bool:
 
 
 def _ensure_ollama(env: Path) -> bool:
-    """Ollama가 안 켜져 있으면 백그라운드로 시작."""
+    """Ollama가 안 켜져 있으면 백그라운드로 시작.
+
+    개선:
+      - logs 폴더가 없으면 자동 생성 (FileNotFoundError 방지)
+      - 폴링 15초 -> 30초 (콜드 스타트 여유)
+      - 로그 파일 핸들을 Popen 에 넘긴 직후 호스트 측은 닫아 fd 누수 방지
+    """
     if _ollama_running():
         return True
 
@@ -48,20 +56,28 @@ def _ensure_ollama(env: Path) -> bool:
         return False
 
     log = env / "logs" / "ollama_run.log"
-    f = open(log, "ab")
+    log.parent.mkdir(parents=True, exist_ok=True)
+
     new_env = os.environ.copy()
     new_env["OLLAMA_MODELS"] = str(env / "llm_models")
     new_env["OLLAMA_HOST"]   = "127.0.0.1:11434"
 
     CREATE_NO_WINDOW = 0x08000000
-    subprocess.Popen(
-        [str(exe), "serve"],
-        stdout=f, stderr=f,
-        env=new_env,
-        creationflags=CREATE_NO_WINDOW,
-    )
 
-    for _ in range(15):
+    # 자식 프로세스에 stdout/stderr 를 넘긴 뒤 호스트 핸들은 즉시 닫는다.
+    # (자식은 fd 를 상속받아 그대로 쓸 수 있다.)
+    f = open(log, "ab")
+    try:
+        subprocess.Popen(
+            [str(exe), "serve"],
+            stdout=f, stderr=f,
+            env=new_env,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    finally:
+        f.close()
+
+    for _ in range(30):
         if _ollama_running():
             ui.ok("Ollama 가동 확인")
             return True
@@ -87,34 +103,84 @@ def _check_docker_image() -> bool:
 #  [1] 채팅 UI
 # ═══════════════════════════════════════════════════════════════
 
+def _chat_log_write(log_path: Path, level: str, msg: str) -> None:
+    """채팅 세션 디버그 로그 한 줄 추가. 파일 I/O 실패는 본 동작을 망치지 않는다."""
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{ts}] [{level:5}] {msg}\n")
+    except OSError:
+        pass
+
+
 def start_chat(env: Path):
     ui.header(t("chat.title"))
 
+    # ─── 세션 로그 파일 준비 ───
+    log_path = env / "logs" / "chat_ui.log"
+
+    def _log(level: str, msg: str) -> None:
+        _chat_log_write(log_path, level, msg)
+
+    _log("INFO", "=" * 60)
+    _log("INFO", "Chat UI session start")
+    _log("INFO", f"env={env}")
+
     if not _ensure_ollama(env):
+        _log("FAIL", "Ollama not available")
+        ui.info(f"세션 로그: {log_path}")
         ui.pause()
         return
+    _log("INFO", "Ollama ready")
 
     rt_params = runtime_guard.compute_runtime_params()
+    _log("INFO", f"runtime params: {rt_params}")
 
-    venv_py = env / "chat_ui" / "venv" / "Scripts" / "python.exe"
-    if not venv_py.exists():
-        ui.err(t("chat.webui_missing", path=str(venv_py)))
+    # ─── Open WebUI 진입점 결정 ───────────────────────────────────
+    # `python -m open_webui` 는 패키지에 __main__.py 가 없어 동작하지 않는다.
+    # 정석은 pip 가 등록한 콘솔 스크립트 (Scripts/open-webui.exe).
+    # 만약 어떤 이유로 그 스크립트가 없으면 venv 의 python 으로 uvicorn 직접 호출
+    # (open_webui.main:app FastAPI 인스턴스) 로 폴백한다.
+    scripts_dir = env / "chat_ui" / "venv" / "Scripts"
+    webui_exe = scripts_dir / "open-webui.exe"
+    venv_py   = scripts_dir / "python.exe"
+
+    if webui_exe.exists():
+        argv = [str(webui_exe), "serve"]
+        _log("INFO", f"primary launcher: {webui_exe}")
+    elif venv_py.exists():
+        argv = [
+            str(venv_py), "-m", "uvicorn", "open_webui.main:app",
+            "--host", "0.0.0.0", "--port", "8080",
+        ]
+        _log("WARN", f"open-webui.exe missing, falling back to uvicorn: {venv_py}")
+        ui.warn("open-webui.exe 없음 — uvicorn 직접 호출로 폴백")
+    else:
+        _log("FAIL", f"no launcher: webui_exe={webui_exe}, venv_py={venv_py}")
+        ui.err(t("chat.webui_missing", path=str(webui_exe)))
         ui.warn(t("chat.run_install_again"))
+        ui.info(f"세션 로그: {log_path}")
         ui.pause()
         return
 
-    # ─── SearXNG 자동 시작 ───
+    # ─── SearXNG 자동 시작 ────────────────────────────────────────
     search_enabled = False
     if searxng_runtime.image_exists():
+        _log("INFO", "SearXNG image present, attempting start")
         ui.info(t("chat.searxng_starting"))
-        if searxng_runtime.start(env):
+        if searxng_runtime.start(env, log_path=log_path):
             search_enabled = True
+            _log("INFO", "SearXNG started")
         else:
+            _log("WARN", "SearXNG start failed (see entries above for details)")
             ui.warn(t("chat.searxng_failed"))
     else:
+        _log("INFO", "SearXNG image not present — skipping")
         ui.warn(t("chat.searxng_not_installed"))
         ui.info(t("chat.searxng_install_hint"))
 
+    # ─── 환경변수 구성 ────────────────────────────────────────────
     new_env = os.environ.copy()
     new_env["OLLAMA_MODELS"]   = str(env / "llm_models")
     new_env["OLLAMA_BASE_URL"] = "http://localhost:11434"
@@ -132,42 +198,97 @@ def start_chat(env: Path):
         new_env["RAG_WEB_SEARCH_CONCURRENT_REQUESTS"] = "5"
         ui.ok(t("chat.searxng_connected", url=searxng_runtime.URL))
 
+    extra_keys = [
+        "OLLAMA_MODELS", "OLLAMA_BASE_URL", "DEFAULT_MODELS",
+        "ENABLE_RAG_WEB_SEARCH", "RAG_WEB_SEARCH_ENGINE",
+        "SEARXNG_QUERY_URL", "RAG_WEB_SEARCH_RESULT_COUNT",
+        "RAG_WEB_SEARCH_CONCURRENT_REQUESTS",
+    ]
+    set_keys = [k for k in extra_keys if k in new_env]
+    _log("INFO", f"env additions: {set_keys}")
+
     print()
     ui.info(t("chat.browser_url"))
     if search_enabled:
         ui.info(t("chat.search_usage"))
     ui.info(t("chat.exit_hint"))
+    ui.info(f"세션 로그: {log_path}")
     print()
 
+    # ─── Open WebUI 프로세스 + 자원 워치독 ───────────────────────
     proc_holder = {"proc": None}
+    kill_timer_holder = {"timer": None}
 
     def _on_danger(reason: str):
+        _log("WARN", f"watchdog triggered: {reason}")
         p = proc_holder["proc"]
         if p and p.poll() is None:
             try:
                 p.terminate()
-                threading.Timer(5.0, lambda: p.kill() if p.poll() is None else None).start()
-            except Exception:
-                pass
+                t = threading.Timer(
+                    5.0,
+                    lambda: p.kill() if p.poll() is None else None,
+                )
+                t.daemon = True
+                t.start()
+                kill_timer_holder["timer"] = t
+            except Exception as e:
+                _log("FAIL", f"terminate failed: {e}")
+
+    def _watchdog_log(m: str) -> None:
+        print(m, flush=True)
+        _log("WARN", f"[watchdog] {m.strip()}")
 
     watchdog = runtime_guard.ResourceWatchdog(
         stop_callback=_on_danger,
-        log_func=lambda m: print(m, flush=True),
+        log_func=_watchdog_log,
     )
     watchdog.start()
 
+    _log("INFO", f"launching: {argv}")
+
+    # ─── 마지막 안내: 브라우저 URL 한 번 더 강조 ──────────────────
+    # Open WebUI 가 시작되면 uvicorn / fastapi 로그가 콘솔에 쏟아지므로,
+    # 사용자가 스크롤하지 않고도 접속 주소를 볼 수 있도록 직전에 한 번 더 표시.
+    print()
+    print(ui.C.BD + ui.C.G + "=" * 60 + ui.C.E)
+    print(ui.C.BD + ui.C.G + "  ▶  브라우저에서 접속:  http://localhost:8080" + ui.C.E)
+    print(ui.C.BD + ui.C.G + "=" * 60 + ui.C.E)
+    print()
+
     try:
-        proc = subprocess.Popen(
-            [str(venv_py), "-m", "open_webui", "serve"],
-            env=new_env,
-        )
+        proc = subprocess.Popen(argv, env=new_env)
         proc_holder["proc"] = proc
-        proc.wait()
+        _log("INFO", f"open-webui started (pid={proc.pid})")
+        rc = proc.wait()
+        _log("INFO", f"open-webui exited (rc={rc})")
+        if rc != 0:
+            ui.warn(f"Open WebUI 비정상 종료: 코드={rc}")
+            ui.info(f"자세한 로그: {log_path}")
     except KeyboardInterrupt:
+        _log("INFO", "KeyboardInterrupt — terminating")
         if proc_holder["proc"]:
             proc_holder["proc"].terminate()
+    except FileNotFoundError as e:
+        _log("FAIL", f"FileNotFoundError: {e}")
+        ui.err(f"실행 파일을 찾을 수 없습니다: {e}")
+        ui.info(f"자세한 로그: {log_path}")
+    except OSError as e:
+        _log("FAIL", f"OSError: {e}")
+        ui.err(f"OS 오류: {e}")
+        ui.info(f"자세한 로그: {log_path}")
+    except Exception as e:
+        _log("FAIL", f"unexpected {type(e).__name__}: {e}")
+        _log("FAIL", "traceback:\n" + traceback.format_exc())
+        ui.err(f"예상치 못한 오류: {type(e).__name__}: {e}")
+        ui.info(f"자세한 로그: {log_path}")
     finally:
+        # kill timer 정리 — 좀비 타이머 방지
+        kt = kill_timer_holder["timer"]
+        if kt is not None:
+            kt.cancel()
         watchdog.stop()
+        _log("INFO", "session end")
 
     ui.pause()
 
@@ -607,6 +728,7 @@ def manage_searxng(env: Path):
             print(f"  {ui.C.BD}[1]{ui.C.E} {t('searxng.opt_start')}")
         print(f"  {ui.C.BD}[3]{ui.C.E} {t('searxng.opt_recreate')}")
         print(f"  {ui.C.BD}[4]{ui.C.E} {t('searxng.opt_show_settings')}")
+        print(f"  {ui.C.BD}[5]{ui.C.E} 컨테이너 로그 보기 (마지막 50줄)")
         print()
         print(f"  {ui.C.BD}[B]{ui.C.E} {t('common.back')}")
         print()
@@ -634,6 +756,20 @@ def manage_searxng(env: Path):
             print(t("searxng.settings_safesearch"))
             print(t("searxng.settings_engines"))
             ui.warn(t("searxng.settings_recreate_hint"))
+            ui.pause()
+        elif choice == "5":
+            if not searxng_runtime.container_exists():
+                ui.warn("SearXNG 컨테이너가 아직 생성되지 않았습니다.")
+            else:
+                logs = searxng_runtime.fetch_container_logs(tail=50)
+                print()
+                ui.info("--- 컨테이너 로그 (마지막 50줄) ---")
+                if logs.strip():
+                    for line in logs.splitlines():
+                        print(f"  {line}")
+                else:
+                    ui.warn("(로그 비어있음)")
+                print()
             ui.pause()
         elif choice in ("b", "back", "q"):
             return

@@ -62,14 +62,6 @@ engines:
 """
 
 
-# limiter.toml — bot 검사 비활성 (Open WebUI 가 정상 클라이언트로 인식되도록)
-LIMITER_TOML = """[botdetection.ip_limit]
-link_token = false
-
-[botdetection.ip_lists]
-pass_searx_org = false
-"""
-
 
 def install(paths: Dict[str, Path]):
     """SearXNG 설정 파일 생성 + 이미지 pull. 컨테이너는 만들지 않음."""
@@ -92,10 +84,9 @@ def install(paths: Dict[str, Path]):
         utils.ok(t("install.searxng_settings_created", path=str(settings_path)))
 
     # ─── limiter.toml ───
-    limiter_path = cfg_dir / "limiter.toml"
-    if not limiter_path.exists():
-        limiter_path.write_text(LIMITER_TOML, encoding="utf-8")
-        utils.ok(t("install.searxng_limiter_created", path=str(limiter_path)))
+    # SearXNG 2026.x 와의 스키마 호환성 문제를 피하기 위해 limiter.toml 은
+    # 만들지 않는다. settings.yml 의 server.limiter: false 라 어차피 불필요.
+    # 잘못된 키 (pass_searx_org 등) 가 들어가면 SearXNG worker 가 즉시 사망함.
 
     # ─── 이미지 pull ───
     utils.info(t("install.searxng_pulling", image=IMAGE))
