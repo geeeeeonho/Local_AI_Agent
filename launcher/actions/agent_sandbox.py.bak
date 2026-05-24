@@ -66,10 +66,6 @@ def _build_command(
         "--name", container_name,
         "-v", f"{workspace}:{config.SANDBOX_WORKSPACE_MOUNT}",
         "--add-host=host.docker.internal:host-gateway",
-        # ErrorGuard: 화면캡처/GUI 자동화 비활성 (no_vision 안전장치)
-        "-e", "DISABLE_VISION=1",
-        "-e", "NO_DISPLAY=1",
-        "-e", "DISPLAY=",
     ]
 
     if "block_internet" in selected:
@@ -81,27 +77,12 @@ def _build_command(
     if "privileged" in selected:
         cmd += ["--privileged"]
 
-    # ErrorGuard: vision/GUI 자동화 시도 차단 + 한국어 응답 강제
-    _safety_msg = (
-        "당신은 격리된 Docker 컨테이너 안의 자율 코딩 에이전트입니다. "
-        "사용자에게는 반드시 한국어로 응답하세요 (코드는 영어 그대로 OK).\n"
-        "절대 규칙:\n"
-        "1) 디스플레이가 없습니다. computer.display/mouse/keyboard/screen, "
-        "pyautogui, pynput, PIL.ImageGrab, mss, screenshot 등은 모두 실패합니다. "
-        "사용 시도 자체를 하지 마세요. computer 모듈을 쓸 필요 없습니다 — "
-        "표준 Python 과 쉘 명령으로 모든 작업이 가능합니다.\n"
-        "2) 같은 코드가 같은 에러로 두 번 실패하면 즉시 중단하고 사용자에게 한국어로 보고하세요. "
-        "NameError, ImportError 가 나면 그 함수/모듈이 없는 것이니 재시도 금지.\n"
-        "3) 작업 디렉터리는 /home/agent/workspace 입니다.\n"
-        "4) 사용자가 화면/GUI 작업을 요청하면 한국어로 거절하고 대안을 제시하세요."
-    )
     cmd += [
         config.SANDBOX_IMAGE, "interpreter",
         "--model", f"ollama/{config.MODEL_TAG}",
         "--api_base",
         f"http://host.docker.internal:{config.OLLAMA_PORT}",
         "--context_window", str(context_window),
-        "--system_message", _safety_msg,
     ]
     if "auto_run" in selected:
         cmd += ["--auto_run"]
