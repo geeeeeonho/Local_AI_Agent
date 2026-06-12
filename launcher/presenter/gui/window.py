@@ -37,6 +37,13 @@ class PanelHost:
                      panel 객체는 .pack(...) 와 .destroy() 메서드 보유.
         """
         if self._current is not None:
+            # v4_lifecycle: 기존 패널에 on_destroy hook 있으면 먼저 호출
+            _on_destroy = getattr(self._current, 'on_destroy', None)
+            if callable(_on_destroy):
+                try:
+                    _on_destroy()
+                except Exception:
+                    pass
             try:
                 self._current.destroy()
             except Exception:
@@ -98,6 +105,26 @@ class MainWindow:
 
     def start(self):
         self.statusbar.start_polling(self.root)
+
+        # v6_lifelog: GUI 창 X 클릭 시 cleanup hook 호출
+        try:
+            from .. import lifelog as _ll
+
+            def _on_window_close():
+                _ll.log('CLEANUP', 'GUI WM_DELETE_WINDOW 트리거')
+                try:
+                    _ll.shutdown_then_exit()
+                except Exception:
+                    pass
+                try:
+                    self.quit()
+                except Exception:
+                    pass
+
+            self.root.protocol('WM_DELETE_WINDOW', _on_window_close)
+        except Exception as _e:
+            pass
+
         try:
             self.root.mainloop()
         finally:
@@ -108,6 +135,14 @@ class MainWindow:
         if getattr(self, "_quitted", False):
             return
         self._quitted = True
+        # v4_lifecycle: 활성 에이전트 일괄 종료
+        try:
+            from .. import agent_lifecycle as _lc
+            _n = _lc.cleanup_all(timeout=3.0)
+            if _n > 0:
+                print(f'[v4_lifecycle] 활성 에이전트 {_n}개 정리됨', flush=True)
+        except Exception:
+            pass
         self.statusbar.stop_polling(self.root)
         # destroy 만 호출 — destroy 가 mainloop 도 함께 깨움
         try:

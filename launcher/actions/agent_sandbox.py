@@ -2,6 +2,7 @@
 
 Presenter.show_checkbox 호출 한 번으로 옵션을 받고 docker run 조립.
 """
+# v6_7_final: 사용자 가시성 강화 적용됨
 from __future__ import annotations
 
 import os
@@ -70,6 +71,14 @@ def _build_command(
         "-e", "DISABLE_VISION=1",
         "-e", "NO_DISPLAY=1",
         "-e", "DISPLAY=",
+        # v6_8_runtime: Python stdout 즉시 flush (콘솔 응답 가시성)
+        "-e", "PYTHONUNBUFFERED=1",
+        # v6_8_runtime: LiteLLM 광고 메시지 억제
+        "-e", "LITELLM_LOG=ERROR",
+        # v6_9_visibility: 추가 ANSI/색상 제거
+        "-e", "FORCE_COLOR=0",
+        "-e", "NO_COLOR=1",
+        "-e", "TERM=dumb",
     ]
 
     if "block_internet" in selected:
@@ -95,12 +104,29 @@ def _build_command(
         "3) 작업 디렉터리는 /home/agent/workspace 입니다.\n"
         "4) 사용자가 화면/GUI 작업을 요청하면 한국어로 거절하고 대안을 제시하세요."
     )
+
+    # 응답 행동 규칙 + 세션 정보 합성 (profiles 와 동일 패턴)
+    from .. import profiles as _profiles
+    _safety_msg = (
+        _safety_msg
+        + _profiles.RESPONSE_DISCIPLINE
+        + _profiles.build_session_addendum(workspace)
+    )
+
+    # v5_runaway: stdout 즉시 flush + LiteLLM 광고 메시지 억제
+    cmd += ["-e", "PYTHONUNBUFFERED=1", "-e", "LITELLM_LOG=ERROR"]
+
     cmd += [
         config.SANDBOX_IMAGE, "interpreter",
         "--model", f"ollama/{config.MODEL_TAG}",
         "--api_base",
         f"http://host.docker.internal:{config.OLLAMA_PORT}",
         "--context_window", str(context_window),
+        # v6_8_runtime: 응답 길이 제한 (무한 생성 방지)
+        "--max_tokens", "512",
+        # v6_9_visibility: 응답 가시성 강화
+        "--verbose",  # 응답 진행 상황 표시
+
         "--system_message", _safety_msg,
     ]
     if "auto_run" in selected:
@@ -108,8 +134,18 @@ def _build_command(
     return cmd
 
 
+# v6_6_sandbox: 샌드박스 액션 단계별 trace
+def _v66_trace(stage: str) -> None:
+    try:
+        from .. import lifelog as _ll
+        _ll.log("TRACE", "[agent_sandbox] " + stage)
+    except Exception:
+        pass
+
+
 def run(env: Path, p: Presenter) -> None:
     """샌드박스 에이전트 시작."""
+    _v66_trace("run() 진입")
     p.section("자동화 에이전트 — 샌드박스")
 
     # ── 사전 검사: Docker 자동 시작 ──
@@ -117,21 +153,26 @@ def run(env: Path, p: Presenter) -> None:
     if not DockerService.ensure_daemon(
         logger=p, timeout=60, cancel_check=cancel_check,
     ):
+        _v66_trace("p.pause() 직전 (★사용자 클릭 대기 — 여기서 멈추면 정상)")
         p.pause()
         return
 
     if not DockerService.image_exists(config.SANDBOX_IMAGE):
         p.error(f"이미지가 없습니다: {config.SANDBOX_IMAGE}")
         p.warn("[6] Docker 이미지 빌드 메뉴를 먼저 실행하세요")
+        _v66_trace("p.pause() 직전 (★사용자 클릭 대기 — 여기서 멈추면 정상)")
         p.pause()
         return
 
     if not OllamaService(env, logger=p).ensure_running():
+        _v66_trace("p.pause() 직전 (★사용자 클릭 대기 — 여기서 멈추면 정상)")
         p.pause()
         return
 
     # ── 워크스페이스 ──
+    _v66_trace("폴더 선택 다이얼로그 직전")
     workspace = _ask_workspace(p, env)
+    _v66_trace("폴더 선택 완료: " + str(workspace))
     if workspace is None:
         return
     workspace.mkdir(parents=True, exist_ok=True)
@@ -159,6 +200,8 @@ def run(env: Path, p: Presenter) -> None:
         "안전 옵션은 저장된 값으로 복원됩니다 (✓).",
         "위험 옵션(⚠/⚠⚠)은 항상 해제 상태로 시작 — 매번 명시적 활성화 필요.",
     ]
+
+    _v66_trace("옵션 체크박스 다이얼로그 직전")
 
     selected = p.show_checkbox(
         title="샌드박스 에이전트 — 옵션 설정",
@@ -215,15 +258,35 @@ def run(env: Path, p: Presenter) -> None:
         popen_kw["creationflags"] = config.WIN_CREATE_NEW_CONSOLE
 
     try:
+        # v6_9_visibility: Ollama 모델 사전 warm-up (첫 응답 지연 제거)
+        try:
+            from .. import lifelog as _ll
+            if hasattr(_ll, "warmup_ollama_model"):
+                p.info("Ollama 모델을 사전 로드합니다... (수십초 걸릴 수 있음)")
+                _ll.warmup_ollama_model(config.MODEL_TAG, timeout=60)
+                p.ok("모델 사전 로드 완료 — 첫 응답이 빨라집니다")
+        except Exception as _we:
+            pass
+        _v66_trace("docker subprocess.Popen 직전")
         proc = subprocess.Popen(cmd, **popen_kw)
         if is_gui_env:
-            p.ok(f"새 콘솔창에서 에이전트가 실행 중입니다 (PID={proc.pid})")
-            p.info("그 창을 닫거나 exit 명령으로 종료하세요.")
+            _v66_trace("docker 실행됨 (새 콘솔, PID=" + str(proc.pid) + ") — 즉시 반환 예정")
+            p.section("=" * 50)
+            p.ok("✓ 에이전트가 별도 콘솔창에서 실행 중입니다")
+            p.ok(f"  PID: {proc.pid}")
+            p.warn("★ 작업표시줄에서 새로 열린 검정색 콘솔창을 찾으세요!")
+            p.warn("   거기서 에이전트와 한국어로 대화하시면 됩니다")
+            p.warn("   대화 종료: 콘솔창에서 exit 입력 또는 X 클릭")
+            p.section("=" * 50)
+            
         else:
+            _v66_trace("proc.wait() 직전 (콘솔 모드 — 여기서 블록될 수 있음)")
             proc.wait()
     except FileNotFoundError as e:
         p.error(f"docker 명령을 찾을 수 없습니다: {e}")
     except KeyboardInterrupt:
         pass
+
+    _v66_trace("p.pause() 직전 (★사용자 클릭 대기 — 여기서 멈추면 정상)")
 
     p.pause()

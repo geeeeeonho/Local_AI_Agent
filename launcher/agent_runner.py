@@ -105,6 +105,15 @@ class UnifiedAgent:
         self._readers: List[threading.Thread] = []
         self._writer: Optional[threading.Thread] = None
         self._error_guard_enabled = True
+        # v6_lifelog: 컨테이너명과 세션 로그 파일 핸들
+        self._container_name_v6 = None
+        self._session_log_v6 = None
+        # v4_lifecycle: 컨테이너명 (cmd 에서 --name 파싱하여 채움)
+        self._container_name: Optional[str] = None
+        # v4_lifecycle: 디버그 로그 파일 핸들 (선택적)
+        self._debug_log_fh = None
+        # v4_lifecycle: 첫 stdout 수신 시각 (TTFT 측정용)
+        self._first_output_at: Optional[float] = None
 
     # ── lifecycle ──
     def is_running(self) -> bool:
@@ -136,6 +145,37 @@ class UnifiedAgent:
                 return False
             self._cmd = list(cmd)
             self._stopped.clear()
+
+            # v4_lifecycle: cmd 에서 --name <X> 자동 추출
+            self._container_name = None
+            try:
+                _idx = self._cmd.index('--name')
+                if _idx + 1 < len(self._cmd):
+                    self._container_name = self._cmd[_idx + 1]
+            except ValueError:
+                pass
+
+            # v4_lifecycle: 디버그 로그 파일 오픈 (best-effort)
+            try:
+                from . import config as _cfg
+                _log_dir = Path(_cfg.ENV_PATH) / 'logs' if hasattr(_cfg, 'ENV_PATH') else Path('.')
+                _log_dir.mkdir(parents=True, exist_ok=True)
+                _ts = time.strftime('%Y%m%d_%H%M%S')
+                _name_part = self._container_name or 'agent'
+                self._debug_log_fh = open(
+                    _log_dir / ('agent_runner_' + _name_part + '_' + _ts + '.log'),
+                    'w', encoding='utf-8'
+                )
+                self._debug_log_fh.write(
+                    "[start] " + time.strftime("%H:%M:%S")
+                    + " container=" + str(self._container_name) + "\n"
+                )
+                self._debug_log_fh.write(
+                    "[cmd] " + " ".join(self._cmd[:8]) + " ...\n"
+                )
+                self._debug_log_fh.flush()
+            except Exception:
+                self._debug_log_fh = None
 
             # Windows 에서 CREATE_NO_WINDOW — 콘솔창 안 뜨도록
             popen_kwargs = {
@@ -193,7 +233,37 @@ class UnifiedAgent:
                 daemon=True, name="agent-wait",
             ).start()
 
+            # v6_lifelog: 세션 로그 + 컨테이너명 추출 + cleanup 등록
+            self._container_name_v6 = None
+            try:
+                _idx = self._cmd.index("--name")
+                if _idx + 1 < len(self._cmd):
+                    self._container_name_v6 = self._cmd[_idx + 1]
+            except (ValueError, AttributeError):
+                pass
+            self._session_log_v6 = None
+            try:
+                from . import lifelog as _ll
+                _name = self._container_name_v6 or ("agent_pid" + str(self._proc.pid))
+                self._session_log_v6 = _ll.open_session_log(_name)
+                _ll.log("INFO", "에이전트 시작 (PID=" + str(self._proc.pid)
+                       + ", container=" + str(self._container_name_v6) + ")")
+                _ll.log_session(self._session_log_v6, "INFO",
+                                "cmd=" + " ".join(self._cmd[:10]) + " ...")
+                # 자기 자신을 cleanup 에 등록 — 종료 hook 에서 자동 정리
+                _self_ref = self
+                _ll.register_cleanup(lambda: _self_ref.stop(timeout=2.0))
+            except Exception as _le:
+                pass
             self._emit(LEVEL_INFO, f"에이전트 시작 (PID={self._proc.pid})")
+            if self._container_name:
+                self._emit(LEVEL_INFO, f"컨테이너: {self._container_name}")
+            # v4_lifecycle: 활성 에이전트 registry 등록
+            try:
+                from . import agent_lifecycle as _lc
+                _lc.register(self)
+            except Exception as _e:
+                self._emit(LEVEL_WARN, f"lifecycle 등록 실패: {_e}")
             return True
 
     def stop(self, timeout: float = 3.0) -> None:
@@ -229,6 +299,63 @@ class UnifiedAgent:
                 proc.kill()
             except Exception:
                 pass
+
+        # v4_lifecycle: docker 컨테이너 강제 종료 (CLI 래퍼만 죽이는 것 방지)
+        if self._container_name:
+            try:
+                _no_window = {}
+                if os.name == "nt":
+                    _no_window["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+                subprocess.run(
+                    ["docker", "stop", "-t", "2", self._container_name],
+                    capture_output=True, timeout=5, **_no_window
+                )
+                subprocess.run(
+                    ["docker", "rm", "-f", self._container_name],
+                    capture_output=True, timeout=5, **_no_window
+                )
+                self._emit(LEVEL_INFO, f"컨테이너 정리: {self._container_name}")
+            except Exception as _e:
+                self._emit(LEVEL_WARN, f"컨테이너 정리 실패: {_e}")
+
+        # v4_lifecycle: 디버그 로그 종료
+        if self._debug_log_fh is not None:
+            try:
+                self._debug_log_fh.write(
+                    "[stop] " + time.strftime("%H:%M:%S")
+                    + " container=" + str(self._container_name) + "\n"
+                )
+                self._debug_log_fh.close()
+            except Exception:
+                pass
+            self._debug_log_fh = None
+
+        # v4_lifecycle: lifecycle registry 에서 제거
+        try:
+            from . import agent_lifecycle as _lc
+            _lc.unregister(self)
+        except Exception:
+            pass
+
+        # v6_lifelog: 컨테이너 강제 격멸 (docker stop -> docker kill fallback)
+        _container = getattr(self, "_container_name_v6", None)
+        if _container:
+            try:
+                from . import lifelog as _ll
+                _ll.force_kill_container(_container, timeout=2)
+            except Exception as _le:
+                self._emit(LEVEL_WARN, "force_kill 예외: " + str(_le))
+
+        # v6_lifelog: 세션 로그 close (마지막 flush 보장)
+        _fh = getattr(self, "_session_log_v6", None)
+        if _fh is not None:
+            try:
+                from . import lifelog as _ll
+                _ll.log_session(_fh, "INFO", "===== 에이전트 종료 =====")
+                _fh.close()
+            except Exception:
+                pass
+            self._session_log_v6 = None
 
         self._stopped.set()
         self._emit(LEVEL_WARN, "에이전트 종료됨")
@@ -293,6 +420,25 @@ class UnifiedAgent:
                     self._emit(level, "")
                     continue
 
+                # v4_lifecycle: 디버그 로그 + 첫 토큰 시각 측정
+                if self._debug_log_fh is not None:
+                    try:
+                        self._debug_log_fh.write(
+                            "[" + level + "] " + line + "\n"
+                        )
+                        self._debug_log_fh.flush()
+                    except Exception:
+                        pass
+                if self._first_output_at is None and level == LEVEL_STDOUT:
+                    self._first_output_at = time.time()
+                # v6_lifelog: 모든 stdout/stderr 줄을 세션 로그에 기록
+                try:
+                    _fh = getattr(self, "_session_log_v6", None)
+                    if _fh is not None:
+                        from . import lifelog as _ll
+                        _ll.log_session(_fh, level.upper(), line)
+                except Exception:
+                    pass
                 # ErrorGuard
                 if self._error_guard_enabled and looks_like_vision_attempt(line):
                     self._emit(
@@ -356,7 +502,7 @@ def build_sandbox_pipe_cmd(
     memory_limit: Optional[str] = None,
     cpu_limit: Optional[str] = None,
     block_internet: bool = True,
-    auto_run: bool = True,
+    auto_run: bool = False,  # v5_runaway: 무한 도구 루프 차단
     extra_args: Optional[List[str]] = None,
 ) -> List[str]:
     """GUI-통합 모드용 docker run 명령 조립.
@@ -381,6 +527,10 @@ def build_sandbox_pipe_cmd(
         "-e", "DISABLE_VISION=1",
         "-e", "NO_DISPLAY=1",
         "-e", "DISPLAY=",  # 빈 값 — vision 라이브러리들이 fail-fast
+        # v5_runaway: Python stdout 즉시 flush (block buffering 해소)
+        "-e", "PYTHONUNBUFFERED=1",
+        # v5_runaway: LiteLLM banner / 트레이닝 광고 메시지 억제
+        "-e", "LITELLM_LOG=ERROR",
     ]
 
     if block_internet:
@@ -395,6 +545,8 @@ def build_sandbox_pipe_cmd(
         "--model", f"ollama/{model_tag}",
         "--api_base", f"http://host.docker.internal:{ollama_port}",
         "--context_window", str(context_window),
+        # v5_runaway: 응답 길이 제한 (stop 토큰 인식 실패 시 자동 cut)
+        "--max_tokens", "512",
         "--system_message", profile_system_message,
     ]
 
@@ -406,10 +558,57 @@ def build_sandbox_pipe_cmd(
     return cmd
 
 
+
+
+# ─────────────────────────────────────────────
+#  v7_1_unified: 호스트 직접 모드 PIPE 명령 조립
+# ─────────────────────────────────────────────
+def build_host_pipe_cmd(
+    interpreter_exe: str,
+    model_tag: str,
+    ollama_url: str,
+    profile_system_message: str,
+    context_window: int = 4096,
+    auto_run: bool = False,
+    extra_args=None,
+):
+    """호스트 직접 모드용 interpreter 명령 조립 (PIPE 방식).
+
+    agent_sandbox 의 build_sandbox_pipe_cmd 와 달리 docker 없이
+    호스트의 interpreter.exe 를 직접 PIPE 로 실행.
+
+    중요:
+      - 컨테이너 격리 없음 (위험) — 호출자가 확인 게이트 통과 필수
+      - auto_run 기본 False — 매 명령 사용자 확인 (안전)
+      - PYTHONUNBUFFERED 등은 호출자가 env 로 전달
+
+    Args:
+        interpreter_exe: interpreter.exe 절대 경로
+        model_tag: 모델 태그
+        ollama_url: Ollama API URL (예: http://127.0.0.1:11434)
+        profile_system_message: 프로필 system 메시지
+        auto_run: True 면 --auto_run (위험, 기본 False)
+    """
+    cmd = [
+        interpreter_exe,
+        "--model", "ollama/" + model_tag,
+        "--api_base", ollama_url,
+        "--context_window", str(context_window),
+        "--max_tokens", "512",
+        "--system_message", profile_system_message,
+    ]
+    if auto_run:
+        cmd += ["--auto_run"]
+    if extra_args:
+        cmd += list(extra_args)
+    return cmd
+
+
 __all__ = [
     "AgentMessage",
     "UnifiedAgent",
     "build_sandbox_pipe_cmd",
+    "build_host_pipe_cmd",
     "looks_like_vision_attempt",
     "LEVEL_STDOUT", "LEVEL_STDERR", "LEVEL_INFO",
     "LEVEL_WARN", "LEVEL_ERROR", "LEVEL_TERMINATED",

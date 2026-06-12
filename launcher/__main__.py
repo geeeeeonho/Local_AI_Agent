@@ -107,14 +107,64 @@ def _write_fatal(exc: BaseException, ctx: str = ""):
 def main():
     args = parse_args()
 
+    # v6_lifelog: 모든 종료 경로에서 로그 보존 + 컨테이너 정리
+    try:
+        from launcher import lifelog as _ll
+        _ll.install_global_hooks(HERE)
+    except Exception as _e:
+        print("[WARN] lifelog 초기화 실패: " + str(_e), file=sys.stderr)
+
+    # v6_2_trace: main() 전체 단계 추적
+    def _trace(stage):
+        try:
+            from launcher import lifelog as _ll2
+            _ll2.log("TRACE", "[main] " + stage)
+        except Exception as _te:
+            try:
+                print("[TRACE main] " + stage, file=sys.stderr)
+            except Exception:
+                pass
+
+    _trace("진입 — lifelog 설치 직후")
+
+    # v6_3_comprehensive: Ollama 모델 메모리 정리 cleanup 등록
+    try:
+        from launcher import lifelog as _ll3
+        if hasattr(_ll3, "register_ollama_cleanup"):
+            _ll3.register_ollama_cleanup()
+            _trace("Ollama cleanup 등록 완료")
+    except Exception as _oe:
+        _trace("Ollama cleanup 등록 실패: " + str(_oe))
+
+    # v6_4_orphan: 도커 고아 컨테이너 정리 cleanup 등록
+    try:
+        from launcher import lifelog as _ll4
+        if hasattr(_ll4, "register_orphan_container_cleanup_auto"):
+            # v6_7_final: config 자동 감지 우선
+            _ll4.register_orphan_container_cleanup_auto()
+        elif hasattr(_ll4, "register_orphan_container_cleanup"):
+            # v6.5 fallback
+            _ll4.register_orphan_container_cleanup(
+                name_patterns=("ai_box_", "llm_agent_", "open_webui",
+                               "searxng", "ollama"),
+                image_patterns=("ai_box_sandbox", "llm-agent-sandbox",
+                                "open_webui", "searxng", "ollama"),
+            )
+            _trace("고아 컨테이너 cleanup 등록 완료")
+    except Exception as _oe:
+        _trace("고아 컨테이너 cleanup 등록 실패: " + str(_oe))
+
     # ── 언어 초기화 ──
+    _trace("언어 초기화 직전")
     try:
         from installer.lang_setup import initialize_language
         initialize_language(HERE, override=args.lang)
-    except Exception:
-        pass
+        _trace("언어 초기화 완료")
+    except Exception as _le:
+        _trace("언어 초기화 예외: " + str(_le))
 
     # ── 설치 폴더 확인 ──
+    _trace("설치 폴더 확인 직전 ENV=" + str(ENV))
     if not ENV.exists():
         print(f"[FAIL] 설치 폴더가 없습니다: {ENV}", file=sys.stderr)
         print("[INFO] install.py 를 먼저 실행하세요 (또는 INSTALL.bat)",
@@ -125,19 +175,30 @@ def main():
         sys.exit(1)
 
     # ── Presenter (자동 폴백) ──
+    _trace("모드 결정 직전")
     mode = _resolve_mode(args)
+    _trace("모드 결정 완료: " + str(mode))
 
     presenter = None
+    _trace("Presenter 생성 직전")
     try:
         presenter, _actual_mode = _create_presenter_with_fallback(mode)
+        _trace("Presenter 생성 완료: " + type(presenter).__name__)
     except Exception as e:
         _write_fatal(e, ctx="Presenter 생성")
         sys.exit(3)
 
     # ── 메뉴 루프 ──
+    _trace("Application import 직전")
     try:
         from launcher.app import Application
-        Application(ENV, presenter).run()
+        _trace("Application import 완료")
+        _trace("Application(ENV, presenter) 인스턴스화 직전")
+        _app = Application(ENV, presenter)
+        _trace("Application 인스턴스화 완료")
+        _trace("Application.run() 호출 직전")
+        _app.run()
+        _trace("Application.run() 반환됨")
     except KeyboardInterrupt:
         print()
     except Exception as e:

@@ -236,8 +236,17 @@ def create_dark_root(title: str = "LLM Environment Launcher",
 
 def make_button(parent, text: str, command,
                 primary: bool = False, danger: bool = False,
+                kind: str = None,
                 **kw) -> tk.Button:
     """일관된 스타일 버튼."""
+    # v7_4_kind: kind= 인자를 primary/danger 플래그로 매핑
+    if kind is not None:
+        if kind in ("accent", "primary"):
+            primary = True
+        elif kind == "danger":
+            danger = True
+        # "default" / 기타 -> 기본 스타일 (변경 없음)
+
     if danger:
         bg, fg = Theme.DANGER, Theme.FG_BRIGHT
         hover = "#d65f48"

@@ -9,6 +9,7 @@
 
 GUI 전용 — TUI 에서 호출 시 안내 후 폴백.
 """
+# v7_2_diag
 from __future__ import annotations
 
 import os
@@ -122,6 +123,11 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
         pass
 
     # ── 명령 조립 ──
+    # 응답 행동 규칙은 SAFETY_PREAMBLE 에 이미 포함됨.
+    # 세션별 동적 정보(호스트 워크스페이스 경로) 만 여기서 append.
+    from .. import profiles as _profiles
+    _system_msg = profile.system_message + _profiles.build_session_addendum(workspace)
+
     cmd = build_sandbox_pipe_cmd(
         image=config.SANDBOX_IMAGE,
         container_name=container,
@@ -129,7 +135,7 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
         workspace_mount=config.SANDBOX_WORKSPACE_MOUNT,
         model_tag=config.MODEL_TAG,
         ollama_port=config.OLLAMA_PORT,
-        profile_system_message=profile.system_message,
+        profile_system_message=_system_msg,
         context_window=context_window,
         memory_limit=run_mem,
         cpu_limit=run_cpus,
@@ -180,6 +186,7 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
                 new_cmd[idx + 1] = nonlocal_container[0]
             except (ValueError, IndexError):
                 pass
+            _v63_trace("agent.start() 호출 직전")
             agent.start(new_cmd)
             panel.enable_send()
 
@@ -190,6 +197,15 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
         panel.set_stop_callback(on_stop)
         panel.set_restart_callback(on_restart)
         panel.set_open_folder_callback(on_open)
+
+        # v4_lifecycle: 패널 종료(사이드바 이동/창 닫기) 시 agent 정리
+        def _on_panel_close():
+            try:
+                agent.stop(timeout=3.0)
+            except Exception:
+                pass
+        if hasattr(panel, 'set_close_callback'):
+            panel.set_close_callback(_on_panel_close)
         panel.refresh_files(workspace)
         panel.set_status(
             f"프로필: {profile.label}\n"
@@ -205,6 +221,13 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
     main_window.host.replace(build_panel)
     panel = panel_holder["panel"]
     if panel is None:
+        try:
+            from .. import lifelog as _ll
+            _ll.log("FAIL", "[agent_chat] panel_holder 가 비어있음 — build_panel 미완료")
+            p.error("대화창을 만들지 못했습니다 (panel=None)")
+            p.pause()
+        except Exception:
+            pass
         return
 
     # ── 에이전트 시작 ──
@@ -220,6 +243,18 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
     files_refresh_counter = [0]
 
     def poll():
+        # v4_lifecycle: 패널이 destroy 됐으면 폴링 중단
+        try:
+            _alive = panel.frame.winfo_exists()
+        except Exception:
+            _alive = False
+        if not _alive:
+            try:
+                agent.stop(timeout=1.0)
+            except Exception:
+                pass
+            return
+
         try:
             msgs = agent.drain_messages(max_n=100)
             for m in msgs:
@@ -246,63 +281,400 @@ def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
     main_window.root.after(poll_interval_ms, poll)
 
 
-def run(env: Path, p: Presenter) -> None:
-    """메뉴 [9] 진입점."""
-    p.section("GUI 통합 대화 모드")
+# v6_3_comprehensive: action 단계별 trace
+def _v63_trace(stage: str) -> None:
+    """lifelog 가 있으면 trace 기록. 없으면 무시."""
+    try:
+        from .. import lifelog as _ll
+        _ll.log("TRACE", "[agent_chat] " + stage)
+    except Exception:
+        pass
+
+
+
+# ─────────────────────────────────────────────
+#  v7_1_unified: 통합 자동화 에이전트 진입점
+# ─────────────────────────────────────────────
+def _select_execution_mode(p):
+    """실행 모드 선택 — 샌드박스(권장) vs 호스트 직접(위험).
+
+    Returns: "sandbox" | "host" | None(취소)
+    """
+    from ..presenter.base import MenuItem
+    items = [
+        MenuItem(
+            key="sandbox", title="샌드박스 (권장)",
+            description="Docker 컨테이너에서 격리 실행 — 안전",
+            badge="권장", badge_kind="good",
+        ),
+        MenuItem(
+            key="host", title="호스트 직접 (위험)",
+            description="호스트 PC 에 직접 접근 — 격리 없음",
+            badge="위험", badge_kind="danger",
+        ),
+    ]
+    choice = p.show_menu(
+        title="실행 모드 선택",
+        subtitle="에이전트를 어디서 실행할지 선택하세요",
+        items=items,
+    )
+    if choice in ("sandbox", "host"):
+        return choice
+    return None
+
+
+def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
+                        context_window, run_mem, run_cpus):
+    """모드별 PIPE 명령 조립.
+
+    Returns: (cmd, is_host) 또는 (None, _) 실패 시
+    """
+    from .. import config
+    if mode == "sandbox":
+        from ..agent_runner import build_sandbox_pipe_cmd
+        cmd = build_sandbox_pipe_cmd(
+            image=config.SANDBOX_IMAGE,
+            container_name=container_name,
+            workspace=workspace,
+            workspace_mount=config.SANDBOX_WORKSPACE_MOUNT,
+            model_tag=config.MODEL_TAG,
+            ollama_port=config.OLLAMA_PORT,
+            profile_system_message=profile.system_message,
+            context_window=context_window,
+            memory_limit=run_mem,
+            cpu_limit=run_cpus,
+            block_internet=True,
+            auto_run=True,   # 샌드박스 안이라 안전
+        )
+        return cmd, False
+    else:  # host
+        from ..agent_runner import build_host_pipe_cmd
+        interp = env / "agent" / "venv" / "Scripts" / "interpreter.exe"
+        if not interp.exists():
+            return None, True
+        cmd = build_host_pipe_cmd(
+            interpreter_exe=str(interp),
+            model_tag=config.MODEL_TAG,
+            ollama_url=config.OLLAMA_URL,
+            profile_system_message=profile.system_message,
+            context_window=context_window,
+            auto_run=False,  # 호스트는 매 명령 확인 (안전)
+        )
+        return cmd, True
+
+
+def run(env, p):
+    """[2] 통합 자동화 에이전트 진입점 (v7_1_unified).
+
+    프로필 선택 -> 워크스페이스 선택 -> 실행 모드 선택
+    -> GUI 내장 ChatPanel 로 양방향 대화 (샌드박스/호스트 공통).
+    """
+    from .. import config
+    import secrets
+
+    p.section("자동화 에이전트")
+    _v63_trace("통합 run() 진입")
 
     # GUI 전용 가드
     try:
         from ..presenter.gui import TkPresenter
         if not isinstance(p, TkPresenter):
             p.warn("이 메뉴는 GUI (TkPresenter) 전용입니다.")
-            p.info("터미널 모드에서는 [2] 샌드박스 에이전트를 사용하세요.")
+            p.info("터미널 모드에서는 별도 콘솔에서 실행하세요.")
             p.pause()
             return
-    except ImportError:
-        p.error("GUI 모듈 로드 실패")
-        p.pause()
-        return
-
-    # 사전 검사: Docker
-    cancel_check = getattr(p, "is_cancelled", lambda: False)
-    if not DockerService.ensure_daemon(
-        logger=p, timeout=60, cancel_check=cancel_check,
-    ):
-        p.pause()
-        return
-
-    if not DockerService.image_exists(config.SANDBOX_IMAGE):
-        p.error(f"이미지가 없습니다: {config.SANDBOX_IMAGE}")
-        p.warn("[6] Docker 이미지 빌드 메뉴를 먼저 실행하세요")
-        p.pause()
-        return
-
-    if not OllamaService(env, logger=p).ensure_running():
-        p.pause()
-        return
-
-    # 프로필 선택
-    profile = _select_profile(p)
-    if profile is None:
-        p.info("취소됨")
-        p.pause()
-        return
-
-    # 워크스페이스
-    workspace = _ask_workspace(p, env)
-    if workspace is None:
-        return
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    # last_workspace 저장
-    try:
-        from .. import settings_store
-        cfg = settings_store.load()
-        if workspace != env / "agent" / "workspace":
-            cfg.last_workspace = str(workspace)
-        settings_store.save(cfg)
     except Exception:
         pass
 
-    # 실행
-    _run_gui_chat(env, p, profile, workspace)
+    # ── 1) 프로필 선택 ──
+    _v63_trace("프로필 선택 직전")
+    profile = _select_profile(p)
+    _v63_trace("프로필 선택 완료: " + (profile.name if profile else "None"))
+    if profile is None:
+        return
+
+    # ── 2) 워크스페이스 선택 ──
+    _v63_trace("워크스페이스 선택 직전")
+    workspace = _ask_workspace(p, env)
+    _v63_trace("워크스페이스 선택 완료: " + str(workspace))
+    if workspace is None:
+        return
+
+    # ── 3) 실행 모드 선택 ──
+    _v63_trace("실행 모드 선택 직전")
+    mode = _select_execution_mode(p)
+    _v63_trace("실행 모드 선택 완료: " + str(mode))
+    if mode is None:
+        return
+
+    # ── 4) 호스트 직접이면 확인 게이트 ──
+    if mode == "host":
+        from ..presenter.base import RISK_HIGH
+        p.section("호스트 직접 모드 — 위험 확인")
+        p.error("호스트 PC 에 직접 접근합니다. 격리가 없습니다.")
+        p.warn("모델 실수가 PC 에 직접 영향을 줄 수 있습니다.")
+        if not p.confirm_dangerous(
+            label="호스트 직접 모드 진입",
+            description=(
+                "에이전트가 호스트 PC 의 모든 파일·명령에 직접 접근합니다.\n"
+                "복구 불가능한 손상이 발생할 수 있습니다."
+            ),
+            risk=RISK_HIGH,
+        ):
+            p.info("취소 (권장: 샌드박스 모드 사용)")
+            p.pause()
+            return
+
+    # ── 5) Ollama 확인 ──
+    try:
+        from ..services.ollama import OllamaService
+        if not OllamaService(env, logger=p).ensure_running():
+            p.error("Ollama 서비스를 시작할 수 없습니다.")
+            p.pause()
+            return
+    except Exception:
+        pass
+
+    # ── 6) 명령 조립 ──
+    run_mem, run_cpus = _resolve_resource_limits(env)
+    container = config.SANDBOX_CONTAINER_PREFIX + "chat_" + secrets.token_hex(4)
+    context_window = 4096
+    try:
+        from .. import runtime_guard
+        rt = runtime_guard.compute_runtime_params()
+        context_window = rt.context_window
+    except Exception:
+        pass
+
+    cmd, is_host = _build_cmd_for_mode(
+        mode, env, profile, workspace, container,
+        context_window, run_mem, run_cpus,
+    )
+    if cmd is None:
+        if is_host:
+            p.error("Open Interpreter (호스트) 가 설치되지 않았습니다.")
+            p.info("샌드박스 모드를 사용하거나 INSTALL 을 다시 실행하세요.")
+        else:
+            p.error("명령 조립 실패")
+        p.pause()
+        return
+
+    # ── 7) GUI 통합 대화창 실행 (v7.0 스레드 마샬링) ──
+    _v63_trace("_run_gui_chat 호출 직전 (통합)")
+    _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
+                          run_mem, run_cpus)
+    _v63_trace("_run_gui_chat 반환됨 (통합)")
+
+
+def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
+                          run_mem, run_cpus):
+    """통합 GUI 대화창 — 샌드박스/호스트 공통.
+
+    v7_0_threadfix 스레드 마샬링 내장.
+    """
+    from ..agent_runner import UnifiedAgent, LEVEL_TERMINATED
+    from ..presenter.gui.chat_panel import ChatPanel
+
+    main_window = getattr(p, "_window", None)
+    if main_window is None:
+        p.error("GUI 환경이 아닙니다.")
+        p.pause()
+        return
+
+    agent = UnifiedAgent()
+
+    # 호스트 모드면 lifelog 에 프로세스 정리 등록
+    if is_host:
+        try:
+            from .. import lifelog as _ll
+            if hasattr(_ll, "register_host_process_cleanup"):
+                def _get_pid():
+                    try:
+                        proc = getattr(agent, "_proc", None)
+                        return proc.pid if proc else None
+                    except Exception:
+                        return None
+                _ll.register_host_process_cleanup(_get_pid)
+        except Exception:
+            pass
+
+    panel_holder = {"panel": None}
+    nonlocal_container = [container]
+
+    def build_panel(parent):
+        mode_label = "호스트 직접 (위험)" if is_host else "샌드박스 (격리)"
+        _plabel = getattr(profile, "label", None) or getattr(profile, "name", "에이전트")
+        panel = ChatPanel(
+            parent,
+            title="에이전트 대화 — " + str(_plabel),
+            subtitle="모드: " + mode_label + "  |  마운트: " + str(workspace),
+            workspace=workspace,
+        )
+
+        def on_user_input(text):
+            ok = agent.send_input(text)
+            if not ok:
+                panel.append_message("warn", "에이전트가 실행 중이 아닙니다")
+
+        def on_stop():
+            panel.append_message("system", "[중단 요청...]")
+            agent.stop(timeout=2.0)
+            panel.disable_send()
+
+        def on_restart():
+            panel.append_message("system", "[재시작 요청...]")
+            agent.stop(timeout=2.0)
+            agent.start(cmd)
+            panel.enable_send()
+
+        def on_open():
+            _open_folder_in_explorer(workspace)
+
+        panel.set_input_callback(on_user_input)
+        panel.set_stop_callback(on_stop)
+        panel.set_restart_callback(on_restart)
+        panel.set_open_folder_callback(on_open)
+        panel.refresh_files(workspace)
+        panel.set_status(
+            "프로필: " + str(_plabel) + "\n"
+            "모드: " + mode_label + "\n"
+            "메모리: " + str(run_mem).upper() + "\n"
+            "CPU: " + str(run_cpus) + " 코어"
+        )
+        panel_holder["panel"] = panel
+        return panel
+
+    # v7_0_threadfix: ChatPanel 생성을 메인 스레드로 마샬링
+    import threading as _thr
+    _panel_ready = _thr.Event()
+    _build_error = [None]
+
+    def _build_on_main():
+        try:
+            from .. import lifelog as _ll
+            _ll.log("TRACE", "[agent_chat] (메인) host.replace 시작")
+        except Exception:
+            pass
+        try:
+            main_window.host.replace(build_panel)
+        except Exception as _e:
+            _build_error[0] = _e
+            try:
+                import traceback as _tb
+                from .. import lifelog as _ll2
+                _ll2.log("FAIL", "[agent_chat] host.replace 예외: " + repr(_e))
+                _ll2.log("DEBUG", _tb.format_exc())
+            except Exception:
+                pass
+        finally:
+            _panel_ready.set()
+            try:
+                from .. import lifelog as _ll3
+                _ll3.log("TRACE", "[agent_chat] (메인) host.replace 종료")
+            except Exception:
+                pass
+
+    try:
+        main_window.root.after(0, _build_on_main)
+    except Exception:
+        _build_on_main()
+
+    if not _panel_ready.wait(timeout=10.0):
+        try:
+            from .. import lifelog as _ll
+            _ll.log("FAIL", "[agent_chat] 통합 패널 생성 10초 타임아웃")
+        except Exception:
+            pass
+        return
+    if _build_error[0] is not None:
+        try:
+            from .. import lifelog as _ll
+            _ll.log("FAIL", "[agent_chat] 패널 생성 예외로 중단: "
+                   + repr(_build_error[0]))
+            p.error("대화창 생성 실패: " + str(_build_error[0]))
+            p.pause()
+        except Exception:
+            pass
+        return
+
+    panel = panel_holder["panel"]
+    if panel is None:
+        return
+
+    # 메인 스레드 마샬링 append
+    def _safe_append(level, txt):
+        try:
+            main_window.root.after(0, lambda: panel.append_message(level, txt))
+        except Exception:
+            try:
+                panel.append_message(level, txt)
+            except Exception:
+                pass
+
+    try:
+        _pl = getattr(profile, "label", None) or getattr(profile, "name", "에이전트")
+    except Exception:
+        _pl = "에이전트"
+    _safe_append("system", "에이전트를 시작합니다... (프로필: " + str(_pl) + ")")
+    if is_host:
+        _safe_append("warn", "호스트 직접 모드 — 매 명령 확인이 필요합니다")
+    try:
+        from .. import lifelog as _ll
+        _ll.log("TRACE", "[agent_chat] agent.start 호출 직전")
+        _ll.log("INFO", "[agent_chat] 명령: " + " ".join(str(c) for c in cmd[:8]))
+    except Exception:
+        pass
+
+    # v7_5_dockercheck: 샌드박스 모드면 Docker 데몬 상태 사전 확인
+    if not is_host:
+        try:
+            from .. import lifelog as _lld
+            if hasattr(_lld, "check_docker_running") and not _lld.check_docker_running():
+                _safe_append("error", "⚠ Docker Desktop 이 실행되지 않았습니다.")
+                _safe_append("warn", "작업표시줄에서 Docker Desktop(고래 아이콘)을 시작하세요.")
+                _safe_append("warn", "시작 후 아래 [재시작] 버튼을 누르면 다시 연결합니다.")
+                _safe_append("system", "(Docker 가 완전히 켜지기까지 30초~1분 걸릴 수 있습니다)")
+        except Exception:
+            pass
+
+    started = agent.start(cmd)
+    try:
+        from .. import lifelog as _ll2
+        _ll2.log("TRACE", "[agent_chat] agent.start 반환: " + str(started))
+    except Exception:
+        pass
+    if not started:
+        _safe_append("error", "에이전트 시작 실패. Docker/Ollama 상태를 확인하세요.")
+        try:
+            from .. import lifelog as _ll3
+            _ll3.log("FAIL", "[agent_chat] agent.start 실패")
+        except Exception:
+            pass
+        return
+
+    # 폴링 루프
+    poll_interval_ms = 80
+    files_refresh_counter = [0]
+
+    def poll():
+        try:
+            msgs = agent.drain_messages(max_n=100)
+            for m in msgs:
+                if m.level == LEVEL_TERMINATED:
+                    panel.append_message("terminated", m.text)
+                    panel.disable_send()
+                else:
+                    panel.append_message(m.level, m.text)
+            files_refresh_counter[0] += 1
+            if files_refresh_counter[0] >= 25:
+                files_refresh_counter[0] = 0
+                panel.refresh_files(workspace)
+        except Exception:
+            pass
+        try:
+            main_window.root.after(poll_interval_ms, poll)
+        except Exception:
+            pass
+
+    main_window.root.after(poll_interval_ms, poll)
+

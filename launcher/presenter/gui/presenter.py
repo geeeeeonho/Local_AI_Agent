@@ -141,14 +141,29 @@ class TkPresenter(Presenter):
         # 시작 패널
         if initial_panel == "home":
             self._show_home(env_path_str)
-        # 종료 단축키
-        self._window.root.protocol(
-            "WM_DELETE_WINDOW", self._window.quit
-        )
+        # 종료 단축키 — v6_3_comprehensive: lifelog hook 도 chain
+        def _v63_on_close():
+            try:
+                from ... import lifelog as _ll
+                _ll.log("CLEANUP", "GUI WM_DELETE_WINDOW 트리거 (TkPresenter)")
+                _ll.shutdown_then_exit()
+            except Exception:
+                pass
+            try:
+                self._window.quit()
+            except Exception:
+                pass
+        self._window.root.protocol("WM_DELETE_WINDOW", _v63_on_close)
 
         self._window.start()
 
     def _handle_sidebar(self, key: str, action_runner: Callable[[str], None]):
+        # v6_4_orphan: 사이드바 클릭 dispatch 추적
+        try:
+            from ... import lifelog as _ll
+            _ll.log("TRACE", "[sidebar] _handle_sidebar 진입 key=" + repr(key))
+        except Exception:
+            pass
         """사이드바 선택 시 호출.
 
         진행 중인 액션이 있어도 즉시 취소하고 새 액션 시작.
@@ -172,6 +187,12 @@ class TkPresenter(Presenter):
         self._start_action(key, action_runner)
 
     def _start_action(self, key: str, action_runner: Callable[[str], None]):
+        # v6_4_orphan: _start_action 추적
+        try:
+            from ... import lifelog as _ll
+            _ll.log("TRACE", "[sidebar] _start_action 진입 key=" + repr(key))
+        except Exception:
+            pass
         """새 액션 시작 (이전 액션이 정리된 후 호출)."""
         # 이전 액션이 아직 안 끝났으면 한번 더 대기
         if getattr(self, "_action_busy", False):
@@ -191,8 +212,24 @@ class TkPresenter(Presenter):
         import threading
 
         def worker():
+            # v6_4_orphan: worker 진입 trace
             try:
+                from ... import lifelog as _ll_w
+                _ll_w.log("TRACE", "[sidebar] worker 시작 key=" + repr(key))
+            except Exception:
+                pass
+            try:
+                try:
+                    from ... import lifelog as _ll_w2
+                    _ll_w2.log("TRACE", "[sidebar] action_runner 호출 직전 key=" + repr(key))
+                except Exception:
+                    pass
                 action_runner(key)
+                try:
+                    from ... import lifelog as _ll_w3
+                    _ll_w3.log("TRACE", "[sidebar] action_runner 정상 반환 key=" + repr(key))
+                except Exception:
+                    pass
             except _ActionCancelled:
                 # 정상 취소 — 무시
                 pass

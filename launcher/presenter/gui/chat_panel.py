@@ -78,6 +78,9 @@ class ChatPanel:
         self._on_stop: Optional[Callable[[], None]] = None
         self._on_restart: Optional[Callable[[], None]] = None
         self._on_open_folder: Optional[Callable[[], None]] = None
+        # v4_lifecycle: panel 이 destroy 될 때 한 번만 호출되는 cleanup hook
+        self._on_close: Optional[Callable[[], None]] = None
+        self._close_fired = False
 
         self._build_header(title, subtitle)
         self._build_body()
@@ -329,10 +332,30 @@ class ChatPanel:
         return self.frame.pack(**kwargs)
 
     def destroy(self):
+        # v4_lifecycle: cleanup hook 한 번만 호출
+        if not self._close_fired and self._on_close is not None:
+            self._close_fired = True
+            try:
+                self._on_close()
+            except Exception:
+                pass
         try:
             self.frame.destroy()
         except tk.TclError:
             pass
+
+    # v4_lifecycle: PanelHost.replace() 가 호출하는 hook (destroy 보다 먼저)
+    def on_destroy(self):
+        if not self._close_fired and self._on_close is not None:
+            self._close_fired = True
+            try:
+                self._on_close()
+            except Exception:
+                pass
+
+    def set_close_callback(self, fn: Optional[Callable[[], None]]) -> None:
+        """패널 종료(사이드바 이동/창 닫기) 시 호출될 cleanup 콜백."""
+        self._on_close = fn
 
 
 __all__ = ["ChatPanel"]

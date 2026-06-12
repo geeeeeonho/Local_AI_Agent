@@ -18,6 +18,8 @@ class Theme:
     BG_INPUT    = "#3c3c3c"   # 입력란
     BG_HOVER    = "#2a2d2e"   # 호버 (사이드바 항목)
     BG_SELECTED = "#37373d"   # 선택된 항목
+    # v7_3_panel: chat_panel.py 가 참조하는 패널 배경 (BG_ALT 별칭)
+    PANEL       = "#252526"   # 패널 배경 (= BG_ALT)
     BG_TOOLTIP  = "#252526"   # 툴팁
 
     # 테두리

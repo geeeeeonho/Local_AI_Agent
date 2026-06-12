@@ -20,14 +20,9 @@ def _build_menu_items() -> list[MenuItem]:
             description="브라우저 기반 채팅 + 자동 웹 검색",
         ),
         MenuItem(
-            key="2", title="자동화 에이전트 — 샌드박스",
-            description="Docker 컨테이너에서 격리 실행",
-            badge="권장", badge_kind="good",
-        ),
-        MenuItem(
-            key="3", title="자동화 에이전트 — 호스트 직접",
-            description="호스트에 직접 접근. 명시적 확인 필요",
-            badge="위험", badge_kind="danger",
+            key="2", title="자동화 에이전트",
+            description="에이전트와 GUI 대화 (샌드박스/호스트 모드 선택)",
+            badge="통합", badge_kind="good",
         ),
         MenuItem(
             key="4", title="Ollama 서비스 시작/확인",
@@ -37,12 +32,6 @@ def _build_menu_items() -> list[MenuItem]:
         MenuItem(key="6", title="Docker 이미지 빌드/재빌드"),
         MenuItem(key="7", title="SearXNG 검색 엔진 제어"),
         MenuItem(key="8", title="설정 관리 (보기/초기화/언어)"),
-        MenuItem(
-            key="9", title="GUI 통합 대화 모드 (NEW)",
-            description="단일 윈도우 안에서 에이전트와 양방향 대화 + 프로젝트 프로필",
-            badge="신규", badge_kind="good",
-            separator_above=True,
-        ),
         MenuItem(key="q", title="종료", separator_above=True),
     ]
 
@@ -51,14 +40,12 @@ def _build_action_map() -> Dict[str, Callable]:
     """key -> action.run 매핑. 추가는 이 한 줄만 늘리면 됨."""
     return {
         "1": actions.chat.run,
-        "2": actions.agent_sandbox.run,
-        "3": actions.agent_direct.run,
+        "2": actions.agent_chat.run,  # v7_1_unified: 통합 진입점
         "4": actions.ollama_action.run,
         "5": actions.model_info.run,
         "6": actions.docker_image.run,
         "7": actions.searxng_action.run,
         "8": actions.settings_action.run,
-        "9": actions.agent_chat.run,
     }
 
 
@@ -87,12 +74,22 @@ class Application:
         except Exception:
             pass
 
+    @staticmethod
+    def _trace(stage: str) -> None:
+        """v6_2_trace: lifelog 가 있으면 추적 로그 기록."""
+        try:
+            from launcher import lifelog as _ll
+            _ll.log("TRACE", "[app] " + stage)
+        except Exception:
+            pass
+
     def run(self) -> None:
         """메인 루프.
 
         Presenter 가 단일 윈도우 GUI 면 _run_single_window 로 위임,
         그렇지 않으면 기존 메뉴 루프 (TUI / 모달 GUI fallback).
         """
+        self._trace("run() 진입")
         # 단일 윈도우 GUI 분기
         try:
             from .presenter.gui import TkPresenter
@@ -140,6 +137,7 @@ class Application:
 
         사이드바 클릭 → action_runner(key) → 패널 전환 → 결과 표시.
         """
+        self._trace("_run_single_window() 진입")
         def action_runner(key: str):
             action = self.actions_map.get(key)
             if action is None:

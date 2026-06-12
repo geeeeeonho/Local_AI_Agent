@@ -204,7 +204,7 @@ class Sidebar:
         # 섹션: 실행
         self._section_label("실행")
         for item in items:
-            if item.key in ("1", "2", "3"):
+            if item.key in ("1", "2"):  # v7_1_unified: 3,9 통합 제거
                 self._add_item(item)
 
         # 섹션: 관리
@@ -216,7 +216,7 @@ class Sidebar:
 
         # 섹션: 기타 (q 종료 등)
         for item in items:
-            if item.key not in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            if item.key not in ("1", "2", "4", "5", "6", "7", "8"):  # v7_1_unified
                 self._add_item(item)
 
         # ── 푸터 (설치 경로) ──

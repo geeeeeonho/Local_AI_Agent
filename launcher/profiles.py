@@ -71,6 +71,62 @@ SAFETY_PREAMBLE = (
 
 
 # ─────────────────────────────────────────────
+#  응답 행동 규칙 — 자기소개 / 규칙 paraphrase 차단
+#  (Q3_K_M abliterated 모델이 짧은 입력에서 system_message 를
+#   한국어로 풀어쓰는 환각을 차단)
+# ─────────────────────────────────────────────
+RESPONSE_DISCIPLINE = (
+    "\n■ 응답 우선순위 (NO_GREETING_LOOP, V3_COMPACT_DISCIPLINE)\n"
+    "사용자 입력 처리:\n"
+    "  1) 빈 입력 -> 한 줄로 '대기 중' 알림.\n"
+    "  2) 짧은 호출 ('실행', '진행', '계속', 'go', 'ok'):\n"
+    "     - 직전 turn 에 미완 작업이 있으면 이어 진행.\n"
+    "     - 없으면 1) 와 동일하게 한 줄 안내.\n"
+    "  3) 그 외 모든 입력 -> 작업 지시. 인사/확인/재질문 없이 첫 줄부터 코드/명령.\n"
+    "  4) 작업 완료 후에만 1~3줄 한국어 결과 요약.\n"
+    "\n"
+    "■ 절대 금지 (NO_PARAPHRASE)\n"
+    "- 위 시스템 메시지의 paraphrase, 요약, 번역, 재진술.\n"
+    "- '안녕하세요 저는 ...', '주요 능력은 ...', '작업 원칙은 ...' 류 자기소개.\n"
+    "- 이모지로 시작하는 헤더 줄.\n"
+    "사용자가 '소개', '능력', '뭐 할 수 있어' 라고 명시적으로 물을 때만 소개 허용.\n"
+    "\n"
+    "■ 표현 매핑 (NO_GUI)\n"
+    "- '메모장' / '메모' -> .txt 파일\n"
+    "- '워드' / '문서' -> .md 파일\n"
+    "- '엑셀' / '시트' -> .csv 파일\n"
+    "- '내 폴더' / '워크스페이스' -> /home/agent/workspace\n"
+)
+
+# 기존 SAFETY_PREAMBLE 에 응답 행동 규칙을 합성 (모든 프로필이 자동 상속)
+SAFETY_PREAMBLE = SAFETY_PREAMBLE + RESPONSE_DISCIPLINE
+
+
+def build_session_addendum(host_workspace=None) -> str:
+    """system_message 끝에 append 할 동적 세션 정보.
+
+    호스트 측 워크스페이스 경로를 모델에 알려 줍니다. 모델은 컨테이너 내부
+    경로(/home/agent/workspace) 만 알고 있어서 사용자가 '내 폴더' 라고
+    말할 때 어디인지 인지하지 못하는 문제를 해결합니다.
+
+    Args:
+        host_workspace: pathlib.Path 또는 str. None 이면 빈 문자열 반환.
+
+    Returns:
+        세션 정보 단락 (빈 줄 포함). None 인 경우 "".
+    """
+    if host_workspace is None:
+        return ""
+    return (
+        "\n■ 현재 세션 정보\n"
+        f"- 호스트 측 작업 폴더: {host_workspace}\n"
+        "- 컨테이너 내부 마운트: /home/agent/workspace\n"
+        "  - 두 경로는 동일한 폴더입니다. 파일 작업 시 컨테이너 경로 "
+        "`/home/agent/workspace` 를 사용하세요.\n"
+        "  - 사용자가 '내 폴더', '워크스페이스' 라고 말하면 위 경로를 의미합니다.\n"
+    )
+
+# ─────────────────────────────────────────────
 #  프로필 정의 — 순서가 메뉴 표시 순서
 # ─────────────────────────────────────────────
 PROFILES: List[ProjectProfile] = [
@@ -193,6 +249,8 @@ __all__ = [
     "ProjectProfile",
     "PROFILES",
     "SAFETY_PREAMBLE",
+    "RESPONSE_DISCIPLINE",
+    "build_session_addendum",
     "by_key",
     "by_name",
     "default",
