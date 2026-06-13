@@ -16,6 +16,48 @@
 """
 from __future__ import annotations
 
+
+# >>> LLM_SESSION_LOG_PATH_FIX_v1 (auto-inserted by FIX_LOG_PATHS.py v7.8; do not edit between markers)
+# LLM_REALTIME_READER_FIX_v1 (FIX_AGENT_REALTIME.py v7.9)
+
+# >>> LLM_AGENT_REPL_FIX_v1 (FIX_AGENT_REPL.py v8.0)
+_AGENT_REPL_SRC_B64 = "IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwojIC0qLSBjb2Rpbmc6IHV0Zi04IC0qLQojIGFnZW50X3JlcGwucHkgKHY4LjUpIC0gT3BlbiBJbnRlcnByZXRlciDrpbwgc3RkaW4g66Oo7ZSEICsg7YyM7J207I2sIEFQSSDroZwg6rWs64+ZIChUVFkg67aI7ZWE7JqUKS4KIyB2OC4xOiDrqqjrjbjrqoUg7J207KSRIG9sbGFtYS8g7KCR65GQ7Ja0IOygnOqxsC4KIyB2OC4yOiDsnZHri7Ug7LKt7YGsIOy2lOy2nCDqsJXtmZQgKyBpbnRlcnByZXRlci5tZXNzYWdlcyDtj7TrsLEgKyDruYgg7J2R64u1IOyLnCDssq3tgaztmJXtg5wg7KeE64uoLgojIHY4LjM6IOuqqOuNuOydhCBvbGxhbWFfY2hhdC8g66GcIOygleq3nO2ZlCAoL2FwaS9jaGF0LCDthZztlIzrpr8g7KCB7JqpIOKAlCDruYjsnZHri7Ug7ZqM7ZS8KS4KIyB2OC41OiBtYXhfdG9rZW5zIO2VmO2VnCAyMDQ4IOKAlCDsvZTrk5wg7IOd7ISxIOykkeqwhCDsnpjrprwoU3ludGF4RXJyb3IpIOuwqeyngC4KaW1wb3J0IHN5cwppbXBvcnQgb3MKaW1wb3J0IGFyZ3BhcnNlCmltcG9ydCB0cmFjZWJhY2sKCgpkZWYgX3NldChvYmosIGRvdHRlZCwgdmFsKToKICAgIGN1ciA9IG9iagogICAgcGFydHMgPSBkb3R0ZWQuc3BsaXQoIi4iKQogICAgZm9yIHAgaW4gcGFydHNbOi0xXToKICAgICAgICBpZiBub3QgaGFzYXR0cihjdXIsIHApOgogICAgICAgICAgICByZXR1cm4gRmFsc2UKICAgICAgICBjdXIgPSBnZXRhdHRyKGN1ciwgcCkKICAgIGlmIGhhc2F0dHIoY3VyLCBwYXJ0c1stMV0pOgogICAgICAgIHRyeToKICAgICAgICAgICAgc2V0YXR0cihjdXIsIHBhcnRzWy0xXSwgdmFsKQogICAgICAgICAgICByZXR1cm4gVHJ1ZQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgIHJldHVybiBGYWxzZQogICAgcmV0dXJuIEZhbHNlCgoKZGVmIF9idWlsZChhcmdzKToKICAgIGludGVycCA9IE5vbmUKICAgIHRyeToKICAgICAgICBmcm9tIGludGVycHJldGVyIGltcG9ydCBpbnRlcnByZXRlciBhcyBpbnRlcnAKICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgdHJ5OgogICAgICAgICAgICBmcm9tIGludGVycHJldGVyIGltcG9ydCBPcGVuSW50ZXJwcmV0ZXIKICAgICAgICAgICAgaW50ZXJwID0gT3BlbkludGVycHJldGVyKCkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgICAgICBmcm9tIGludGVycHJldGVyLmNvcmUuY29yZSBpbXBvcnQgT3BlbkludGVycHJldGVyCiAgICAgICAgICAgIGludGVycCA9IE9wZW5JbnRlcnByZXRlcigpCiAgICAjIHY4LjM6IGluc3RydWN0IOuqqOuNuOydgCAvYXBpL2NoYXQob2xsYW1hX2NoYXQpIOqwgCDslYjsoJXsoIEg4oCUIC9hcGkvZ2VuZXJhdGUg67mI7J2R64u1IO2ajO2UvAogICAgX0tOT1dOID0gKCJvbGxhbWFfY2hhdCIsICJvcGVuYWkiLCAiYW50aHJvcGljIiwgImF6dXJlIiwKICAgICAgICAgICAgICAiZ2VtaW5pIiwgImdyb3EiLCAibWlzdHJhbCIsICJjb2hlcmUiLCAidG9nZXRoZXJfYWkiKQogICAgX20gPSBhcmdzLm1vZGVsCiAgICBfcHJvdiA9IF9tLnNwbGl0KCIvIiwgMSlbMF0KICAgIGlmIF9wcm92ID09ICJvbGxhbWEiOgogICAgICAgIG1vZGVsID0gIm9sbGFtYV9jaGF0LyIgKyBfbS5zcGxpdCgiLyIsIDEpWzFdCiAgICBlbGlmIF9wcm92IGluIF9LTk9XTjoKICAgICAgICBtb2RlbCA9IF9tCiAgICBlbHNlOgogICAgICAgIG1vZGVsID0gIm9sbGFtYV9jaGF0LyIgKyBfbQogICAgIyB2OC41OiBtYXhfdG9rZW5zIO2VmO2VnCAyMDQ4IOuztOyepSDigJQgNTEyIOuKlCDsvZTrk5wg7IOd7ISxIOykkeqwhOyXkCDsnpjroKQgU3ludGF4RXJyb3Ig7Jyg67CcCiAgICBfZWZmX21heCA9IGFyZ3MubWF4X3Rva2VucyBpZiAoYXJncy5tYXhfdG9rZW5zIGFuZCBhcmdzLm1heF90b2tlbnMgPj0gMjA0OCkgZWxzZSAyMDQ4CiAgICBmb3IgcGF0aCwgdmFsIGluICgKICAgICAgICAoImxsbS5tb2RlbCIsIG1vZGVsKSwgKCJtb2RlbCIsIG1vZGVsKSwKICAgICAgICAoImxsbS5hcGlfYmFzZSIsIGFyZ3MuYXBpX2Jhc2UpLCAoImFwaV9iYXNlIiwgYXJncy5hcGlfYmFzZSksCiAgICAgICAgKCJsbG0uY29udGV4dF93aW5kb3ciLCBhcmdzLmNvbnRleHRfd2luZG93KSwgKCJjb250ZXh0X3dpbmRvdyIsIGFyZ3MuY29udGV4dF93aW5kb3cpLAogICAgICAgICgibGxtLm1heF90b2tlbnMiLCBfZWZmX21heCksICgibWF4X3Rva2VucyIsIF9lZmZfbWF4KSwKICAgICAgICAoImxsbS5zdXBwb3J0c19mdW5jdGlvbnMiLCBGYWxzZSksCiAgICAgICAgKCJzeXN0ZW1fbWVzc2FnZSIsIGFyZ3Muc3lzdGVtX21lc3NhZ2UpLAogICAgICAgICgiYXV0b19ydW4iLCBib29sKGFyZ3MuYXV0b19ydW4pKSwKICAgICAgICAoIm9mZmxpbmUiLCBUcnVlKSwgKCJ2ZXJib3NlIiwgRmFsc2UpLAogICAgICAgICgic2FmZV9tb2RlIiwgIm9mZiIpLAogICAgKToKICAgICAgICBfc2V0KGludGVycCwgcGF0aCwgdmFsKQogICAgcmV0dXJuIGludGVycAoKCmRlZiBfZXh0cmFjdChjaHVuayk6CiAgICAjIOuLpOyWke2VnCBPSSDrsoTsoIQg7LKt7YGsIO2PrOunt+yXkOyEnCDtkZzsi5wg7YWN7Iqk7Yq4IOy2lOy2nAogICAgaWYgaXNpbnN0YW5jZShjaHVuaywgc3RyKToKICAgICAgICByZXR1cm4gY2h1bmsKICAgIGlmIGlzaW5zdGFuY2UoY2h1bmssIGRpY3QpOgogICAgICAgIGMgPSBjaHVuay5nZXQoImNvbnRlbnQiKQogICAgICAgIGlmIGlzaW5zdGFuY2UoYywgc3RyKToKICAgICAgICAgICAgcmV0dXJuIGMKICAgICAgICBpZiBpc2luc3RhbmNlKGMsIGRpY3QpOgogICAgICAgICAgICBmb3IgayBpbiAoImNvbnRlbnQiLCAidGV4dCIsICJtZXNzYWdlIik6CiAgICAgICAgICAgICAgICB2ID0gYy5nZXQoaykKICAgICAgICAgICAgICAgIGlmIGlzaW5zdGFuY2Uodiwgc3RyKToKICAgICAgICAgICAgICAgICAgICByZXR1cm4gdgogICAgICAgIGZvciBrIGluICgidGV4dCIsICJtZXNzYWdlIiwgImRlbHRhIiwgInJlc3BvbnNlIik6CiAgICAgICAgICAgIHYgPSBjaHVuay5nZXQoaykKICAgICAgICAgICAgaWYgaXNpbnN0YW5jZSh2LCBzdHIpOgogICAgICAgICAgICAgICAgcmV0dXJuIHYKICAgIHJldHVybiAiIgoKCmRlZiBfc2hhcGUoY2h1bmspOgogICAgaWYgaXNpbnN0YW5jZShjaHVuaywgZGljdCk6CiAgICAgICAga2V5cyA9ICIsIi5qb2luKHNvcnRlZChzdHIoaykgZm9yIGsgaW4gY2h1bmsua2V5cygpKSkKICAgICAgICByZXR1cm4gImRpY3QodHlwZT0iICsgc3RyKGNodW5rLmdldCgidHlwZSIpKSArICIsZm10PSIgKyBzdHIoY2h1bmsuZ2V0KCJmb3JtYXQiKSkgKyAiLGtleXM9IiArIGtleXMgKyAiKSIKICAgIHJldHVybiB0eXBlKGNodW5rKS5fX25hbWVfXwoKCmRlZiBfZnJvbV9tZXNzYWdlcyhpbnRlcnAsIGJlZm9yZSk6CiAgICBtc2dzID0gZ2V0YXR0cihpbnRlcnAsICJtZXNzYWdlcyIsIE5vbmUpCiAgICBpZiBub3QgaXNpbnN0YW5jZShtc2dzLCBsaXN0KToKICAgICAgICByZXR1cm4gIiIKICAgIG91dCA9IFtdCiAgICBmb3IgbSBpbiBtc2dzW2JlZm9yZTpdOgogICAgICAgIGlmIG5vdCBpc2luc3RhbmNlKG0sIGRpY3QpOgogICAgICAgICAgICBjb250aW51ZQogICAgICAgIGlmIG0uZ2V0KCJyb2xlIikgaW4gKCJhc3Npc3RhbnQiLCAiY29tcHV0ZXIiKToKICAgICAgICAgICAgYyA9IG0uZ2V0KCJjb250ZW50IikKICAgICAgICAgICAgaWYgaXNpbnN0YW5jZShjLCBzdHIpIGFuZCBjLnN0cmlwKCk6CiAgICAgICAgICAgICAgICB0YWcgPSAiIgogICAgICAgICAgICAgICAgaWYgbS5nZXQoInR5cGUiKSA9PSAiY29kZSI6CiAgICAgICAgICAgICAgICAgICAgdGFnID0gIltjb2RlXSAiCiAgICAgICAgICAgICAgICBlbGlmIG0uZ2V0KCJ0eXBlIikgPT0gImNvbnNvbGUiOgogICAgICAgICAgICAgICAgICAgIHRhZyA9ICJbb3V0cHV0XSAiCiAgICAgICAgICAgICAgICBvdXQuYXBwZW5kKHRhZyArIGMpCiAgICByZXR1cm4gIlxuIi5qb2luKG91dCkKCgpkZWYgbWFpbigpOgogICAgYXAgPSBhcmdwYXJzZS5Bcmd1bWVudFBhcnNlcigpCiAgICBhcC5hZGRfYXJndW1lbnQoIi0tbW9kZWwiLCByZXF1aXJlZD1UcnVlKQogICAgYXAuYWRkX2FyZ3VtZW50KCItLWFwaV9iYXNlIiwgcmVxdWlyZWQ9VHJ1ZSkKICAgIGFwLmFkZF9hcmd1bWVudCgiLS1jb250ZXh0X3dpbmRvdyIsIHR5cGU9aW50LCBkZWZhdWx0PTQwOTYpCiAgICBhcC5hZGRfYXJndW1lbnQoIi0tbWF4X3Rva2VucyIsIHR5cGU9aW50LCBkZWZhdWx0PTUxMikKICAgIGFwLmFkZF9hcmd1bWVudCgiLS1zeXN0ZW1fbWVzc2FnZSIsIGRlZmF1bHQ9IiIpCiAgICBhcC5hZGRfYXJndW1lbnQoIi0tYXV0b19ydW4iLCBhY3Rpb249InN0b3JlX3RydWUiKQogICAgYXJncywgX3Vua25vd24gPSBhcC5wYXJzZV9rbm93bl9hcmdzKCkKCiAgICB0cnk6CiAgICAgICAgaW50ZXJwID0gX2J1aWxkKGFyZ3MpCiAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgc3lzLnN0ZG91dC53cml0ZSgiW0ZBVEFMXSBpbnRlcnByZXRlciDstIjquLDtmZQg7Iuk7YyoOiAiICsgcmVwcihlKSArICJcbiIpCiAgICAgICAgdHJhY2ViYWNrLnByaW50X2V4YyhmaWxlPXN5cy5zdGRvdXQpCiAgICAgICAgc3lzLnN0ZG91dC5mbHVzaCgpCiAgICAgICAgcmV0dXJuIDEKCiAgICBzeXMuc3Rkb3V0LndyaXRlKCJb7JeQ7J207KCE7Yq4IOykgOu5hOuQqF0g66mU7Iuc7KeA66W8IOyeheugpe2VmOyEuOyalC5cbiIpCiAgICBzeXMuc3Rkb3V0LndyaXRlKCI+ICIpCiAgICBzeXMuc3Rkb3V0LmZsdXNoKCkKCiAgICBmb3IgbGluZSBpbiBzeXMuc3RkaW46CiAgICAgICAgbXNnID0gbGluZS5zdHJpcCgpCiAgICAgICAgaWYgbm90IG1zZzoKICAgICAgICAgICAgc3lzLnN0ZG91dC53cml0ZSgiPiAiKTsgc3lzLnN0ZG91dC5mbHVzaCgpOyBjb250aW51ZQogICAgICAgIGlmIG1zZy5sb3dlcigpIGluICgiZXhpdCIsICJxdWl0IiwgIi9leGl0IiwgIi9xdWl0Iik6CiAgICAgICAgICAgIGJyZWFrCiAgICAgICAgdHJ5OgogICAgICAgICAgICBiZWZvcmUgPSBsZW4oZ2V0YXR0cihpbnRlcnAsICJtZXNzYWdlcyIsIFtdKSBvciBbXSkKICAgICAgICAgICAgZ290ID0gRmFsc2UKICAgICAgICAgICAgc2VlbiA9IFtdCiAgICAgICAgICAgIHJlc3VsdCA9IGludGVycC5jaGF0KG1zZywgZGlzcGxheT1GYWxzZSwgc3RyZWFtPVRydWUpCiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIGl0ID0gaXRlcihyZXN1bHQpCiAgICAgICAgICAgIGV4Y2VwdCBUeXBlRXJyb3I6CiAgICAgICAgICAgICAgICBpdCA9IGl0ZXIoW3Jlc3VsdF0pCiAgICAgICAgICAgIGZvciBjaHVuayBpbiBpdDoKICAgICAgICAgICAgICAgIHQgPSBfZXh0cmFjdChjaHVuaykKICAgICAgICAgICAgICAgIGlmIHQ6CiAgICAgICAgICAgICAgICAgICAgc3lzLnN0ZG91dC53cml0ZSh0KTsgc3lzLnN0ZG91dC5mbHVzaCgpOyBnb3QgPSBUcnVlCiAgICAgICAgICAgICAgICBlbGlmIGxlbihzZWVuKSA8IDEwOgogICAgICAgICAgICAgICAgICAgIHNlZW4uYXBwZW5kKF9zaGFwZShjaHVuaykpCiAgICAgICAgICAgIGlmIG5vdCBnb3Q6CiAgICAgICAgICAgICAgICByZWNvdmVyZWQgPSBfZnJvbV9tZXNzYWdlcyhpbnRlcnAsIGJlZm9yZSkKICAgICAgICAgICAgICAgIGlmIHJlY292ZXJlZDoKICAgICAgICAgICAgICAgICAgICBzeXMuc3Rkb3V0LndyaXRlKHJlY292ZXJlZCk7IGdvdCA9IFRydWUKICAgICAgICAgICAgaWYgbm90IGdvdDoKICAgICAgICAgICAgICAgIGRpYWcgPSAiIHwgIi5qb2luKHNlZW4pIGlmIHNlZW4gZWxzZSAi7LKt7YGsIOyXhuydjCjrqqjrjbjsnbQg67mIIOydkeuLtSkiCiAgICAgICAgICAgICAgICBzeXMuc3Rkb3V0LndyaXRlKCJb67mIIOydkeuLtV0g7KeE64uoOiAiICsgZGlhZykKICAgICAgICAgICAgc3lzLnN0ZG91dC53cml0ZSgiXG4iKQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICAgICAgc3lzLnN0ZG91dC53cml0ZSgiXG5bRVJST1JdIOydkeuLtSDsg53shLEg7Iuk7YyoOiAiICsgcmVwcihlKSArICJcbiIpCiAgICAgICAgICAgIHRyYWNlYmFjay5wcmludF9leGMoZmlsZT1zeXMuc3Rkb3V0KQogICAgICAgIHN5cy5zdGRvdXQud3JpdGUoIj4gIik7IHN5cy5zdGRvdXQuZmx1c2goKQogICAgcmV0dXJuIDAKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgc3lzLmV4aXQobWFpbigpKQo="
+_AGENT_REPL_BOOTSTRAP = "import os,base64;exec(base64.b64decode(os.environ['AGENT_REPL_SRC']).decode('utf-8'))"
+# <<< LLM_AGENT_REPL_FIX_v1
+
+def _llm_session_log_dir():
+    """에이전트 로그를 llm_environment/logs 아래로 강제 (cwd 오염 방지)."""
+    import os
+    from pathlib import Path
+    ov = os.environ.get("LLM_ENV_DIR")
+    if ov:
+        b = Path(ov)
+        d = b / "logs" if b.name != "logs" else b
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return d
+    try:
+        here = Path(__file__).resolve()
+        cands = [here.parent] + list(here.parents)
+    except Exception:
+        cands = [Path.cwd()]
+    for c in cands:
+        try:
+            if (c / "llm_environment").is_dir() or (c / "RUN.bat").exists() or (c / "INSTALL.bat").exists():
+                d = c / "llm_environment" / "logs"
+                d.mkdir(parents=True, exist_ok=True)
+                return d
+        except Exception:
+            continue
+    d = Path.cwd() / "llm_environment" / "logs"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+# <<< LLM_SESSION_LOG_PATH_FIX_v1
 import os
 import queue
 import re
@@ -163,7 +205,7 @@ class UnifiedAgent:
                 _ts = time.strftime('%Y%m%d_%H%M%S')
                 _name_part = self._container_name or 'agent'
                 self._debug_log_fh = open(
-                    _log_dir / ('agent_runner_' + _name_part + '_' + _ts + '.log'),
+                    str(_llm_session_log_dir() / (_log_dir / ('agent_runner_' + _name_part + '_' + _ts + '.log'))),
                     'w', encoding='utf-8'
                 )
                 self._debug_log_fh.write(
@@ -407,13 +449,40 @@ class UnifiedAgent:
             except queue.Full:
                 pass  # 어쩔 수 없음
 
+    def _read_realtime(self, stream):
+        """v7.9: 문자 단위 실시간 읽기. readline 블록 회피.
+
+        - 완성된 줄은 \\n 기준 즉시 방출
+        - Open Interpreter 프롬프트('> ', '>>> ')는 줄바꿈 없이도 즉시 방출
+        호출측(_reader_loop)의 줄 처리 로직을 그대로 재사용한다.
+        """
+        _PROMPTS = ("> ", ">>> ")
+        _buf = []
+        while True:
+            try:
+                ch = stream.read(1)
+            except (ValueError, OSError):
+                break
+            if ch == "":
+                break
+            if ch == "\n":
+                yield "".join(_buf) + "\n"
+                _buf = []
+                continue
+            _buf.append(ch)
+            if "".join(_buf) in _PROMPTS:
+                yield "".join(_buf)
+                _buf = []
+        if _buf:
+            yield "".join(_buf)
+
     def _reader_loop(self, stream, level: str) -> None:
         """stdout/stderr 한 줄씩 읽어 큐에 push.
 
         ErrorGuard: vision 시도 패턴 감지 시 WARN 추가.
         """
         try:
-            for raw_line in iter(stream.readline, ""):
+            for raw_line in self._read_realtime(stream):
                 line = raw_line.rstrip("\n\r")
                 if not line:
                     # 빈 줄도 표시 (코드 블록 보존)
@@ -471,6 +540,13 @@ class UnifiedAgent:
                 try:
                     proc.stdin.write(line)
                     proc.stdin.flush()
+                    _dbg = getattr(self, "_debug_log_fh", None)
+                    if _dbg is not None:
+                        try:
+                            _dbg.write("[stdin] " + line.rstrip("\n\r") + "\n")
+                            _dbg.flush()
+                        except Exception:
+                            pass
                 except (BrokenPipeError, OSError, ValueError):
                     break
 
@@ -531,6 +607,7 @@ def build_sandbox_pipe_cmd(
         "-e", "PYTHONUNBUFFERED=1",
         # v5_runaway: LiteLLM banner / 트레이닝 광고 메시지 억제
         "-e", "LITELLM_LOG=ERROR",
+        "-e", "AGENT_REPL_SRC=" + _AGENT_REPL_SRC_B64,
     ]
 
     if block_internet:
@@ -541,7 +618,7 @@ def build_sandbox_pipe_cmd(
         cmd += [f"--memory={memory_limit}"]
 
     cmd += [
-        image, "interpreter",
+        image, "python3", "-c", _AGENT_REPL_BOOTSTRAP,
         "--model", f"ollama/{model_tag}",
         "--api_base", f"http://host.docker.internal:{ollama_port}",
         "--context_window", str(context_window),

@@ -15,6 +15,41 @@ v6.1 변경:
 """
 from __future__ import annotations
 
+
+# >>> LLM_SESSION_LOG_PATH_FIX_v1 (auto-inserted by FIX_SESSION_LOG_PATH.py v7.7; do not edit between markers)
+def _llm_session_log_dir():
+    """세션 로그를 llm_environment/logs 아래로 강제 (cwd 오염 방지)."""
+    import os
+    from pathlib import Path
+    ov = os.environ.get("LLM_ENV_DIR")
+    if ov:
+        b = Path(ov)
+        d = b / "logs" if b.name != "logs" else b
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return d
+    try:
+        here = Path(__file__).resolve()
+        cands = [here.parent] + list(here.parents)
+    except Exception:
+        cands = [Path.cwd()]
+    for c in cands:
+        try:
+            if (c / "llm_environment").is_dir() or (c / "RUN.bat").exists() or (c / "INSTALL.bat").exists():
+                d = c / "llm_environment" / "logs"
+                d.mkdir(parents=True, exist_ok=True)
+                return d
+        except Exception:
+            continue
+    d = Path.cwd() / "llm_environment" / "logs"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+# <<< LLM_SESSION_LOG_PATH_FIX_v1
 import atexit
 import datetime
 import os
@@ -181,7 +216,7 @@ def open_session_log(name: str) -> Optional[TextIO]:
     safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in name)
     try:
         path = _log_dir / (safe_name + "_" + _ts_file() + ".log")
-        fh = open(path, "w", encoding="utf-8", buffering=1)
+        fh = open(str(_llm_session_log_dir() / (path)), "w", encoding="utf-8", buffering=1)
         fh.write("=" * 60 + "\n")
         fh.write("  Session: " + name + "\n")
         fh.write("  Started: " + datetime.datetime.now().isoformat() + "\n")

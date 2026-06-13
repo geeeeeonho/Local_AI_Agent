@@ -625,15 +625,22 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     except Exception:
         pass
 
-    # v7_5_dockercheck: 샌드박스 모드면 Docker 데몬 상태 사전 확인
+    # v8_3_dockergate: Docker 미응답 시 Docker Desktop 자동 시작 후 대기 (수동 시작 불필요)
     if not is_host:
         try:
-            from .. import lifelog as _lld
-            if hasattr(_lld, "check_docker_running") and not _lld.check_docker_running():
-                _safe_append("error", "⚠ Docker Desktop 이 실행되지 않았습니다.")
-                _safe_append("warn", "작업표시줄에서 Docker Desktop(고래 아이콘)을 시작하세요.")
-                _safe_append("warn", "시작 후 아래 [재시작] 버튼을 누르면 다시 연결합니다.")
-                _safe_append("system", "(Docker 가 완전히 켜지기까지 30초~1분 걸릴 수 있습니다)")
+            from ..services.docker import DockerService as _DS
+            if not _DS.daemon_alive():
+                _safe_append("system", "Docker 데몬이 응답하지 않습니다 — Docker Desktop 자동 시작 시도 중...")
+                _safe_append("warn", "완전히 켜질 때까지 30초~1분 걸릴 수 있습니다. 잠시만 기다려 주세요.")
+                class _DLog:
+                    def info(self, m): _safe_append("system", str(m))
+                    def ok(self, m): _safe_append("system", str(m))
+                    def warn(self, m): _safe_append("warn", str(m))
+                    def error(self, m): _safe_append("error", str(m))
+                if _DS.ensure_daemon(logger=_DLog(), timeout=90):
+                    _safe_append("system", "Docker 준비 완료 — 에이전트를 시작합니다.")
+                else:
+                    _safe_append("error", "Docker 를 시작하지 못했습니다. Docker Desktop 을 직접 켠 뒤 [재시작] 을 누르세요.")
         except Exception:
             pass
 

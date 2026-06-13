@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 # ─── 모델 ─────────────────────────────────────────────
-MODEL_TAG = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M"
+MODEL_TAG = "gemma-agent-fixed:Q3_K_M"  # LLM_TEMPLATE_FIX_v1 (was: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M)
 MODEL_TAG_FALLBACK = "hf.co/jenerallee78/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M"
 
 # ─── Docker ───────────────────────────────────────────
