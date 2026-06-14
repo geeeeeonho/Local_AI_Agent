@@ -1,14 +1,15 @@
-"""installer — install.py 가 사용하는 모듈들.
+"""installer — `python -m installer` 가 사용하는 설치 모듈들.
 
-리팩토링 v5 구조:
-    installer.core.*    — 책임별 분할 (console/preflight/download/filesystem)
-    installer.utils     — 호환 shim (모두 re-export)
-    installer.i18n      — 다국어 (변경 없음)
-    installer.ollama    — Ollama 설치 (변경 없음)
-    installer.model     — 모델 다운로드 (변경 없음)
-    installer.python_tools — venv 생성 (변경 없음)
-    installer.sandbox   — Docker 빌드 (변경 없음)
-    installer.searxng   — SearXNG 설치 (변경 없음)
-    installer.resources — 시스템 사양 감지 (변경 없음)
-    installer.lang_setup — 언어 초기화 (변경 없음)
+구조:
+    installer.__main__   — 설치 오케스트레이터 (진입점)
+    installer.core.*     — 콘솔/사전검사/다운로드/폴더생성
+    installer.utils      — core.* 재노출 shim
+    installer.i18n       — 다국어 메시지 (ko/en)
+    installer.lang_setup — 언어 초기화
+    installer.resources  — 시스템 사양 감지 + 안전 프로필
+    installer.ollama     — 포터블 Ollama 설치 + serve
+    installer.model      — 역할별 모델 다운로드 (model_roles 기반, 멱등)
+    installer.python_tools — Open WebUI / Open Interpreter venv (멱등)
+    installer.sandbox    — Docker 에이전트 이미지 빌드 (멱등)
+    installer.searxng    — SearXNG 설정 + 이미지 (멱등)
 """
