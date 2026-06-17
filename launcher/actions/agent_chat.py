@@ -323,8 +323,58 @@ def _select_execution_mode(p):
     return None
 
 
+# LLM_AGENT_MODEL_ROLE_v1: 역할 기반 메모리 적응형 모델 선택
+def _select_agent_model(env, p):
+    """에이전트가 쓸 모델을 역할 기반으로 선택 + 메모리 적응 해석.
+
+    Returns: {"tag","reason","label"} 또는 None(취소).
+    model_roles 가 없으면 config.MODEL_TAG 로 안전 폴백.
+    """
+    from .. import config
+    try:
+        from .. import model_roles as mr
+    except Exception:
+        try:
+            from launcher import model_roles as mr  # 절대 경로 폴백
+        except Exception:
+            return {"tag": config.MODEL_TAG, "reason": "기본 모델", "label": "기본"}
+
+    try:
+        from ..presenter.base import MenuItem
+    except Exception:
+        return {"tag": config.MODEL_TAG, "reason": "기본 모델", "label": "기본"}
+
+    # 코드 실행 에이전트에 적합한 역할만 (무검열 검색/번역은 채팅용 → 실행기에서 제외)
+    exec_keys = ("2", "3", "4")  # 코딩 / 맥락 / 균형
+    roles = [mr.by_key(k) for k in exec_keys if mr.by_key(k)]
+    if not roles:
+        return {"tag": config.MODEL_TAG, "reason": "기본 모델", "label": "기본"}
+
+    items = []
+    for r in roles:
+        _badge = "권장" if r.key == "2" else None
+        items.append(MenuItem(
+            key=r.key, title=r.label, description=r.description,
+            badge=_badge, badge_kind=("good" if _badge else None),
+        ))
+    items.append(MenuItem(key="b", title="취소", separator_above=True))
+
+    free = mr.detect_free_memory_gb()
+    free_txt = ("여유 메모리 " + format(free, ".1f") + "GB") if free is not None else "여유 메모리 탐지 실패"
+    choice = p.show_menu(
+        title="에이전트 모델 역할 선택",
+        subtitle=free_txt + " · 코딩은 부족하면 7b 자동",
+        items=items,
+    )
+    if choice in ("b", "q"):
+        return None
+    role = mr.by_key(choice) or mr.by_key("2")
+    res = mr.resolve(role, free)
+    return {"tag": res.model, "reason": res.reason, "label": role.label}
+
+
 def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
-                        context_window, run_mem, run_cpus):
+                        context_window, run_mem, run_cpus, model_tag=None):
     """모드별 PIPE 명령 조립.
 
     Returns: (cmd, is_host) 또는 (None, _) 실패 시
@@ -337,7 +387,7 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
             container_name=container_name,
             workspace=workspace,
             workspace_mount=config.SANDBOX_WORKSPACE_MOUNT,
-            model_tag=config.MODEL_TAG,
+            model_tag=(model_tag or config.MODEL_TAG),
             ollama_port=config.OLLAMA_PORT,
             profile_system_message=profile.system_message,
             context_window=context_window,
@@ -354,7 +404,7 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
             return None, True
         cmd = build_host_pipe_cmd(
             interpreter_exe=str(interp),
-            model_tag=config.MODEL_TAG,
+            model_tag=(model_tag or config.MODEL_TAG),
             ollama_url=config.OLLAMA_URL,
             profile_system_message=profile.system_message,
             context_window=context_window,
@@ -392,6 +442,13 @@ def run(env, p):
     _v63_trace("프로필 선택 완료: " + (profile.name if profile else "None"))
     if profile is None:
         return
+
+    # LLM_AGENT_MODEL_ROLE_v1: 역할(모델) 선택 — 메모리 적응형
+    _model_sel = _select_agent_model(env, p)
+    if _model_sel is None:
+        return
+    agent_model_tag = _model_sel["tag"]
+    p.info("에이전트 모델: " + agent_model_tag + "  (" + _model_sel["reason"] + ")")
 
     # ── 2) 워크스페이스 선택 ──
     _v63_trace("워크스페이스 선택 직전")
@@ -449,6 +506,7 @@ def run(env, p):
     cmd, is_host = _build_cmd_for_mode(
         mode, env, profile, workspace, container,
         context_window, run_mem, run_cpus,
+        model_tag=agent_model_tag,
     )
     if cmd is None:
         if is_host:
