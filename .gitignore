@@ -15,10 +15,25 @@ llm_environment/
 #  개인 설정 파일 (사용자별)
 # ─────────────────────────────────────────────
 # 마지막 워크스페이스 경로 등 개인 정보 포함
+# 참고: launcher/settings 는 user_data/settings 로 향하는 정션(junction).
+#       아래 규칙 + user_data 규칙이 양쪽 경로를 모두 커버한다.
 launcher/settings/user_config.json
 launcher/settings/*.json
 !launcher/settings/.gitkeep
 .webui_secret_key
+
+
+# ─────────────────────────────────────────────
+#  통합 사용자 데이터 (user_data/)   ★
+# ─────────────────────────────────────────────
+# 채팅 DB(webui.db)·설정·로그·에이전트 세션·캐시 등 전부 개인/대용량 → 저장소 제외.
+# 단, 폴더 구조 설명용 README 와 빈 폴더 유지용 .gitkeep 은 추적한다.
+#   - "/user_data/*" 는 바로 아래의 모든 파일/폴더(settings, logs, chat, interpreter…)를 무시
+#   - "!" 예외로 최상위 README 와 .gitkeep 만 다시 포함
+/user_data/*
+!/user_data/.gitkeep
+!/user_data/README
+!/user_data/README.*
 
 
 # ─────────────────────────────────────────────
@@ -141,7 +156,7 @@ agent/workspace/*
 !agent/workspace/.gitkeep
 !agent/workspace/README.txt
 
-# Open WebUI 채팅 기록·업로드 파일
+# Open WebUI 채팅 기록·업로드 파일 (레거시 경로 — 현재는 user_data/chat 사용)
 chat_ui/data/
 *.db
 *.sqlite

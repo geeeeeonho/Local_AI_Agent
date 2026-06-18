@@ -95,7 +95,10 @@ def run(env: Path, p: Presenter) -> None:
         if choice == "1":
             if cfg_path.exists():
                 p.section("현재 설정")
-                print(cfg_path.read_text(encoding="utf-8"))
+                # SETTINGS_VIEW_v1: GUI 엔 print 가 안 보이므로 p.info 로 표시
+                p.info("설정 파일: " + str(cfg_path))
+                for _ln in cfg_path.read_text(encoding="utf-8").splitlines():
+                    p.info(_ln if _ln.strip() else " ")
             else:
                 p.warn("설정 파일이 아직 없습니다 (기본값 사용 중)")
             p.pause()

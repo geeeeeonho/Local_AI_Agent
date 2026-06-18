@@ -154,6 +154,15 @@ def main():
     except Exception as _oe:
         _trace("고아 컨테이너 cleanup 등록 실패: " + str(_oe))
 
+    # >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리 등록
+    try:
+        from launcher import lifelog as _ll5
+        if hasattr(_ll5, "register_cache_cleanup"):
+            _ll5.register_cache_cleanup(HERE)
+            _trace("캐시 정리 cleanup 등록 완료")
+    except Exception as _cce:
+        _trace("캐시 정리 cleanup 등록 실패: " + str(_cce))
+
     # ── 언어 초기화 ──
     _trace("언어 초기화 직전")
     try:

@@ -90,6 +90,54 @@ def run(env: Path, p: Presenter) -> None:
     new_env["OLLAMA_BASE_URL"] = config.OLLAMA_URL
     new_env["DEFAULT_MODELS"] = config.MODEL_TAG
 
+    # >>> WEBUI_SECRETKEY_v1 - 시크릿 키를 user_data 에 보관 + env 주입 (루트 파일 방지)
+    try:
+        from .. import user_data as _ud_sk
+        _sk_dir = _ud_sk.chat_dir()
+    except Exception:
+        _sk_dir = env.parent / "user_data" / "chat"
+    try:
+        import secrets as _secrets_sk
+        os.makedirs(str(_sk_dir), exist_ok=True)
+        _sk_file = _sk_dir / ".webui_secret_key"
+        _root_sk = env.parent / ".webui_secret_key"
+        if not _sk_file.exists():
+            _seed = ""
+            try:
+                if _root_sk.exists():
+                    _seed = _root_sk.read_text(encoding="utf-8").strip()
+            except Exception:
+                _seed = ""
+            _sk_file.write_text(_seed or _secrets_sk.token_hex(32), encoding="utf-8")
+        try:
+            if _root_sk.exists():
+                _root_sk.unlink()  # 루트 기존 키 제거 (user_data 로 이전됨)
+        except Exception:
+            pass
+        _sk_val = _sk_file.read_text(encoding="utf-8").strip()
+        if _sk_val:
+            new_env["WEBUI_SECRET_KEY"] = _sk_val
+    except Exception:
+        pass
+    # <<< WEBUI_SECRETKEY_v1
+
+    # >>> WEBUI_NOAUTH_v1 - 로그인 생략 (단일 사용자 모드)
+    new_env["WEBUI_AUTH"] = "False"
+    # <<< WEBUI_NOAUTH_v1
+
+    # >>> WEBUI_DATADIR_v1 - Open WebUI 저장 위치를 user_data/chat 로 지정
+    try:
+        from .. import user_data as _ud
+        _webui_data = _ud.chat_dir()
+    except Exception:
+        _webui_data = env.parent / "user_data" / "chat"
+    try:
+        os.makedirs(str(_webui_data), exist_ok=True)
+    except Exception:
+        pass
+    new_env["DATA_DIR"] = str(_webui_data)
+    # <<< WEBUI_DATADIR_v1
+
     # 런타임 가드 적용 (선택)
     try:
         from .. import runtime_guard  # legacy
@@ -112,6 +160,13 @@ def run(env: Path, p: Presenter) -> None:
 
     _launch_webui(argv, new_env, log_path, p)
     p.pause()
+
+    # >>> WEBUI_AUTOSTOP_v1 - 이 패널을 닫으면(나올 때) Open WebUI 도 함께 종료
+    try:
+        _stop_webui()
+    except Exception:
+        pass
+    # <<< WEBUI_AUTOSTOP_v1
 
 
 def _try_start_searxng(env: Path, log_path: Path, p: Presenter) -> bool:
@@ -202,11 +257,22 @@ def _launch_webui(argv, new_env, log_path: Path, p: Presenter) -> None:
     kwargs = {"env": new_env}
     if os.name == "nt" and is_gui_env:
         from .. import config as _cfg
-        kwargs["creationflags"] = _cfg.WIN_CREATE_NEW_CONSOLE
+        kwargs["creationflags"] = _cfg.WIN_CREATE_NO_WINDOW  # CHAT_UX_v1: 콘솔창 숨김(파워셸 미생성)
 
     try:
         proc = subprocess.Popen(argv, **kwargs)
         _log_write(log_path, "INFO", f"started pid={proc.pid}")
+
+        # >>> WEBUI_AUTOSTOP_v1 - 종료 시 서버 트리 정리 + 패널 종료용 핸들 보관
+        try:
+            from .. import lifelog as _ll_autostop
+            _ll_autostop.register_host_process_cleanup(
+                lambda: getattr(proc, "pid", None)
+            )
+        except Exception:
+            pass
+        globals()["_WEBUI_PROC"] = proc
+        # <<< WEBUI_AUTOSTOP_v1
 
         if is_gui_env:
             p.ok(f"Open WebUI 시작됨 (PID={proc.pid})")
@@ -241,7 +307,9 @@ def _launch_webui(argv, new_env, log_path: Path, p: Presenter) -> None:
             p.watch_process(proc)
 
             p.info(f"세션 로그: {log_path}")
-            p.info("외부 콘솔창을 닫으면 Open WebUI 가 종료됩니다.")
+            # CHAT_UX_v1: 콘솔 숨김 안내
+            p.info("이 패널을 나가거나 런처를 닫으면 Open WebUI 가 자동 종료됩니다.")
+            _show_model_tips(p)
 
         else:
             # 터미널 모드: 동기 대기
@@ -264,3 +332,60 @@ def _launch_webui(argv, new_env, log_path: Path, p: Presenter) -> None:
                    f"unexpected {type(e).__name__}: {e}")
         _log_write(log_path, "FAIL", "trace:\n" + traceback.format_exc())
         p.error(f"예상치 못한 오류: {type(e).__name__}: {e}")
+
+
+# >>> WEBUI_AUTOSTOP_v1 helper
+def _stop_webui():
+    """현재 실행 중인 Open WebUI 프로세스 트리를 종료."""
+    proc = globals().get("_WEBUI_PROC")
+    if proc is None:
+        return
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True, timeout=5, creationflags=0x08000000,
+            )
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+    globals()["_WEBUI_PROC"] = None
+# <<< WEBUI_AUTOSTOP_v1 helper
+
+
+# >>> CHAT_UX_v1 helper - 추천 모델 안내
+def _show_model_tips(p) -> None:
+    """채팅 UI 로드 후 역할별 추천 모델을 패널에 표시."""
+    try:
+        from .. import model_roles as _mr
+    except Exception:
+        try:
+            from launcher import model_roles as _mr
+        except Exception:
+            _mr = None
+    p.info("-" * 40)
+    p.info("추천 모델 (용도별) — Open WebUI 좌상단에서 모델을 고르세요")
+    roles = getattr(_mr, "ROLES", None) if _mr else None
+    if not roles:
+        p.info("  - 코딩: qwen2.5-coder:14b (메모리 부족 시 7b)")
+        p.info("  - 무검열 검색/번역: huihui_ai/qwen3-abliterated:8b")
+        p.info("  - 맥락 이해/범용: qwen3:8b")
+        return
+    try:
+        free = _mr.detect_free_memory_gb()
+        if free is not None:
+            p.info("  현재 여유 메모리 약 %.1fGB" % free)
+    except Exception:
+        pass
+    for r in roles:
+        line = "  - " + r.label + " -> " + r.model
+        if getattr(r, "fallback", None):
+            line += " (메모리 부족 시 " + r.fallback + ")"
+        p.info(line)
+        if getattr(r, "description", ""):
+            p.info("      " + r.description)
+# <<< CHAT_UX_v1 helper

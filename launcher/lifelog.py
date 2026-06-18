@@ -456,7 +456,7 @@ def install_global_hooks(project_root: Path) -> None:
                 return
             _installed = True
             _project_root = Path(project_root).resolve()
-            _log_dir = _project_root / "logs"
+            _log_dir = _project_root / "user_data" / "logs"
             try:
                 _log_dir.mkdir(parents=True, exist_ok=True)
             except OSError as e:
@@ -980,3 +980,60 @@ def check_docker_running(timeout: int = 3) -> bool:
         log("WARN", "Docker 명령 실행 불가: " + str(e))
         return False
 
+
+# >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리
+def register_cache_cleanup(project_root) -> None:
+    """종료 시 user_data/chat/cache 와 잔여 .tmp 를 자동 정리하도록 등록.
+
+    임베딩/모델 다운로드(오프라인에서 재다운로드 비쌈)는 보존한다.
+    """
+    from pathlib import Path as _P
+
+    _PRESERVE = ("embedding", "embeddings", "model", "models",
+                 "whisper", "sentence-transformers", "hub", "tiktoken")
+
+    def _do():
+        import shutil as _sh
+        try:
+            root = _P(project_root)
+            ud = root / "user_data"
+            cache = ud / "chat" / "cache"
+            removed = 0
+            freed = 0
+            if cache.is_dir():
+                for item in list(cache.iterdir()):
+                    nm = item.name.lower()
+                    if item.is_dir() and any(k in nm for k in _PRESERVE):
+                        continue  # 모델/임베딩 보존
+                    try:
+                        if item.is_dir():
+                            for f in item.rglob("*"):
+                                try:
+                                    if f.is_file():
+                                        freed += f.stat().st_size
+                                except OSError:
+                                    pass
+                            _sh.rmtree(item, ignore_errors=True)
+                        else:
+                            freed += item.stat().st_size
+                            item.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+            if ud.is_dir():
+                for t in ud.rglob("*.tmp"):
+                    try:
+                        if t.is_file():
+                            freed += t.stat().st_size
+                            t.unlink()
+                            removed += 1
+                    except OSError:
+                        pass
+            log("CLEANUP", "캐시 정리: " + str(removed) + "개 항목, 약 "
+                + str(freed // 1024) + " KB 회수")
+        except Exception as e:
+            log("WARN", "캐시 정리 예외: " + str(e))
+
+    register_cleanup(_do)
+    log("INFO", "캐시 정리 cleanup 등록됨")
+# <<< CACHE_CLEANUP_v1
