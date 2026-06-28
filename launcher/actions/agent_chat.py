@@ -602,7 +602,150 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             workspace=workspace,
         )
 
+        # FOLDER_POLICY_LIVE_v1: 세션 중 허용/금지 폴더 변경 + 컨테이너 재기동(대화 보존)
+        _cmd_holder = [cmd]
+
+        def _post(level, txt):
+            try:
+                panel.append_message(level, txt)
+            except Exception:
+                pass
+
+        def _rebuild_policy_cmd(base):
+            # base 에서 기존 allowed 마운트/tmpfs 마스크 제거 -> 현재 정책으로 재삽입 + --name 회전
+            out = []
+            i = 0
+            while i < len(base):
+                t = base[i]
+                if t == "-v" and i + 1 < len(base) and ":/home/agent/allowed/" in base[i + 1]:
+                    i += 2
+                    continue
+                if t == "--tmpfs" and i + 1 < len(base) and base[i + 1].startswith("/home/agent/allowed/"):
+                    i += 2
+                    continue
+                out.append(t)
+                i += 1
+            new_name = config.SANDBOX_CONTAINER_PREFIX + "chat_" + secrets.token_hex(4)
+            try:
+                ni = out.index("--name")
+                out[ni + 1] = new_name
+                insert_at = ni + 2
+            except (ValueError, IndexError):
+                try:
+                    insert_at = out.index("run") + 1
+                except ValueError:
+                    insert_at = len(out)
+            fresh = []
+            try:
+                from .. import folder_policy as _fp
+                for _h, _c in _fp.mounts_for():
+                    fresh += ["-v", _h + ":" + _c]
+                if hasattr(_fp, "tmpfs_masks_for"):
+                    for _m in _fp.tmpfs_masks_for():
+                        fresh += ["--tmpfs", _m]
+            except Exception:
+                pass
+            out[insert_at:insert_at] = fresh
+            return out, new_name
+
+        def _restart_apply():
+            if is_host:
+                _post("warn", "호스트 모드는 폴더 격리가 없어 재기동으로 바뀌지 않습니다. 세션을 다시 시작하세요.")
+                return
+            try:
+                new_cmd, _name = _rebuild_policy_cmd(_cmd_holder[0])
+            except Exception as _e:
+                _post("error", "정책 반영 실패: " + str(_e))
+                return
+            _cmd_holder[0] = new_cmd
+            _nmounts = sum(1 for _x in new_cmd if _x == "-v")
+            _post("system", "[정책 반영 - 컨테이너 재기동...] 마운트 " + str(_nmounts) + "개")
+            try:
+                agent.stop(timeout=2.0)
+            except Exception:
+                pass
+            agent.start(new_cmd)
+            try:
+                panel.enable_send()
+            except Exception:
+                pass
+            try:
+                panel.refresh_files(workspace)
+            except Exception:
+                pass
+
+        def _policy_summary_text():
+            try:
+                from .. import folder_policy as _fp
+                al = _fp.list_allowed()
+                dl = _fp.list_denied()
+                lines = ["[허용]"] + (["  " + x for x in al] if al else ["  (없음)"])
+                lines += ["[금지]"] + (["  " + x for x in dl] if dl else ["  (없음)"])
+                lines += ["마운트 예정 " + str(len(_fp.mounts_for())) + "개 · 변경 반영: /reload"]
+                return "\n".join(lines)
+            except Exception as _e:
+                return "정책 조회 실패: " + str(_e)
+
+        def _handle_slash(text):
+            s = (text or "").strip()
+            if not s.startswith("/"):
+                return False
+            parts = s.split(None, 1)
+            c0 = parts[0].lower()
+            arg = parts[1].strip().strip('"').strip("'") if len(parts) > 1 else ""
+            if c0 in ("/help", "/?", "/명령"):
+                _post("system",
+                      "폴더 명령: /folders 목록 · /allow <경로> · /deny <경로> · "
+                      "/unallow <경로> · /undeny <경로> · /reload 변경반영")
+                return True
+            try:
+                from .. import folder_policy as _fp
+            except Exception:
+                _post("error", "folder_policy 를 불러올 수 없습니다")
+                return True
+            if c0 in ("/folders", "/폴더", "/list"):
+                _post("system", _policy_summary_text())
+                return True
+            if c0 in ("/reload", "/적용", "/remount"):
+                _restart_apply()
+                return True
+            if c0 in ("/allow", "/허용"):
+                if not arg:
+                    _post("warn", "사용법: /allow <폴더경로>")
+                    return True
+                r = _fp.add_allowed(arg)
+                _post("system", {"ok": "허용 추가됨: " + arg + "  (반영: /reload)",
+                                 "exists": "이미 허용에 있음",
+                                 "denied": "금지 목록과 충돌 - 추가 불가",
+                                 "fail": "저장 실패"}.get(r, str(r)))
+                return True
+            if c0 in ("/deny", "/금지"):
+                if not arg:
+                    _post("warn", "사용법: /deny <폴더경로>")
+                    return True
+                r = _fp.add_denied(arg)
+                _post("system", {"ok": "금지 추가됨: " + arg + "  (반영: /reload)",
+                                 "exists": "이미 금지에 있음",
+                                 "fail": "저장 실패"}.get(r, str(r)))
+                return True
+            if c0 in ("/unallow", "/허용해제"):
+                if not arg:
+                    _post("warn", "사용법: /unallow <폴더경로>")
+                    return True
+                _post("system", ("허용 제거됨: " + arg + "  (반영: /reload)") if _fp.remove_allowed(arg) else "저장 실패")
+                return True
+            if c0 in ("/undeny", "/금지해제"):
+                if not arg:
+                    _post("warn", "사용법: /undeny <폴더경로>")
+                    return True
+                _post("system", ("금지 제거됨: " + arg + "  (반영: /reload)") if _fp.remove_denied(arg) else "저장 실패")
+                return True
+            _post("warn", "알 수 없는 명령: " + c0 + "  (/help)")
+            return True
+
         def on_user_input(text):
+            if _handle_slash(text):
+                return
             ok = agent.send_input(text)
             if not ok:
                 panel.append_message("warn", "에이전트가 실행 중이 아닙니다")
@@ -615,7 +758,13 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         def on_restart():
             panel.append_message("system", "[재시작 요청...]")
             agent.stop(timeout=2.0)
-            agent.start(cmd)
+            if not is_host:
+                try:
+                    new_cmd, _ = _rebuild_policy_cmd(_cmd_holder[0])  # FOLDER_POLICY_LIVE_v1
+                    _cmd_holder[0] = new_cmd
+                except Exception:
+                    pass
+            agent.start(_cmd_holder[0])
             panel.enable_send()
 
         def on_open():
@@ -707,6 +856,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     except Exception:
         _pl = "에이전트"
     _safe_append("system", "에이전트를 시작합니다... (프로필: " + str(_pl) + ")")
+    _safe_append("system", "폴더 명령: /folders 목록 · /allow <경로> · /deny <경로> · /reload 반영  (/help)")  # FOLDER_POLICY_LIVE_v1
     if is_host:
         _safe_append("warn", "호스트 직접 모드 — 매 명령 확인이 필요합니다")
     try:
