@@ -371,9 +371,10 @@ def _show_model_tips(p) -> None:
     p.info("추천 모델 (용도별) — Open WebUI 좌상단에서 모델을 고르세요")
     roles = getattr(_mr, "ROLES", None) if _mr else None
     if not roles:
-        p.info("  - 코딩: qwen2.5-coder:14b (메모리 부족 시 7b)")
-        p.info("  - 무검열 검색/번역: huihui_ai/qwen3-abliterated:8b")
-        p.info("  - 맥락 이해/범용: qwen3:8b")
+        p.info("  - 자동화 에이전트: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (부족 시 12b)")
+        p.info("  - 코딩: qwen3-coder:30b (메모리 부족 시 7b)")
+        p.info("  - 무검열 검색/번역: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (대체 huihui 8b)")
+        p.info("  - 맥락 이해/범용: gemma4:12b")
         return
     try:
         free = _mr.detect_free_memory_gb()

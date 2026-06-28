@@ -56,6 +56,9 @@ class OllamaService:
         e = (base or os.environ).copy()
         e["OLLAMA_MODELS"] = str(self.env / "llm_models")
         e["OLLAMA_HOST"] = f"{config.OLLAMA_HOST}:{config.OLLAMA_PORT}"
+        # AGENT_MEM_v1: 모델 중복 적재 방지(누적 메모리 감소) + 유휴 시 자동 언로드
+        e.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
+        e.setdefault("OLLAMA_KEEP_ALIVE", "5m")
         return e
 
     # ── 시작 ──

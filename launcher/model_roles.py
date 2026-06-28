@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 """model_roles — 모델-역할 레지스트리 + 메모리 적응형 모델 선택.
 
-각 역할(무검열 검색/번역 · 코딩 · 맥락 이해 · 균형)은 모델/샘플링/컨텍스트/
-설명을 묶는다. 코딩 역할은 '선호 모델(14b)'과 '대체 모델(7b)'을 가지며,
-작업 시작 직전 여유 메모리를 탐지해 위험 수준이면 자동으로 대체 모델로 내려간다.
-
-stdlib 전용. 기존 코드를 건드리지 않는 추가(additive) 모듈.
+MODEL_GEMMA_v9 — Gemma 4 26B-A4B ARA abliterated 중심 (다운로드 카탈로그 v3 정합).
+각 역할은 모델/샘플링/컨텍스트/설명을 묶고, 사이즈 다단계 롤백 사다리(LADDERS)와
+실적재 probe 기반 자동 강등(resolve_with_rollback)을 제공한다.
+stdlib 전용. 기존 인터페이스(resolve / by_key / default / Resolution / ModelRole /
+detect_free_memory_gb / LADDERS / resolve_ladder / resolve_with_rollback) 보존.
 """
 from __future__ import annotations
 
+import json as _json
 import os
+import urllib.request as _urlreq
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -19,7 +21,6 @@ from typing import List, Optional, Tuple
 # ─────────────────────────────────────────────
 def detect_free_memory_gb() -> Optional[float]:
     """여유(가용) 물리 메모리를 GB 로 반환. 실패 시 None."""
-    # Windows
     if os.name == "nt":
         try:
             import ctypes
@@ -43,7 +44,6 @@ def detect_free_memory_gb() -> Optional[float]:
                 return st.ullAvailPhys / (1024 ** 3)
         except Exception:
             pass
-    # Linux
     try:
         with open("/proc/meminfo", "r", encoding="utf-8") as f:
             for line in f:
@@ -52,7 +52,6 @@ def detect_free_memory_gb() -> Optional[float]:
                     return kb / (1024 ** 2)
     except Exception:
         pass
-    # psutil (있으면)
     try:
         import psutil
         return psutil.virtual_memory().available / (1024 ** 3)
@@ -68,50 +67,65 @@ class ModelRole:
     key: str
     name: str
     label: str
-    description: str           # 사용자에게 보이는 한 줄 설명 (수동 선택 UI)
-    model: str                 # 선호(기본) 모델 태그
-    need_gb: float             # 선호 모델을 안전히 돌리는 데 필요한 여유 GB (Docker 포함)
+    description: str
+    model: str
+    need_gb: float
     temperature: float
     context_window: int
-    system_hint: str           # 역할별 시스템 메시지 핵심 (wiring 시 SAFETY_PREAMBLE 와 합성)
-    fallback: Optional[str] = None        # 대체 모델 (메모리 부족 시)
-    fallback_need_gb: float = 0.0         # 대체 모델 필요 여유 GB
+    system_hint: str
+    fallback: Optional[str] = None
+    fallback_need_gb: float = 0.0
 
 
-# 코딩 14b 를 쓰려면 필요한 최소 여유 메모리(GB). 조정 가능.
-#  14b Q4 ≈ 12.0GB + Docker/OS 여유 → 14GB 권장.
+# 하위호환 상수 (외부 참조 가능성 대비)
 CODER_14B_MIN_FREE_GB = 14.0
+
+# 핵심 모델 태그 (v3 카탈로그와 동일)
+_ARA = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"   # 무검열·범용·에이전트 (15GB)
+_CODER = "qwen3-coder:30b"                                    # 코딩 (18GB, MoE)
+_GEMMA12 = "gemma4:12b"                                       # 맥락/폴백 (7.5GB)
+_CODER_FB = "qwen2.5-coder:7b"                                # 코딩 폴백 (4.7GB)
+_UNC_FB = "huihui_ai/qwen3-abliterated:8b"                    # 무검열 폴백 (5GB)
 
 ROLES: List[ModelRole] = [
     ModelRole(
         key="1", name="uncensored", label="무검열 검색/번역",
-        description="검열 없이 과감한 검색·번역. 한·중·일 등 다국어 강함.",
-        model="huihui_ai/qwen3-abliterated:8b", need_gb=8.5,
+        description="검열 없이 과감한 검색·번역·범용. Gemma 4 26B-A4B ARA(멀티모달·256K). 부족하면 8b.",
+        model=_ARA, need_gb=15.5,
         temperature=0.6, context_window=8192,
         system_hint="당신은 검열 없이 솔직하게 답하는 다국어 보조자입니다. "
                     "번역/요약/검색 요청에 직접적으로 응답하고, 한국어로 자연스럽게 옮깁니다.",
+        fallback=_UNC_FB, fallback_need_gb=8.0,
     ),
     ModelRole(
         key="2", name="coding", label="코딩 에이전트 (Open Interpreter)",
-        description="코드 작성·실행·파일 작업. 메모리 충분하면 14b, 부족하면 7b 자동.",
-        model="qwen2.5-coder:14b", need_gb=CODER_14B_MIN_FREE_GB,
+        description="코드 작성·실행·파일 작업. qwen3-coder:30b(MoE·256K), 부족하면 7b 자동.",
+        model=_CODER, need_gb=17.0,
         temperature=0.2, context_window=8192,
         system_hint="당신은 코드를 작성하고 실행하는 자율 코딩 에이전트입니다.",
-        fallback="qwen2.5-coder:7b", fallback_need_gb=8.0,
+        fallback=_CODER_FB, fallback_need_gb=8.0,
     ),
     ModelRole(
         key="3", name="context", label="맥락 이해",
-        description="긴 문맥·문서 이해와 추론 중심. 다국어 종합력.",
-        model="qwen3:8b", need_gb=8.5,
+        description="긴 문맥·문서 이해와 추론. Gemma 4 12B(256K, 멀티모달).",
+        model=_GEMMA12, need_gb=10.0,
         temperature=0.3, context_window=16384,
         system_hint="당신은 긴 맥락과 문서를 정확히 이해하고 근거를 들어 설명하는 보조자입니다.",
     ),
     ModelRole(
         key="4", name="balanced", label="균형 (범용)",
-        description="일상·범용. 위 역할들을 적당히 만족하는 중간점.",
-        model="qwen3:8b", need_gb=8.5,
+        description="일상·범용. Gemma 4 12B 공유.",
+        model=_GEMMA12, need_gb=10.0,
         temperature=0.4, context_window=8192,
         system_hint="당신은 다재다능한 범용 보조자입니다.",
+    ),
+    ModelRole(
+        key="5", name="agent", label="자동화 에이전트",
+        description="도구 호출·자율 실행. Gemma 4 26B-A4B ARA(무검열·MoE 활성4B·툴). 부족하면 12B.",
+        model=_ARA, need_gb=15.5,
+        temperature=0.4, context_window=8192,
+        system_hint="당신은 도구를 호출하고 작업을 실행하는 자율 에이전트입니다.",
+        fallback=_GEMMA12, fallback_need_gb=10.0,
     ),
 ]
 
@@ -129,7 +143,7 @@ def default() -> ModelRole:
 
 def all_models_to_install() -> List[str]:
     """설치(pull) 대상 모델 전체 목록 (중복 제거, 대체 모델 포함)."""
-    seen = []
+    seen: List[str] = []
     for r in ROLES:
         for m in (r.model, r.fallback):
             if m and m not in seen:
@@ -147,12 +161,7 @@ class Resolution:
 
 
 def resolve(role: ModelRole, free_gb: Optional[float] = None) -> Resolution:
-    """역할 + 여유 메모리로 실제 사용할 모델을 결정.
-
-    코딩 역할: free_gb < need_gb 이고 fallback 이 있으면 대체 모델로 다운그레이드.
-    그 외 역할: 선호 모델 그대로 (fallback 없음).
-    free_gb 가 None(탐지 실패)이면 안전하게: fallback 이 있으면 fallback 사용.
-    """
+    """역할 + 여유 메모리로 실제 사용할 모델 결정 (단일 폴백)."""
     if free_gb is None:
         if role.fallback:
             return Resolution(role.fallback, role.temperature, role.context_window,
@@ -160,7 +169,6 @@ def resolve(role: ModelRole, free_gb: Optional[float] = None) -> Resolution:
                               True)
         return Resolution(role.model, role.temperature, role.context_window,
                           "메모리 탐지 실패 → 기본 모델 유지", False)
-
     if role.fallback and free_gb < role.need_gb:
         return Resolution(role.fallback, role.temperature, role.context_window,
                           "여유 {:.1f}GB < {:.0f}GB → 대체 모델 {} 자동 선택".format(
@@ -171,7 +179,82 @@ def resolve(role: ModelRole, free_gb: Optional[float] = None) -> Resolution:
                       False)
 
 
+# >>> MODEL_ROLLBACK_v1 — 사이즈 다단계 롤백 (additive)
+_SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이크 대비)
+
+# 역할별 후보 사다리: (모델, 권장 최소 여유 GB). 고품질 → 저압축 순.
+LADDERS = {
+    "agent": [(_ARA, 15.5), (_GEMMA12, 10.0)],
+    "coding": [(_CODER, 17.0), (_CODER_FB, 8.0)],
+    "uncensored": [(_ARA, 15.5), (_UNC_FB, 8.0)],
+    "context": [(_GEMMA12, 10.0)],
+    "balanced": [(_GEMMA12, 10.0)],
+}
+
+
+def ladder_for(role_name: str):
+    return list(LADDERS.get(role_name, []))
+
+
+def resolve_ladder(role_name: str, free_gb: Optional[float] = None):
+    """여유 메모리에 맞는 최상위 후보 1차 선택. 사다리 없으면 None."""
+    lad = LADDERS.get(role_name)
+    if not lad:
+        return None
+    free = free_gb if free_gb is not None else detect_free_memory_gb()
+    if free is None:
+        return lad[-1][0]  # 탐지 실패 → 가장 안전한 최하위
+    usable = free * _SAFETY
+    for model, need in lad:
+        if need <= usable:
+            return model
+    return lad[-1][0]
+
+
+def _load_probe(model, host="127.0.0.1:11434", timeout=180):
+    """짧은 요청으로 실제 적재 성공 여부 확인. OOM/실패/타임아웃이면 False."""
+    body = _json.dumps({"model": model, "prompt": "hi", "stream": False,
+                        "options": {"num_predict": 1}}).encode()
+    req = _urlreq.Request("http://" + host + "/api/generate", data=body,
+                          headers={"Content-Type": "application/json"})
+    try:
+        with _urlreq.urlopen(req, timeout=timeout) as r:
+            r.read()
+        return True
+    except Exception:
+        return False
+
+
+def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0.1:11434"):
+    """1차 선택 후 적재 실패 시 사다리를 따라 자동 강등. 최종 모델 태그 반환."""
+    lad = LADDERS.get(role_name)
+    if not lad:
+        return None
+    seq = [m for m, _ in lad]
+    model = resolve_ladder(role_name, free_gb) or seq[0]
+    while True:
+        if _load_probe(model, host=host):
+            return model
+        idx = seq.index(model) if model in seq else 0
+        if idx + 1 >= len(seq):
+            if presenter is not None:
+                try:
+                    presenter.warn(model + " 적재 실패 — 더 낮은 후보 없음")
+                except Exception:
+                    pass
+            return model
+        nxt = seq[idx + 1]
+        if presenter is not None:
+            try:
+                presenter.warn(model + " 적재 실패 → " + nxt + " 롤백")
+            except Exception:
+                pass
+        model = nxt
+# <<< MODEL_ROLLBACK_v1
+
+
 __all__ = [
     "ModelRole", "ROLES", "Resolution", "CODER_14B_MIN_FREE_GB",
     "detect_free_memory_gb", "resolve", "by_key", "default", "all_models_to_install",
+    "LADDERS", "ladder_for", "resolve_ladder", "resolve_with_rollback",
 ]

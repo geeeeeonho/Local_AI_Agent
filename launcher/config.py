@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 # ─── 모델 ─────────────────────────────────────────────
-MODEL_TAG = "gemma-agent-fixed:Q3_K_M"  # LLM_TEMPLATE_FIX_v1 (was: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M)
-MODEL_TAG_FALLBACK = "hf.co/jenerallee78/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M"
+MODEL_TAG = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"  # MODEL_GEMMA_v9 (무검열 범용/에이전트)
+MODEL_TAG_FALLBACK = "gemma4:12b"  # MODEL_GEMMA_v9 (메모리 부족 시 롤백)
 
 # ─── Docker ───────────────────────────────────────────
 SANDBOX_IMAGE = "llm-agent-sandbox"

@@ -17,17 +17,20 @@ from . import utils, ollama
 from .i18n import get_language
 
 # model_roles 가 없을 때를 대비한 인라인 폴백 (역할 라벨, 모델)
+# MODEL_FINAL_v8 inline 폴백 (model_roles import 실패 시)
 _INLINE: List[Tuple[str, str]] = [
-    ("무검열 검색/번역", "huihui_ai/qwen3-abliterated:8b"),
+    ("무검열 검색/번역", "richardyoung/qwen3-14b-abliterated:q4_K_M"),
+    ("무검열 검색/번역 (대체)", "huihui_ai/qwen3-abliterated:8b"),
     ("코딩 (기본 14b)", "qwen2.5-coder:14b"),
     ("코딩 (대체 7b)", "qwen2.5-coder:7b"),
-    ("맥락/균형", "qwen3:8b"),
+    ("맥락/균형", "gemma4:12b"),
+    ("자동화 에이전트", "gemma4:26b"),
 ]
 
 # 자체 ko/en 메시지 (i18n.py 를 건드리지 않기 위해 모듈 로컬)
 _MSG = {
     "ko": {
-        "section": "역할별 모델 다운로드 (4역할)",
+        "section": "역할별 모델 다운로드 (5역할)",
         "intro": "한 번에 하나만 메모리에 적재되므로 RAM 무관, 디스크만 사용합니다.",
         "list_head": "현재 설치된 모델: ",
         "skip": "  [건너뜀] {label} :: {tag} (이미 설치됨)",
@@ -40,7 +43,7 @@ _MSG = {
         "no_exe": "ollama.exe 를 찾을 수 없어 모델 단계를 건너뜁니다.",
     },
     "en": {
-        "section": "Download role models (4 roles)",
+        "section": "Download role models (5 roles)",
         "intro": "Only one model is loaded at a time, so disk is used (not extra RAM).",
         "list_head": "Currently installed: ",
         "skip": "  [SKIP] {label} :: {tag} (already installed)",
@@ -61,7 +64,15 @@ def _m(key: str, **kw) -> str:
 
 
 def _load_models() -> List[Tuple[str, str]]:
-    """역할 라벨이 붙은 (label, model) 목록. model_roles 우선, 없으면 인라인."""
+    """역할 라벨이 붙은 (label, model) 목록. 카탈로그 > model_roles > 인라인."""
+    # MODEL_CATALOG_v1: 카탈로그 설치 세트 우선
+    try:
+        from launcher import model_catalog as _cat  # type: ignore
+        _pairs = _cat.install_pairs()
+        if _pairs:
+            return _pairs
+    except Exception:
+        pass
     try:
         from launcher import model_roles as mr  # type: ignore
         pairs: List[Tuple[str, str]] = []
@@ -116,6 +127,34 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     models = _load_models()
     installed = _installed(exe, env)
     utils.info(_m("list_head") + (", ".join(sorted(installed)) if installed else "(none)"))
+
+    # MODEL_SELECT_GUI_v1: 설치 전용 선택 GUI (Tk 불가/취소 처리)
+    try:
+        from launcher import model_catalog as _cat
+        _entries = _cat.all_entries()
+    except Exception:
+        _entries = None
+    if _entries:
+        try:
+            from installer import model_select_gui as _msg_gui
+            utils.info("모델 선택 창을 띄웁니다. 창이 안 보이면 작업표시줄/Alt+Tab 에서 '설치할 모델 선택' 창을 확인하세요.")
+            _picked = _msg_gui.select_models(_entries, installed, lang=get_language())
+        except Exception as _ge:
+            utils.warn("선택 GUI 불가 — 권장 세트 자동 설치 (" + repr(_ge) + ")")
+            _picked = "AUTO"
+        if _picked is None:
+            utils.warn("모델 선택 취소 — 나중에 RUN.bat -> [9] 모델 관리 에서 받으세요.")
+            return []
+        if _picked != "AUTO":
+            _desired = set(_picked)
+            _role = {e.tag: e.role for e in _entries}
+            models = [(_role.get(_t, _t), _t) for _t in sorted(_desired - installed)]
+            for _dt in sorted(installed - _desired):
+                utils.info("삭제: " + _dt)
+                try:
+                    subprocess.run([str(exe), "rm", _dt], env=env, check=False)
+                except Exception as _de:
+                    utils.warn("삭제 실패: " + _dt + " (" + repr(_de) + ")")
 
     pulled = skipped = failed = 0
     ok_tags: List[str] = []

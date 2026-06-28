@@ -12,6 +12,8 @@ from . import (
     searxng as searxng_action,
     settings as settings_action,
     agent_chat,
+    model_manage,  # MODEL_MANAGER_v1
+    docker_clean,  # DOCKER_CLEAN_v1
 )
 
 __all__ = [
@@ -19,4 +21,6 @@ __all__ = [
     "ollama_action", "model_info", "docker_image",
     "searxng_action", "settings_action",
     "agent_chat",
+    "model_manage",
+    "docker_clean",
 ]

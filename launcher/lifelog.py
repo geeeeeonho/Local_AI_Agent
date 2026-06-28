@@ -859,7 +859,7 @@ def warmup_ollama_model(model_tag: str, host: str = "http://127.0.0.1:11434",
             "model": model_tag,
             "prompt": "Hi",
             "stream": False,
-            "keep_alive": "10m",
+            "keep_alive": "5m",  # AGENT_MEM_v1
             "options": {"num_predict": 1},
         }).encode("utf-8")
         req = _urlreq.Request(

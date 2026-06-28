@@ -32,6 +32,10 @@ def _build_menu_items() -> list[MenuItem]:
         MenuItem(key="6", title="Docker 이미지 빌드/재빌드"),
         MenuItem(key="7", title="SearXNG 검색 엔진 제어"),
         MenuItem(key="8", title="설정 관리 (보기/초기화/언어)"),
+        MenuItem(key="9", title="모델 관리 (다운로드/삭제)",
+                 description="받을 모델 선택 · 사용 안 하는 모델 삭제"),  # MODEL_MANAGER_v1
+        MenuItem(key="10", title="도커 정리 (누적 캐시/이미지)",
+                 description="중지 컨테이너·dangling 이미지·빌드 캐시 청소"),  # DOCKER_CLEAN_v1
         MenuItem(key="q", title="종료", separator_above=True),
     ]
 
@@ -46,6 +50,8 @@ def _build_action_map() -> Dict[str, Callable]:
         "6": actions.docker_image.run,
         "7": actions.searxng_action.run,
         "8": actions.settings_action.run,
+        "9": actions.model_manage.run,  # MODEL_MANAGER_v1
+        "10": actions.docker_clean.run,  # DOCKER_CLEAN_v1
     }
 
 

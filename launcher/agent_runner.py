@@ -695,6 +695,14 @@ def build_sandbox_pipe_cmd(
     ]
     cmd += _state_mount + _state_env  # AGENT_STATE_PERSIST_v1
 
+    # FOLDER_POLICY_v1: 상시 허용 폴더 마운트 (샌드박스는 그 외 경로 물리 차단)
+    try:
+        from .. import folder_policy as _fp
+        for _h, _c in _fp.mounts_for():
+            cmd += ["-v", _h + ":" + _c]
+    except Exception:
+        pass
+
     if block_internet:
         cmd += ["--dns=0.0.0.0"]
     if cpu_limit:

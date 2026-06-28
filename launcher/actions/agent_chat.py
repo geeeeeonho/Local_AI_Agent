@@ -345,14 +345,14 @@ def _select_agent_model(env, p):
         return {"tag": config.MODEL_TAG, "reason": "기본 모델", "label": "기본"}
 
     # 코드 실행 에이전트에 적합한 역할만 (무검열 검색/번역은 채팅용 → 실행기에서 제외)
-    exec_keys = ("2", "3", "4")  # 코딩 / 맥락 / 균형
+    exec_keys = ("5", "2", "3", "4")  # MODEL_FINAL_v8: 에이전트(권장)/코딩/맥락/균형
     roles = [mr.by_key(k) for k in exec_keys if mr.by_key(k)]
     if not roles:
         return {"tag": config.MODEL_TAG, "reason": "기본 모델", "label": "기본"}
 
     items = []
     for r in roles:
-        _badge = "권장" if r.key == "2" else None
+        _badge = "권장" if r.key == "5" else None  # MODEL_FINAL_v8
         items.append(MenuItem(
             key=r.key, title=r.label, description=r.description,
             badge=_badge, badge_kind=("good" if _badge else None),
@@ -370,7 +370,16 @@ def _select_agent_model(env, p):
         return None
     role = mr.by_key(choice) or mr.by_key("2")
     res = mr.resolve(role, free)
-    return {"tag": res.model, "reason": res.reason, "label": role.label}
+    tag, reason = res.model, res.reason
+    # MODEL_ROLLBACK_v1: 사다리(다단계 양자화) 기반 메모리 적응 선택 우선
+    _lad = getattr(mr, "LADDERS", {})
+    if getattr(role, "name", "") in _lad and hasattr(mr, "resolve_ladder"):
+        _picked = mr.resolve_ladder(role.name, free)
+        if _picked:
+            if _picked != tag:
+                reason = "사다리 선택(여유 적응): " + _picked
+            tag = _picked
+    return {"tag": tag, "reason": reason, "label": role.label}
 
 
 def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
@@ -452,6 +461,12 @@ def run(env, p):
 
     # ── 2) 워크스페이스 선택 ──
     _v63_trace("워크스페이스 선택 직전")
+    # FOLDER_POLICY_v1: 허용/금지 폴더 설정(설정 버튼)
+    try:
+        from .. import folder_policy as _fp
+        _fp.maybe_manage(p, env)
+    except Exception:
+        pass
     workspace = _ask_workspace(p, env)
     _v63_trace("워크스페이스 선택 완료: " + str(workspace))
     if workspace is None:
@@ -489,6 +504,24 @@ def run(env, p):
             p.error("Ollama 서비스를 시작할 수 없습니다.")
             p.pause()
             return
+    except Exception:
+        pass
+
+    # MODEL_ROLLBACK_v1: Ollama 확인 후 실제 적재 probe -> OOM/실패 시 자동 강등
+    try:
+        from .. import model_roles as _mr8
+        if hasattr(_mr8, "resolve_with_rollback") and hasattr(_mr8, "LADDERS"):
+            _free8 = _mr8.detect_free_memory_gb()
+            _rname8 = None
+            for _k8, _lad8 in _mr8.LADDERS.items():
+                if any(_m8 == agent_model_tag for _m8, _nb8 in _lad8):
+                    _rname8 = _k8
+                    break
+            if _rname8:
+                _rolled8 = _mr8.resolve_with_rollback(_rname8, _free8, presenter=p)
+                if _rolled8 and _rolled8 != agent_model_tag:
+                    p.warn("적재 실패 감지 -> " + _rolled8 + " 로 롤백")
+                    agent_model_tag = _rolled8
     except Exception:
         pass
 

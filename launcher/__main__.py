@@ -163,6 +163,14 @@ def main():
     except Exception as _cce:
         _trace("캐시 정리 cleanup 등록 실패: " + str(_cce))
 
+    # >>> DOCKER_AUTOCLEAN_v1 - 종료 시 도커 안전 정리 (플래그 켜진 경우)
+    try:
+        from launcher import docker_maint as _dm
+        if _dm.register_auto_prune(ENV):
+            _trace("도커 자동정리 등록 완료")
+    except Exception as _dce:
+        _trace("도커 자동정리 등록 실패: " + str(_dce))
+
     # ── 언어 초기화 ──
     _trace("언어 초기화 직전")
     try:

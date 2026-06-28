@@ -89,9 +89,10 @@ def _show_role_table(p) -> None:
     p.info("-" * 40)
     p.info("용도별 권장 모델")
     if not roles:
+        p.info("  - 자동화 에이전트: gemma4:26b (부족 시 12b)")
         p.info("  - 코딩: qwen2.5-coder:14b (부족 시 7b)")
-        p.info("  - 무검열 검색/번역: huihui_ai/qwen3-abliterated:8b")
-        p.info("  - 맥락/범용: qwen3:8b")
+        p.info("  - 무검열 검색/번역: richardyoung/qwen3-14b-abliterated:q4_K_M (대체 huihui 8b)")
+        p.info("  - 맥락/범용: gemma4:12b")
         return
     for r in roles:
         line = "  - " + r.label + " -> " + r.model
