@@ -52,6 +52,11 @@ def save(data: dict) -> bool:
         return False
 
 
+def _cmpkey(path: str) -> str:
+    # FOLDER_POLICY_CASE_v1: 비교 전용 정규화 (Windows 대소문자 무시)
+    return os.path.normcase(_norm(path))
+
+
 def _norm(path: str) -> str:
     try:
         return str(Path(path).resolve())
@@ -68,9 +73,9 @@ def list_denied() -> List[str]:
 
 
 def is_denied(path: str) -> bool:
-    n = _norm(path)
+    n = _cmpkey(path)
     for d in list_denied():
-        dn = _norm(d)
+        dn = _cmpkey(d)
         if n == dn or n.startswith(dn.rstrip("\\/") + os.sep):
             return True
     return False
@@ -82,7 +87,7 @@ def add_allowed(path: str) -> str:
         return "denied"
     d = load()
     al = d.get("allowed", [])
-    if any(_norm(x) == n for x in al):
+    if any(_cmpkey(x) == _cmpkey(n) for x in al):
         return "exists"
     al.append(n)
     d["allowed"] = al
@@ -92,7 +97,7 @@ def add_allowed(path: str) -> str:
 def remove_allowed(path: str) -> bool:
     n = _norm(path)
     d = load()
-    d["allowed"] = [x for x in d.get("allowed", []) if _norm(x) != n]
+    d["allowed"] = [x for x in d.get("allowed", []) if _cmpkey(x) != _cmpkey(n)]
     return save(d)
 
 
@@ -100,18 +105,18 @@ def add_denied(path: str) -> str:
     n = _norm(path)
     d = load()
     dl = d.get("denied", [])
-    if any(_norm(x) == n for x in dl):
+    if any(_cmpkey(x) == _cmpkey(n) for x in dl):
         return "exists"
     dl.append(n)
     d["denied"] = dl
-    d["allowed"] = [x for x in d.get("allowed", []) if _norm(x) != n]  # 금지 시 허용에서 제거
+    d["allowed"] = [x for x in d.get("allowed", []) if _cmpkey(x) != _cmpkey(n)]  # 금지 시 허용에서 제거
     return "ok" if save(d) else "fail"
 
 
 def remove_denied(path: str) -> bool:
     n = _norm(path)
     d = load()
-    d["denied"] = [x for x in d.get("denied", []) if _norm(x) != n]
+    d["denied"] = [x for x in d.get("denied", []) if _cmpkey(x) != _cmpkey(n)]
     return save(d)
 
 
@@ -127,13 +132,13 @@ def _container_name(host: str, used: set) -> str:
     return name
 
 
-def mounts_for() -> List[Tuple[str, str]]:
-    """허용 폴더 → (호스트경로, 컨테이너경로). 컨테이너 경로는 /home/agent/allowed/<이름>.
-
-    존재하지 않거나 금지된 폴더는 제외. 샌드박스 docker run 에 -v 로 추가됨.
-    """
-    out: List[Tuple[str, str]] = []
-    used: set = set()
+def _plan():
+    # FOLDER_POLICY_OVERLAY_v1: 마운트와 tmpfs 마스크를 동일 루프에서 산출(이름 정합 보장).
+    mounts = []
+    masks = []
+    used = set()
+    denied_keys = [_cmpkey(d) for d in list_denied()]
+    denied_raw = list_denied()
     for h in list_allowed():
         try:
             hp = Path(h)
@@ -141,11 +146,35 @@ def mounts_for() -> List[Tuple[str, str]]:
                 continue
             if is_denied(str(hp)):
                 continue
+            real = hp.resolve()
             cname = _container_name(str(hp), used)
-            out.append((str(hp.resolve()), "/home/agent/allowed/" + cname))
+            cmount = "/home/agent/allowed/" + cname
+            mounts.append((str(real), cmount))
+            base = _cmpkey(str(real))
+            for dk, draw in zip(denied_keys, denied_raw):
+                if dk == base:
+                    continue
+                if dk.startswith(base + os.sep):
+                    try:
+                        rel = os.path.relpath(_norm(draw), str(real))
+                    except Exception:
+                        continue
+                    rel_posix = rel.replace("\\", "/").strip("/")
+                    if rel_posix and not rel_posix.startswith(".."):
+                        masks.append(cmount + "/" + rel_posix)
         except Exception:
             continue
-    return out
+    return mounts, masks
+
+
+def mounts_for():
+    """허용 폴더 -> (호스트경로, 컨테이너경로). 그 외 경로는 물리 차단."""
+    return _plan()[0]
+
+
+def tmpfs_masks_for():
+    """허용 상위 안의 '금지' 하위를 빈 tmpfs 로 가릴 컨테이너 경로 목록."""
+    return _plan()[1]
 
 
 def summary() -> str:
@@ -241,5 +270,5 @@ def maybe_manage(p, env=None) -> None:
 __all__ = [
     "load", "save", "list_allowed", "list_denied", "is_denied",
     "add_allowed", "remove_allowed", "add_denied", "remove_denied",
-    "mounts_for", "summary", "manage", "maybe_manage",
+    "mounts_for", "tmpfs_masks_for", "summary", "manage", "maybe_manage",
 ]

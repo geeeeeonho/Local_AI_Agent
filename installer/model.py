@@ -19,12 +19,12 @@ from .i18n import get_language
 # model_roles 가 없을 때를 대비한 인라인 폴백 (역할 라벨, 모델)
 # MODEL_FINAL_v8 inline 폴백 (model_roles import 실패 시)
 _INLINE: List[Tuple[str, str]] = [
-    ("무검열 검색/번역", "richardyoung/qwen3-14b-abliterated:q4_K_M"),
+    ("무검열 검색/번역", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
     ("무검열 검색/번역 (대체)", "huihui_ai/qwen3-abliterated:8b"),
-    ("코딩 (기본 14b)", "qwen2.5-coder:14b"),
+    ("코딩 (기본)", "qwen3-coder:30b"),  # CATALOG_ALIGN_v9
     ("코딩 (대체 7b)", "qwen2.5-coder:7b"),
     ("맥락/균형", "gemma4:12b"),
-    ("자동화 에이전트", "gemma4:26b"),
+    ("자동화 에이전트", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
 ]
 
 # 자체 ko/en 메시지 (i18n.py 를 건드리지 않기 위해 모듈 로컬)
@@ -111,7 +111,7 @@ def _present(tag: str, installed: set) -> bool:
         return True
     # 태그 없는 베이스가 같고 동일 quant 로 끝나면 동일로 간주 (보수적)
     base = tag.split(":")[0]
-    return any(n.split(":")[0] == base for n in installed if ":" in n) and tag in installed
+    return tag in installed  # PRESENT_FIX_v1 (base-match 분기는 비활성 상태였음 — 현행 동작 보존)
 
 
 def download(paths: Dict[str, Path]) -> Optional[List[str]]:

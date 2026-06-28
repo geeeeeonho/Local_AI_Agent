@@ -89,9 +89,9 @@ def _show_role_table(p) -> None:
     p.info("-" * 40)
     p.info("용도별 권장 모델")
     if not roles:
-        p.info("  - 자동화 에이전트: gemma4:26b (부족 시 12b)")
-        p.info("  - 코딩: qwen2.5-coder:14b (부족 시 7b)")
-        p.info("  - 무검열 검색/번역: richardyoung/qwen3-14b-abliterated:q4_K_M (대체 huihui 8b)")
+        p.info("  - 자동화 에이전트: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (부족 시 12b)")  # CATALOG_ALIGN_v9
+        p.info("  - 코딩: qwen3-coder:30b (부족 시 7b)")
+        p.info("  - 무검열 검색/번역: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (대체 huihui 8b)")
         p.info("  - 맥락/범용: gemma4:12b")
         return
     for r in roles:

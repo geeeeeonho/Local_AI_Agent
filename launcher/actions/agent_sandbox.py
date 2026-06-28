@@ -83,9 +83,16 @@ def _build_command(
 
     # FOLDER_POLICY_v1: 상시 허용 폴더 마운트 (샌드박스는 그 외 경로 물리 차단)
     try:
-        from .. import folder_policy as _fp
+        try:
+            from .. import folder_policy as _fp
+        except Exception:
+            from launcher import folder_policy as _fp
         for _h, _c in _fp.mounts_for():
             cmd += ["-v", _h + ":" + _c]
+        # FOLDER_POLICY_OVERLAY_v1: 허용 상위 안의 '금지' 하위를 빈 tmpfs 로 가림
+        if hasattr(_fp, "tmpfs_masks_for"):
+            for _m in _fp.tmpfs_masks_for():
+                cmd += ["--tmpfs", _m]
     except Exception:
         pass
 
