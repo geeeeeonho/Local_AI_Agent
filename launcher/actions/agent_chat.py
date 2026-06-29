@@ -62,7 +62,7 @@ def _select_profile(p: Presenter):
 
 
 def _ask_workspace(p: Presenter, env: Path) -> Optional[Path]:
-    """마운트할 폴더 선택."""
+    """작업 폴더 선택. 허용 폴더가 있으면 그중에서 고르게 하고, 아니면 직접 선택. FOLDER_WS_v1."""
     default = env / "agent" / "workspace"
 
     last_used = None
@@ -75,6 +75,38 @@ def _ask_workspace(p: Presenter, env: Path) -> Optional[Path]:
                 last_used = lp
     except Exception:
         pass
+
+    # FOLDER_WS_v1: 허용 폴더가 있으면 그중에서 '작업 폴더'를 고르게 (의도: 허용 폴더에서 작업)
+    allowed = []
+    try:
+        from .. import folder_policy as _fp
+        allowed = [a for a in _fp.list_allowed()
+                   if Path(a).exists() and Path(a).is_dir()]
+    except Exception:
+        allowed = []
+    if allowed:
+        try:
+            items = []
+            for i, a in enumerate(allowed, 1):
+                items.append(MenuItem(key=str(i), title=Path(a).name, description=a))
+            items.append(MenuItem(key="o", title="직접 다른 폴더 선택", separator_above=True))
+            items.append(MenuItem(key="b", title="취소"))
+            c = p.show_menu(
+                title="작업 폴더 선택",
+                subtitle="허용 폴더 중에서 작업할 폴더를 고르세요 (나머지 허용 폴더도 함께 접근 가능)",
+                items=items,
+            )
+            if c in ("b", "q", None):
+                return None
+            if c != "o":
+                try:
+                    idx = int(c) - 1
+                    if 0 <= idx < len(allowed):
+                        return Path(allowed[idx])
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     return p.prompt_path(
         title="GUI 통합 대화 — 작업 폴더",
@@ -391,6 +423,8 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
     from .. import config
     if mode == "sandbox":
         from ..agent_runner import build_sandbox_pipe_cmd
+        from .. import profiles as _profiles  # FOLDER_WS_v1: 작업 폴더 + 허용 폴더 안내 주입
+        _sysmsg = profile.system_message + _profiles.build_session_addendum(workspace)
         cmd = build_sandbox_pipe_cmd(
             image=config.SANDBOX_IMAGE,
             container_name=container_name,
@@ -398,7 +432,7 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
             workspace_mount=config.SANDBOX_WORKSPACE_MOUNT,
             model_tag=(model_tag or config.MODEL_TAG),
             ollama_port=config.OLLAMA_PORT,
-            profile_system_message=profile.system_message,
+            profile_system_message=_sysmsg,
             context_window=context_window,
             memory_limit=run_mem,
             cpu_limit=run_cpus,
@@ -525,6 +559,36 @@ def run(env, p):
     except Exception:
         pass
 
+    # MODEL_INSTALLED_MATCH_v1: 실제 설치된 모델과 자동 매치 (404 'model not found' 사전 차단)
+    try:
+        from .. import model_roles as _mri
+        from .. import config as _cfgm
+        if hasattr(_mri, "auto_match_installed"):
+            _hosti = "127.0.0.1:" + str(getattr(_cfgm, "OLLAMA_PORT", 11434))
+            _rn = None
+            try:
+                for _k, _l in getattr(_mri, "LADDERS", {}).items():
+                    if any(_m == agent_model_tag for _m, _nb in _l):
+                        _rn = _k
+                        break
+            except Exception:
+                _rn = None
+            _freei = None
+            try:
+                _freei = _mri.detect_free_memory_gb()
+            except Exception:
+                pass
+            _matched, _note = _mri.auto_match_installed(agent_model_tag, _rn, _freei, host=_hosti)
+            if _matched is None:
+                p.error(_note or "설치된 모델이 없습니다 — MANAGE.bat [2] 에서 받으세요.")
+                p.pause()
+                return
+            if _matched != agent_model_tag:
+                p.warn(_note or ("설치된 " + _matched + " 로 자동 전환"))
+                agent_model_tag = _matched
+    except Exception:
+        pass
+
     # ── 6) 명령 조립 ──
     run_mem, run_cpus = _resolve_resource_limits(env)
     container = config.SANDBOX_CONTAINER_PREFIX + "chat_" + secrets.token_hex(4)
@@ -646,7 +710,30 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             except Exception:
                 pass
             out[insert_at:insert_at] = fresh
+            # FOLDER_WS_RELOAD_v1: 시스템 메시지(허용 폴더 안내)도 현재 정책으로 갱신
+            try:
+                from .. import profiles as _profiles
+                _sm = profile.system_message + _profiles.build_session_addendum(workspace)
+                _si = out.index("--system_message")
+                out[_si + 1] = _sm
+            except Exception:
+                pass
             return out, new_name
+
+        def _allowed_sig(c):  # FOLDER_WS_RELOAD_v1: 허용 마운트/마스크 집합의 서명
+            sig = []
+            i = 0
+            while i < len(c):
+                if c[i] == "-v" and i + 1 < len(c) and ":/home/agent/allowed/" in c[i + 1]:
+                    sig.append("v:" + c[i + 1])
+                    i += 2
+                    continue
+                if c[i] == "--tmpfs" and i + 1 < len(c) and c[i + 1].startswith("/home/agent/allowed/"):
+                    sig.append("t:" + c[i + 1])
+                    i += 2
+                    continue
+                i += 1
+            return sorted(sig)
 
         def _restart_apply():
             if is_host:
@@ -656,6 +743,9 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 new_cmd, _name = _rebuild_policy_cmd(_cmd_holder[0])
             except Exception as _e:
                 _post("error", "정책 반영 실패: " + str(_e))
+                return
+            if _allowed_sig(new_cmd) == _allowed_sig(_cmd_holder[0]):  # FOLDER_WS_RELOAD_v1
+                _post("system", "[변경 없음 - 재기동 생략] 현재 마운트 유지")
                 return
             _cmd_holder[0] = new_cmd
             _nmounts = sum(1 for _x in new_cmd if _x == "-v")

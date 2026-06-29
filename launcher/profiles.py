@@ -128,28 +128,34 @@ SAFETY_PREAMBLE = SAFETY_PREAMBLE + RESPONSE_DISCIPLINE + INJECTION_GUARD
 
 
 def build_session_addendum(host_workspace=None) -> str:
-    """system_message 끝에 append 할 동적 세션 정보.
-
-    호스트 측 워크스페이스 경로를 모델에 알려 줍니다. 모델은 컨테이너 내부
-    경로(/home/agent/workspace) 만 알고 있어서 사용자가 '내 폴더' 라고
-    말할 때 어디인지 인지하지 못하는 문제를 해결합니다.
-
-    Args:
-        host_workspace: pathlib.Path 또는 str. None 이면 빈 문자열 반환.
-
-    Returns:
-        세션 정보 단락 (빈 줄 포함). None 인 경우 "".
-    """
-    if host_workspace is None:
-        return ""
-    return (
-        "\n■ 현재 세션 정보\n"
-        f"- 호스트 측 작업 폴더: {host_workspace}\n"
-        "- 컨테이너 내부 마운트: /home/agent/workspace\n"
-        "  - 두 경로는 동일한 폴더입니다. 파일 작업 시 컨테이너 경로 "
-        "`/home/agent/workspace` 를 사용하세요.\n"
-        "  - 사용자가 '내 폴더', '워크스페이스' 라고 말하면 위 경로를 의미합니다.\n"
-    )
+    """system_message 끝에 append 할 동적 세션 정보 (작업 폴더 + 허용 폴더 안내). FOLDER_WS_v1."""
+    parts = []
+    if host_workspace is not None:
+        parts.append(
+            "\n■ 현재 세션 정보\n"
+            "- 호스트 측 작업 폴더: " + str(host_workspace) + "\n"
+            "- 컨테이너 내부 마운트: /home/agent/workspace\n"
+            "  - 두 경로는 동일한 폴더입니다. 기본 파일 작업은 컨테이너 경로 "
+            "`/home/agent/workspace` 를 사용하세요.\n"
+            "  - 사용자가 '내 폴더', '워크스페이스' 라고 말하면 위 경로를 의미합니다.\n"
+        )
+    try:
+        from . import folder_policy as _fp
+        _mounts = _fp.mounts_for()
+    except Exception:
+        _mounts = []
+    if _mounts:
+        _lines = ["\n■ 추가 작업 가능 폴더 (허용됨, 읽기/쓰기)\n"]
+        for _h, _c in _mounts:
+            _lines.append("- " + str(_c) + "   (호스트: " + str(_h) + ")\n")
+        _lines.append(
+            "  - 위 폴더들도 자유롭게 읽고 쓸 수 있습니다. 사용자가 그 폴더 작업을 요청하면 "
+            "해당 컨테이너 경로에서 직접 수행하세요.\n"
+            "  - 앞의 '모든 입출력은 workspace 에서' 규칙은 이 허용 폴더들에는 적용되지 않습니다.\n"
+            "  - 현재 마운트는 `ls /home/agent/allowed/` 로도 확인할 수 있습니다.\n"
+        )
+        parts.append("".join(_lines))
+    return "".join(parts)
 
 # ─────────────────────────────────────────────
 #  프로필 정의 — 순서가 메뉴 표시 순서

@@ -250,6 +250,71 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
             except Exception:
                 pass
         model = nxt
+
+
+# >>> MODEL_INSTALLED_MATCH_v1 — 설치 모델 자동 매치 (additive)
+def installed_models(host="127.0.0.1:11434", timeout=5):
+    """Ollama /api/tags 로 설치된 모델 태그 집합 반환. 조회 실패 시 None."""
+    try:
+        req = _urlreq.Request("http://" + host + "/api/tags")
+        with _urlreq.urlopen(req, timeout=timeout) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        out = set()
+        for m in (data.get("models") or []):
+            nm = m.get("name") or m.get("model")
+            if nm:
+                out.add(nm)
+        return out
+    except Exception:
+        return None
+
+
+def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.0.1:11434"):
+    """설치된 모델을 보고 실제 사용할 태그를 결정. 반환 (tag, note).
+
+    desired_tag 가 설치돼 있으면 그대로. 아니면 역할 사다리 / 유사이름 / 임의 설치 순 폴백.
+    설치된 모델이 전혀 없으면 tag=None. /api/tags 조회 실패면 desired_tag 그대로(기존 동작).
+    """
+    inst = installed_models(host)
+    if inst is None:
+        return desired_tag, None
+    if desired_tag and desired_tag in inst:
+        return desired_tag, None
+    free = free_gb if free_gb is not None else detect_free_memory_gb()
+    usable = (free * _SAFETY) if free is not None else None
+
+    lad = LADDERS.get(role_name) if role_name else None
+    if lad:
+        for m, need in lad:
+            if m in inst and (usable is None or need <= usable):
+                return m, "선택 모델 미설치 → 설치된 " + m + " 자동 사용"
+        for m, _n in lad:
+            if m in inst:
+                return m, "선택 모델 미설치 → 설치된 " + m + " 사용(메모리 빠듯)"
+
+    allc = [(need, m) for _ln, _l in LADDERS.items() for m, need in _l if m in inst]
+    fit = [(n, m) for n, m in allc if usable is None or n <= usable]
+    pool = fit if fit else allc
+    if pool:
+        pool.sort(reverse=True)
+        return pool[0][1], "역할 모델 미설치 → 설치된 " + pool[0][1] + " 자동 사용"
+
+    bases = set()
+    for _ln, _l in LADDERS.items():
+        for m, _n in _l:
+            bases.add(m.split(":")[0])
+    if desired_tag:
+        bases.add(desired_tag.split(":")[0])
+    base_hits = sorted(x for x in inst if x.split(":")[0] in bases)
+    if base_hits:
+        return base_hits[0], "정확한 태그 미설치 → 유사 모델 " + base_hits[0] + " 사용"
+
+    if inst:
+        any_m = sorted(inst)[0]
+        return any_m, "역할 매칭 없음 → 설치된 " + any_m + " 사용"
+
+    return None, "설치된 모델이 없습니다 — MANAGE.bat [2] 모델 관리에서 받으세요"
+# <<< MODEL_INSTALLED_MATCH_v1
 # <<< MODEL_ROLLBACK_v1
 
 
@@ -257,4 +322,5 @@ __all__ = [
     "ModelRole", "ROLES", "Resolution", "CODER_14B_MIN_FREE_GB",
     "detect_free_memory_gb", "resolve", "by_key", "default", "all_models_to_install",
     "LADDERS", "ladder_for", "resolve_ladder", "resolve_with_rollback",
+    "installed_models", "auto_match_installed",
 ]
