@@ -834,11 +834,61 @@ def build_host_pipe_cmd(
     return cmd
 
 
+# ─────────────────────────────────────────────
+#  HOST_TOR_ENV_v1: 호스트 인터프리터용 Tor 프록시 환경변수
+# ─────────────────────────────────────────────
+def build_tor_env(base=None):
+    """호스트 직접 실행 프로세스에 Tor 프록시를 강제하는 환경변수 dict.
+
+    - HTTP/HTTPS  -> Privoxy(127.0.0.1:8118) -> Tor  (urllib/requests 호환)
+    - ALL_PROXY   -> socks5h://127.0.0.1:9050        (socks5h: 원격 DNS, 유출 차단)
+    - NO_PROXY    -> 로컬 Ollama(127.0.0.1/localhost) 우회  (필수 — 없으면 모델 호출 실패)
+
+    Args:
+        base: 기존 env dict(예: OllamaService.env_vars()). None 이면 os.environ 복사.
+    Returns:
+        프록시 키가 병합된 새 dict(원본 불변).
+    """
+    import os as _os
+    env = dict(base) if base is not None else _os.environ.copy()
+    _hp, _sp = 8118, 9050
+    try:
+        try:
+            from .. import tor_runtime as _tr
+        except Exception:
+            from launcher import tor_runtime as _tr
+        _hp = int(getattr(_tr, "TOR_HTTP_PORT", 8118))
+        _sp = int(getattr(_tr, "TOR_HOST_PORT", 9050))
+    except Exception:
+        _hp, _sp = 8118, 9050
+    _http = "http://127.0.0.1:%d" % _hp
+    _socks = "socks5h://127.0.0.1:%d" % _sp
+    _no = "127.0.0.1,localhost,::1,host.docker.internal"
+    try:
+        try:
+            from .. import config as _cfg
+        except Exception:
+            from launcher import config as _cfg
+        _oh = str(getattr(_cfg, "OLLAMA_HOST", "") or "")
+        if _oh and _oh not in _no:
+            _no += "," + _oh
+    except Exception:
+        pass
+    for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env[_k] = _http
+    for _k in ("ALL_PROXY", "all_proxy"):
+        env[_k] = _socks
+    for _k in ("NO_PROXY", "no_proxy"):
+        env[_k] = _no
+    return env
+
+
 __all__ = [
     "AgentMessage",
     "UnifiedAgent",
     "build_sandbox_pipe_cmd",
     "build_host_pipe_cmd",
+    "build_tor_env",
     "looks_like_vision_attempt",
     "LEVEL_STDOUT", "LEVEL_STDERR", "LEVEL_INFO",
     "LEVEL_WARN", "LEVEL_ERROR", "LEVEL_TERMINATED",

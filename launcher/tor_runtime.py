@@ -69,20 +69,47 @@ def _has_http_port() -> bool:  # TOR_RUNTIME_v8
     return bool(r and r.returncode == 0 and ("8118" in (r.stdout or "")))
 
 
-def _wait_port(timeout=BOOT_TIMEOUT) -> bool:
-    import socket
+def _socks5_handshake_ok(host, port, timeout=3) -> bool:  # TOR_HEALTHCHECK_v1
+    """SOCKS5 그리팅에 유효 응답하는지(=진짜 SOCKS 프록시인지) 확인.
+
+    TCP 연결만으로는 '누가 포트를 열었다'까지만 보장된다. Tor SOCKS 리스너는
+    05 01 00 (VER=5, NMETHODS=1, NOAUTH) 에 05 00(무인증 수락) 등으로 답한다.
+    포트만 점유한 죽은/다른 컨테이너를 '정상'으로 오판하지 않기 위한 강화 검사.
+    """
+    import socket as _s
+    try:
+        c = _s.create_connection((host, port), timeout=timeout)
+    except Exception:
+        return False
+    try:
+        c.sendall(b"\x05\x01\x00")
+        resp = c.recv(2)
+        return len(resp) == 2 and resp[0] == 0x05 and resp[1] in (0x00, 0xff)
+    except Exception:
+        return False
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
+def _wait_port(timeout=BOOT_TIMEOUT) -> bool:  # TOR_HEALTHCHECK_v1: TCP + SOCKS5 확인
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            with socket.create_connection(("127.0.0.1", TOR_HOST_PORT), timeout=2):
-                return True
-        except Exception:
-            time.sleep(1)
+        if _socks5_handshake_ok("127.0.0.1", TOR_HOST_PORT, timeout=2):
+            return True
+        time.sleep(1)
     return False
 
 
 def _write_torrc(env):
     """TOR_RUNTIME_v2: 회로 격리(IsolateDestAddr/Port) torrc 생성. env 없으면 None."""
+    # TORRC_SKIP_v1: dperson/torproxy 는 /etc/tor/torrc 마운트 시 기동 실패(자가검증 확인).
+    #   torrc 를 비활성화하고 start() 가 '기본 구성'으로 동작하게 한다(= Tor 정상, 전 구간
+    #   우회 유지). 회로격리(IsolateDestAddr/Port)만 포기. 다른 이미지로 교체하면 가드 제거.
+    if TOR_IMAGE == "dperson/torproxy":
+        return None
     if not env:
         return None
     try:

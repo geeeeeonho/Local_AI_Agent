@@ -483,7 +483,7 @@ def run(env, p):
     # ── 7) GUI 통합 대화창 실행 (v7.0 스레드 마샬링) ──
     _v63_trace("_run_gui_chat 호출 직전 (통합)")
     _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
-                          run_mem, run_cpus)
+                          run_mem, run_cpus, tor_proxy=_tor_on)  # HOST_TOR_ENV_v1
     _v63_trace("_run_gui_chat 반환됨 (통합)")
 
 
@@ -508,7 +508,7 @@ def _net_flags(cmd):  # NETMODE_LOG_v1
 
 
 def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
-                          run_mem, run_cpus):
+                          run_mem, run_cpus, tor_proxy=False):  # HOST_TOR_ENV_v1
     """통합 GUI 대화창 — 샌드박스/호스트 공통.
 
     v7_0_threadfix 스레드 마샬링 내장.
@@ -778,7 +778,14 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _cmd_holder[0] = new_cmd
                 except Exception:
                     pass
-            agent.start(_cmd_holder[0])
+            _renv = None  # HOST_TOR_ENV_v1
+            if is_host and tor_proxy:
+                try:
+                    from launcher.agent.agent_runner import build_tor_env
+                    _renv = build_tor_env()
+                except Exception:
+                    _renv = None
+            agent.start(_cmd_holder[0], env=_renv)
             panel.enable_send()
 
         def on_open():
@@ -1099,18 +1106,41 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _spN.run(["docker", "network", "create", _NET], capture_output=True, timeout=15, creationflags=_nw)
             except Exception:
                 pass
-            for _cn in ("llm_tor", "llm_searxng"):  # NET_LOG_v1: 연결 결과 표시
-                try:
-                    _rcC = _spN.run(["docker", "network", "connect", _NET, _cn], capture_output=True, timeout=10, creationflags=_nw)
-                    _errC = (_rcC.stderr or b"").decode("utf-8", "ignore").strip()
-                    if _rcC.returncode == 0:
-                        _safe_append("system", "[net] %s -> %s 연결 OK" % (_cn, _NET))
-                    elif "already" in _errC.lower():
-                        _safe_append("system", "[net] %s 이미 %s 에 연결됨" % (_cn, _NET))
-                    else:
-                        _safe_append("warn", "[net] %s 연결 실패: %s" % (_cn, _errC[:140]))
-                except Exception as _eC:
-                    _safe_append("warn", "[net] %s 연결 예외: %s" % (_cn, _eC))
+            for _cn in ("llm_tor", "llm_searxng"):  # NET_CONNECT_RETRY_v1: Removing 레이스 흡수
+                import time as _tR
+                _joined = False
+                _last = ""
+                for _try in range(8):  # 최대 ~8초: Removing -> Removed -> 재생성 창 흡수
+                    try:
+                        _rcC = _spN.run(["docker", "network", "connect", _NET, _cn],
+                                        capture_output=True, timeout=10, creationflags=_nw)
+                        _errC = (_rcC.stderr or b"").decode("utf-8", "ignore").strip()
+                    except Exception as _eC:
+                        _rcC = None
+                        _errC = str(_eC)
+                    _low = _errC.lower()
+                    if (_rcC is not None and _rcC.returncode == 0) or ("already" in _low):
+                        _joined = True
+                        break
+                    _last = _errC
+                    _transient = any(_s in _low for _s in (
+                        "marked for removal", "being removed", "removal in progress",
+                        "no such container", "is not running", "not found", "notfound"))
+                    if not _transient:
+                        break
+                    if _cn == "llm_tor" and ("no such container" in _low or "not found" in _low):
+                        try:  # 프록시 핵심 컨테이너 소멸 시 멱등 재기동
+                            from .. import tor_runtime as _trR
+                            _trR.start(env)
+                        except Exception:
+                            pass
+                    _tR.sleep(1.0)
+                if _joined:
+                    _safe_append("system", "[net] %s -> %s 연결 OK" % (_cn, _NET))
+                elif _cn == "llm_tor":
+                    _safe_append("warn", "[net] %s 연결 재확인 실패: %s (검색 불안정 가능 - Tor 이미지/기동 확인)" % (_cn, (_last or "?")[:120]))
+                else:
+                    _safe_append("system", "[net] %s 연결 생략: %s" % (_cn, (_last or "?")[:80]))
             if "--network" not in cmd:
                 _posN = (cmd.index("--rm") + 1) if "--rm" in cmd else 2
                 cmd[_posN:_posN] = ["--network", _NET]
@@ -1120,7 +1150,15 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     cmd[_iN] = _vN.replace("host.docker.internal:8118", "llm_tor:8118").replace("host.docker.internal:9050", "llm_tor:9050")
     except Exception:
         pass
-    started = agent.start(cmd)
+    _start_env = None  # HOST_TOR_ENV_v1
+    if is_host and tor_proxy:
+        try:
+            from launcher.agent.agent_runner import build_tor_env
+            _start_env = build_tor_env()
+            _safe_append("system", "[net] 호스트 인터프리터 Tor 프록시 적용 (127.0.0.1:8118 / 9050)")
+        except Exception as _ete:
+            _safe_append("warn", "[net] Tor env 적용 실패: %s" % _ete)
+    started = agent.start(cmd, env=_start_env)
     try:
         from launcher.core import lifelog as _ll2
         _ll2.log("TRACE", "[agent_chat] agent.start 반환: " + str(started))
@@ -1132,7 +1170,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             _safe_append("system", "에이전트 재시도 중... (%d/2)" % (_rai + 1))
             _trR.sleep(3)
             try:
-                started = agent.start(cmd)
+                started = agent.start(cmd, env=_start_env)  # HOST_TOR_ENV_v1
             except Exception:
                 started = False
             if started:
