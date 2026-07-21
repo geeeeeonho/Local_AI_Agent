@@ -33,7 +33,7 @@ def _patterns() -> Tuple[tuple, tuple]:
     names = list(_NAME_PATTERNS)
     images = list(_IMAGE_PATTERNS)
     try:
-        from . import config as _cfg
+        from launcher import config as _cfg
         pfx = getattr(_cfg, "SANDBOX_CONTAINER_PREFIX", None)
         if pfx and pfx not in names:
             names.append(pfx)
@@ -188,7 +188,7 @@ def register_auto_prune(env) -> bool:
     if not autoclean_enabled(env):
         return False
     try:
-        from . import lifelog as _ll
+        from launcher.core import lifelog as _ll
 
         def _do():
             try:

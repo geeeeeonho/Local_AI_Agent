@@ -92,7 +92,7 @@ def run(env: Path, p: Presenter) -> None:
 
     # >>> WEBUI_SECRETKEY_v1 - 시크릿 키를 user_data 에 보관 + env 주입 (루트 파일 방지)
     try:
-        from .. import user_data as _ud_sk
+        from launcher.core import user_data as _ud_sk
         _sk_dir = _ud_sk.chat_dir()
     except Exception:
         _sk_dir = env.parent / "user_data" / "chat"
@@ -127,7 +127,7 @@ def run(env: Path, p: Presenter) -> None:
 
     # >>> WEBUI_DATADIR_v1 - Open WebUI 저장 위치를 user_data/chat 로 지정
     try:
-        from .. import user_data as _ud
+        from launcher.core import user_data as _ud
         _webui_data = _ud.chat_dir()
     except Exception:
         _webui_data = env.parent / "user_data" / "chat"
@@ -164,6 +164,11 @@ def run(env: Path, p: Presenter) -> None:
     # >>> WEBUI_AUTOSTOP_v1 - 이 패널을 닫으면(나올 때) Open WebUI 도 함께 종료
     try:
         _stop_webui()
+    except Exception:
+        pass
+    try:
+        from .. import searxng_runtime as _sx  # SEARXNG_AUTOSTOP_v1
+        _sx.stop()
     except Exception:
         pass
     # <<< WEBUI_AUTOSTOP_v1
@@ -265,7 +270,7 @@ def _launch_webui(argv, new_env, log_path: Path, p: Presenter) -> None:
 
         # >>> WEBUI_AUTOSTOP_v1 - 종료 시 서버 트리 정리 + 패널 종료용 핸들 보관
         try:
-            from .. import lifelog as _ll_autostop
+            from launcher.core import lifelog as _ll_autostop
             _ll_autostop.register_host_process_cleanup(
                 lambda: getattr(proc, "pid", None)
             )
@@ -361,10 +366,10 @@ def _stop_webui():
 def _show_model_tips(p) -> None:
     """채팅 UI 로드 후 역할별 추천 모델을 패널에 표시."""
     try:
-        from .. import model_roles as _mr
+        from launcher.models import model_roles as _mr
     except Exception:
         try:
-            from launcher import model_roles as _mr
+            from launcher.models import model_roles as _mr
         except Exception:
             _mr = None
     p.info("-" * 40)

@@ -11,7 +11,7 @@ from ..presenter.base import Option, Presenter, RISK_SAFE, RISK_MEDIUM, RISK_HIG
 
 
 def _maint():
-    from .. import docker_maint as m
+    from launcher.core import docker_maint as m
     return m
 
 

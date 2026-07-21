@@ -38,7 +38,7 @@ def _resolve_resource_limits(env: Path) -> tuple[str, str]:
 
 def _select_profile(p: Presenter):
     """프로필 선택 — 메뉴 표시."""
-    from .. import profiles
+    from launcher.agent import profiles
 
     items = [
         MenuItem(
@@ -79,7 +79,7 @@ def _ask_workspace(p: Presenter, env: Path) -> Optional[Path]:
     # FOLDER_WS_v1: 허용 폴더가 있으면 그중에서 '작업 폴더'를 고르게 (의도: 허용 폴더에서 작업)
     allowed = []
     try:
-        from .. import folder_policy as _fp
+        from launcher.agent import folder_policy as _fp
         allowed = [a for a in _fp.list_allowed()
                    if Path(a).exists() and Path(a).is_dir()]
     except Exception:
@@ -129,195 +129,10 @@ def _open_folder_in_explorer(folder: Path) -> None:
         pass
 
 
-def _run_gui_chat(env: Path, p: Presenter, profile, workspace: Path) -> None:
-    """GUI 통합 대화창 실행. TkPresenter 전용."""
-    from ..agent_runner import (
-        UnifiedAgent,
-        AgentMessage,
-        build_sandbox_pipe_cmd,
-        LEVEL_TERMINATED,
-    )
-    from ..presenter.gui.chat_panel import ChatPanel
-
-    # ── 자원 한도 ──
-    run_mem, run_cpus = _resolve_resource_limits(env)
-
-    # ── 컨테이너 이름 ──
-    container = f"{config.SANDBOX_CONTAINER_PREFIX}chat_{secrets.token_hex(4)}"
-
-    # ── 컨텍스트 윈도 ──
-    context_window = 4096
-    try:
-        from .. import runtime_guard
-        rt = runtime_guard.compute_runtime_params()
-        context_window = rt.context_window
-    except Exception:
-        pass
-
-    # ── 명령 조립 ──
-    # 응답 행동 규칙은 SAFETY_PREAMBLE 에 이미 포함됨.
-    # 세션별 동적 정보(호스트 워크스페이스 경로) 만 여기서 append.
-    from .. import profiles as _profiles
-    _system_msg = profile.system_message + _profiles.build_session_addendum(workspace)
-
-    cmd = build_sandbox_pipe_cmd(
-        image=config.SANDBOX_IMAGE,
-        container_name=container,
-        workspace=workspace,
-        workspace_mount=config.SANDBOX_WORKSPACE_MOUNT,
-        model_tag=config.MODEL_TAG,
-        ollama_port=config.OLLAMA_PORT,
-        profile_system_message=_system_msg,
-        context_window=context_window,
-        memory_limit=run_mem,
-        cpu_limit=run_cpus,
-        block_internet=True,    # 기본 안전
-        auto_run=True,           # 샌드박스 안이라 안전
-    )
-
-    # ── ChatPanel 생성 (TkPresenter 의 PanelHost 위에) ──
-    # GUI presenter 라는 가정 — 호출자가 보장
-    gui = p
-    main_window = getattr(gui, "_window", None)
-    if main_window is None:
-        p.error("GUI 환경이 아닙니다 — 이 메뉴는 GUI 전용입니다")
-        p.pause()
-        return
-
-    agent = UnifiedAgent()
-    panel_holder = {"panel": None}
-
-    def build_panel(parent):
-        panel = ChatPanel(
-            parent,
-            title=f"에이전트 대화 — {profile.label}",
-            subtitle=f"마운트: {workspace}  |  컨테이너: {container}",
-            workspace=workspace,
-        )
-
-        # 콜백 연결
-        def on_user_input(text: str):
-            ok = agent.send_input(text)
-            if not ok:
-                panel.append_message("warn", "에이전트가 실행 중이 아닙니다")
-
-        def on_stop():
-            panel.append_message("system", "[중단 요청…]")
-            agent.stop(timeout=2.0)
-            panel.disable_send()
-
-        def on_restart():
-            panel.append_message("system", "[재시작 요청…]")
-            agent.stop(timeout=2.0)
-            # 새 컨테이너 이름으로 재시작
-            nonlocal_container[0] = f"{config.SANDBOX_CONTAINER_PREFIX}chat_{secrets.token_hex(4)}"
-            new_cmd = list(cmd)
-            # --name 다음 항목을 교체
-            try:
-                idx = new_cmd.index("--name")
-                new_cmd[idx + 1] = nonlocal_container[0]
-            except (ValueError, IndexError):
-                pass
-            _v63_trace("agent.start() 호출 직전")
-            agent.start(new_cmd)
-            panel.enable_send()
-
-        def on_open():
-            _open_folder_in_explorer(workspace)
-
-        panel.set_input_callback(on_user_input)
-        panel.set_stop_callback(on_stop)
-        panel.set_restart_callback(on_restart)
-        panel.set_open_folder_callback(on_open)
-
-        # v4_lifecycle: 패널 종료(사이드바 이동/창 닫기) 시 agent 정리
-        def _on_panel_close():
-            try:
-                agent.stop(timeout=3.0)
-            except Exception:
-                pass
-        if hasattr(panel, 'set_close_callback'):
-            panel.set_close_callback(_on_panel_close)
-        panel.refresh_files(workspace)
-        panel.set_status(
-            f"프로필: {profile.label}\n"
-            f"메모리: {run_mem.upper()}\n"
-            f"CPU: {run_cpus} 코어\n"
-            f"인터넷: 차단\n"
-            f"화면 캡처: 비활성"
-        )
-        panel_holder["panel"] = panel
-        return panel
-
-    nonlocal_container = [container]
-    main_window.host.replace(build_panel)
-    panel = panel_holder["panel"]
-    if panel is None:
-        try:
-            from .. import lifelog as _ll
-            _ll.log("FAIL", "[agent_chat] panel_holder 가 비어있음 — build_panel 미완료")
-            p.error("대화창을 만들지 못했습니다 (panel=None)")
-            p.pause()
-        except Exception:
-            pass
-        return
-
-    # ── 에이전트 시작 ──
-    panel.append_message("system", f"에이전트를 시작합니다… (프로필: {profile.label})")
-    panel.append_message("system", "명령: " + " ".join(cmd[:6]) + " ...")
-    started = agent.start(cmd)
-    if not started:
-        panel.append_message("error", "에이전트 시작 실패. Docker 데몬과 이미지 상태를 확인하세요.")
-        return
-
-    # ── 폴링 루프 (Tk after 기반) ──
-    poll_interval_ms = 80
-    files_refresh_counter = [0]
-
-    def poll():
-        # v4_lifecycle: 패널이 destroy 됐으면 폴링 중단
-        try:
-            _alive = panel.frame.winfo_exists()
-        except Exception:
-            _alive = False
-        if not _alive:
-            try:
-                agent.stop(timeout=1.0)
-            except Exception:
-                pass
-            return
-
-        try:
-            msgs = agent.drain_messages(max_n=100)
-            for m in msgs:
-                if m.level == LEVEL_TERMINATED:
-                    panel.append_message("terminated", m.text)
-                    panel.disable_send()
-                else:
-                    panel.append_message(m.level, m.text)
-
-            # 약 2초마다 파일 리스트 갱신
-            files_refresh_counter[0] += 1
-            if files_refresh_counter[0] >= 25:  # 80ms * 25 = 2000ms
-                files_refresh_counter[0] = 0
-                panel.refresh_files(workspace)
-        except Exception:
-            pass
-
-        # 패널이 살아있으면 계속 폴링
-        try:
-            main_window.root.after(poll_interval_ms, poll)
-        except Exception:
-            pass
-
-    main_window.root.after(poll_interval_ms, poll)
-
-
-# v6_3_comprehensive: action 단계별 trace
 def _v63_trace(stage: str) -> None:
     """lifelog 가 있으면 trace 기록. 없으면 무시."""
     try:
-        from .. import lifelog as _ll
+        from launcher.core import lifelog as _ll
         _ll.log("TRACE", "[agent_chat] " + stage)
     except Exception:
         pass
@@ -364,10 +179,10 @@ def _select_agent_model(env, p):
     """
     from .. import config
     try:
-        from .. import model_roles as mr
+        from launcher.models import model_roles as mr
     except Exception:
         try:
-            from launcher import model_roles as mr  # 절대 경로 폴백
+            from launcher.models import model_roles as mr  # 절대 경로 폴백
         except Exception:
             return {"tag": config.MODEL_TAG, "reason": "기본 모델", "label": "기본"}
 
@@ -414,16 +229,41 @@ def _select_agent_model(env, p):
     return {"tag": tag, "reason": reason, "label": role.label}
 
 
+def _select_internet_mode(p):  # TOR_TOGGLE_v1
+    """샌드박스 인터넷: 차단(기본) vs Tor 경유. Returns True=Tor, False=차단."""
+    try:
+        from ..presenter.base import MenuItem
+    except Exception:
+        return False
+    items = [
+        MenuItem(key="block", title="인터넷 차단 (기본·권장)",
+                 description="샌드박스에서 외부 인터넷 차단 — 가장 안전",
+                 badge="권장", badge_kind="good"),
+        MenuItem(key="tor", title="Tor 경유 인터넷 허용",
+                 description="외부 트래픽을 Tor(9050)로 프록시 · Tor 데몬 필요 · "
+                             "Ollama 는 직접 연결 유지",
+                 badge="주의", badge_kind="danger"),
+    ]
+    items.append(MenuItem(key="b", title="취소", separator_above=True))
+    choice = p.show_menu(
+        title="샌드박스 인터넷 설정",
+        subtitle="기본은 차단. Tor 경유는 Tor(9050)가 실행 중일 때만 동작합니다.",
+        items=items,
+    )
+    return choice == "tor"
+
+
 def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
-                        context_window, run_mem, run_cpus, model_tag=None):
+                        context_window, run_mem, run_cpus, model_tag=None,
+                        tor_proxy=False):
     """모드별 PIPE 명령 조립.
 
     Returns: (cmd, is_host) 또는 (None, _) 실패 시
     """
     from .. import config
     if mode == "sandbox":
-        from ..agent_runner import build_sandbox_pipe_cmd
-        from .. import profiles as _profiles  # FOLDER_WS_v1: 작업 폴더 + 허용 폴더 안내 주입
+        from launcher.agent.agent_runner import build_sandbox_pipe_cmd
+        from launcher.agent import profiles as _profiles  # FOLDER_WS_v1: 작업 폴더 + 허용 폴더 안내 주입
         _sysmsg = profile.system_message + _profiles.build_session_addendum(workspace)
         cmd = build_sandbox_pipe_cmd(
             image=config.SANDBOX_IMAGE,
@@ -436,12 +276,13 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
             context_window=context_window,
             memory_limit=run_mem,
             cpu_limit=run_cpus,
-            block_internet=True,
+            block_internet=(not tor_proxy),  # TOR_TOGGLE_v1
+            tor_proxy=tor_proxy,
             auto_run=True,   # 샌드박스 안이라 안전
         )
         return cmd, False
     else:  # host
-        from ..agent_runner import build_host_pipe_cmd
+        from launcher.agent.agent_runner import build_host_pipe_cmd
         interp = env / "agent" / "venv" / "Scripts" / "interpreter.exe"
         if not interp.exists():
             return None, True
@@ -466,6 +307,15 @@ def run(env, p):
     import secrets
 
     p.section("자동화 에이전트")
+    # MODEL_CLASSES_ENTRY_v1: 진입 시 클래스별 사다리 + 현재 메모리 추천
+    try:
+        try:
+            from ..models import model_classes as _mcls
+        except Exception:
+            from launcher.models import model_classes as _mcls
+        p.info(_mcls.format_text())
+    except Exception:
+        pass
     _v63_trace("통합 run() 진입")
 
     # GUI 전용 가드
@@ -487,7 +337,20 @@ def run(env, p):
         return
 
     # LLM_AGENT_MODEL_ROLE_v1: 역할(모델) 선택 — 메모리 적응형
-    _model_sel = _select_agent_model(env, p)
+    # UNIFIED_ENTRY_v1: 모델/실행모드/인터넷을 한 창에서 선택 (실패 시 순차 메뉴 폴백)
+    _uni = False
+    try:
+        from ..agent import entry_dialog as _ed
+        _uni = _ed.agent_setup(env, p)  # ENTRY_INWINDOW_v1
+    except Exception:
+        _uni = False
+    if _uni is None:
+        p.info("취소")
+        return
+    if isinstance(_uni, dict):
+        _model_sel = _uni
+    else:
+        _model_sel = _select_agent_model(env, p)
     if _model_sel is None:
         return
     agent_model_tag = _model_sel["tag"]
@@ -497,7 +360,7 @@ def run(env, p):
     _v63_trace("워크스페이스 선택 직전")
     # FOLDER_POLICY_v1: 허용/금지 폴더 설정(설정 버튼)
     try:
-        from .. import folder_policy as _fp
+        from launcher.agent import folder_policy as _fp
         _fp.maybe_manage(p, env)
     except Exception:
         pass
@@ -508,7 +371,7 @@ def run(env, p):
 
     # ── 3) 실행 모드 선택 ──
     _v63_trace("실행 모드 선택 직전")
-    mode = _select_execution_mode(p)
+    mode = _uni["mode"] if isinstance(_uni, dict) else _select_execution_mode(p)  # UNIFIED_ENTRY_v1
     _v63_trace("실행 모드 선택 완료: " + str(mode))
     if mode is None:
         return
@@ -543,7 +406,7 @@ def run(env, p):
 
     # MODEL_ROLLBACK_v1: Ollama 확인 후 실제 적재 probe -> OOM/실패 시 자동 강등
     try:
-        from .. import model_roles as _mr8
+        from launcher.models import model_roles as _mr8
         if hasattr(_mr8, "resolve_with_rollback") and hasattr(_mr8, "LADDERS"):
             _free8 = _mr8.detect_free_memory_gb()
             _rname8 = None
@@ -552,7 +415,7 @@ def run(env, p):
                     _rname8 = _k8
                     break
             if _rname8:
-                _rolled8 = _mr8.resolve_with_rollback(_rname8, _free8, presenter=p)
+                _rolled8 = _mr8.resolve_ladder(_rname8, _free8)  # PREWARM_UI_v1: 전환 전 적재 안 함
                 if _rolled8 and _rolled8 != agent_model_tag:
                     p.warn("적재 실패 감지 -> " + _rolled8 + " 로 롤백")
                     agent_model_tag = _rolled8
@@ -561,7 +424,7 @@ def run(env, p):
 
     # MODEL_INSTALLED_MATCH_v1: 실제 설치된 모델과 자동 매치 (404 'model not found' 사전 차단)
     try:
-        from .. import model_roles as _mri
+        from launcher.models import model_roles as _mri
         from .. import config as _cfgm
         if hasattr(_mri, "auto_match_installed"):
             _hosti = "127.0.0.1:" + str(getattr(_cfgm, "OLLAMA_PORT", 11434))
@@ -600,10 +463,13 @@ def run(env, p):
     except Exception:
         pass
 
+    _tor_on = (_uni.get("tor", False) if isinstance(_uni, dict)
+               else (_select_internet_mode(p) if mode == "sandbox" else False))  # UNIFIED_ENTRY_v1
     cmd, is_host = _build_cmd_for_mode(
         mode, env, profile, workspace, container,
         context_window, run_mem, run_cpus,
         model_tag=agent_model_tag,
+        tor_proxy=_tor_on,
     )
     if cmd is None:
         if is_host:
@@ -621,13 +487,34 @@ def run(env, p):
     _v63_trace("_run_gui_chat 반환됨 (통합)")
 
 
+def _net_mode_label(cmd):  # NETMODE_LOG_v1
+    j = " ".join(str(c) for c in cmd)
+    if "--dns=0.0.0.0" in j:
+        return "차단 (인터넷 없음)"
+    if "socks5h://" in j or "ALL_PROXY=" in j or "HTTP_PROXY=" in j:
+        return "Tor 경유"
+    return "개방 (직접 연결)"
+
+
+def _net_flags(cmd):  # NETMODE_LOG_v1
+    toks = [str(c) for c in cmd]
+    out = []
+    for i, t in enumerate(toks):
+        if t == "--dns=0.0.0.0" or t.startswith("--add-host"):
+            out.append(t)
+        elif t == "-e" and i + 1 < len(toks) and "PROXY" in toks[i + 1]:
+            out.append(toks[i + 1])
+    return " ".join(out) if out else "(네트워크 플래그 없음)"
+
+
 def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                           run_mem, run_cpus):
     """통합 GUI 대화창 — 샌드박스/호스트 공통.
 
     v7_0_threadfix 스레드 마샬링 내장.
     """
-    from ..agent_runner import UnifiedAgent, LEVEL_TERMINATED
+    from launcher.agent.agent_runner import UnifiedAgent
+    from launcher.agent.agent_runner import LEVEL_TERMINATED
     from ..presenter.gui.chat_panel import ChatPanel
 
     main_window = getattr(p, "_window", None)
@@ -641,7 +528,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     # 호스트 모드면 lifelog 에 프로세스 정리 등록
     if is_host:
         try:
-            from .. import lifelog as _ll
+            from launcher.core import lifelog as _ll
             if hasattr(_ll, "register_host_process_cleanup"):
                 def _get_pid():
                     try:
@@ -665,6 +552,16 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             subtitle="모드: " + mode_label + "  |  마운트: " + str(workspace),
             workspace=workspace,
         )
+        try:  # MODEL_DISPLAY_v1: 현재 모델을 드롭다운 라벨에 표시
+            _mc0 = list(cmd)
+            if "--model" in _mc0:
+                _mt0 = _mc0[_mc0.index("--model") + 1]
+                if isinstance(_mt0, str) and _mt0.startswith("ollama/"):
+                    _mt0 = _mt0[len("ollama/"):]
+                if hasattr(panel, "set_current_model"):
+                    panel.set_current_model(_mt0)
+        except Exception:
+            pass
 
         # FOLDER_POLICY_LIVE_v1: 세션 중 허용/금지 폴더 변경 + 컨테이너 재기동(대화 보존)
         _cmd_holder = [cmd]
@@ -701,7 +598,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     insert_at = len(out)
             fresh = []
             try:
-                from .. import folder_policy as _fp
+                from launcher.agent import folder_policy as _fp
                 for _h, _c in _fp.mounts_for():
                     fresh += ["-v", _h + ":" + _c]
                 if hasattr(_fp, "tmpfs_masks_for"):
@@ -712,7 +609,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             out[insert_at:insert_at] = fresh
             # FOLDER_WS_RELOAD_v1: 시스템 메시지(허용 폴더 안내)도 현재 정책으로 갱신
             try:
-                from .. import profiles as _profiles
+                from launcher.agent import profiles as _profiles
                 _sm = profile.system_message + _profiles.build_session_addendum(workspace)
                 _si = out.index("--system_message")
                 out[_si + 1] = _sm
@@ -766,7 +663,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
 
         def _policy_summary_text():
             try:
-                from .. import folder_policy as _fp
+                from launcher.agent import folder_policy as _fp
                 al = _fp.list_allowed()
                 dl = _fp.list_denied()
                 lines = ["[허용]"] + (["  " + x for x in al] if al else ["  (없음)"])
@@ -786,10 +683,10 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             if c0 in ("/help", "/?", "/명령"):
                 _post("system",
                       "폴더 명령: /folders 목록 · /allow <경로> · /deny <경로> · "
-                      "/unallow <경로> · /undeny <경로> · /reload 변경반영")
+                      "/unallow <경로> · /undeny <경로> · /reload 변경반영 · /model <태그> 모델변경")
                 return True
             try:
-                from .. import folder_policy as _fp
+                from launcher.agent import folder_policy as _fp
             except Exception:
                 _post("error", "folder_policy 를 불러올 수 없습니다")
                 return True
@@ -798,6 +695,33 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 return True
             if c0 in ("/reload", "/적용", "/remount"):
                 _restart_apply()
+                return True
+            if c0 in ("/model", "/모델"):  # ENTRY_INWINDOW_v1
+                if not arg:
+                    _post("system", "사용법: /model <태그>  예: /model qwen2.5-coder:7b")
+                    return True
+                _cnew = list(_cmd_holder[0])
+                if "--model" in _cnew:
+                    _mi = _cnew.index("--model")
+                    if _mi + 1 < len(_cnew):
+                        _cnew[_mi + 1] = "ollama/" + arg
+                    _cmd_holder[0] = _cnew
+                    _post("system", "[모델 변경 - 컨테이너 재기동...] " + arg)
+                    try:
+                        agent.stop(timeout=2.0)
+                    except Exception:
+                        pass
+                    try:
+                        agent.start(_cnew)
+                        _post("system", "모델 변경 완료: " + arg + "  (첫 응답은 적재로 다소 걸릴 수 있음)")
+                    except Exception as _e:
+                        _post("error", "모델 변경 실패: " + str(_e))
+                    try:
+                        panel.enable_send()
+                    except Exception:
+                        pass
+                else:
+                    _post("error", "현재 명령에 --model 이 없어 변경할 수 없습니다.")
                 return True
             if c0 in ("/allow", "/허용"):
                 if not arg:
@@ -881,7 +805,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
 
     def _build_on_main():
         try:
-            from .. import lifelog as _ll
+            from launcher.core import lifelog as _ll
             _ll.log("TRACE", "[agent_chat] (메인) host.replace 시작")
         except Exception:
             pass
@@ -891,7 +815,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             _build_error[0] = _e
             try:
                 import traceback as _tb
-                from .. import lifelog as _ll2
+                from launcher.core import lifelog as _ll2
                 _ll2.log("FAIL", "[agent_chat] host.replace 예외: " + repr(_e))
                 _ll2.log("DEBUG", _tb.format_exc())
             except Exception:
@@ -899,7 +823,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         finally:
             _panel_ready.set()
             try:
-                from .. import lifelog as _ll3
+                from launcher.core import lifelog as _ll3
                 _ll3.log("TRACE", "[agent_chat] (메인) host.replace 종료")
             except Exception:
                 pass
@@ -911,14 +835,14 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
 
     if not _panel_ready.wait(timeout=10.0):
         try:
-            from .. import lifelog as _ll
+            from launcher.core import lifelog as _ll
             _ll.log("FAIL", "[agent_chat] 통합 패널 생성 10초 타임아웃")
         except Exception:
             pass
         return
     if _build_error[0] is not None:
         try:
-            from .. import lifelog as _ll
+            from launcher.core import lifelog as _ll
             _ll.log("FAIL", "[agent_chat] 패널 생성 예외로 중단: "
                    + repr(_build_error[0]))
             p.error("대화창 생성 실패: " + str(_build_error[0]))
@@ -947,14 +871,111 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         _pl = "에이전트"
     _safe_append("system", "에이전트를 시작합니다... (프로필: " + str(_pl) + ")")
     _safe_append("system", "폴더 명령: /folders 목록 · /allow <경로> · /deny <경로> · /reload 반영  (/help)")  # FOLDER_POLICY_LIVE_v1
+    try:  # SESSION_HINT_v1
+        from launcher.core import user_data as _udh
+        import glob as _glbh
+        _nsess = len(_glbh.glob(os.path.join(str(_udh.interpreter_dir("sandbox")),
+                                              "session_*.json")))
+        if _nsess > 0:
+            _safe_append("system", "이전 대화 %d개 저장됨 — 우측 [이전 대화] 버튼으로 "
+                         "이어갈 수 있습니다." % _nsess)
+    except Exception:
+        pass
     if is_host:
         _safe_append("warn", "호스트 직접 모드 — 매 명령 확인이 필요합니다")
     try:
-        from .. import lifelog as _ll
+        from launcher.core import lifelog as _ll
         _ll.log("TRACE", "[agent_chat] agent.start 호출 직전")
         _ll.log("INFO", "[agent_chat] 명령: " + " ".join(str(c) for c in cmd[:8]))
+        _ll.log("INFO", "[agent_chat] 인터넷 모드: " + _net_mode_label(cmd)
+                + " | " + _net_flags(cmd))  # NETMODE_LOG_v1
     except Exception:
         pass
+    try:
+        _safe_append("system", "[인터넷] " + _net_mode_label(cmd)
+                     + "  (" + _net_flags(cmd) + ")")  # NETMODE_LOG_v1
+    except Exception:
+        pass
+    if not is_host and _net_mode_label(cmd) == "Tor 경유":  # TOR_AUTOSTART_v1
+        try:
+            try:
+                from .. import tor_runtime as _tr
+            except Exception:
+                from launcher import tor_runtime as _tr
+            def _qlog(m):  # TOR_QUIET_v1: 준비 과정은 로그 파일로만
+                try:
+                    try:
+                        from ..core import lifelog as _llq
+                    except Exception:
+                        from launcher.core import lifelog as _llq
+                    _llq.log("INFO", "[tor/docker] " + str(m))
+                except Exception:
+                    pass
+            try:  # TOR_DOCKER_ORDER_v1: Tor 는 Docker 필요 -> 데몬 먼저 보장
+                from ..services.docker import DockerService as _DSt
+                if not _DSt.daemon_alive():
+                    _qlog("Docker 데몬 확인 중 (Tor 준비)...")
+                    _safe_append("system", "환경 준비 중... (최대 1분)")
+                    class _DLt:
+                        def info(self, m): _qlog(m)
+                        def ok(self, m): _qlog(m)
+                        def warn(self, m): _qlog(m)
+                        def error(self, m): _safe_append("error", str(m))
+                    _DSt.ensure_daemon(logger=_DLt(), timeout=90)
+            except Exception:
+                pass
+            try:  # DOCKER_READY_v1: 데몬 응답 != 런타임 준비 -> docker ps 성공까지 대기
+                import subprocess as _spR, time as _tmR
+                _ready = False
+                for _i in range(20):
+                    try:
+                        if _spR.run(["docker", "ps"], capture_output=True, timeout=10, creationflags=(0x08000000 if os.name == "nt" else 0)).returncode == 0:
+                            _ready = True
+                            break
+                    except Exception:
+                        pass
+                    if _i == 0:
+                        _safe_append("system", "환경 준비 중... (최대 1분)")
+                    _qlog("Docker 런타임 준비 대기 %d" % _i)
+                    _tmR.sleep(3)
+                if not _ready:
+                    _safe_append("warn", "Docker 런타임이 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요.")
+            except Exception:
+                pass
+            try:  # OLLAMA_READY_v1: 재시작 churn 후 Ollama 응답까지 대기
+                import urllib.request as _urqO, time as _tmO
+                _oport = 11434
+                try:
+                    from .. import config as _cfgO
+                    _oport = int(getattr(_cfgO, "OLLAMA_PORT", 11434))
+                except Exception:
+                    pass
+                _ourl = "http://127.0.0.1:%d/api/version" % _oport
+                _oready = False
+                for _i in range(20):
+                    try:
+                        _urqO.urlopen(_ourl, timeout=5).read()
+                        _oready = True
+                        break
+                    except Exception:
+                        pass
+                    if _i == 0:
+                        _safe_append("system", "Ollama 준비 확인 중...")
+                    _qlog("Ollama 응답 대기 %d" % _i)
+                    _tmO.sleep(3)
+                if not _oready:
+                    _safe_append("warn", "Ollama 가 응답하지 않습니다 (127.0.0.1:%d). Ollama 를 먼저 실행하세요." % _oport)
+            except Exception:
+                pass
+            _qlog("Tor 프록시 확인/기동 중... (9050)")  # TOR_QUIET_v1
+            _tor_ok = _tr.start(env, log=_qlog)
+            if _tor_ok:
+                _qlog("Tor 경유 준비 완료 — 외부 트래픽이 Tor 로 우회됩니다.")
+            else:
+                _safe_append("warn", "Tor 미기동 — 대시보드 'Tor 이미지 받기'로 이미지를 "
+                             "받았는지 확인하세요. 지금은 외부 인터넷 연결이 실패할 수 있습니다.")
+        except Exception as _e_tor:
+            _safe_append("warn", "Tor 기동 예외: %r" % _e_tor)
 
     # v8_3_dockergate: Docker 미응답 시 Docker Desktop 자동 시작 후 대기 (수동 시작 불필요)
     if not is_host:
@@ -975,16 +996,194 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         except Exception:
             pass
 
+    # PREWARM_UI_v1: 모델 적재/롤백을 대화창(워커 스레드)에서 진행 표시
+    if not is_host:
+        try:
+            from .. import model_roles as _mrp
+            if "--model" in cmd:
+                _mi = cmd.index("--model")
+                if _mi + 1 < len(cmd) and str(cmd[_mi + 1]).startswith("ollama/"):
+                    _curtag = str(cmd[_mi + 1])[len("ollama/"):]
+                    _role = None
+                    for _kk, _lad in getattr(_mrp, "LADDERS", {}).items():
+                        if any(_m == _curtag for _m, _n in _lad):
+                            _role = _kk
+                            break
+                    if _role and hasattr(_mrp, "resolve_with_rollback"):
+                        _safe_append("system", "모델 적재 확인 중... (여유 메모리 점검 · 최초 1회 다소 걸릴 수 있음)")
+
+                        class _PWPresenter:
+                            def warn(self, _m):
+                                _safe_append("warn", str(_m))
+
+                            def info(self, _m):
+                                _safe_append("system", str(_m))
+
+                        try:
+                            _free_pw = _mrp.detect_free_memory_gb()
+                        except Exception:
+                            _free_pw = None
+                        _rolled = _mrp.resolve_with_rollback(_role, _free_pw, presenter=_PWPresenter())
+                        if _rolled and _rolled != _curtag:
+                            cmd[_mi + 1] = "ollama/" + _rolled
+                            _safe_append("system", "적재 실패 감지 -> " + _rolled + " 로 자동 변경")
+                        else:
+                            _safe_append("system", "모델 적재 확인 완료: " + _curtag)
+        except Exception:
+            pass
+
+    try:  # SYSMSG_FILE_v1: 긴 시스템 메시지를 파일로 (WinError 206 방지)
+        if "--system_message" in cmd and any("/home/agent/.agent_state" in str(_x) for _x in cmd):
+            _si = cmd.index("--system_message")
+            if _si + 1 < len(cmd) and not str(cmd[_si + 1]).startswith("@FILE:") and len(str(cmd[_si + 1])) > 1500:
+                from ..core import user_data as _udS
+                import os as _osS
+                _sdir = str(_udS.interpreter_dir("sandbox"))
+                _osS.makedirs(_sdir, exist_ok=True)
+                _spath = _osS.path.join(_sdir, "system_message.txt")
+                with open(_spath, "w", encoding="utf-8") as _sf:
+                    _sf.write(str(cmd[_si + 1]))
+                cmd[_si + 1] = "@FILE:/home/agent/.agent_state/system_message.txt"
+    except Exception:
+        pass
+    try:  # PRETOOL_PATH_v1: PreTool 를 모든 코드블록에서 import 가능하게
+        if any("/home/agent/.agent_state" in str(_xp) for _xp in cmd) \
+                and not any("PYTHONPATH=" in str(_xp) for _xp in cmd):
+            _pos = (cmd.index("--rm") + 1) if "--rm" in cmd else (cmd.index("run") + 1 if "run" in cmd else 2)
+            cmd[_pos:_pos] = ["-e", "PYTHONPATH=/home/agent/.agent_state"]
+    except Exception:
+        pass
+    try:  # PRETOOL_SYNC_v1: PreTool/sitecustomize 를 실제 마운트 폴더로 복사
+        from ..core import user_data as _udP
+        import os as _osP, shutil as _shP
+        _dstP = str(_udP.interpreter_dir("sandbox"))
+        _rootP = _osP.path.dirname(_osP.path.dirname(_osP.path.dirname(_osP.path.abspath(__file__))))
+        _srcP = _osP.path.join(_rootP, "PreTool")
+        if _osP.path.isdir(_srcP):
+            _shP.copytree(_srcP, _osP.path.join(_dstP, "PreTool"), dirs_exist_ok=True)
+            _scS = _osP.path.join(_srcP, "sitecustomize.py")
+            if _osP.path.exists(_scS):
+                _shP.copy2(_scS, _osP.path.join(_dstP, "sitecustomize.py"))
+    except Exception:
+        pass
+    try:  # SEARXNG_AUTOSTART_v1: 로컬 검색엔진 기동(web_search 가 8888 로 붙음)
+        if any("HTTP_PROXY=" in str(_xs) or "--add-host" in str(_xs) for _xs in cmd):
+            from .. import searxng_runtime as _sxr
+            def _sxlog(m):
+                try:
+                    try:
+                        from ..core import lifelog as _llx
+                    except Exception:
+                        from launcher.core import lifelog as _llx
+                    _llx.log("INFO", "[searxng] " + str(m))
+                except Exception:
+                    pass
+            if not _sxr.is_running():
+                _safe_append("system", "로컬 검색엔진(SearXNG) 준비 중...")
+                _sxlog("SearXNG 기동 시도")
+                try:
+                    _sxok = _sxr.start(env, log_path=None)
+                    _sxlog("SearXNG 기동 %s" % ("완료" if _sxok else "실패(폴백 사용)"))
+                except Exception as _esx:
+                    _sxlog("SearXNG 기동 예외: %s" % _esx)
+    except Exception:
+        pass
+    try:  # AGENT_NET_v1: 공유 네트워크로 Tor/SearXNG 를 컨테이너명으로 도달
+        if any("--add-host" in str(_xn) for _xn in cmd):
+            import subprocess as _spN
+            _NET = os.environ.get("LLM_NETWORK", "llm_net")
+            _nw = (0x08000000 if os.name == "nt" else 0)
+            try:
+                _ri = _spN.run(["docker", "network", "inspect", _NET], capture_output=True, timeout=10, creationflags=_nw)
+                if _ri.returncode != 0:
+                    _spN.run(["docker", "network", "create", _NET], capture_output=True, timeout=15, creationflags=_nw)
+            except Exception:
+                pass
+            for _cn in ("llm_tor", "llm_searxng"):  # NET_LOG_v1: 연결 결과 표시
+                try:
+                    _rcC = _spN.run(["docker", "network", "connect", _NET, _cn], capture_output=True, timeout=10, creationflags=_nw)
+                    _errC = (_rcC.stderr or b"").decode("utf-8", "ignore").strip()
+                    if _rcC.returncode == 0:
+                        _safe_append("system", "[net] %s -> %s 연결 OK" % (_cn, _NET))
+                    elif "already" in _errC.lower():
+                        _safe_append("system", "[net] %s 이미 %s 에 연결됨" % (_cn, _NET))
+                    else:
+                        _safe_append("warn", "[net] %s 연결 실패: %s" % (_cn, _errC[:140]))
+                except Exception as _eC:
+                    _safe_append("warn", "[net] %s 연결 예외: %s" % (_cn, _eC))
+            if "--network" not in cmd:
+                _posN = (cmd.index("--rm") + 1) if "--rm" in cmd else 2
+                cmd[_posN:_posN] = ["--network", _NET]
+            for _iN in range(len(cmd)):
+                _vN = str(cmd[_iN])
+                if "host.docker.internal:8118" in _vN or "host.docker.internal:9050" in _vN:
+                    cmd[_iN] = _vN.replace("host.docker.internal:8118", "llm_tor:8118").replace("host.docker.internal:9050", "llm_tor:9050")
+    except Exception:
+        pass
     started = agent.start(cmd)
     try:
-        from .. import lifelog as _ll2
+        from launcher.core import lifelog as _ll2
         _ll2.log("TRACE", "[agent_chat] agent.start 반환: " + str(started))
     except Exception:
         pass
+    if not started:  # AGENT_RETRY_v1: 일시적 실패(도커 재시작 직후 등) 재시도
+        import time as _trR
+        for _rai in range(2):
+            _safe_append("system", "에이전트 재시도 중... (%d/2)" % (_rai + 1))
+            _trR.sleep(3)
+            try:
+                started = agent.start(cmd)
+            except Exception:
+                started = False
+            if started:
+                _safe_append("system", "재시도 성공 — 에이전트를 시작합니다.")
+                break
     if not started:
         _safe_append("error", "에이전트 시작 실패. Docker/Ollama 상태를 확인하세요.")
+        try:  # START_DIAG_v1: 실제 원인 진단(프록시 우회)
+            import urllib.request as _urqD, json as _jsnD, subprocess as _spD
+            _oport = 11434
+            try:
+                from .. import config as _cfgD
+                _oport = int(getattr(_cfgD, "OLLAMA_PORT", 11434))
+            except Exception:
+                pass
+            try:
+                _opn = _urqD.build_opener(_urqD.ProxyHandler({}))
+                _d = _jsnD.loads(_opn.open("http://127.0.0.1:%d/api/tags" % _oport, timeout=5).read().decode("utf-8"))
+                _ms = [m.get("name") or m.get("model") for m in (_d.get("models") or [])]
+                if _ms:
+                    _safe_append("system", "진단: Ollama 설치 모델 %d개 (%s)" % (len(_ms), ", ".join([x for x in _ms[:5] if x])))
+                else:
+                    _safe_append("error", "진단: Ollama 에 설치된 모델이 0개입니다 — MANAGE.bat [2] 모델 관리에서 받으세요.")
+            except Exception as _eD:
+                _safe_append("error", "진단: Ollama 무응답 (127.0.0.1:%d) — Ollama 를 먼저 실행하세요." % _oport)
+            try:
+                _img = "llm-agent-sandbox"
+                try:
+                    from .. import config as _cfgD2
+                    _img = getattr(_cfgD2, "SANDBOX_IMAGE", _img)
+                except Exception:
+                    pass
+                if _spD.run(["docker", "image", "inspect", _img], capture_output=True, timeout=10, creationflags=(0x08000000 if os.name == "nt" else 0)).returncode != 0:
+                    _safe_append("error", "진단: 샌드박스 이미지 '%s' 없음 — 이미지를 빌드/받으세요." % _img)
+            except Exception:
+                pass
+            try:  # START_DIAG2_v1: 컨테이너 실제 출력/오류 캡처
+                import subprocess as _spC
+                _rcC = _spC.run(cmd, stdin=_spC.DEVNULL, stdout=_spC.PIPE, stderr=_spC.STDOUT,
+                                timeout=15, creationflags=(0x08000000 if os.name == "nt" else 0))
+                _outC = (_rcC.stdout or b"").decode("utf-8", "ignore").strip()
+                if _outC:
+                    _safe_append("error", "진단(컨테이너 출력, rc=%s): %s" % (_rcC.returncode, _outC[-600:]))
+                else:
+                    _safe_append("system", "진단: 컨테이너가 출력 없이 종료 (rc=%s) — 이미지/엔트리포인트 확인" % _rcC.returncode)
+            except Exception as _eC:
+                _safe_append("system", "진단: 컨테이너 재현 실패: %s" % _eC)
+        except Exception:
+            pass
         try:
-            from .. import lifelog as _ll3
+            from launcher.core import lifelog as _ll3
             _ll3.log("FAIL", "[agent_chat] agent.start 실패")
         except Exception:
             pass

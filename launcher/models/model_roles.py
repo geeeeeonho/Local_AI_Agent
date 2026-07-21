@@ -84,6 +84,7 @@ CODER_14B_MIN_FREE_GB = 14.0
 _ARA = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"   # 무검열·범용·에이전트 (15GB)
 _CODER = "qwen3-coder:30b"                                    # 코딩 (18GB, MoE)
 _GEMMA12 = "gemma4:12b"                                       # 맥락/폴백 (7.5GB)
+_CODER_MID = "qwen2.5-coder:14b"                              # 코딩 중간 (9GB, 16GB VRAM 적합)
 _CODER_FB = "qwen2.5-coder:7b"                                # 코딩 폴백 (4.7GB)
 _UNC_FB = "huihui_ai/qwen3-abliterated:8b"                    # 무검열 폴백 (5GB)
 
@@ -99,7 +100,7 @@ ROLES: List[ModelRole] = [
     ),
     ModelRole(
         key="2", name="coding", label="코딩 에이전트 (Open Interpreter)",
-        description="코드 작성·실행·파일 작업. qwen3-coder:30b(MoE·256K), 부족하면 7b 자동.",
+        description="코드 작성·실행·파일 작업. qwen3-coder:30b(MoE·256K), 부족하면 14b→7b 자동.",
         model=_CODER, need_gb=17.0,
         temperature=0.2, context_window=8192,
         system_hint="당신은 코드를 작성하고 실행하는 자율 코딩 에이전트입니다.",
@@ -185,7 +186,7 @@ _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이�
 # 역할별 후보 사다리: (모델, 권장 최소 여유 GB). 고품질 → 저압축 순.
 LADDERS = {
     "agent": [(_ARA, 15.5), (_GEMMA12, 10.0)],
-    "coding": [(_CODER, 17.0), (_CODER_FB, 8.0)],
+    "coding": [(_CODER, 17.0), (_CODER_MID, 12.0), (_CODER_FB, 8.0)],
     "uncensored": [(_ARA, 15.5), (_UNC_FB, 8.0)],
     "context": [(_GEMMA12, 10.0)],
     "balanced": [(_GEMMA12, 10.0)],
@@ -194,6 +195,51 @@ LADDERS = {
 
 def ladder_for(role_name: str):
     return list(LADDERS.get(role_name, []))
+
+
+# >>> TIERS_v1 — 폴백 순서를 티어(기본+대안)로 명시. LADDERS 를 이 순서로 재구성.
+TIERS = {
+    "coding": [
+        {"need": 17.0, "primary": "qwen3-coder:30b",
+         "alts": ["qwen3.6:27b", "devstral-small:24b"]},
+        {"need": 12.0, "primary": "qwen2.5-coder:14b",
+         "alts": ["deepseek-coder-v2:16b"]},
+        {"need": 8.0, "primary": "qwen2.5-coder:7b", "alts": []},
+    ],
+    "uncensored": [
+        {"need": 15.5, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+         "alts": []},
+        {"need": 8.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
+    ],
+    "agent": [
+        {"need": 15.5, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+         "alts": []},
+        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b"]},
+    ],
+    "balanced": [
+        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b", "qwen2.5:14b"]},
+    ],
+    "context": [
+        {"need": 10.0, "primary": "gemma4:12b", "alts": []},
+    ],
+}
+
+
+def _flatten_tiers(_tiers):
+    """티어 -> 평탄 사다리 [(model, need), ...]. 같은 티어의 기본+대안은 같은 need 공유."""
+    _out = {}
+    for _role, _tl in _tiers.items():
+        _seq = []
+        for _t in _tl:
+            _seq.append((_t["primary"], float(_t["need"])))
+            for _a in _t.get("alts", []):
+                _seq.append((_a, float(_t["need"])))
+        _out[_role] = _seq
+    return _out
+
+
+LADDERS = _flatten_tiers(TIERS)  # 원본 LADDERS 를 티어 기반(대안 포함)으로 대체
+# <<< TIERS_v1
 
 
 def resolve_ladder(role_name: str, free_gb: Optional[float] = None):

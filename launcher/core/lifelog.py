@@ -766,7 +766,7 @@ def _detect_container_patterns() -> tuple:
 
     # config 에서 직접 읽기
     try:
-        from . import config as _cfg
+        from launcher import config as _cfg
         # SANDBOX_CONTAINER_PREFIX (예: "llm_agent_")
         prefix = getattr(_cfg, "SANDBOX_CONTAINER_PREFIX", None)
         if prefix:

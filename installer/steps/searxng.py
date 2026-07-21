@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict
 
-from . import utils
+from installer import utils
 
 CONTAINER_NAME = "llm_searxng"
 IMAGE          = "searxng/searxng:latest"
@@ -31,7 +31,7 @@ use_default_settings: true
 # ===== 프록시 우회 설정 (추가됨) =====
 outgoing:
   proxies:
-    all: socks5://host.docker.internal:9050
+    all: socks5h://host.docker.internal:9050  # SEARXNG_HARDEN_v1: DNS 유출 방지(원격 해석)
 # ====================================
 
 general:
@@ -80,7 +80,7 @@ pass_searx_org = false
 
 def install(paths: Dict[str, Path]):
     """SearXNG 설정 파일 생성 + 이미지 pull. 컨테이너는 만들지 않음."""
-    from .i18n import t
+    from installer.i18n import t
 
     utils.section(t("install.searxng_section"))
 
@@ -113,5 +113,14 @@ def install(paths: Dict[str, Path]):
     except subprocess.CalledProcessError:
         utils.err(t("install.searxng_pull_fail"))
         return
+
+    # SEARXNG_HARDEN_v1: Tor SOCKS 프록시 이미지도 함께 받음 (검색 익명화에 필요)
+    try:
+        utils.info("Tor 프록시 이미지 pull: dperson/torproxy")
+        subprocess.run(["docker", "pull", "dperson/torproxy"], check=True)
+        utils.ok("Tor 이미지 준비 완료")
+    except subprocess.CalledProcessError:
+        utils.warn("Tor 이미지 pull 실패 - 검색 익명화가 제한될 수 있습니다 "
+                   "(수동: docker pull dperson/torproxy)")
 
     utils.ok(t("install.searxng_ready", name=CONTAINER_NAME, port=HOST_PORT))

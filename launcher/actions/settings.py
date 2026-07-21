@@ -9,7 +9,7 @@ from ..presenter.base import MenuItem, Presenter
 def _menu_items() -> list[MenuItem]:
     # LLM_LOG_GUI_TOGGLE_v1: 현재 로그 상태 표시
     try:
-        from ..agent_runner import logging_enabled as _le
+        from launcher.agent.agent_runner import logging_enabled as _le
         _log_state = "ON" if _le() else "OFF"
     except Exception:
         _log_state = "?"
@@ -53,7 +53,8 @@ def _change_language(p: Presenter) -> None:
 def _toggle_logging(p: Presenter) -> None:
     """LLM_LOG_GUI_TOGGLE_v1: 세션 로그 기록 on/off 토글."""
     try:
-        from ..agent_runner import logging_enabled, set_logging_enabled
+        from launcher.agent.agent_runner import logging_enabled
+        from launcher.agent.agent_runner import set_logging_enabled
     except Exception as e:
         p.error("로그 토글 불가 — 먼저 PATCH_VERBOSE_LOG 적용 필요: " + str(e))
         p.pause()

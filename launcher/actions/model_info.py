@@ -60,7 +60,7 @@ def _model_purpose_map() -> dict:
     """모델 태그 -> 용도(라벨) 매핑. model_roles + config 기본 모델."""
     m: dict = {}
     try:
-        from .. import model_roles as _mr
+        from launcher.models import model_roles as _mr
         for r in _mr.ROLES:
             for tag in (r.model, getattr(r, "fallback", None)):
                 if tag:
@@ -82,7 +82,7 @@ def _model_purpose_map() -> dict:
 def _show_role_table(p) -> None:
     """용도별 권장 모델 표를 패널에 표시."""
     try:
-        from .. import model_roles as _mr
+        from launcher.models import model_roles as _mr
         roles = getattr(_mr, "ROLES", None)
     except Exception:
         roles = None

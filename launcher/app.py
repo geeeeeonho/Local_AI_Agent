@@ -84,7 +84,7 @@ class Application:
     def _trace(stage: str) -> None:
         """v6_2_trace: lifelog 가 있으면 추적 로그 기록."""
         try:
-            from launcher import lifelog as _ll
+            from launcher.core import lifelog as _ll
             _ll.log("TRACE", "[app] " + stage)
         except Exception:
             pass

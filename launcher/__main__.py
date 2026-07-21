@@ -109,7 +109,7 @@ def main():
 
     # v6_lifelog: 모든 종료 경로에서 로그 보존 + 컨테이너 정리
     try:
-        from launcher import lifelog as _ll
+        from launcher.core import lifelog as _ll
         _ll.install_global_hooks(HERE)
     except Exception as _e:
         print("[WARN] lifelog 초기화 실패: " + str(_e), file=sys.stderr)
@@ -117,7 +117,7 @@ def main():
     # v6_2_trace: main() 전체 단계 추적
     def _trace(stage):
         try:
-            from launcher import lifelog as _ll2
+            from launcher.core import lifelog as _ll2
             _ll2.log("TRACE", "[main] " + stage)
         except Exception as _te:
             try:
@@ -129,7 +129,7 @@ def main():
 
     # v6_3_comprehensive: Ollama 모델 메모리 정리 cleanup 등록
     try:
-        from launcher import lifelog as _ll3
+        from launcher.core import lifelog as _ll3
         if hasattr(_ll3, "register_ollama_cleanup"):
             _ll3.register_ollama_cleanup()
             _trace("Ollama cleanup 등록 완료")
@@ -138,7 +138,7 @@ def main():
 
     # v6_4_orphan: 도커 고아 컨테이너 정리 cleanup 등록
     try:
-        from launcher import lifelog as _ll4
+        from launcher.core import lifelog as _ll4
         if hasattr(_ll4, "register_orphan_container_cleanup_auto"):
             # v6_7_final: config 자동 감지 우선
             _ll4.register_orphan_container_cleanup_auto()
@@ -156,7 +156,7 @@ def main():
 
     # >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리 등록
     try:
-        from launcher import lifelog as _ll5
+        from launcher.core import lifelog as _ll5
         if hasattr(_ll5, "register_cache_cleanup"):
             _ll5.register_cache_cleanup(HERE)
             _trace("캐시 정리 cleanup 등록 완료")
@@ -165,7 +165,7 @@ def main():
 
     # >>> DOCKER_AUTOCLEAN_v1 - 종료 시 도커 안전 정리 (플래그 켜진 경우)
     try:
-        from launcher import docker_maint as _dm
+        from launcher.core import docker_maint as _dm
         if _dm.register_auto_prune(ENV):
             _trace("도커 자동정리 등록 완료")
     except Exception as _dce:

@@ -144,7 +144,7 @@ class TkPresenter(Presenter):
         # 종료 단축키 — v6_3_comprehensive: lifelog hook 도 chain
         def _v63_on_close():
             try:
-                from ... import lifelog as _ll
+                from launcher.core import lifelog as _ll
                 _ll.log("CLEANUP", "GUI WM_DELETE_WINDOW 트리거 (TkPresenter)")
                 _ll.shutdown_then_exit()
             except Exception:
@@ -160,7 +160,7 @@ class TkPresenter(Presenter):
     def _handle_sidebar(self, key: str, action_runner: Callable[[str], None]):
         # v6_4_orphan: 사이드바 클릭 dispatch 추적
         try:
-            from ... import lifelog as _ll
+            from launcher.core import lifelog as _ll
             _ll.log("TRACE", "[sidebar] _handle_sidebar 진입 key=" + repr(key))
         except Exception:
             pass
@@ -189,7 +189,7 @@ class TkPresenter(Presenter):
     def _start_action(self, key: str, action_runner: Callable[[str], None]):
         # v6_4_orphan: _start_action 추적
         try:
-            from ... import lifelog as _ll
+            from launcher.core import lifelog as _ll
             _ll.log("TRACE", "[sidebar] _start_action 진입 key=" + repr(key))
         except Exception:
             pass
@@ -214,19 +214,19 @@ class TkPresenter(Presenter):
         def worker():
             # v6_4_orphan: worker 진입 trace
             try:
-                from ... import lifelog as _ll_w
+                from launcher.core import lifelog as _ll_w
                 _ll_w.log("TRACE", "[sidebar] worker 시작 key=" + repr(key))
             except Exception:
                 pass
             try:
                 try:
-                    from ... import lifelog as _ll_w2
+                    from launcher.core import lifelog as _ll_w2
                     _ll_w2.log("TRACE", "[sidebar] action_runner 호출 직전 key=" + repr(key))
                 except Exception:
                     pass
                 action_runner(key)
                 try:
-                    from ... import lifelog as _ll_w3
+                    from launcher.core import lifelog as _ll_w3
                     _ll_w3.log("TRACE", "[sidebar] action_runner 정상 반환 key=" + repr(key))
                 except Exception:
                     pass

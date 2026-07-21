@@ -57,7 +57,7 @@ def main() -> int:
     if not _ollama_up():
         print("[INFO] Ollama 시작 중...")
         try:
-            from installer import ollama as _oll
+            from installer.steps import ollama as _oll
             envv = _oll.env_for(paths)
         except Exception:
             envv = dict(os.environ)
@@ -92,7 +92,7 @@ def main() -> int:
         print("[FAIL] Ollama 에 연결할 수 없습니다. Docker/Ollama 상태를 확인하세요.")
         return 1
 
-    from installer import model as _model
+    from installer.steps import model as _model
     _model.download(paths)
     print("[OK] 모델 관리 완료.")
     return 0

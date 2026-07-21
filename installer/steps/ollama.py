@@ -10,8 +10,8 @@ import zipfile
 from pathlib import Path
 from typing import Dict
 
-from . import utils
-from .i18n import t
+from installer import utils
+from installer.i18n import t
 
 OLLAMA_ZIP_URL = (
     "https://github.com/ollama/ollama/releases/latest/download/"

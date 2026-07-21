@@ -6,15 +6,15 @@ import venv
 from pathlib import Path
 from typing import Dict, Optional
 
-from . import utils
-from .i18n import t
-from .resources import SafetyProfile, env_for_pip
+from installer import utils
+from installer.i18n import t
+from installer.resources import SafetyProfile, env_for_pip
 
 
 def _already(tool_exe, label):
     """이미 설치된 도구면 메시지 출력 후 True (pip 단계 건너뜀 — 작동 환경 보호)."""
     if tool_exe.exists():
-        from .i18n import get_language
+        from installer.i18n import get_language
         msg = ("이미 설치됨 — 건너뜀: " if get_language() == "ko"
                else "Already installed - skipping: ")
         utils.ok(f"{label} {msg}{tool_exe.parent.parent}")
@@ -77,7 +77,7 @@ def install_open_webui(paths: Dict[str, Path], profile: Optional[SafetyProfile] 
     utils.section(t("install.webui_section"))
 
     if profile is None:
-        from .resources import compute_safety_profile, detect
+        from installer.resources import compute_safety_profile, detect
         profile = compute_safety_profile(detect(paths["env"]))
 
     vdir = paths["chat"] / "venv"
@@ -106,7 +106,7 @@ def install_open_interpreter(
     utils.section(t("install.interpreter_section"))
 
     if profile is None:
-        from .resources import compute_safety_profile, detect
+        from installer.resources import compute_safety_profile, detect
         profile = compute_safety_profile(detect(paths["env"]))
 
     vdir = paths["agent"] / "venv"

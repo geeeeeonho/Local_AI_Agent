@@ -20,7 +20,7 @@ if os.name == "nt":
 
 
 def _catalog():
-    from .. import model_catalog as cat
+    from launcher.models import model_catalog as cat
     return cat
 
 

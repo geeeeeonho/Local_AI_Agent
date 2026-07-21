@@ -1,256 +1,332 @@
-# LLM Local Setup
+# Local_AI — 포터블 로컬 LLM 에이전트 환경
 
-> Windows용 **포터블 로컬 LLM 환경**. 인터넷 없이도 동작하는 채팅·자동화 에이전트·웹 검색을
-> 단일 GUI 런처에서 제공합니다. 비전문가도 `MANAGE.bat`(설치) → `RUN.bat`(실행) 으로 시작할 수 있고,
-> 모든 사용자 데이터(채팅·설정·로그·에이전트 세션)는 **`user_data/` 한 곳**에 모입니다.
+> Windows용 **자기완결형 로컬 LLM 스택**. 클라우드 없이 채팅·자동화 에이전트·웹 검색을
+> 단일 GUI 런처(`RUN.bat`)에서 제공한다. 모든 사용자 데이터(채팅·설정·로그·에이전트 세션)는
+> **`user_data/` 한 곳**에 모이며, 모든 코드 변경은 멱등 패처(`APPLY_ALL.bat`)로 관리된다.
 
-- **실행 환경**: Windows 10/11, Python 3.11+ (권장 3.12.x), (선택) Docker Desktop
+- **실행 환경**: Windows 10/11, Python 3.11+ (권장 3.12.x), Docker Desktop
 - **루트 경로 예시**: `C:\Users\ghwork\Works\Local_AI`
-- **구동 방식**: `python -m launcher` (GUI) / `python -m installer` (설치) — `RUN.bat`·`MANAGE.bat` 가 감싼다
-- **권장 사양 기준**: RAM 약 20GB 가용, VRAM 16GB. 대형 모델은 한 번에 하나만 적재(아래 8장).
+- **구동**: `python -m launcher` (GUI) / `python -m installer` (설치) — `RUN.bat`·`MANAGE.bat` 가 감쌈
+- **권장 사양**: RAM 약 20GB 가용, VRAM 16GB. 대형 모델은 한 번에 하나만 적재.
+- **적용 상태**: `APPLY_ALL.py = v39` (파일 23 + 패치 43). 재실행 안전(SKIP).
 
 ---
 
-## 0. 최근 업데이트 (이번 세션 — 코드 리뷰 안정화)
-
-| 패치 | 내용 |
-|------|------|
-| **세션 로그 경로 수정** | 이중 경로 결합으로 무력화돼 있던 v7.7 패치를 정상화 → 세션·디버그 로그가 실제로 `llm_environment/logs` 아래에 기록됨 (8장) |
-| **폴더 정책 overlay** | 허용한 상위 폴더 안의 **금지 하위**를 컨테이너에서 빈 `--tmpfs` 로 가림. 허용 부모는 마운트하되 금지 자식의 호스트 내용은 보이지 않음 (4장) |
-| **경로 비교 대소문자 무시** | Windows 에서 `C:\A` 와 `c:\a` 를 같게 취급(`normcase`) → 금지/중복 우회 차단 (4장) |
-| **폴백 카탈로그 v9 정합** | 설치기·모델정보의 import 실패용 폴백 목록을 ARA·`qwen3-coder:30b` 신 세트로 통일 (3장) |
-| **설치 멱등 헬퍼 정리** | `installer/model._present()` 의 비활성(죽은) 분기 제거 — 동작은 동일 |
-
-### 이전 세션
-
-| 패치 | 내용 |
-|------|------|
-| **MANAGE.bat 통합** | `INSTALL.bat`·`DIAGNOSE.bat` 를 단일 디스패처 `MANAGE.bat` 로 합침 ([1] 설치 / [2] 모델 관리 / [3] 진단) |
-| **모델 카탈로그 v3** | 다운로드 목록을 **Gemma 4 26B-A4B ARA(무검열)** + `qwen3-coder:30b` 중심으로 재구성 (3장) |
-| **런타임 역할 v9** | `RUN.bat` 의 에이전트/추천이 v3 카탈로그와 정합되도록 `model_roles` 재배선 (3장) |
-| **채팅 연결거부 수정** | Open WebUI 준비 전 버튼 활성화로 생기던 `ERR_CONNECTION_REFUSED` 해결 (9장) |
-| **허용/금지 폴더 정책** | 에이전트가 접근할 폴더를 설정 화면에서 영구 관리. 샌드박스에선 그 외 경로 물리 차단 (4장) |
-| **메모리 누적 억제** | `OLLAMA_MAX_LOADED_MODELS=1` + `OLLAMA_KEEP_ALIVE=5m` 로 모델 중복 적재 방지 (8장) |
+## 목차
+1. 빠른 시작
+2. 디렉터리 / 모듈 구조 (상세)
+3. 아키텍처 & 데이터 흐름
+4. 구성 요소 (Ollama · SearXNG · Tor · 공유 네트워크)
+5. 에이전트 실행 순서 (agent_chat 파이프라인)
+6. PreTool — 에이전트 도구 패키지
+7. 데이터 저장 구조 (`user_data/`)
+8. 현재 동작 상태 (해결/미해결)
+9. 패치 이력 (테마별 43개)
+10. 설정 · 패치 규약
+11. 문제 해결 / 다음 단계
 
 ---
 
 ## 1. 빠른 시작
 
-```cmd
-MANAGE.bat       :: 설치/유지보수 디스패처 ([1] 설치 [2] 모델 관리 [3] 진단)
-RUN.bat          :: GUI 런처 실행 (Tkinter 단일 윈도우)
-RUN_TUI.bat      :: 터미널 UI 강제 (헤드리스/원격)
+```bat
+:: 프로젝트 루트에서
+APPLY_ALL.bat                 :: 파일 배치 + 43개 패치 멱등 적용
+docker rm -f llm_tor llm_searxng   :: (선택) 오래된 컨테이너 정리
+RUN.bat                       :: GUI 런처 (에이전트/채팅)
+MANAGE.bat                    :: 설치·모델 관리 대시보드
 ```
 
-처음이라면 `MANAGE.bat` → `[1] 설치` 로 환경을 구성하고, `[2] 모델 관리` 로 모델을 내려받은 뒤
-`RUN.bat` 으로 사용합니다.
-
-- `MANAGE.bat` 는 인자도 받습니다: `MANAGE.bat install` / `MANAGE.bat manage` / `MANAGE.bat diagnose`.
-- `RUN.bat` 는 GUI 로 뜨고, tkinter 가 없거나 GUI 초기화가 실패하면 **자동으로 TUI 로 폴백**합니다.
-- Docker 가 없으면 샌드박스 에이전트·SearXNG 는 자동으로 건너뜁니다 (Ollama·채팅은 동작).
+에이전트 진입 → 프로필 선택(범용 개발 등) → 인터넷 모드(차단 / Tor 경유) → 메시지 입력.
+`net_diag()` 로 네트워크 경로를 점검할 수 있고, 모든 대화·코드·결과는 런처 로그에 남는다(IO_LOG).
 
 ---
 
-## 2. 메뉴 기능
-
-### MANAGE.bat (설치/유지보수)
-
-| 키 | 기능 | 설명 |
-|----|------|------|
-| **1** | 설치 | Python·Docker 감지 → 환경 구성 (`python -m installer`) |
-| **2** | 모델 관리 | 다운로드 카탈로그(3장)에서 모델 설치/삭제 (`python -m installer.manage`) |
-| **3** | 진단 | Python / Docker / PATH 상태 점검 |
-| **Q** | 종료 | |
-
-### RUN.bat (GUI 런처)
-
-| 키 | 기능 | 설명 |
-|----|------|------|
-| **1** | 채팅 UI (Open WebUI) | 브라우저 기반 채팅 + 자동 웹 검색. 시작 후 **"▶ 브라우저 열기"** 버튼으로 진입 |
-| **2** | 자동화 에이전트 *(통합)* | 모델 역할 → **허용 폴더 정책** → 워크스페이스 → **샌드박스(권장)/호스트 직접** 선택 후 GUI 대화 |
-| **4** | Ollama 서비스 시작/확인 | 로컬 모델 서버 상태 확인·기동 |
-| **5** | 설치된 모델 정보 | 적재 모델 목록·크기 + 역할 표 |
-| **6** | Docker 이미지 빌드/재빌드 | 샌드박스 이미지 생성 |
-| **7** | SearXNG 검색 엔진 제어 | 메타 검색 컨테이너 제어 |
-| **8** | 설정 관리 | 보기 / 워크스페이스 초기화 / 언어 / 로그 on·off / 전체 초기화 |
-| **q** | 종료 | 종료 시 정리 hook 동작 (8장) |
-
-> `[2]` 는 과거 `샌드박스` + `호스트직접` 으로 나뉘어 있던 것을 **하나로 통합**(`actions/agent_chat.py`)했습니다.
-> 호스트 직접 모드는 격리가 없어 `I-UNDERSTAND` 게이트로 보호됩니다.
-
----
-
-## 3. 모델 구성 — 다운로드 카탈로그(v3) + 런타임 역할(v9)
-
-### 3-1. 다운로드 카탈로그 (`launcher/model_catalog.py`)
-
-`MANAGE.bat [2] 모델 관리` 가 내려받는 목록입니다. **CORE**(권장 기본 세트, 약 50GB)와 **ADVANCED**(선택)로 나뉩니다.
-
-| 모델 | 크기 | 용도 |
-|------|------|------|
-| `prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S` | ~15GB | 무검열·범용·에이전트 (MoE 활성 4B, 256K 컨텍스트) |
-| `qwen3-coder:30b` | ~18GB | 코딩 에이전트 (MoE, Open Interpreter 주력) |
-| `gemma4:12b` | ~7.5GB | 맥락 이해·균형·폴백 |
-| `qwen2.5-coder:7b` | ~4.7GB | 코딩 롤백(저메모리) |
-| `huihui_ai/qwen3-abliterated:8b` | ~5GB | 무검열 롤백(저메모리) |
-
-> ARA 모델은 텍스트 전용 GGUF 라 인터프리터의 텍스트·툴 작업은 정상이지만, 비전 입력은 Ollama 빌드에
-> 따라 제한될 수 있습니다. ADVANCED 에는 `...:Q5_K_M`, `gemma4:26b`, `devstral-small:24b`,
-> `gpt-oss:20b` 등이 포함됩니다.
-
-### 3-2. 런타임 역할 (`launcher/model_roles.py`)
-
-`RUN.bat` 의 에이전트 선택·추천이 사용하는 역할 표입니다. **여유 메모리를 탐지해 사다리(LADDERS)를 따라
-자동으로 적정 모델을 고르고**, 실제 적재에 실패하면 더 가벼운 후보로 강등합니다(probe 기반 롤백).
-
-| 역할(키) | 기본 모델 | 메모리 부족 시 |
-|----------|-----------|----------------|
-| 무검열 검색/번역 `[1]` | ARA Q4_K_S | → `huihui_ai/qwen3-abliterated:8b` |
-| 코딩 (Open Interpreter) `[2]` | `qwen3-coder:30b` | → `qwen2.5-coder:7b` |
-| 맥락 이해 `[3]` | `gemma4:12b` | — |
-| 균형(범용) `[4]` | `gemma4:12b` | — |
-| 자동화 에이전트 `[5]` | ARA Q4_K_S | → `gemma4:12b` |
-
-- 사다리 임계값(가용 메모리 기준): ARA ≈ 15.5GB, `qwen3-coder:30b` ≈ 17.0GB, `gemma4:12b` ≈ 10.0GB.
-  가용의 92%만 사용하도록 안전 계수를 둡니다.
-- 예: 가용 20GB → 코딩=`qwen3-coder:30b` / 에이전트=ARA. 가용 18GB 이하 → 자동으로 한 칸 강등.
-- `config.MODEL_TAG` = ARA, `MODEL_TAG_FALLBACK` = `gemma4:12b` (역할 모듈을 못 읽을 때의 최종 폴백).
-
----
-
-## 4. 허용/금지 폴더 정책 — `launcher/folder_policy.py`
-
-자동화 에이전트가 접근 가능한 폴더를 **설정 화면에서 영구 관리**합니다. `[2]` 진입 시 워크스페이스 선택
-직전에 **"허용 폴더 정책"** 메뉴가 뜨고, `[2] 허용/금지 폴더 설정` 에서 추가/제거합니다.
-
-- 저장 위치: `user_data/settings/folder_policy.json` (`{"allowed":[...], "denied":[...]}`)
-- **상시 허용** 폴더는 매 실행마다 컨테이너의 `/home/agent/allowed/<이름>` 으로 마운트됩니다.
-  세션 워크스페이스(`/home/agent/workspace`)는 그대로 유지됩니다.
-- **샌드박스 모드에선 마운트되지 않은 호스트 경로가 물리적으로 보이지 않으므로, "그 외 경로 처리 금지"가
-  도커 격리로 강제됩니다.** 별도 경로 검사 코드가 필요 없습니다.
-- **금지** 목록은 ⓐ 같은 폴더를 허용에 넣는 것을 차단하고(하위 경로 포함), ⓑ 호스트 직접 모드의 가드로
-  쓰입니다. 존재하지 않는 폴더는 마운트에서 자동 제외됩니다.
-- 호스트 직접 모드는 격리가 없어 이 제한이 "권고"에 그칩니다(위험 게이트로 가려짐).
-
----
-
-## 5. 데이터 저장 구조 — `user_data/`
-
-모든 사용자 데이터는 프로젝트 루트의 **`user_data/`** 하위에 모입니다. 종료해도 보존되고, 폴더째 복사하면
-다른 PC로 이전할 수 있습니다.
-
-```
-user_data/
-├── settings/        설정 (user_config.json, folder_policy.json)  ← launcher/settings 가 가리킴(정션)
-├── logs/            런처/세션 로그            ← lifelog 가 직접 기록
-├── chat/            Open WebUI 데이터          ← webui.db + uploads/ + vector_db/ + cache/
-└── interpreter/
-    ├── sandbox/     샌드박스 에이전트 세션
-    └── host/        호스트 에이전트 세션
-```
-
-| 데이터 | 실제 위치 | 연결 방식 |
-|--------|-----------|-----------|
-| 채팅(Open WebUI) | `user_data/chat/` | `actions/chat.py` 가 환경변수 `DATA_DIR` 지정 |
-| 에이전트 세션 | `user_data/interpreter/sandbox/` | `agent_runner.py` 가 컨테이너에 마운트 + `AGENT_STATE_DIR` 전달 |
-| 설정·폴더정책 | `user_data/settings/` | `launcher/settings` → `user_data/settings` **디렉터리 정션** |
-| 로그 | `user_data/logs/` | `lifelog._log_dir` 지정 |
-
-> **정션(junction)**: 코드는 그대로 `launcher\settings` 경로를 쓰지만 그 폴더가 `user_data\settings` 를
-> 가리키는 링크라 물리적으로는 `user_data\settings` 에 저장됩니다(`mklink /J`, 관리자 권한 불필요).
-
----
-
-## 6. 디렉터리 구조 (요약)
+## 2. 디렉터리 / 모듈 구조 (상세)
 
 ```
 Local_AI/
-├── MANAGE.bat               설치/유지보수 디스패처 (install/manage/diagnose)
-├── RUN.bat                  GUI 런처 실행
-├── RUN_TUI.bat              터미널 UI 강제
+├── RUN.bat                     python -m launcher (GUI 런처)
+├── MANAGE.bat                  python -m installer (설치/관리 대시보드)
+├── APPLY_ALL.bat / .py         멱등 일괄 패처 (파일 배치 + 43 패치)
+├── APPLY_*.bat / .py           개별 패처(자기삭제 쌍)
+├── README.md
 │
-├── launcher/                ← 런처 패키지 (UI + 액션)
-│   ├── __main__.py          진입점: 모드 결정 + 자동 폴백 + cleanup 등록
-│   ├── config.py            상수 (OLLAMA_URL, MODEL_TAG, SANDBOX_IMAGE …)
-│   ├── app.py               메뉴/액션 매핑 + 단일 윈도우 루프
-│   ├── lifelog.py           종료 hook + 로그 + cleanup 콜백
-│   ├── user_data.py         user_data 경로/IO 헬퍼
-│   ├── model_catalog.py     ★ 다운로드 카탈로그 v3 (3-1장)
-│   ├── model_roles.py       ★ 런타임 역할 v9 + 메모리 사다리 (3-2장)
-│   ├── folder_policy.py     ★ 허용/금지 폴더 정책 (4장)
-│   ├── agent_runner.py      UnifiedAgent + 미니루프(b64) + ErrorGuard
-│   ├── settings_store.py    영속 설정 (정션으로 user_data/settings)
-│   ├── presenter/           UI 추상화 (base / tui / gui)
-│   ├── services/            ollama.py · docker.py
-│   └── actions/             chat.py[1] · agent_chat.py[2] · ollama.py[4] · model_info.py[5] …
+├── launcher/                   ── GUI 런처 패키지 ──
+│   ├── __init__.py __main__.py app.py   부트스트랩/진입
+│   ├── config.py               상수: MODEL_TAG, OLLAMA_PORT(11434), SANDBOX_IMAGE 등
+│   ├── i18n.py                 다국어 문자열
+│   ├── runtime_guard.py        런타임 가드
+│   ├── tor_runtime.py          Tor 컨테이너 수명주기 (v8, --network llm_net)
+│   ├── searxng_runtime.py      SearXNG 컨테이너 수명주기 (--network llm_net)
+│   │   (호환 shim: 루트의 lifelog/user_data/model_roles/settings_store/docker_maint/
+│   │    folder_policy/profiles/agent_runner 등은 아래 서브패키지로 재배치 + shim 유지)
+│   │
+│   ├── core/                   ── 인프라 ──
+│   │   ├── lifelog.py          런처 로그 · 종료 cleanup 등록/실행 · [CHAT]/[net] 기록
+│   │   ├── user_data.py        user_data 경로 해석 (interpreter_dir("sandbox") 등)
+│   │   ├── settings_store.py   설정 영속(user_config.json)
+│   │   └── docker_maint.py     Docker 정리(고아 컨테이너 이름/이미지 패턴)
+│   │
+│   ├── models/                 ── 모델 선택 ──
+│   │   ├── model_catalog.py    다운로드 카탈로그(v3)
+│   │   ├── model_roles.py      런타임 역할·사다리·RAM 자동 강등(auto_match_installed)
+│   │   └── model_classes.py    클래스별 사다리 시각화(공용 뷰: 일반/무검열/관리특화)
+│   │
+│   ├── agent/                  ── 에이전트 ──
+│   │   ├── agent_runner.py     docker run 명령 구성 + 미니루프(b64 인코딩된 REPL 소스)
+│   │   ├── agent_lifecycle.py  에이전트 수명주기(start/stop/poll)
+│   │   ├── entry_dialog.py     통합 진입 다이얼로그(창 안에서, host.replace)
+│   │   ├── folder_policy.py    허용/금지 폴더 정책(allowed/denied)
+│   │   └── profiles.py         프로필(범용 개발 등) → 역할/시스템메시지
+│   │
+│   ├── actions/                ── 메뉴 액션(런처가 호출) ──
+│   │   ├── agent_chat.py       ★에이전트 채팅(GUI) — 최근 패치 대부분이 여기 적용
+│   │   ├── agent_direct.py     직접(호스트) 에이전트
+│   │   ├── agent_sandbox.py    샌드박스 에이전트
+│   │   ├── _sandbox_options.py 인터넷/폴더 등 진입 옵션
+│   │   ├── chat.py             Open WebUI(DATA_DIR=user_data/chat)
+│   │   ├── ollama.py           Ollama 시작/정리
+│   │   ├── searxng.py          SearXNG 액션
+│   │   ├── docker_clean.py docker_image.py   Docker 정리/이미지
+│   │   ├── model_info.py model_manage.py     모델 조회/관리
+│   │   ├── settings.py         설정
+│   │   └── manage_gui.py       관리 GUI 연결
+│   │
+│   ├── presenter/              ── Presenter 패턴(로직↔UI 분리) ──
+│   │   ├── base.py             Presenter 추상
+│   │   ├── tui.py              TerminalPresenter
+│   │   └── gui/
+│   │       ├── window.py       메인 윈도우(host: 화면 교체 컨테이너)
+│   │       ├── presenter.py    TkPresenter
+│   │       ├── chat_panel.py   채팅 로그 패널(★IO_LOG: append_message → 런처 로그)
+│   │       ├── sidebar.py menu_panel.py panels.py   좌측/메뉴/패널
+│   │       ├── dialogs.py statusbar.py              다이얼로그/상태바
+│   │       └── theme.py widgets.py                  VS Code Dark 테마/위젯
+│   │
+│   └── services/              ── 외부 서비스 래퍼 ──
+│       ├── docker.py           DockerService(daemon_alive, ensure_daemon)
+│       └── ollama.py           Ollama 서비스(가용성/모델)
 │
-├── installer/               설치 패키지 (python -m installer)
-├── llm_environment/         설치 후 생성 자원 (ollama_runtime / llm_models / chat_ui / agent / searxng)
-└── user_data/               ★ 통합 사용자 데이터 (5장)
+├── installer/                  ── 설치/관리 패키지 (python -m installer) ──
+│   ├── __init__.py __main__.py
+│   ├── manage_gui.py           MANAGE 대시보드(진단 + 모델 설치/삭제, 창 안 임베드)
+│   ├── i18n.py lang_setup.py resources.py utils.py
+│   ├── core/                   console.py download.py filesystem.py preflight.py
+│   └── steps/                  model.py ollama.py python_tools.py sandbox.py searxng.py
+│
+├── PreTool/                    ── 에이전트 도구(컨테이너에 마운트) ──
+│   ├── __init__.py             catalog() · 전 함수 노출
+│   ├── search.py               web_search/search_summary/fetch_text/net_diag (SearXNG 우선)
+│   ├── excel.py                excel_write/csv_write/read_table (순수 stdlib xlsx)
+│   ├── report.py               report_write (md/html)
+│   ├── files.py                move/copy/list_files/organize_by_ext
+│   ├── dev.py                  run_tests/check_syntax/run_python/lint/outline/diff/complexity
+│   ├── data.py                 calc/json_pretty/json_query/summarize_text/word_stats
+│   └── sitecustomize.py        PYTHONPATH 자동 실행 → PreTool 함수를 builtin 으로 주입
+│
+└── user_data/                  ── 사용자 데이터(영속) ──
+    ├── settings/               user_config.json, folder_policy.json  ← launcher/settings 정션
+    ├── chat/                   Open WebUI DB + 캐시
+    ├── logs/                   launcher_*.log (대화·[net]·기동 전부)
+    └── interpreter/sandbox/    에이전트 세션(session_*.json) + PreTool/ + sitecustomize.py
+                                 (컨테이너 /home/agent/.agent_state 로 마운트)
 ```
 
+> **런타임 파일 3종**(`tor_runtime.py`, `searxng_runtime.py`, `agent/entry_dialog.py`)은
+> "내 버전이면 갱신, 사용자 커스텀이면 보존" 정책(FILES_MINE). 나머지는 항상 배치(FILES).
+
 ---
 
-## 7. 아키텍처 핵심
+## 3. 아키텍처 & 데이터 흐름
 
 ### Presenter 패턴
-모든 액션은 `presenter/base.py` 의 `Presenter` 인터페이스만 사용합니다. 같은 액션 코드가 TUI 와
-단일 윈도우 GUI 에서 그대로 동작합니다. GUI 위젯 생성은 **반드시 메인 스레드**에서만 이뤄지고, 워커
-스레드는 `root.after(0, …)` 로 마샬링합니다.
+UI(Tkinter)와 로직을 분리한다. 액션(`actions/*`)은 `Presenter` 인터페이스에만 의존하고,
+실제 구현은 `TkPresenter`(GUI) / `TerminalPresenter`(TUI)가 담당. 화면 전환은 메인 윈도우의
+`host` 컨테이너를 `host.replace(frame)` 로 교체(통합 진입 다이얼로그도 이 방식).
 
-### 자동화 에이전트
-- **샌드박스 모드(권장)**: Docker 컨테이너에서 경량 REPL(미니루프)이 모델과 대화. 화면 캡처/GUI 자동화
-  API(`pyautogui`, `mss`, `PIL.ImageGrab` 등)는 **ErrorGuard** 정규식으로 차단. 명령 컨텍스트는
-  `--context_window` + `--max_tokens 512` 로 제한됩니다.
-- **호스트 직접 모드**: 실제 Open Interpreter 를 호스트에서 실행 (`I-UNDERSTAND` 확인 필요, 격리 없음).
-- 미니루프는 `agent_runner.py` 안에 base64 문자열로 내장됩니다.
+### 핵심 호출관계 (에이전트 채팅)
+```
+RUN.bat → python -m launcher → app → TkPresenter
+   → menu → actions/agent_chat._run_gui_chat_unified(env, presenter, cmd, is_host)
+        1) 인터넷 모드 표시(NETMODE_LOG) · Docker/Tor/SearXNG 준비
+        2) cmd 조정(네트워크/프록시/시스템메시지/PYTHONPATH)  ← 최근 패치 집중 지점
+        3) agent.start(cmd)  → agent/agent_runner (docker run + 미니루프)
+        4) poll 루프: 컨테이너 stdout → chat_panel.append_message → 화면 + 런처 로그
+```
 
----
+### 네트워크 토폴로지 (v36~)
+```
+[Ollama]  호스트 프로세스, 11434  ←── (host.docker.internal, NO_PROXY 직접) ── [에이전트 컨테이너]
+                                                                                    │  (llm_net)
+[llm_tor]   9050 SOCKS / 8118 HTTP  ──llm_net── 프록시(HTTP_PROXY=llm_tor:8118) ────┤
+[llm_searxng] 내부 8080 (JSON 검색)  ──llm_net── web_search(llm_searxng:8080) ───────┘
+```
+- **Ollama(호스트 프로세스)** 는 `host.docker.internal` 로 도달(정상).
+- **다른 컨테이너의 게시 포트는 `host.docker.internal` 로 도달 불가**(Docker Desktop 특성) →
+  **공유 네트워크 `llm_net` + 컨테이너 이름**으로 통신하도록 전환(AGENT_NET/NET_CONNECT).
 
-## 8. 종료/정리 + 메모리 관리
-
-`lifelog.py` 가 시작 시 4종 종료 hook(atexit / SIGINT / SIGTERM / Windows ConsoleCtrlHandler)을 설치하고,
-종료 시 등록된 cleanup 콜백을 실행합니다.
-
-- `register_ollama_cleanup` — 종료 시 적재 모델 **메모리 unload**
-- `register_orphan_container_cleanup_auto` — 고아 컨테이너 정리 (이름/이미지 접두사 한정)
-- `register_cache_cleanup` — `user_data/chat/cache` + `*.tmp` 정리 (임베딩/모델은 보존)
-- `register_host_process_cleanup` — Windows `taskkill /T /F` 로 프로세스 **트리** 종료
-
-**메모리 누적 억제 (이번 세션)** — `OllamaService.env_vars()` 가 Ollama 서버 기동 시 다음을 주입합니다:
-
-- `OLLAMA_MAX_LOADED_MODELS=1` — 한 번에 한 모델만 상주. 역할 전환 시 옛 15~18GB 모델이 자동 언로드되어
-  **두 모델 동시 적재로 인한 누적이 사라집니다.**
-- `OLLAMA_KEEP_ALIVE=5m` — 유휴 5분 후 자동 언로드 (warmup 도 5분).
-- 둘 다 `setdefault` 라 사용자가 실제 환경변수로 덮어쓰면 그 값을 존중합니다.
-- ⚠ 이미 실행 중인 Ollama 에는 적용되지 않습니다 — 런처가 서버를 **새로 기동**할 때 반영되므로, 켜져 있다면
-  한 번 종료 후 재시작하세요.
-
-**Open WebUI 자동 종료**: 채팅 패널을 나오거나 런처를 닫으면 서버 프로세스가 자동 정리됩니다.
-*브라우저 탭만 닫는 것으로는 종료되지 않습니다.*
+### 데이터 흐름
+1. **모델 호출**: 미니루프 → `host.docker.internal:11434`(NO_PROXY 직접) → Ollama.
+2. **웹 검색**: `web_search` → `llm_searxng:8080`(JSON, 프록시 우회) → SearXNG → (Tor) → 인터넷.
+3. **대화 로깅**: 컨테이너 stdout → `chat_panel.append_message` → `lifelog.log("CHAT", …)` → 런처 로그.
+4. **세션 영속**: `user_data/interpreter/sandbox/session_*.json`(호스트) ↔ `/home/agent/.agent_state`(컨테이너).
 
 ---
 
-## 9. 문제 해결
+## 4. 구성 요소
 
-### 채팅 UI 가 "사이트에 연결할 수 없음 (ERR_CONNECTION_REFUSED)"
-Open WebUI 첫 부팅이 30초를 넘으면, 과거에는 서버가 준비되기 전에 "브라우저 열기" 버튼이 활성화되어
-연결 거부가 났습니다. 이번 세션에서 다음과 같이 수정했습니다:
+| 구성 | 역할 | 컨테이너/포트 | 런타임 모듈 |
+|------|------|------|------|
+| **Ollama** | 모델 서버(호스트 프로세스) | `:11434` | `services/ollama.py` |
+| **Open WebUI** | 브라우저 채팅 UI | 로컬 | `actions/chat.py` |
+| **에이전트 미니루프** | Docker 샌드박스 REPL | `llm_agent_chat_*` (이미지 `llm-agent-sandbox`) | `agent/agent_runner.py` |
+| **SearXNG** | 로컬 메타검색(JSON) | `llm_searxng` (내부 8080) | `searxng_runtime.py` |
+| **Tor + Privoxy** | 프록시(회로격리) | `llm_tor` (9050 SOCKS / 8118 HTTP) | `tor_runtime.py` |
+| **공유 네트워크** | 컨테이너 간 이름 통신 | `llm_net` | AGENT_NET/NET_CONNECT |
 
-- 준비 확인을 `/health` 우선으로 바꾸고 대기 시간을 150초로 확대.
-- **버튼을 누를 때마다 응답을 재확인** — 아직 준비 안 됐으면 빈 탭을 여는 대신 "잠시 후 다시 누르세요" 안내.
+- **프라이버시**: `socks5h://`(DNS 유출 차단), SearXNG `search.method: POST`, 메트릭/제목쿼리 비활성,
+  Tor 회로 격리(IsolateDestAddr). 시스템 메시지에 **개인정보 외부 전송 금지** 강제(PRIVACY_GUARD).
 
-여전히 안 되면 잠시 기다렸다가 다시 누르거나, `RUN.bat [4]` 로 Ollama 상태를, `MANAGE.bat [3]` 으로
-Docker/Python 을 점검하세요.
+---
 
-### 대형 모델이 무한루프·응답 절단·자기소개만 반복
-메모리 압박 신호입니다. 8장의 `OLLAMA_MAX_LOADED_MODELS=1` 이 기본 대응이며, 더 가벼운 역할
-(`gemma4:12b`, `qwen2.5-coder:7b`)을 선택하거나 컨텍스트 윈도우를 줄이세요. 역할 사다리(3-2장)가
-가용 메모리에 맞춰 자동 강등도 수행합니다.
+## 5. 에이전트 실행 순서 (agent_chat 파이프라인)
 
-### 에이전트가 의도한 폴더 밖을 건드릴까 걱정
-샌드박스 모드에서는 4장의 허용 폴더만 마운트되고 나머지는 물리적으로 보이지 않습니다. 허용한 폴더
-**안에** 금지 폴더가 있으면, 그 하위는 빈 `--tmpfs` 로 가려져 컨테이너에서 호스트 내용이 보이지 않습니다
-(허용 부모는 마운트되지만 금지 자식만 차단). 경로 비교는 Windows 대소문자를 무시합니다. 캐시/고아 정리도
-`user_data` 와 프로젝트 접두사로 한정됩니다. 단, 도커 `[10]` 의 **수동 전역 prune** 은 다른 도커
-프로젝트의 이미지/볼륨까지 지울 수 있으니 주의하세요(폴더가 아니라 도커 데이터 한정).
+`_run_gui_chat_unified` 는 `agent.start(cmd)` 앞에서 아래를 순서대로 수행한다(전부 최근 패치):
+
+1. **NETMODE_LOG** — `[인터넷] Tor 경유 …` 표시
+2. **Docker 게이트**(TOR_DOCKER_ORDER/TOR_QUIET) — 데몬 확인/자동시작(조용히 로그로)
+3. **DOCKER_READY** — `docker ps` 성공까지 대기(재시작 직후 대비)
+4. **OLLAMA_READY** — Ollama(11434) 응답까지 대기
+5. **SEARXNG_AUTOSTART** — 로컬 SearXNG 기동
+6. **AGENT_NET** — `llm_net` 생성 + cmd 에 `--network llm_net` + 프록시 호스트를 `llm_tor` 로 치환
+7. **NET_CONNECT / NET_LOG** — 실행 중 `llm_tor`/`llm_searxng` 를 `llm_net` 에 연결(결과 `[net]` 표시)
+8. **SYSMSG_FILE** — 긴 시스템 메시지를 `@FILE:`(마운트 파일)로 → WinError 206 방지
+9. **PRETOOL_PATH** — `-e PYTHONPATH=/home/agent/.agent_state`
+10. **PRETOOL_SYNC** — PreTool/sitecustomize 를 실제 마운트 폴더로 복사
+11. **agent.start(cmd)** → 실패 시 **AGENT_RETRY**(2회) → 여전히 실패면 **START_DIAG/DIAG2**(원인 진단)
+
+미니루프 내부: `--system_message @FILE:` 를 파일에서 읽고(SYSMSG_READ), 코드블록마다 별도
+`python3 -c` 실행(sitecustomize 로 PreTool 전역 주입).
+
+---
+
+## 6. PreTool — 에이전트 도구 패키지
+
+| 범주 | 함수 |
+|------|------|
+| 검색 | `web_search(q)` · `search_summary(q)` · `fetch_text(url)` · `net_diag()` |
+| 엑셀/표 | `excel_write(path, rows, headers)` · `csv_write` · `read_table` |
+| 문서 | `report_write(path, title, sections)` |
+| 파일 | `move` · `copy` · `list_files` · `organize_by_ext` |
+| 개발 | `run_tests(code, cases)` · `check_syntax` · `run_python` · `lint` · `outline` · `diff` · `complexity` |
+| 데이터 | `calc` · `json_pretty` · `json_query` · `summarize_text` · `word_stats` |
+
+- **순수 stdlib** — 샌드박스에서 pip 불필요.
+- **import 없이 호출** — `sitecustomize` 가 `PreTool.__all__` 을 builtin 으로 주입.
+- **검색 경로** — `web_search` 는 SearXNG(JSON)→SearXNG(HTML)→DuckDuckGo 3단 폴백.
+- 전체 목록: `import PreTool; print(PreTool.catalog())`.
+
+---
+
+## 7. 데이터 저장 구조 (`user_data/`)
+
+```
+user_data/
+├── settings/        user_config.json, folder_policy.json   ← launcher/settings 디렉터리 정션
+├── chat/            Open WebUI DB + 캐시 (actions/chat.py 가 DATA_DIR 지정)
+├── logs/            launcher_*.log  (대화 [CHAT]·네트워크 [net]·기동 [tor/docker]/[searxng])
+└── interpreter/
+    └── sandbox/     세션 session_*.json + PreTool/ + sitecustomize.py
+                     → 컨테이너 /home/agent/.agent_state 로 마운트
+```
+폴더째 복사하면 다른 PC로 이식 가능. 종료해도 보존(모델 언로드·캐시 정리만 수행).
+
+---
+
+## 8. 현재 동작 상태 (v39)
+
+### ✅ 해결 완료
+- **에이전트 기동** — WinError 206(명령줄 초과)을 시스템 메시지 파일 전달로 해결,
+  Docker 재시작 직후 실패는 재시도로 흡수.
+- **PreTool** — 17+개 도구. 실제 마운트로 동기화(PRETOOL_SYNC) + PYTHONPATH → `import PreTool` 정상,
+  sitecustomize 로 import 없이 전역 호출 가능.
+- **SearXNG 경로** — 자동 기동 + `llm_net` 연결 확인(`[net] llm_searxng 이미 llm_net 에 연결됨`),
+  `web_search` 가 `llm_searxng:8080` JSON 으로 접속. **이 경로는 완성.**
+- **IO_LOG** — 입력·모델출력·코드·결과·네트워크 연결이 전부 런처 로그에 기록.
+- 콘솔 깜빡임 제거 · Docker/Tor 준비 백그라운드 · 종료 시 llm_tor 자동 정리.
+
+### ⚠️ 남은 문제 (검색 실패의 마지막 원인)
+1. **`llm_tor` 의 `llm_net` 합류 레이스** — `[net] llm_tor 연결 실패: Container … is marked for
+   removal and cannot be connected`. 옛 컨테이너 제거 중이라 연결 실패 → 프록시 `llm_tor:8118`
+   이름 해석 불가(`gaierror -2`).
+2. **8b 무검열 모델의 도구 shadow** — 모델이 PreTool 의 `web_search` 를 자기 urllib 로 재정의하고
+   그 코드가 (1)의 깨진 프록시로 나가 실패. **PreTool 의 `search_summary`(→ SearXNG)를 그대로
+   썼다면 성공했을 상황.**
+
+> 인프라(기동·도구·검색엔진·네트워크·로깅)는 사실상 완성. **(1)만 해결되면 모델의 자기 urllib 도
+> 프록시로 정상 동작**하여 shadow 가 무해해진다.
+
+---
+
+## 9. 패치 이력 (테마별 43개)
+
+**기동 안정화** — SYSMSG_FILE/READ(WinError 206) · AGENT_RETRY · DOCKER_READY · OLLAMA_READY ·
+START_DIAG/DIAG2 · MID_DOWNGRADE/ENTRY_LADDER/MODEL_DISPLAY/TIERS(모델 선택·강등·표시)
+
+**도구(PreTool)** — PRETOOL_HINT/DEV_HINT/FORCE(안내·직접호출 지시) · PRETOOL_PATH(PYTHONPATH) ·
+PRETOOL_SYNC(실제 마운트 복사) · sitecustomize(전역 주입)
+
+**검색/네트워크** — WEBSEARCH_HINT/URLENCODE_HINT/SEARCH_RECIPE(검색 지시) · HTTP_PROXY(8118) ·
+SEARXNG_AUTOSTART · AGENT_NET/NET_CONNECT/NET_LOG(공유 네트워크) ·
+TOR_TOGGLE/AUTOSTART/DOCKER_ORDER/QUIET(Tor)
+
+**UI/세션** — UNIFIED_ENTRY/ENTRY_INWINDOW · SESSION_RESUME/SESSION_HINT ·
+SIDEBAR_RESTORE/STARTUP_BUTTONS/PREWARM_UI · NETMODE_LOG · IO_LOG(chat_panel v4)
+
+**설치/정리** — MANAGE_FIX · SEARXNG_STOP/HARDEN · PRIVACY_GUARD · DEADCODE_CLEANUP · STARTUP_FIX
+
+---
+
+## 10. 설정 · 패치 규약
+
+**주요 설정(`launcher/config.py`)**: `OLLAMA_PORT=11434`, `SANDBOX_IMAGE=llm-agent-sandbox`,
+`MODEL_TAG`(ARA), `MODEL_TAG_FALLBACK`(gemma4:12b). 네트워크명 오버라이드: 환경변수 `LLM_NETWORK`(기본 `llm_net`),
+SearXNG URL: `SEARXNG_URL`(기본 `http://llm_searxng:8080`).
+
+**패치 규약(엄격)**: 멱등(버전 마커) · 앵커 기반 정확 치환 · MISS 시 무손상 · AST/compile 검증 ·
+원자적 쓰기(tmp+os.replace, CRLF 보존) · 미니루프는 b64 → 디코드·수정·재인코드 ·
+`.bat` 는 ASCII+CRLF · Windows docker subprocess 는 `CREATE_NO_WINDOW` · 자기삭제 `APPLY_*` 쌍.
+
+---
+
+## 11. 문제 해결 / 다음 단계
+
+### 검색이 `Name or service not known` (llm_tor/llm_searxng 못 찾음)
+컨테이너가 `llm_net` 에 안 붙은 상태. **`docker rm -f llm_tor llm_searxng` 후 `APPLY_ALL.bat`
+재실행** → 깨끗한 컨테이너가 `--network llm_net` 로 생성되어 자동 합류. 재발 시 런처 로그의
+`[net]` 두 줄로 확인.
+
+### 검색이 `Network is unreachable`
+`host.docker.internal` 로 컨테이너 게시 포트에 도달 불가한 케이스 → 이미 `llm_net`+컨테이너명으로
+전환됨(위 항목으로 해결). Ollama(11434)만 되는 건 정상(호스트 프로세스).
+
+### 모델이 도구를 안 쓰고 자기 코드를 짬 / 응답 불안정
+8b 무검열 모델 특성. **[모델 변경]으로 `qwen2.5-coder:7b/14b` 권장**(도구 준수율↑).
+
+### 에이전트 시작 실패
+채팅에 진단이 뜬다: "Ollama 설치 모델 N개" / "이미지 없음" / "컨테이너 출력 …".
+그 문구로 원인(모델 미설치/이미지/컨테이너 오류) 판별.
+
+### 재개 시 우선 작업
+1. `llm_tor` 의 `llm_net` 확실 합류(깨끗한 재시작 또는 NET_CONNECT 재시도/tor_runtime 자체 connect).
+2. 모델 shadow 회피(모델 교체 또는 지시 강화; (1) 해결 시 자동 무해화).
+3. `search_summary('오늘 코스피')` 결과가 오는지 런처 로그(IO_LOG)로 검증.
+
+---
+
+## 부록 — 알려진 제약
+- Docker/컨테이너 네트워크는 실제 Windows+Docker PC에서 런처 로그(IO_LOG/NET_LOG)로 검증한다.
+- 8b 무검열 모델(huihui/ARA)은 도구·지시 준수가 불안정 → 스크랩엔 `qwen2.5-coder` 권장.
+- `host.docker.internal` 은 호스트 프로세스(Ollama)만 도달, 컨테이너 게시 포트엔 도달 불가
+  → `llm_net` 공유 네트워크 + 컨테이너명 통신으로 전환함.

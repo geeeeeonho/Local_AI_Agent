@@ -192,7 +192,7 @@ def _toast(p, msg: str) -> None:
 
 
 def _remove_pick(p, items_list, remover, title: str) -> None:
-    from .presenter.base import MenuItem
+    from launcher.presenter.base import MenuItem
     if not items_list:
         _toast(p, "목록이 비어 있습니다")
         return
@@ -211,7 +211,7 @@ def _remove_pick(p, items_list, remover, title: str) -> None:
 
 def manage(p, env=None) -> None:
     """허용/금지 폴더 관리 UI."""
-    from .presenter.base import MenuItem
+    from launcher.presenter.base import MenuItem
     home = Path.home()
     while True:
         al = list_allowed()
@@ -253,7 +253,7 @@ def manage(p, env=None) -> None:
 
 def maybe_manage(p, env=None) -> None:
     """에이전트 진입 시 호출: 정책 요약 + 설정 진입 선택. 진행을 누를 때까지 반복(여러 개 설정 후 진입)."""
-    from .presenter.base import MenuItem
+    from launcher.presenter.base import MenuItem
     while True:  # FOLDER_POLICY_LIVE_v1
         items = [
             MenuItem(key="1", title="이대로 진행"),

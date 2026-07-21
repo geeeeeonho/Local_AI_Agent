@@ -5,9 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
-from . import utils
-from .i18n import t
-from .resources import SafetyProfile
+from installer import utils
+from installer.i18n import t
+from installer.resources import SafetyProfile
 
 IMAGE_NAME = "llm-agent-sandbox"
 
@@ -77,7 +77,7 @@ def install(
             capture_output=True, timeout=15,
         )
         if _chk.returncode == 0:
-            from .i18n import get_language
+            from installer.i18n import get_language
             _msg = (f"{IMAGE_NAME} 이미지 이미 존재 — 빌드 건너뜀"
                     if get_language() == "ko"
                     else f"{IMAGE_NAME} image already exists - skipping build")

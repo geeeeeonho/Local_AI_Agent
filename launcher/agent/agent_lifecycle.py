@@ -21,7 +21,7 @@ import weakref
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .agent_runner import UnifiedAgent
+    from launcher.agent.agent_runner import UnifiedAgent
 
 __all__ = ["register", "unregister", "cleanup_all", "count_active"]
 

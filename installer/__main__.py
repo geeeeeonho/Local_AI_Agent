@@ -11,9 +11,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from installer import (
-    utils, ollama, model, python_tools, sandbox, searxng, resources, lang_setup
-)
+from installer import utils, resources, lang_setup
+from installer.steps import ollama
+from installer.steps import model
+from installer.steps import python_tools
+from installer.steps import sandbox
+from installer.steps import searxng
 from installer.i18n import t
 
 # 프로젝트 루트 = installer/__main__.py 의 부모의 부모

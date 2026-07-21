@@ -84,9 +84,9 @@ def _build_command(
     # FOLDER_POLICY_v1: 상시 허용 폴더 마운트 (샌드박스는 그 외 경로 물리 차단)
     try:
         try:
-            from .. import folder_policy as _fp
+            from launcher.agent import folder_policy as _fp
         except Exception:
-            from launcher import folder_policy as _fp
+            from launcher.agent import folder_policy as _fp
         for _h, _c in _fp.mounts_for():
             cmd += ["-v", _h + ":" + _c]
         # FOLDER_POLICY_OVERLAY_v1: 허용 상위 안의 '금지' 하위를 빈 tmpfs 로 가림
@@ -121,7 +121,7 @@ def _build_command(
     )
 
     # 응답 행동 규칙 + 세션 정보 합성 (profiles 와 동일 패턴)
-    from .. import profiles as _profiles
+    from launcher.agent import profiles as _profiles
     _safety_msg = (
         _safety_msg
         + _profiles.RESPONSE_DISCIPLINE
@@ -152,7 +152,7 @@ def _build_command(
 # v6_6_sandbox: 샌드박스 액션 단계별 trace
 def _v66_trace(stage: str) -> None:
     try:
-        from .. import lifelog as _ll
+        from launcher.core import lifelog as _ll
         _ll.log("TRACE", "[agent_sandbox] " + stage)
     except Exception:
         pass
@@ -275,7 +275,7 @@ def run(env: Path, p: Presenter) -> None:
     try:
         # v6_9_visibility: Ollama 모델 사전 warm-up (첫 응답 지연 제거)
         try:
-            from .. import lifelog as _ll
+            from launcher.core import lifelog as _ll
             if hasattr(_ll, "warmup_ollama_model"):
                 p.info("Ollama 모델을 사전 로드합니다... (수십초 걸릴 수 있음)")
                 _ll.warmup_ollama_model(config.MODEL_TAG, timeout=60)

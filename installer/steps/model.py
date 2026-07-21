@@ -13,8 +13,9 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import utils, ollama
-from .i18n import get_language
+from installer import utils
+from installer.steps import ollama
+from installer.i18n import get_language
 
 # model_roles 가 없을 때를 대비한 인라인 폴백 (역할 라벨, 모델)
 # MODEL_FINAL_v8 inline 폴백 (model_roles import 실패 시)
@@ -67,14 +68,14 @@ def _load_models() -> List[Tuple[str, str]]:
     """역할 라벨이 붙은 (label, model) 목록. 카탈로그 > model_roles > 인라인."""
     # MODEL_CATALOG_v1: 카탈로그 설치 세트 우선
     try:
-        from launcher import model_catalog as _cat  # type: ignore
+        from launcher.models import model_catalog as _cat  # type: ignore
         _pairs = _cat.install_pairs()
         if _pairs:
             return _pairs
     except Exception:
         pass
     try:
-        from launcher import model_roles as mr  # type: ignore
+        from launcher.models import model_roles as mr  # type: ignore
         pairs: List[Tuple[str, str]] = []
         for r in mr.ROLES:
             pairs.append((r.label, r.model))
@@ -130,13 +131,13 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
 
     # MODEL_SELECT_GUI_v1: 설치 전용 선택 GUI (Tk 불가/취소 처리)
     try:
-        from launcher import model_catalog as _cat
+        from launcher.models import model_catalog as _cat
         _entries = _cat.all_entries()
     except Exception:
         _entries = None
     if _entries:
         try:
-            from installer import model_select_gui as _msg_gui
+            from installer.steps import model_select_gui as _msg_gui
             utils.info("모델 선택 창을 띄웁니다. 창이 안 보이면 작업표시줄/Alt+Tab 에서 '설치할 모델 선택' 창을 확인하세요.")
             _picked = _msg_gui.select_models(_entries, installed, lang=get_language())
         except Exception as _ge:
@@ -173,6 +174,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
                 ok_tags.append(tag)
             else:
                 utils.err(_m("fail", tag=tag, rc=r.returncode))
+                utils.warn("[HINT] pull 실패. '412 requires a newer version of Ollama' 라면 Ollama 가 오래된 것입니다. https://ollama.com/download 에서 최신 Ollama 로 업데이트 후 다시 받으세요. (gemma4 계열 등 최신 모델은 새 Ollama 필요)")
                 failed += 1
         except Exception as e:
             utils.err(_m("fail", tag=tag, rc=repr(e)))

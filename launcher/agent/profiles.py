@@ -140,7 +140,7 @@ def build_session_addendum(host_workspace=None) -> str:
             "  - 사용자가 '내 폴더', '워크스페이스' 라고 말하면 위 경로를 의미합니다.\n"
         )
     try:
-        from . import folder_policy as _fp
+        from launcher.agent import folder_policy as _fp
         _mounts = _fp.mounts_for()
     except Exception:
         _mounts = []
