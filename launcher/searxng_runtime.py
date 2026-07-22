@@ -91,6 +91,13 @@ def _harden_settings(cfg, log_path=None):
        ② search.method: POST (검색어가 URL/referrer 에 안 남음)
        ③ general.enable_metrics: false (내부 메트릭 수집 off)
        ④ ui.query_in_title: false (검색어가 페이지 제목에 안 남음)"""
+    try:
+        _lt = Path(cfg) / "limiter.toml"
+        if _lt.exists():
+            _lt.unlink()
+            _log(log_path, "INFO", "호환 안 되는 limiter.toml 제거 (이미지 기본값 사용)")
+    except Exception:
+        pass
     sp = Path(cfg) / "settings.yml"
     try:
         txt = sp.read_text(encoding="utf-8")
@@ -99,6 +106,8 @@ def _harden_settings(cfg, log_path=None):
     orig = txt
     txt = txt.replace("socks5://host.docker.internal:9050",
                       "socks5h://host.docker.internal:9050")
+    # SEARXNG_TOR_HOST_v1: 컨테이너→컨테이너는 게시포트 대신 llm_net 컨테이너명으로
+    txt = txt.replace("socks5h://host.docker.internal:9050", "socks5h://llm_tor:9050")
     if "method:" not in txt and (nl := "\n") and "\nsearch:\n" in txt:
         txt = txt.replace("\nsearch:\n", "\nsearch:\n  method: \"POST\"\n", 1)
     if "enable_metrics:" not in txt and "\ngeneral:\n" in txt:
