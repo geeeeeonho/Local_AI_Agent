@@ -755,8 +755,17 @@ def build_sandbox_pipe_cmd(
         pass
 
     if tor_proxy:
-        _http = "http://host.docker.internal:8118"  # Privoxy(HTTP) — urllib 호환  # HTTP_PROXY_v1
-        _socks = "socks5h://host.docker.internal:9050"
+        # AGENT_PROXY_CFG_v1: 주소 정본은 launcher/config.py 다.
+        #   원본: _http  = "http://host.docker.internal:8118"
+        #         _socks = "socks5h://host.docker.internal:9050"
+        #   컨테이너 이름 경로는 --add-host/포트게시에 의존하지 않아 더 견고하다.
+        try:
+            from .. import config as _cfgN
+            _http = _cfgN.tor_http_proxy()
+            _socks = _cfgN.tor_socks_proxy()
+        except Exception:
+            _http = "http://llm_tor:8118"
+            _socks = "socks5h://llm_tor:9050"
         _no = "host.docker.internal,localhost,127.0.0.1"
         for _pk in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             cmd += ["-e", _pk + "=" + _http]

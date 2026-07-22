@@ -39,7 +39,7 @@ IMAGE = _c("SEARXNG_IMAGE", "searxng/searxng:latest")
 CONTAINER = _c("SEARXNG_CONTAINER", "llm_searxng")
 HOST_PORT = _c("SEARXNG_HOST_PORT", 8888)
 BOOT_TIMEOUT = _c("SEARXNG_BOOT_TIMEOUT", 60)
-CONTAINER_PORT = 8080  # SearXNG 공식 이미지 기본 리슨 포트
+CONTAINER_PORT = _c("SEARXNG_CONTAINER_PORT", 8080)  # NET_CONFIG_v1: config 정본
 NETWORK = _c("LLM_NETWORK", "llm_net")  # SEARXNG_NET_v1: 공유 네트워크
 
 

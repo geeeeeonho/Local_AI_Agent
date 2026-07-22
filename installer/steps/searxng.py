@@ -28,11 +28,19 @@ def _settings_yml(secret: str) -> str:
 
 use_default_settings: true
 
-# ===== 프록시 우회 설정 (추가됨) =====
+# ===== proxy / Tor (INSTALLER_NET_v1) =====
+# ASCII only on purpose: non-ASCII here has been corrupted by PowerShell
+# edits before, and SearXNG then refuses to start.
+#   * key MUST be "all://" - newer httpx rejects the bare "all" and every
+#     engine then dies with "unexpected crash" (search returns 0 results)
+#   * target MUST be the container name - on Docker Desktop containers
+#     cannot reach each other through host.docker.internal
 outgoing:
   proxies:
-    all: socks5h://host.docker.internal:9050  # SEARXNG_HARDEN_v1: DNS 유출 방지(원격 해석)
-# ====================================
+    "all://": socks5h://llm_tor:9050
+  request_timeout: 15.0
+  max_request_timeout: 30.0
+# ==========================================
 
 general:
   debug: false
@@ -98,11 +106,18 @@ def install(paths: Dict[str, Path]):
         settings_path.write_text(_settings_yml(secret), encoding="utf-8")
         utils.ok(t("install.searxng_settings_created", path=str(settings_path)))
 
-    # ─── limiter.toml ───
+    # ─── limiter.toml (INSTALLER_NET_v1: 생성하지 않음) ───
+    # 최신 searxng 이미지와 스키마가 맞지 않아 부팅 중 TypeError 로 컨테이너가
+    # 즉사한다("schema of /etc/searxng/limiter.toml is invalid!").
+    # limiter 는 settings.yml 의 limiter:false 로 이미 비활성이므로 파일이 없는
+    # 편이 안전하다(없으면 이미지 내장 기본값을 사용).
     limiter_path = cfg_dir / "limiter.toml"
-    if not limiter_path.exists():
-        limiter_path.write_text(LIMITER_TOML, encoding="utf-8")
-        utils.ok(t("install.searxng_limiter_created", path=str(limiter_path)))
+    if limiter_path.exists():
+        try:
+            limiter_path.unlink()
+            utils.ok("limiter.toml 제거 (이미지 기본값 사용)")
+        except Exception:
+            utils.warn("limiter.toml 제거 실패: " + str(limiter_path))
 
     # ─── 이미지 pull ───
     utils.info(t("install.searxng_pulling", image=IMAGE))
