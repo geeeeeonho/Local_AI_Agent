@@ -147,6 +147,12 @@ TOOL_MANDATE = (
     "   결과를 받아놓고 쓰지 않은 채 일반론으로 보고서를 쓰면 안 됩니다.\n"
     "   보고서를 만들 때도 search_summary() 출력의 제목·요약·URL 을 인용해 작성하세요.\n"
     "5. 검색이 실패하면(결과 없음/에러) 추측하지 말고 '검색 결과 없음' 이라고 보고하세요.\n"
+    "\n■ 더 깊이 조사할 때 (SEARCH_TOOLS_v2)\n"
+    "   print(research('주제', n=3))   <- 검색 + 상위 3건의 '본문까지' 읽어옴. 보고서는 이걸 쓰세요.\n"
+    "   print(open_url(url))           <- 특정 기사/페이지의 본문만 읽기\n"
+    "   for l in page_links(url): ...  <- 그 페이지의 링크 목록으로 더 탐색\n"
+    "   보고서·요약 요청에는 search_summary 보다 research() 가 적합합니다.\n"
+    "   (검색 요약문만으로는 근거가 부족하므로 실제 본문을 읽어야 합니다)\n"
 )
 
 SAFETY_PREAMBLE = (SAFETY_PREAMBLE + RESPONSE_DISCIPLINE + INJECTION_GUARD
