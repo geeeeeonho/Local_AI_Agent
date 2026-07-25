@@ -4,7 +4,7 @@
 from PreTool import web_search, run_tests, check_syntax, excel_write, report_write, ...
 전체 도구는 PreTool.catalog() 로 확인.
 """
-from .search import web_search, fetch_text, search_summary, net_diag, open_url, page_links, research
+from .search import web_search, fetch_text, search_summary, net_diag, open_url, page_links, research, search_urls
 from .excel import excel_write, csv_write, read_table
 from .report import report_write
 from .files import move, copy, list_files, organize_by_ext
@@ -12,6 +12,7 @@ from .dev import (check_syntax, run_tests, run_python, lint, outline, diff, comp
 from .data import calc, json_pretty, json_query, summarize_text, word_stats
 
 __all__ = [
+    "search_urls",
     "research",
     "page_links",
     "open_url",
