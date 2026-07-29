@@ -15,9 +15,23 @@ from typing import Dict
 
 from installer import utils
 
-CONTAINER_NAME = "llm_searxng"
-IMAGE          = "searxng/searxng:latest"
-HOST_PORT      = 8888  # Open WebUI 가 8080 쓰므로 충돌 회피
+# INSTALLER_CONFIG_v1: config 정본 참조 (없으면 리터럴 폴백)
+try:
+    from launcher import config as _config
+except Exception:  # pragma: no cover
+    try:
+        import config as _config  # type: ignore
+    except Exception:
+        _config = None
+
+
+def _c(name, default):
+    return getattr(_config, name, default) if _config else default
+
+
+CONTAINER_NAME = _c("SEARXNG_CONTAINER", "llm_searxng")
+IMAGE          = _c("SEARXNG_IMAGE", "searxng/searxng:latest")
+HOST_PORT      = _c("SEARXNG_HOST_PORT", 8888)  # Open WebUI 가 8080 쓰므로 충돌 회피
 
 
 # Open WebUI 와 호환되도록 JSON 포맷을 활성화하고 SafeSearch=0 으로 설정
@@ -129,13 +143,21 @@ def install(paths: Dict[str, Path]):
         utils.err(t("install.searxng_pull_fail"))
         return
 
-    # SEARXNG_HARDEN_v1: Tor SOCKS 프록시 이미지도 함께 받음 (검색 익명화에 필요)
+    # SEARXNG_HARDEN_v1: Tor SOCKS 프록시 이미지도 함께 받음 (config 정본)
+    _tor_img = _c("TOR_IMAGE", "dperson/torproxy")
     try:
-        utils.info("Tor 프록시 이미지 pull: dperson/torproxy")
-        subprocess.run(["docker", "pull", "dperson/torproxy"], check=True)
+        utils.info("Tor 프록시 이미지 pull: " + _tor_img)
+        subprocess.run(["docker", "pull", _tor_img], check=True)
         utils.ok("Tor 이미지 준비 완료")
     except subprocess.CalledProcessError:
         utils.warn("Tor 이미지 pull 실패 - 검색 익명화가 제한될 수 있습니다 "
-                   "(수동: docker pull dperson/torproxy)")
+                   "(수동: docker pull " + _tor_img + ")")
+
+    # INSTALLER_CONFIG_v1(NETMODE_WARP): 기본 네트워크(WARP) 이미지도 함께 받음
+    try:
+        from installer.steps import warp as _warp
+        _warp.install(paths)
+    except Exception as _e:
+        utils.warn("WARP 이미지 설치 ꇐ뜀: " + str(_e))
 
     utils.ok(t("install.searxng_ready", name=CONTAINER_NAME, port=HOST_PORT))

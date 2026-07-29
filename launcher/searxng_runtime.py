@@ -108,6 +108,20 @@ def _harden_settings(cfg, log_path=None):
                       "socks5h://host.docker.internal:9050")
     # SEARXNG_TOR_HOST_v1: 컨테이너→컨테이너는 게시포트 대신 llm_net 컨테이너명으로
     txt = txt.replace("socks5h://host.docker.internal:9050", "socks5h://llm_tor:9050")
+    # NETMODE_PROXY_SYNC_v1: outgoing 프록시를 현재 NET_MODE 에 맞춘다.
+    #   warp -> socks5h://llm_warp:1080,  tor -> socks5h://llm_tor:9050 (양방향)
+    try:
+        _ap = _c("active_socks_proxy", None)
+        _proxy = _ap() if callable(_ap) else None
+    except Exception:
+        _proxy = None
+    if _proxy:
+        for _old in ("socks5h://llm_tor:9050", "socks5h://llm_warp:1080"):
+            if _old != _proxy:
+                txt = txt.replace(_old, _proxy)
+    # NETMODE_WARP_v1: 기본 네트워크는 WARP. NET_MODE=tor 일 때만 Tor 를 유지한다.
+    if __import__("os").environ.get("NET_MODE", "warp").strip().lower() != "tor":
+        txt = txt.replace("socks5h://llm_tor:9050", "socks5h://llm_warp:1080")
     if "method:" not in txt and (nl := "\n") and "\nsearch:\n" in txt:
         txt = txt.replace("\nsearch:\n", "\nsearch:\n  method: \"POST\"\n", 1)
     if "enable_metrics:" not in txt and "\ngeneral:\n" in txt:
@@ -155,8 +169,24 @@ def start(env, log_path=None, with_tor=True) -> bool:
         return True
     _ensure_net()  # SEARXNG_NET_v1
 
+    # NETMODE_WARP_v1: 기본은 WARP 프록시를 먼저 기동. NET_MODE=tor 이면 Tor 사용.
+    _net_mode = __import__("os").environ.get("NET_MODE", "warp").strip().lower()
+    if _net_mode != "tor":
+        try:
+            from . import warp_runtime  # type: ignore
+        except Exception:
+            warp_runtime = None
+        if warp_runtime is not None:
+            try:
+                if not warp_runtime.start(env, log_path=log_path):
+                    _log(log_path, "WARN",
+                         "WARP 미기동 - 검색이 실패할 수 있습니다. "
+                         "NET_MODE=tor 로 전환하거나 WARP 를 설치하세요.")
+            except Exception as _e:
+                _log(log_path, "WARN", "WARP 기동 예외: " + str(_e)[:120])
+
     # settings.yml 이 Tor(9050) 를 요구하므로 Tor 를 먼저 best-effort 로 기동
-    if with_tor:
+    if with_tor and _net_mode == "tor":
         try:
             from . import tor_runtime  # type: ignore
         except Exception:

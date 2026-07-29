@@ -86,7 +86,7 @@ def agent_setup(env=None, presenter=None):
 
             role_var = tk.StringVar(value=(roles[0].key if roles else "5"))
             mode_var = tk.StringVar(value="sandbox")
-            net_var = tk.StringVar(value="block")
+            net_var = tk.StringVar(value="warp")  # ENTRY_3WAY_v1: 기본 WARP
 
             def _section(title, desc):
                 c = tk.Frame(base, bg=_CARD)
@@ -123,8 +123,12 @@ def agent_setup(env=None, presenter=None):
             tk.Label(sec2, text="", bg=_CARD).pack(pady=(0, 4))
 
             sec3 = _section("인터넷 (샌드박스)", None)
-            _radio(sec3, net_var, "block", "차단 (기본·안전)", "외부 인터넷 없음")
-            _radio(sec3, net_var, "tor", "Tor 경유 허용", "외부 트래픽을 Tor 로 우회 (Tor 필요)", danger=True)
+            # ENTRY_3WAY_v1: WARP(빠름·기본) / Tor(최고 익명) / 차단
+            _radio(sec3, net_var, "warp", "WARP 경유 (빠름·기본)",
+                   "Cloudflare WARP 로 IP 보호 · 빠르고 차단 적음 (WARP 이미지 필요)")
+            _radio(sec3, net_var, "tor", "Tor 경유 (최고 익명)",
+                   "가장 익명적이나 느림 (Tor 이미지 필요)")
+            _radio(sec3, net_var, "block", "차단 (검색 불가)", "외부 인터넷 없음·가장 안전")
             tk.Label(sec3, text="", bg=_CARD).pack(pady=(0, 4))
 
             def _show_progress():
@@ -150,7 +154,21 @@ def agent_setup(env=None, presenter=None):
                 except Exception:
                     sel = {"tag": None, "reason": "resolve 실패", "label": role_var.get()}
                 sel["mode"] = mode_var.get()
-                sel["tor"] = (net_var.get() == "tor" and mode_var.get() == "sandbox")
+                # ENTRY_3WAY_v1: warp/tor 둘 다 '프록시 사용'(True). 주소·기동은 NET_MODE 기준.
+                _nm = net_var.get()
+                sel["net_mode"] = _nm
+                sel["tor"] = (_nm in ("warp", "tor") and mode_var.get() == "sandbox")
+                if sel["tor"]:
+                    try:
+                        import os as _os
+                        _os.environ["NET_MODE"] = _nm
+                        try:
+                            from .. import config as _cfgE
+                        except Exception:
+                            from launcher import config as _cfgE
+                        _cfgE.NET_MODE = _nm
+                    except Exception:
+                        pass
                 result["value"] = sel
                 try:
                     _show_progress()  # 동일 UI 에 진행바

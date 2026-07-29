@@ -19,13 +19,27 @@ from __future__ import annotations
 import subprocess
 import time
 
-# 사용자 조정 가능 상수 --------------------------------------------------
-TOR_IMAGE = "dperson/torproxy"     # SOCKS5 Tor proxy (내부 9050). 원하면 교체 가능.
-TOR_CONTAINER = "llm_tor"
-TOR_HOST_PORT = 9050               # 호스트/컨테이너들이 접근할 포트 (settings.yml 과 일치)
-TOR_CONTAINER_PORT = 9050          # 이미지 내부 SocksPort
-TOR_HTTP_PORT = 8118               # Privoxy(HTTP 프록시) — urllib 호환
-BOOT_TIMEOUT = 30
+# TOR_CONFIG_v1: config 정본 참조 (없으면 리터럴 폴백)
+try:
+    from . import config as _config  # 패키지 컨텍스트
+except Exception:  # pragma: no cover
+    try:
+        import config as _config  # type: ignore
+    except Exception:
+        _config = None
+
+
+def _c(name, default):
+    return getattr(_config, name, default) if _config else default
+
+
+# 사용자 조정 가능 상수 (정본 = launcher/config.py) --------------------
+TOR_IMAGE = _c("TOR_IMAGE", "dperson/torproxy")            # SOCKS5 Tor proxy
+TOR_CONTAINER = _c("TOR_CONTAINER", "llm_tor")
+TOR_HOST_PORT = _c("TOR_SOCKS_PORT", 9050)                 # 호스트/컨테이너 접근 포트
+TOR_CONTAINER_PORT = _c("TOR_SOCKS_PORT", 9050)            # 이미지 내부 SocksPort
+TOR_HTTP_PORT = _c("TOR_HTTP_PORT", 8118)                  # Privoxy(HTTP)
+BOOT_TIMEOUT = _c("TOR_BOOT_TIMEOUT", 30)                  # config 정본(=90) 사용
 # ----------------------------------------------------------------------
 
 _CREATE_NO_WINDOW = 0x08000000  # Windows: 콘솔 창 안 띄움
@@ -126,7 +140,7 @@ def _write_torrc(env):
         return None
 
 
-NETWORK = "llm_net"  # TOR_RUNTIME_v8: 공유 네트워크 (tor_runtime 은 _c 헬퍼 없음)
+NETWORK = _c("LLM_NETWORK", "llm_net")  # TOR_CONFIG_v1: 공유 네트워크 (config 정본)
 
 
 def _ensure_net():
@@ -208,6 +222,22 @@ def start(env=None, log=None) -> bool:
                 log(str(m))
             except Exception:
                 pass
+
+    # NETMODE_TOR_GUARD_v1: warp 모드에서는 Tor 를 띄우지 않는다.
+    # 호출부(searxng_runtime, agent_chat 등)를 일일이 고치는 대신
+    # 여기서 한 번에 막는다. NET_MODE=tor 일 때만 진행.
+    try:
+        _nm_guard = str(_c("NET_MODE", "warp")).strip().lower()
+    except Exception:
+        import os as _os_g
+        _nm_guard = _os_g.environ.get("NET_MODE", "warp").strip().lower()
+    if _nm_guard != "tor":
+        if log:
+            try:
+                log("NET_MODE=%s — Tor 기동 생략(프록시는 WARP 사용)" % _nm_guard)
+            except Exception:
+                pass
+        return False
 
     if is_running():
         if _has_http_port():  # TOR_RUNTIME_v8: 8118 게시 확인

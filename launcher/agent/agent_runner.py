@@ -759,19 +759,23 @@ def build_sandbox_pipe_cmd(
         #   원본: _http  = "http://host.docker.internal:8118"
         #         _socks = "socks5h://host.docker.internal:9050"
         #   컨테이너 이름 경로는 --add-host/포트게시에 의존하지 않아 더 견고하다.
+        # NETMODE_WARP_v4: NET_MODE 인지 프록시 (warp=SOCKS 전용, tor=http+socks)
         try:
             from .. import config as _cfgN
-            _http = _cfgN.tor_http_proxy()
-            _socks = _cfgN.tor_socks_proxy()
+            _penv = _cfgN.net_proxy_env()
         except Exception:
-            _http = "http://llm_tor:8118"
-            _socks = "socks5h://llm_tor:9050"
-        _no = "host.docker.internal,localhost,127.0.0.1"
-        for _pk in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-            cmd += ["-e", _pk + "=" + _http]
-        for _pk in ("ALL_PROXY", "all_proxy"):
-            cmd += ["-e", _pk + "=" + _socks]
-        cmd += ["-e", "NO_PROXY=" + _no, "-e", "no_proxy=" + _no]
+            _penv = {
+                "HTTP_PROXY": "socks5h://llm_warp:1080",
+                "HTTPS_PROXY": "socks5h://llm_warp:1080",
+                "http_proxy": "socks5h://llm_warp:1080",
+                "https_proxy": "socks5h://llm_warp:1080",
+                "ALL_PROXY": "socks5h://llm_warp:1080",
+                "all_proxy": "socks5h://llm_warp:1080",
+                "NO_PROXY": "host.docker.internal,localhost,127.0.0.1",
+                "no_proxy": "host.docker.internal,localhost,127.0.0.1",
+            }
+        for _pk, _pv in _penv.items():
+            cmd += ["-e", _pk + "=" + _pv]
     elif block_internet:
         cmd += ["--dns=0.0.0.0"]
     if cpu_limit:

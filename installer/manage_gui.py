@@ -399,6 +399,72 @@ def _run_gui() -> int:
                            anchor="w")
     summary_lbl.pack(fill="x", padx=16, pady=(0, 2))
 
+    def _pull_warp():
+        # WARP_PULL_v1: WARP 이미지를 창 안에서 원클릭 pull
+        if state["busy"]:
+            return
+        try:
+            from launcher import warp_runtime as _wr
+            _img = getattr(_wr, "IMAGE", "dublok/cloudflare-warp:latest")
+        except Exception:
+            _img = "dublok/cloudflare-warp:latest"
+        state["busy"] = True
+        _logln("[WARP] 이미지 받는 중: " + _img + " (수 분 걸릴 수 있음)")
+
+        def _w():
+            class _L:
+                def info(self, m): root.after(0, _logln, "  " + str(m))
+                def ok(self, m): root.after(0, _logln, "  " + str(m), "ok")
+                def warn(self, m): root.after(0, _logln, "  " + str(m), "warn")
+                def error(self, m): root.after(0, _logln, "  " + str(m), "err")
+            _alive = False
+            try:
+                from launcher.services.docker import DockerService
+                root.after(0, _logln, "  Docker 데몬 확인/시작 중...")
+                _alive = DockerService.ensure_daemon(logger=_L(), timeout=120)
+            except Exception:
+                _alive = _daemon_alive()
+            if not _alive:
+                root.after(0, _logln, "  Docker 데몬 미기동 — Docker Desktop 실행 후 다시 시도하세요", "err")
+                def _d0():
+                    state["busy"] = False
+                    _rebuild()
+                root.after(0, _d0)
+                return
+            root.after(0, _logln, "[WARP] 이미지 받는 중: " + _img)
+            try:
+                pr = subprocess.Popen(["docker", "pull", _img],
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, bufsize=1)
+                last = ""
+                buf = ""
+                while True:
+                    ch = pr.stdout.read(1)
+                    if not ch:
+                        break
+                    if ch in ("\r", "\n"):
+                        line = buf.strip()
+                        buf = ""
+                        if line and line != last:
+                            last = line
+                            root.after(0, _logln, "  " + line)
+                    else:
+                        buf += ch
+                rc = pr.wait()
+                if rc == 0:
+                    root.after(0, _logln, "  WARP 이미지 준비 완료 — 챗/검색 시 자동 기동", "ok")
+                else:
+                    root.after(0, _logln, "  WARP 이미지 pull 실패 (rc=%d)" % rc, "err")
+            except Exception as _e:
+                root.after(0, _logln, "  WARP pull 예외: %r" % _e, "err")
+            finally:
+                def _d1():
+                    state["busy"] = False
+                    _rebuild()
+                root.after(0, _d1)
+
+        threading.Thread(target=_w, daemon=True).start()
+
     def _pull_tor():
         # TOR_PULL_v1: Tor 이미지를 창 안에서 원클릭 pull (CLI/재설치 불필요)
         if state["busy"]:
@@ -561,6 +627,9 @@ def _run_gui() -> int:
               bg=_CARD, fg="#dddddd", activebackground=_LINE, relief="flat",
               font=("Segoe UI", 9), padx=10, pady=6).pack(side="left", padx=(8, 0))
     tk.Button(foot, text="Tor 이미지 받기", command=_pull_tor,
+              bg=_CARD, fg="#dddddd", activebackground=_LINE, relief="flat",
+              font=("Segoe UI", 9), padx=10, pady=6).pack(side="left", padx=(8, 0))
+    tk.Button(foot, text="WARP 이미지 받기", command=_pull_warp,
               bg=_CARD, fg="#dddddd", activebackground=_LINE, relief="flat",
               font=("Segoe UI", 9), padx=10, pady=6).pack(side="left", padx=(8, 0))
     tk.Button(foot, text="새로고침", command=_rebuild,

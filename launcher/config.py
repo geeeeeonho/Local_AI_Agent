@@ -105,6 +105,78 @@ def searxng_internal_url(host: str = None) -> str:
 
 SEARXNG_INTERNAL_URL = "http://%s:%d" % (SEARXNG_CONTAINER, SEARXNG_CONTAINER_PORT)
 
+# =======================================================
+#  NETMODE_WARP_v2 - 기본 네트워크 = WARP, Tor 는 별개 옵션 (정본)
+#
+#  NET_MODE 로 나가는 프록시 계층을 고른다.
+#    warp(기본) : Cloudflare WARP SOCKS5 (llm_warp:1080) - 빠르고 차단 적음
+#    tor        : 기존 Tor (llm_tor:9050) - onion/익명성 경로 보존
+#  주소/포트/이미지는 여기서만 정의하고 다른 모듈은 이 값을 읽는다.
+#  (WARP 는 SOCKS5 만 제공 -> HTTP_PROXY 도 socks5h 로 통일)
+# =======================================================
+import os as _os  # 표준 라이브러리 (지연 참조용)
+
+NET_MODE = _os.environ.get("NET_MODE", "warp").strip().lower()
+
+WARP_IMAGE = _os.environ.get("WARP_IMAGE", "dublok/cloudflare-warp:latest")
+WARP_CONTAINER = _os.environ.get("WARP_CONTAINER", "llm_warp")
+WARP_PORT = int(_os.environ.get("WARP_PORT", "1080"))
+WARP_LICENSE = _os.environ.get("WARP_LICENSE", "")
+WARP_BOOT_TIMEOUT = int(_os.environ.get("WARP_BOOT_TIMEOUT", "45"))
+
+
+# HTTP_BRIDGE_v1: WARP(SOCKS 전용) 앞의 HTTP 프록시 브리지
+HTTP_BRIDGE_CONTAINER = _os.environ.get("HTTP_BRIDGE_CONTAINER", "llm_httpbridge")
+HTTP_BRIDGE_PORT = int(_os.environ.get("HTTP_BRIDGE_PORT", "8118"))
+HTTP_BRIDGE_HOST_PORT = int(_os.environ.get("HTTP_BRIDGE_HOST_PORT", "8119"))
+
+
+def http_bridge_proxy(host: str = None) -> str:
+    """HTTP_BRIDGE_v1: urllib 이 쓸 수 있는 HTTP 프록시 URL."""
+    return "http://%s:%d" % (host or HTTP_BRIDGE_CONTAINER, HTTP_BRIDGE_PORT)
+
+
+def warp_socks_proxy(host: str = None) -> str:
+    """WARP SOCKS5 프록시 URL(원격 DNS). 예) socks5h://llm_warp:1080"""
+    return "socks5h://%s:%d" % (host or WARP_CONTAINER, WARP_PORT)
+
+
+def active_socks_proxy(host: str = None) -> str:
+    """NET_MODE 기준 SOCKS5 프록시(컨테이너 이름).
+    warp -> socks5h://llm_warp:1080,  tor -> socks5h://llm_tor:9050"""
+    if NET_MODE == "tor":
+        return tor_socks_proxy(host)
+    return warp_socks_proxy(host)
+
+
+def active_container() -> str:
+    """현재 네트워크 모드의 프록시 컨테이너 이름."""
+    return TOR_CONTAINER if NET_MODE == "tor" else WARP_CONTAINER
+
+
+def active_image() -> str:
+    """현재 네트워크 모드의 프록시 이미지."""
+    return TOR_IMAGE if NET_MODE == "tor" else WARP_IMAGE
+
+
+def net_proxy_env(host: str = None) -> dict:
+    """NET_MODE 인지 프록시 env. warp 는 SOCKS 전용이라 HTTP_PROXY 도 socks5h.
+    tor 모드는 기존 agent_proxy_env() 와 동일 동작을 유지한다."""
+    if NET_MODE == "tor":
+        return agent_proxy_env(host)
+    # HTTP_BRIDGE_v1: urllib 은 SOCKS 를 못 쓴다. HTTP_* 는 브리지(http://),
+    # ALL_PROXY 는 SOCKS 를 이해하는 클라이언트(curl/requests)용으로 유지.
+    p = warp_socks_proxy(host)
+    hp = http_bridge_proxy()
+    env = {}
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        env[k] = hp
+    for k in ("ALL_PROXY", "all_proxy"):
+        env[k] = p
+    for k in ("NO_PROXY", "no_proxy"):
+        env[k] = NO_PROXY_HOSTS
+    return env
+
 # 프록시를 태우면 안 되는 대상 (로컬 Ollama 등)
 NO_PROXY_HOSTS = "host.docker.internal,localhost,127.0.0.1,::1"
 

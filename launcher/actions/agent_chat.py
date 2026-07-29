@@ -229,28 +229,43 @@ def _select_agent_model(env, p):
     return {"tag": tag, "reason": reason, "label": role.label}
 
 
-def _select_internet_mode(p):  # TOR_TOGGLE_v1
-    """샌드박스 인터넷: 차단(기본) vs Tor 경유. Returns True=Tor, False=차단."""
+def _select_internet_mode(p):  # NETMODE_3WAY_v1: WARP(빠름)/Tor(최고익명)/차단
+    """샌드박스 인터넷 3지선. 선택을 config.NET_MODE 에 반영하고
+    Returns True=프록시 사용(warp/tor), False=차단."""
     try:
         from ..presenter.base import MenuItem
     except Exception:
         return False
     items = [
-        MenuItem(key="block", title="인터넷 차단 (기본·권장)",
-                 description="샌드박스에서 외부 인터넷 차단 — 가장 안전",
+        MenuItem(key="warp", title="WARP 경유 (빠름·기본)",
+                 description="Cloudflare WARP SOCKS5 로 IP 보호 · 빠르고 차단 적음 · WARP 이미지 필요",
                  badge="권장", badge_kind="good"),
-        MenuItem(key="tor", title="Tor 경유 인터넷 허용",
-                 description="외부 트래픽을 Tor(9050)로 프록시 · Tor 데몬 필요 · "
-                             "Ollama 는 직접 연결 유지",
-                 badge="주의", badge_kind="danger"),
+        MenuItem(key="tor", title="Tor 경유 (최고 익명)",
+                 description="Tor(9050)로 우회 · 가장 익명적이나 느림 · Tor 이미지 필요",
+                 badge="익명", badge_kind=None),
+        MenuItem(key="block", title="인터넷 차단",
+                 description="외부 인터넷 차단 — 가장 안전(검색 불가)",
+                 badge=None),
     ]
     items.append(MenuItem(key="b", title="취소", separator_above=True))
     choice = p.show_menu(
         title="샌드박스 인터넷 설정",
-        subtitle="기본은 차단. Tor 경유는 Tor(9050)가 실행 중일 때만 동작합니다.",
+        subtitle="기본은 WARP(빠름). Tor 는 최고 익명이나 이미지·회로 준비가 필요합니다.",
         items=items,
     )
-    return choice == "tor"
+    if choice not in ("warp", "tor", "block"):
+        return False
+    if choice == "block":
+        return False
+    # NETMODE_3WAY_v1: 선택 모드를 config/env 에 반영 (프록시 주소·기동이 이를 따름)
+    try:
+        import os as _os
+        _os.environ["NET_MODE"] = choice
+        from .. import config as _cfg
+        _cfg.NET_MODE = choice
+    except Exception:
+        pass
+    return True
 
 
 def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
@@ -487,12 +502,14 @@ def run(env, p):
     _v63_trace("_run_gui_chat 반환됨 (통합)")
 
 
-def _net_mode_label(cmd):  # NETMODE_LOG_v1
+def _net_mode_label(cmd):  # NETMODE_RUNTIME_v1: WARP/Tor 구분 라벨
     j = " ".join(str(c) for c in cmd)
     if "--dns=0.0.0.0" in j:
         return "차단 (인터넷 없음)"
-    if "socks5h://" in j or "ALL_PROXY=" in j or "HTTP_PROXY=" in j:
-        return "Tor 경유"
+    if "llm_warp" in j:
+        return "WARP 경유 (빠름)"
+    if "llm_tor" in j or "socks5h://" in j or "ALL_PROXY=" in j or "HTTP_PROXY=" in j:
+        return "Tor 경유 (최고 익명)"
     return "개방 (직접 연결)"
 
 
@@ -903,12 +920,19 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                      + "  (" + _net_flags(cmd) + ")")  # NETMODE_LOG_v1
     except Exception:
         pass
-    if not is_host and _net_mode_label(cmd) == "Tor 경유":  # TOR_AUTOSTART_v1
+    if not is_host and any("HTTP_PROXY=" in str(_c) for _c in cmd):  # NETMODE_RUNTIME_v1
         try:
+            _use_warp = any("llm_warp" in str(_c) for _c in cmd)  # NETMODE_RUNTIME_v1
             try:
-                from .. import tor_runtime as _tr
+                if _use_warp:
+                    from .. import warp_runtime as _tr
+                else:
+                    from .. import tor_runtime as _tr
             except Exception:
-                from launcher import tor_runtime as _tr
+                if _use_warp:
+                    from launcher import warp_runtime as _tr
+                else:
+                    from launcher import tor_runtime as _tr
             def _qlog(m):  # TOR_QUIET_v1: 준비 과정은 로그 파일로만
                 try:
                     try:
@@ -974,13 +998,18 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _safe_append("warn", "Ollama 가 응답하지 않습니다 (127.0.0.1:%d). Ollama 를 먼저 실행하세요." % _oport)
             except Exception:
                 pass
-            _qlog("Tor 프록시 확인/기동 중... (9050)")  # TOR_QUIET_v1
-            _tor_ok = _tr.start(env, log=_qlog)
-            if _tor_ok:
-                _qlog("Tor 경유 준비 완료 — 외부 트래픽이 Tor 로 우회됩니다.")
+            _pname = "WARP" if _use_warp else "Tor"  # NETMODE_RUNTIME_v1
+            _qlog(_pname + " 프록시 확인/기동 중...")  # TOR_QUIET_v1
+            if _use_warp:
+                _tor_ok = _tr.start(env, log_path=None)
             else:
-                _safe_append("warn", "Tor 미기동 — 대시보드 'Tor 이미지 받기'로 이미지를 "
-                             "받았는지 확인하세요. 지금은 외부 인터넷 연결이 실패할 수 있습니다.")
+                _tor_ok = _tr.start(env, log=_qlog)
+            if _tor_ok:
+                _qlog(_pname + " 경유 준비 완료 — 외부 트래픽이 " + _pname + " 로 우회됩니다.")
+            else:
+                _safe_append("warn", _pname + " 미기동 — 이미지를 받았는지 확인하세요 "
+                             "(WARP: docker pull dublok/cloudflare-warp:latest). "
+                             "지금은 외부 인터넷 연결이 실패할 수 있습니다.")
         except Exception as _e_tor:
             _safe_append("warn", "Tor 기동 예외: %r" % _e_tor)
 
@@ -1106,7 +1135,15 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _spN.run(["docker", "network", "create", _NET], capture_output=True, timeout=15, creationflags=_nw)
             except Exception:
                 pass
-            for _cn in ("llm_tor", "llm_searxng"):  # NET_CONNECT_RETRY_v1: Removing 레이스 흡수
+            # NETCONNECT_MODE_v1: 모드에 맞는 컨테이너만 연결
+            try:
+                from .. import config as _cfgNC
+                _nmNC = str(getattr(_cfgNC, "NET_MODE", "warp")).strip().lower()
+            except Exception:
+                _nmNC = os.environ.get("NET_MODE", "warp").strip().lower()
+            _namesNC = (("llm_tor", "llm_searxng") if _nmNC == "tor"
+                        else ("llm_warp", "llm_httpbridge", "llm_searxng"))
+            for _cn in _namesNC:
                 import time as _tR
                 _joined = False
                 _last = ""
