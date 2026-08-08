@@ -12,10 +12,30 @@ _OPS = {_ast.Add: _op.add, _ast.Sub: _op.sub, _ast.Mult: _op.mul,
         _ast.Pow: _op.pow, _ast.USub: _op.neg, _ast.UAdd: _op.pos}
 
 
+# [CALC_GUARD_v1] 지수 폭탄 방어.
+#   calc('9**9**9') 는 방어가 없으면 영구 정지한다(실측: 10초 타임아웃 미반환).
+#   샌드박스 코드블록 하나가 통째로 멈추므로 에이전트 전체가 정지한 것처럼 보인다.
+_MAX_EXP = 1000
+_MAX_BITS = 16000
+
+
+def _pow_guard(a, b):
+    if isinstance(a, float) or isinstance(b, float):
+        return _op.pow(a, b)
+    if b > _MAX_EXP or b < -_MAX_EXP:
+        raise ValueError("지수가 너무 큽니다(|지수| <= %d)" % _MAX_EXP)
+    bits = (a.bit_length() or 1) * abs(b)
+    if bits > _MAX_BITS:
+        raise ValueError("결과가 너무 큽니다(자릿수 초과)")
+    return _op.pow(a, b)
+
+
 def _ev(node):
     if isinstance(node, _ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
     if isinstance(node, _ast.BinOp) and type(node.op) in _OPS:
+        if isinstance(node.op, _ast.Pow):
+            return _pow_guard(_ev(node.left), _ev(node.right))
         return _OPS[type(node.op)](_ev(node.left), _ev(node.right))
     if isinstance(node, _ast.UnaryOp) and type(node.op) in _OPS:
         return _OPS[type(node.op)](_ev(node.operand))
@@ -25,7 +45,9 @@ def _ev(node):
 def calc(expr):
     """'2*(3+4)**2' 같은 산술식을 안전하게 계산(eval 미사용). 실패 시 문자열 에러."""
     try:
-        return _ev(_ast.parse(str(expr), mode="eval").body)
+        # [CALC_STRIP_v1] ast.parse(mode="eval") 은 선행 공백을 들여쓰기로 본다.
+        # calc(" 1+2 ") 처럼 공백이 붙으면 'unexpected indent' 로 실패했다(실측).
+        return _ev(_ast.parse(str(expr).strip(), mode="eval").body)
     except Exception as e:
         return "계산 불가: %s" % e
 

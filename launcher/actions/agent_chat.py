@@ -1089,17 +1089,36 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             cmd[_pos:_pos] = ["-e", "PYTHONPATH=/home/agent/.agent_state"]
     except Exception:
         pass
-    try:  # PRETOOL_SYNC_v1: PreTool/sitecustomize 를 실제 마운트 폴더로 복사
+    try:  # PRETOOL_SYNC_v2: 루트 ./PreTool 만 정본. 마운트 사본은 매번 새로 만든다.
         from ..core import user_data as _udP
         import os as _osP, shutil as _shP
         _dstP = str(_udP.interpreter_dir("sandbox"))
         _rootP = _osP.path.dirname(_osP.path.dirname(_osP.path.dirname(_osP.path.abspath(__file__))))
         _srcP = _osP.path.join(_rootP, "PreTool")
         if _osP.path.isdir(_srcP):
-            _shP.copytree(_srcP, _osP.path.join(_dstP, "PreTool"), dirs_exist_ok=True)
+            _mirP = _osP.path.join(_dstP, "PreTool")
+            # 1) 기존 사본 제거. copytree(dirs_exist_ok=True) 는 지우지 않으므로
+            #    루트에서 삭제·개명한 모듈이 사본에 남아 import 를 가로챈다.
+            if _osP.path.isdir(_mirP):
+                _shP.rmtree(_mirP, ignore_errors=True)
+            # 2) __pycache__ 와 sitecustomize.py 는 사본에 넣지 않는다.
+            #    sitecustomize 는 sys.path 최상위에서만 자동 실행되므로
+            #    PreTool/ 안쪽 사본은 절대 실행되지 않는 죽은 파일이다.
+            #    dirs_exist_ok=True 는 파일 잠김 등으로 rmtree 가 실패했을 때의 안전망.
+            _shP.copytree(_srcP, _mirP, dirs_exist_ok=True,
+                          ignore=_shP.ignore_patterns("__pycache__", "*.pyc",
+                                                      "sitecustomize.py"))
+            # 3) 실제로 실행되는 위치는 상태 폴더 최상위 한 곳뿐이다.
             _scS = _osP.path.join(_srcP, "sitecustomize.py")
             if _osP.path.exists(_scS):
                 _shP.copy2(_scS, _osP.path.join(_dstP, "sitecustomize.py"))
+            # 4) 이전 버전이 남긴 죽은 사본 제거(있을 때만).
+            _deadP = _osP.path.join(_mirP, "sitecustomize.py")
+            if _osP.path.isfile(_deadP):
+                try:
+                    _osP.remove(_deadP)
+                except OSError:
+                    pass
     except Exception:
         pass
     try:  # SEARXNG_AUTOSTART_v1: 로컬 검색엔진 기동(web_search 가 8888 로 붙음)

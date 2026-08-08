@@ -48,12 +48,25 @@ def _docker() -> str:
     return shutil.which("docker") or "docker"
 
 
+_CREATE_NO_WINDOW = 0x08000000  # [WARP_NOWINDOW_v1] Windows: 콘솔 창 안 띄움
+
+
 def _run(args, timeout=60):
+    """docker 호출.
+
+    [WARP_NOWINDOW_v1]
+      - creationflags: 런처는 pythonw.exe(콘솔 없음)로 돌기 때문에 플래그가 없으면
+        윈도우가 docker 자식마다 콘솔 창을 새로 만든다 -> 기동 초반 깜빡임.
+        tor_runtime / searxng_runtime / http_bridge 에는 이미 있는데 여기만 빠져 있었다.
+      - encoding/errors: text=True 만 주면 윈도우 기본 코덱(cp949)으로 디코드하다
+        UnicodeDecodeError 로 죽을 수 있다(http_bridge 와 동일한 대응).
+    """
+    kw = {"capture_output": True, "text": True, "encoding": "utf-8",
+          "errors": "replace", "timeout": timeout}
+    if os.name == "nt":
+        kw["creationflags"] = _CREATE_NO_WINDOW
     try:
-        return subprocess.run(
-            [_docker(), *args],
-            capture_output=True, text=True, timeout=timeout,
-        )
+        return subprocess.run([_docker(), *args], **kw)
     except Exception:
         return None
 
@@ -114,14 +127,64 @@ def _remove_stale() -> None:
         _run(["rm", "-f", CONTAINER], timeout=30)
 
 
-def _wait_ready(timeout=BOOT_TIMEOUT) -> bool:
-    end = time.time() + timeout
-    while time.time() < end:
+def _socks5_alive(host, port, timeout=3) -> bool:
+    """[WARP_READY_v1] 실제 SOCKS5 인사를 주고받아 '진짜' 준비 여부를 본다.
+
+    왜 TCP connect 만으로는 안 되나
+      도커의 유저랜드 프록시(docker-proxy)는 컨테이너 안에서 아무도 듣지 않아도
+      호스트의 게시 포트 연결을 먼저 accept 한다. 그래서 create_connection 은
+      항상 즉시 성공한다(위양성).
+      실측: 컨테이너 내부 1080 리스닝이 NONE 이고 warp-cli 가
+      'Registration Missing' 인데도 기존 검사는 1초 만에 True 를 냈다.
+
+    SOCKS5 는 첫 바이트가 0x05 인 응답을 반드시 돌려준다. 그것까지 확인한다.
+    """
+    try:
+        c = socket.create_connection((host, port), timeout=timeout)
+    except Exception:
+        return False
+    try:
+        c.settimeout(timeout)
+        c.sendall(b"\x05\x01\x00")
+        buf = b""
+        while len(buf) < 2:
+            chunk = c.recv(2 - len(buf))
+            if not chunk:
+                return False
+            buf += chunk
+        return buf[0:1] == b"\x05"
+    except Exception:
+        return False
+    finally:
         try:
-            with socket.create_connection(("127.0.0.1", PROXY_PORT), timeout=2):
-                return True
+            c.close()
         except Exception:
-            time.sleep(1)
+            pass
+
+
+def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None) -> bool:
+    """[WARP_READY_v1] SOCKS5 가 실제로 응답할 때까지 기다린다.
+
+    WARP 는 Cloudflare 등록에 보통 10~40초가 걸린다. 그동안 프록시 포트는
+    열려 있지 않다. 조급하게 True 를 내면 브리지/SearXNG/에이전트가 전부
+    죽은 프록시 위에서 기동한다.
+    """
+    end = time.time() + timeout
+    waited = 0
+    while time.time() < end:
+        if _socks5_alive("127.0.0.1", PROXY_PORT):
+            if waited:
+                _log(log_path, "INFO", "WARP SOCKS5 응답 확인 (%d초 대기)" % waited)
+            return True
+        time.sleep(1)
+        waited += 1
+        if waited % 10 == 0:
+            _log(log_path, "INFO",
+                 "WARP 등록 대기 중... %d/%d초 (Cloudflare 등록에 시간이 걸립니다)"
+                 % (waited, timeout))
+    _log(log_path, "WARN",
+         "WARP SOCKS5 가 %d초 안에 응답하지 않았습니다. "
+         "docker exec %s warp-cli --accept-tos status 로 확인하세요." % (timeout, CONTAINER))
     return False
 
 
@@ -244,7 +307,7 @@ def start(env=None, log_path=None) -> bool:
                  "WARP 기동 실패: %s" % ((r.stderr if r else "docker 없음") or "").strip()[:200])
             return False
 
-    if _wait_ready():
+    if _wait_ready(log_path=log_path):  # [WARP_READY_v1]
         _log(log_path, "INFO", "WARP 준비됨 (%s, socks5h :%d)" % (CONTAINER, PROXY_PORT))
         # HTTP_BRIDGE_v1: urllib 용 HTTP 프록시 브리지도 함께 기동
         try:

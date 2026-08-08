@@ -9,7 +9,34 @@ import os
 import time
 
 
+def _norm_sections(sections):
+    """[(제목, 본문)] 로 정규화. 문자열 목록/딕셔너리/단일 문자열도 받는다."""
+    if sections is None:
+        return []
+    if isinstance(sections, str):
+        return [("본문", sections)]
+    if isinstance(sections, dict):
+        return [(str(k), v) for k, v in sections.items()]
+    out = []
+    for i, s in enumerate(sections, 1):
+        if isinstance(s, str):
+            out.append(("%d." % i, s))
+        elif isinstance(s, dict):
+            out.append((str(s.get("heading", s.get("title", "%d." % i))),
+                        s.get("body", s.get("content", ""))))
+        elif isinstance(s, (list, tuple)) and len(s) >= 2:
+            out.append((s[0], s[1]))
+        elif isinstance(s, (list, tuple)) and len(s) == 1:
+            out.append(("%d." % i, s[0]))
+        else:
+            out.append(("%d." % i, str(s)))
+    return out
+
+
 def report_write(path, title, sections, fmt=None):
+    # [FLEX_INPUT_v1] path 에 Path 객체, sections 에 문자열/딕셔너리도 허용
+    path = str(path)
+    sections = _norm_sections(sections)
     fmt = fmt or ("html" if path.lower().endswith((".html", ".htm")) else "md")
     stamp = time.strftime("%Y-%m-%d %H:%M")
     if fmt == "html":

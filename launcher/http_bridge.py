@@ -171,6 +171,14 @@ def handle(cli):
         up.settimeout(None)
         pipe(cli, up)
     except Exception as e:
+        # [BRIDGE_LOG_v1] 사유를 stderr 로도 남긴다.
+        # 본문에만 쓰면 urllib 이 CONNECT 실패 시 본문을 버려 원인이 사라진다.
+        try:
+            sys.stderr.write("bridge: FAIL %s <- %s: %s\n"
+                             % (locals().get("target", "?"), type(e).__name__, e))
+            sys.stderr.flush()
+        except Exception:
+            pass
         try:
             cli.sendall(("HTTP/1.1 502 Bad Gateway\r\n\r\nbridge: %s\r\n" % e).encode("utf-8"))
         except Exception:

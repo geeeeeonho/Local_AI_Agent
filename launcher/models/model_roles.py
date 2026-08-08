@@ -211,16 +211,30 @@ TIERS = {
          "alts": []},
         {"need": 8.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
     ],
+    # [TIERS_QAT_v1] 에이전트는 도구 호출/형식 준수가 생명이라
+    # 양자화 내성이 좋은 QAT 체크포인트를 우선한다.
+    #   QAT = 학습 중 4비트 연산을 시뮬레이션 -> 양자화 오차에 미리 적응
+    #   PTQ(학습 후 반올림)보다 품질 저하가 훨씬 적다
+    # 실측 근거: 8b abliterated 는 코드블록 펜스를 못 지켜 미니루프가 실행조차
+    #           못 했다. qwen2.5-coder:14b 로 바꾸자 정상 동작했다.
     "agent": [
-        {"need": 15.5, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": []},
-        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b"]},
+        {"need": 16.5, "primary": "gemma4:26b-a4b-it-qat",
+         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+                  "qwen3-coder:30b"]},
+        {"need": 11.0, "primary": "qwen2.5-coder:14b",
+         "alts": ["gemma4:12b", "gpt-oss:20b"]},
+        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
+        {"need": 6.0, "primary": "gemma4:e4b-it-qat",
+         "alts": ["qwen2.5-coder:7b"]},
     ],
-    "balanced": [
+    "balanced": [  # [TIERS_QAT_v1] 10GB 미만에서 전멸하던 구간 보강
         {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b", "qwen2.5:14b"]},
+        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
+        {"need": 6.0, "primary": "gemma4:e4b-it-qat", "alts": []},
     ],
-    "context": [
+    "context": [  # [TIERS_QAT_v1]
         {"need": 10.0, "primary": "gemma4:12b", "alts": []},
+        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
     ],
 }
 
@@ -238,23 +252,135 @@ def _flatten_tiers(_tiers):
     return _out
 
 
+# >>> MODEL_REGISTRY_v1 - user_data/models/registry.json 으로 티어 덮어쓰기/추가
+def _registry_path():
+    """<프로젝트루트>/user_data/models/registry.json"""
+    here = os.path.dirname(os.path.abspath(__file__))          # launcher/models
+    root = os.path.dirname(os.path.dirname(here))              # 프로젝트 루트
+    return os.path.join(root, "user_data", "models", "registry.json")
+
+
+def _valid_tier(t):
+    if not isinstance(t, dict):
+        return False
+    if not isinstance(t.get("primary"), str) or not t["primary"].strip():
+        return False
+    try:
+        float(t.get("need"))
+    except (TypeError, ValueError):
+        return False
+    a = t.get("alts", [])
+    return isinstance(a, list) and all(isinstance(x, str) for x in a)
+
+
+def _norm_tier(t):
+    return {"need": float(t["need"]), "primary": t["primary"].strip(),
+            "alts": [x.strip() for x in t.get("alts", []) if x.strip()]}
+
+
+def load_registry(path=None):
+    """레지스트리를 읽어 (replace, add, errors) 반환. 실패해도 예외를 내지 않는다."""
+    path = path or _registry_path()
+    if not os.path.isfile(path):
+        return {}, {}, []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception as e:
+        return {}, {}, ["registry.json 읽기 실패: %s: %s" % (type(e).__name__, e)]
+    if not isinstance(data, dict):
+        return {}, {}, ["registry.json 최상위가 객체가 아닙니다"]
+    errs = []
+    out = {}
+    for key in ("replace", "add"):
+        sec = data.get(key) or {}
+        if not isinstance(sec, dict):
+            errs.append("%s 가 객체가 아닙니다" % key)
+            sec = {}
+        clean = {}
+        for role, tiers in sec.items():
+            if not isinstance(tiers, list):
+                errs.append("%s.%s 가 배열이 아닙니다" % (key, role))
+                continue
+            good = []
+            for i, t in enumerate(tiers):
+                if _valid_tier(t):
+                    good.append(_norm_tier(t))
+                else:
+                    errs.append("%s.%s[%d] 형식 오류 - 건너뜀" % (key, role, i))
+            if good:
+                clean[role] = good
+        out[key] = clean
+    return out.get("replace", {}), out.get("add", {}), errs
+
+
+def apply_registry(tiers, path=None):
+    """TIERS 사본에 레지스트리를 반영해 돌려준다. 원본은 건드리지 않는다."""
+    rep, add, errs = load_registry(path)
+    merged = {k: list(v) for k, v in tiers.items()}
+    for role, tl in rep.items():
+        merged[role] = list(tl)
+    for role, tl in add.items():
+        merged[role] = list(merged.get(role, [])) + list(tl)
+    for role in list(merged):
+        # need 내림차순(고품질 -> 저압축). 같은 need 는 원래 순서 유지.
+        merged[role] = sorted(merged[role], key=lambda t: -float(t["need"]))
+    return merged, errs
+
+
+REGISTRY_ERRORS = []
+try:
+    TIERS, REGISTRY_ERRORS = apply_registry(TIERS)
+except Exception as _e:
+    REGISTRY_ERRORS = ["registry 적용 실패(기본 TIERS 유지): %s" % _e]
+# <<< MODEL_REGISTRY_v1
+
 LADDERS = _flatten_tiers(TIERS)  # 원본 LADDERS 를 티어 기반(대안 포함)으로 대체
 # <<< TIERS_v1
 
 
+def _lightest(lad, installed=None):
+    """[LADDER_FALLBACK_v1] 사다리에서 '진짜 가장 가벼운' 후보.
+
+    기존 코드는 lad[-1][0] 을 최하위로 봤는데, _flatten_tiers 가 같은 need 의
+    대안(alts)을 뒤에 이어 붙이므로 lad[-1] 은 마지막 티어의 '대안' 이다.
+    실측: usable 9.2GB 에서 agent -> gpt-oss:20b(미설치), balanced -> qwen2.5:14b(미설치).
+    """
+    if not lad:
+        return None
+    if installed:
+        have = [(need, m) for m, need in lad if m in installed]
+        if have:
+            return min(have)[1]
+    return min(lad, key=lambda x: x[1])[0]
+
+
 def resolve_ladder(role_name: str, free_gb: Optional[float] = None):
-    """여유 메모리에 맞는 최상위 후보 1차 선택. 사다리 없으면 None."""
+    """여유 메모리에 맞는 최상위 후보 1차 선택. 사다리 없으면 None.
+
+    [LADDER_FALLBACK_v1] 설치된 모델을 우선한다. 없는 모델을 골라 놓고
+    뒤늦게 auto_match_installed 가 수습하면 엉뚱한 곳으로 떨어진다.
+    설치 목록 조회에 실패하면 기존 동작(설치 무시)으로 안전 폴백한다.
+    """
     lad = LADDERS.get(role_name)
     if not lad:
         return None
+    try:
+        installed = installed_models()
+    except Exception:
+        installed = None
     free = free_gb if free_gb is not None else detect_free_memory_gb()
     if free is None:
-        return lad[-1][0]  # 탐지 실패 → 가장 안전한 최하위
+        return _lightest(lad, installed)
     usable = free * _SAFETY
-    for model, need in lad:
-        if need <= usable:
-            return model
-    return lad[-1][0]
+    fits = [(m, need) for m, need in lad if need <= usable]
+    if installed:
+        for m, _need in fits:
+            if m in installed:
+                return m
+    if fits:
+        return fits[0][0]
+    return _lightest(lad, installed)
 
 
 def _load_probe(model, host="127.0.0.1:11434", timeout=180):

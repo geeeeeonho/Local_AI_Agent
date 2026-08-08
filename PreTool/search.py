@@ -66,6 +66,26 @@ _DDG_ONION = os.environ.get(
     "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion")
 
 
+# [SETTINGS_ENV_v1] launcher/config.py 의 pretool_settings_env() 가 주입하는 값을
+# 실제로 읽는다. 여기가 없으면 config.py 를 고쳐도 아무 일도 일어나지 않는다.
+def _envint(name, default):
+    try:
+        return int(str(os.environ.get(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
+SEARCH_TIMEOUT = _envint("SEARCH_TIMEOUT", 25)
+SEARCH_ONION_TIMEOUT = _envint("SEARCH_ONION_TIMEOUT", 25)
+PAGE_TIMEOUT = _envint("PAGE_TIMEOUT", 25)
+ARCHIVE_TIMEOUT = _envint("ARCHIVE_TIMEOUT", 20)
+SEARCH_RETRIES = _envint("SEARCH_RETRIES", 3)
+PUBLIC_SEARX_TRIES = _envint("PUBLIC_SEARX_TRIES", 3)
+PAGE_BODY_LIMIT = _envint("PAGE_BODY_LIMIT", 6000)
+RESEARCH_BODY_CHARS = _envint("RESEARCH_BODY_CHARS", 1800)
+MIN_BODY_CHARS = _envint("MIN_BODY_CHARS", 400)
+
+
 # ─────────────────────────────────────────────
 #  공통
 # ─────────────────────────────────────────────
@@ -73,6 +93,47 @@ def _strip(s):
     s = _TAG.sub(" ", s or "")
     s = _html.unescape(s)
     return " ".join(s.split())
+
+
+# [SEARCH_DECODE_v1] 인코딩 자동 판정.
+#   무조건 utf-8 로 읽으면 EUC-KR 사이트(네이버 금융 등)의 한글이 전멸한다.
+#   errors="ignore" 가 조용히 삼켜서 예외도 경고도 없다(실측).
+_CS_META = re.compile(rb'(?is)<meta[^>]+charset=["\']?\s*([\w\-]+)')
+_CS_EQUIV = re.compile(rb'(?is)content=["\'][^"\']*charset=\s*([\w\-]+)')
+_CS_ALIAS = {
+    "euc-kr": "cp949", "euckr": "cp949", "ks_c_5601-1987": "cp949",
+    "korean": "cp949", "ms949": "cp949", "x-windows-949": "cp949",
+    "shift_jis": "cp932", "sjis": "cp932", "x-sjis": "cp932",
+    "gb2312": "gbk", "gb_2312-80": "gbk",
+}
+
+
+def _smart_decode(data):
+    """응답 바이트를 올바른 인코딩으로 문자열화한다."""
+    if isinstance(data, str):
+        return data
+    if not data:
+        return ""
+    if data[:3] == b"\xef\xbb\xbf":
+        return data[3:].decode("utf-8", "replace")
+    m = _CS_META.search(data[:4096]) or _CS_EQUIV.search(data[:4096])
+    if m:
+        enc = m.group(1).decode("ascii", "ignore").lower()
+        enc = _CS_ALIAS.get(enc, enc)
+        try:
+            return data.decode(enc, "replace")
+        except LookupError:
+            pass
+    try:
+        return data.decode("utf-8")          # 엄격: 성공하면 UTF-8 사이트
+    except UnicodeDecodeError:
+        pass
+    for cand in ("cp949", "cp932", "gbk", "latin-1"):
+        try:
+            return data.decode(cand)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", "replace")
 
 
 def _direct_opener():
@@ -116,7 +177,7 @@ def _proxy_get(url, timeout=30):
     """기본 opener = HTTP_PROXY 사용 -> Privoxy -> Tor."""
     req = urllib.request.Request(_safe_url(url), headers={"User-Agent": _UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "ignore")
+        return _smart_decode(r.read())
 
 
 def _unwrap(u):
@@ -243,6 +304,38 @@ def _ddg_onion(query, n=5, timeout=45):
     return None, last
 
 
+# [SEARX_PARSE_v1] SearXNG 결과 HTML 전용 파서.
+#   DuckDuckGo 용 _ddg_parse 를 쓰면 SearXNG 의 result 마크업을 못 읽고,
+#   일반 앵커 폴백이 페이지 푸터(searx.space / Source code / Issue tracker)를
+#   '검색 결과' 로 돌려준다. 결과 0건일 때 특히 조용히 오염된다(실측 재현).
+_SX_ART = re.compile(
+    r'<article\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>(.*?)</article>', re.S)
+_SX_H3A = re.compile(r'<h3\b[^>]*>\s*<a\b[^>]*href="([^"]*)"[^>]*>(.*?)</a>', re.S)
+_SX_URLA = re.compile(r'<a\b[^>]*class="[^"]*\burl_header\b[^"]*"[^>]*href="([^"]*)"')
+_SX_CONT = re.compile(r'<p\b[^>]*class="[^"]*\bcontent\b[^"]*"[^>]*>(.*?)</p>', re.S)
+
+
+def _searx_parse(raw, n):
+    """SearXNG 결과 페이지에서 '결과 블록 안' 만 읽는다. 없으면 빈 목록."""
+    out = []
+    for a in _SX_ART.findall(raw):
+        m = _SX_H3A.search(a)
+        if m:
+            url, title = m.group(1), _strip(m.group(2))
+        else:
+            um = _SX_URLA.search(a)
+            if not um:
+                continue
+            url, title = um.group(1), ""
+        cm = _SX_CONT.search(a)
+        out.append({"title": title,
+                    "snippet": _strip(cm.group(1)) if cm else "",
+                    "url": _html.unescape(url)})
+        if len(out) >= n:
+            break
+    return out
+
+
 def _searxng(query, n=5, timeout=20):
     """로컬 SearXNG (같은 도커 네트워크, 프록시 우회)."""
     errs = []
@@ -251,7 +344,7 @@ def _searxng(query, n=5, timeout=20):
     for url in (_SEARX + "/search?format=json&q=" + q, _SEARX + "/search?q=" + q):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": _UA})
-            body = op.open(req, timeout=timeout).read().decode("utf-8", "ignore")
+            body = _smart_decode(op.open(req, timeout=timeout).read())
             if "format=json" in url:
                 try:
                     data = _json.loads(body)
@@ -262,12 +355,15 @@ def _searxng(query, n=5, timeout=20):
                                     "url": it.get("url", "")})
                     if out:
                         return out, None
+                    errs.append("json: 결과 0건")
                     continue
                 except ValueError:
-                    pass
-            rows = _ddg_parse(body, n)
+                    errs.append("json 포맷 꺼짐(settings.yml 의 search.formats 에 json 추가)")
+            rows = _searx_parse(body, n)
             if rows:
                 return rows, None
+            errs.append("html: 결과 0건 — SearXNG 는 응답했으나 엔진이 결과를 못 냈습니다"
+                        "(엔진의 외부 접속 실패 가능; net_diag() 로 프록시 확인)")
         except Exception as e:
             errs.append(str(e)[:90])
     return None, ("; ".join(errs) if errs else "결과 없음")
@@ -325,7 +421,7 @@ PUBLIC_SEARX = tuple(
 )
 
 
-def _public_searx(query, n=5, timeout=25, tries=3):
+def _public_searx(query, n=5, timeout=SEARCH_TIMEOUT, tries=PUBLIC_SEARX_TRIES):
     """공용 SearXNG 인스턴스를 Tor 로 경유해 검색.
 
     인스턴스를 무작위 순서로 돌며 성공할 때까지 시도한다(부하 분산 + 질의 분산).
@@ -720,13 +816,13 @@ def _direct_get(url, timeout=25):
     req = urllib.request.Request(_safe_url(url), headers={"User-Agent": _UA})
     op = _direct_opener()
     with op.open(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "ignore")
+        return _smart_decode(r.read())
 
 
-MIN_BODY = 400   # 이보다 짧으면 '기사 본문' 으로 보지 않는다(메뉴/스켈레톤 페이지)
+MIN_BODY = MIN_BODY_CHARS   # 이보다 짧으면 '기사 본문' 으로 보지 않는다(메뉴/스켈레톤 페이지)
 
 
-def _get_body(url, timeout=25, allow_archive=True, archive_timeout=20):
+def _get_body(url, timeout=PAGE_TIMEOUT, allow_archive=True, archive_timeout=ARCHIVE_TIMEOUT):
     """본문 가져오기 — 차단되면 아카이브로 우회. (본문, 출처, 오류) 반환.
 
     타임아웃을 짧게 잡는다. Tor 에서 25초 안에 응답하지 않는 사이트는 대개
@@ -769,7 +865,7 @@ def page_title(raw):
     return _strip(m.group(1)) if m else ""
 
 
-def open_url(url, limit=6000, timeout=40):
+def open_url(url, limit=PAGE_BODY_LIMIT, timeout=PAGE_TIMEOUT):
     """URL 한 개를 열어 제목 + 본문 텍스트를 반환 (서핑용).
 
     예)  print(open_url('https://www.yna.co.kr/view/AKR...'))
@@ -825,7 +921,7 @@ def fetch_text(url, timeout=30, limit=4000):
     return _readable(raw)[:limit]
 
 
-def research(query, n=3, chars=1800, timeout=40):
+def research(query, n=3, chars=RESEARCH_BODY_CHARS, timeout=PAGE_TIMEOUT):
     """검색 -> 상위 n건의 '본문까지' 읽어와 한 번에 정리 (보고서 작성용).
 
     검색 요약만으로는 근거가 부족하므로 실제 페이지 본문을 붙여 준다.

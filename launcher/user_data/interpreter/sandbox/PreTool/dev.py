@@ -15,6 +15,8 @@ import tokenize
 
 def _src(code):
     """문자열이면 그대로, 존재하는 파일 경로면 읽어서 반환(유연)."""
+    if isinstance(code, os.PathLike):  # [FLEX_INPUT_v1] Path 객체 허용
+        code = os.fspath(code)
     if isinstance(code, str) and len(code) < 260 and os.path.isfile(code):
         with open(code, encoding="utf-8") as f:
             return f.read()
@@ -141,6 +143,8 @@ def lint(code):
             for a in node.names:
                 imported[(a.asname or a.name).split(".")[0]] = node.lineno
         elif isinstance(node, ast.ImportFrom):
+            if node.module == "__future__":
+                continue  # [LINT_FUTURE_v1] annotations 는 이름으로 쓰이지 않는다(오탐)
             for a in node.names:
                 if a.name != "*":
                     imported[a.asname or a.name] = node.lineno

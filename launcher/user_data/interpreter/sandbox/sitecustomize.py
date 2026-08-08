@@ -14,5 +14,11 @@ try:
         if _fn is not None and not hasattr(_b, _n):
             setattr(_b, _n, _fn)
     _b.PreTool = _pt
-except Exception:
-    pass
+except Exception as _e:  # [SITECUSTOM_DIAG_v1]
+    # 조용히 삼키면 모델은 web_search() 에서 NameError 만 보고 원인을 알 수 없다.
+    # 평소에는 침묵하되, PRETOOL_DEBUG=1 이면 이유를 stderr 로 알린다.
+    import os as _os
+    import sys as _sys
+    if _os.environ.get("PRETOOL_DEBUG"):
+        _sys.stderr.write("[PreTool] 전역 주입 실패: %s: %s\n"
+                          % (type(_e).__name__, _e))

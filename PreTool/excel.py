@@ -10,6 +10,7 @@ import csv as _csv
 import os
 import re
 import zipfile
+from html import unescape as _unesc  # [XLSX_READ_v1]
 from xml.sax.saxutils import escape as _esc
 
 
@@ -24,6 +25,7 @@ def _col(n):  # 0->A, 26->AA
 
 def excel_write(path, rows, headers=None):
     """rows: [[셀,...], ...]. headers 주면 첫 행. 순수 stdlib 로 유효한 .xlsx 작성."""
+    path = str(path)  # [FLEX_INPUT_v1] Path 객체 허용
     if not path.lower().endswith(".xlsx"):
         path += ".xlsx"
     data = []
@@ -74,6 +76,7 @@ def excel_write(path, rows, headers=None):
 
 
 def csv_write(path, rows, headers=None):
+    path = str(path)  # [FLEX_INPUT_v1]
     if not path.lower().endswith(".csv"):
         path += ".csv"
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
@@ -85,14 +88,87 @@ def csv_write(path, rows, headers=None):
     return os.path.abspath(path)
 
 
+# [XLSX_READ_v1]
+_X_ROW = re.compile(r'<row\b[^>]*>(.*?)</row>', re.S)
+_X_CELL = re.compile(r'<c\b([^>]*)>(.*?)</c>|<c\b([^>]*)/>', re.S)
+_X_T = re.compile(r'<t\b[^>]*>(.*?)</t>', re.S)
+_X_V = re.compile(r'<v\b[^>]*>(.*?)</v>', re.S)
+_X_REF = re.compile(r'\br="([A-Z]+)\d+"')
+_X_TYP = re.compile(r'\bt="([^"]+)"')
+
+
+def _x_colidx(letters):
+    n = 0
+    for ch in letters:
+        n = n * 26 + (ord(ch) - 64)
+    return n - 1
+
+
+def _x_sheet(z):
+    if "xl/worksheets/sheet1.xml" in z.namelist():
+        return "xl/worksheets/sheet1.xml"
+    for n in sorted(z.namelist()):
+        if n.startswith("xl/worksheets/") and n.endswith(".xml"):
+            return n
+    raise ValueError("워크시트를 찾을 수 없습니다")
+
+
+def _x_shared(z):
+    """xl/sharedStrings.xml 해석. 엑셀이 만든 파일은 셀에 문자열 '인덱스' 만 들어 있다."""
+    if "xl/sharedStrings.xml" not in z.namelist():
+        return []
+    raw = z.read("xl/sharedStrings.xml").decode("utf-8", "ignore")
+    return [_unesc("".join(_X_T.findall(si)))
+            for si in re.findall(r'<si\b[^>]*>(.*?)</si', raw, re.S)]
+
+
 def read_table(path):
-    if path.lower().endswith(".csv"):
+    """.csv/.tsv/.xlsx 를 [[셀,...], ...] 로 읽는다. 값은 항상 문자열.
+
+    엑셀이 만든 .xlsx 는 sharedStrings 를 쓰므로 그것까지 해석해야
+    숫자 인덱스가 데이터로 둔갑하지 않는다(조용한 오염 방지).
+    """
+    path = str(path)
+    low = path.lower()
+    if low.endswith((".csv", ".tsv")):
+        delim = "\t" if low.endswith(".tsv") else ","
         with open(path, newline="", encoding="utf-8-sig") as f:
-            return [row for row in _csv.reader(f)]
-    if path.lower().endswith(".xlsx"):
-        with zipfile.ZipFile(path) as z:
-            xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8", "ignore")
-        cells = re.findall(r'<t[^>]*>(.*?)</t>|<v>(.*?)</v>', xml, re.S)
-        vals = [a or b for a, b in cells]
-        return [vals]  # 단순 평탄화(값 목록)
-    raise ValueError("지원 형식 아님(.csv/.xlsx): %s" % path)
+            return [row for row in _csv.reader(f, delimiter=delim)]
+    if not low.endswith((".xlsx", ".xlsm")):
+        raise ValueError("지원 형식 아님(.csv/.tsv/.xlsx): %s" % path)
+    with zipfile.ZipFile(path) as z:
+        shared = _x_shared(z)
+        xml = z.read(_x_sheet(z)).decode("utf-8", "ignore")
+    table = []
+    for rowxml in _X_ROW.findall(xml):
+        row = []
+        for m in _X_CELL.finditer(rowxml):
+            attrs = m.group(1) if m.group(1) is not None else (m.group(3) or "")
+            inner = m.group(2) or ""
+            rm = _X_REF.search(attrs)
+            ci = _x_colidx(rm.group(1)) if rm else len(row)
+            tm = _X_TYP.search(attrs)
+            ctype = tm.group(1) if tm else ""
+            if ctype == "inlineStr":
+                val = _unesc("".join(_X_T.findall(inner)))
+            elif ctype == "s":
+                vs = _X_V.findall(inner)
+                try:
+                    val = shared[int(vs[0])] if vs else ""
+                except (ValueError, IndexError):
+                    val = ""
+            else:
+                vs = _X_V.findall(inner)
+                val = _unesc(vs[0]) if vs else ""
+            while len(row) < ci:
+                row.append("")
+            if len(row) == ci:
+                row.append(val)
+            else:
+                row[ci] = val
+        table.append(row)
+    width = max((len(r) for r in table), default=0)
+    for r in table:
+        while len(r) < width:
+            r.append("")
+    return table
