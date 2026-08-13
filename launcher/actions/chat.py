@@ -395,3 +395,196 @@ def _show_model_tips(p) -> None:
         if getattr(r, "description", ""):
             p.info("      " + r.description)
 # <<< CHAT_UX_v1 helper
+
+
+# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
+# [1] 채팅 UI 를 Open WebUI -> AnythingLLM 으로 교체.
+# 원본은 _ANYLLM_ORIG_RUN 으로 보존된다.
+#   되돌리기 : set LOCAL_AI_CHAT_ENGINE=openwebui
+#   유지실행 : set LOCAL_AI_ANYTHINGLLM_KEEP=1  (패널을 나가도 컨테이너를 끄지 않음)
+_ANYLLM_ORIG_RUN = run
+
+
+def run(env, p):
+    import os as _os_al
+    if _os_al.environ.get("LOCAL_AI_CHAT_ENGINE", "").lower() in ("openwebui", "webui"):
+        return _ANYLLM_ORIG_RUN(env, p)
+
+    import webbrowser as _wb_al
+    from .. import config as _cfg_al
+    from ..services.ollama import OllamaService as _Olm_al
+
+    try:
+        from .. import anythingllm_runtime as _al
+    except Exception as _e_imp:
+        p.error("anythingllm_runtime 을 불러오지 못했습니다: %r" % _e_imp)
+        p.info("PATCH_ANYTHINGLLM.bat 을 다시 실행하세요.")
+        p.pause()
+        return
+
+    _cancel = getattr(p, "is_cancelled", lambda: False)
+
+    # ── 인터넷 모드 선택 (WARP / Tor / 직접) ──
+    #   반드시 p.section() 보다 '먼저' 한다. show_menu 는 화면 패널을 메뉴로
+    #   교체하는데, _ensure_log 는 _current_log_panel 이 None 일 때만 패널을
+    #   새로 만든다. 순서가 반대면 이후 출력이 안 보이는 패널에 쌓인다.
+    #   고른 값은 NET_MODE 정본에 반영되고, 프록시 기동·SearXNG outgoing 동기화·
+    #   AnythingLLM 컨테이너 주입이 전부 이 값을 따라간다.
+    _preset = _os_al.environ.get("LOCAL_AI_ANYTHINGLLM_NET", "").strip().lower()
+    if _preset not in ("warp", "tor", "direct"):
+        try:
+            from ..presenter.base import MenuItem as _MI_al
+            _cur = getattr(_cfg_al, "NET_MODE", "warp")
+            _choice = p.show_menu(
+                title="인터넷 연결 방식 (채팅 UI)",
+                subtitle="AnythingLLM 의 웹 검색·문서 수집이 나가는 경로입니다. "
+                         "모델 호출(Ollama)과 SearXNG 는 항상 프록시를 우회합니다.",
+                items=[
+                    _MI_al(key="warp", title="WARP 경유 (권장)",
+                           description="Cloudflare 엣지 IP. 빠르고 차단이 적습니다."),
+                    _MI_al(key="tor", title="Tor 경유",
+                           description="가장 익명적이지만 느리고 차단이 잦습니다."),
+                    _MI_al(key="direct", title="직접 연결",
+                           description="프록시 없음. 내 IP 가 그대로 노출됩니다."),
+                ],
+                last_choice=_cur,
+            )
+        except Exception:
+            _choice = None
+        if _choice in ("q", None):
+            return          # 메뉴 패널이 그대로 남으므로 별도 출력 없이 복귀
+        _preset = _choice if _choice in ("warp", "tor", "direct") else "warp"
+    try:
+        _os_al.environ["NET_MODE"] = _preset
+        _cfg_al.NET_MODE = _preset
+    except Exception:
+        pass
+
+    # 모드를 고른 '뒤에' 로그 패널을 연다 (메뉴 패널을 대체)
+    p.section("채팅 UI 시작 (AnythingLLM + SearXNG)")
+    p.info("인터넷 연결: " + _al.net_mode_label(_preset))
+    # 오래 걸리므로 진입점 자리를 먼저 잡아둔다 (회색 '준비 중' 버튼)
+    try:
+        p.reserve_entrypoint("브라우저 (" + _al.URL + ")")
+    except Exception:
+        pass
+
+    _keep = _os_al.environ.get("LOCAL_AI_ANYTHINGLLM_KEEP", "").lower() in ("1", "true", "yes")
+
+    try:
+        # 1) Ollama
+        if not _Olm_al(env, logger=p).ensure_running():
+            p.error("Ollama 를 시작할 수 없습니다.")
+            p.pause()
+            return
+
+        # 2) Docker 데몬
+        try:
+            from ..services.docker import DockerService as _DS_al
+            if not _DS_al.daemon_alive():
+                p.info("Docker 데몬이 응답하지 않습니다 — Docker Desktop 자동 시작 시도 중...")
+                p.warn("완전히 켜질 때까지 30초~1분 걸릴 수 있습니다.")
+                if not _DS_al.ensure_daemon(logger=p, timeout=90, cancel_check=_cancel):
+                    p.error("Docker 를 시작하지 못했습니다. Docker Desktop 을 켠 뒤 다시 시도하세요.")
+                    p.pause()
+                    return
+        except Exception as _e_dk:
+            p.warn("Docker 확인 생략: %r" % _e_dk)
+
+        # 3) 이미지
+        if not _al.image_exists():
+            p.warn("AnythingLLM 이미지가 없습니다 — 지금 받습니다 (약 3~5GB, 5~20분)")
+            p.info("취소 버튼을 누르면 다운로드를 중단합니다.")
+            if not _al.pull(log=p.info, cancel_check=_cancel):
+                if _cancel():
+                    p.warn("사용자가 취소했습니다.")
+                else:
+                    p.error("이미지 pull 실패 — 수동: docker pull " + _al.IMAGE)
+                p.pause()
+                return
+            p.ok("이미지 준비 완료")
+
+        # 4) SearXNG (선택) — @agent 웹 검색용
+        #    NET_MODE 를 위에서 이미 정했으므로 searxng_runtime 의
+        #    NETMODE_PROXY_SYNC_v1 이 settings.yml outgoing 을 알아서 맞춘다.
+        _search_ok = False
+        try:
+            from .. import searxng_runtime as _sx_al
+            if _sx_al.image_exists():
+                p.info("SearXNG 검색 엔진 시작 중...")
+                _search_ok = bool(_sx_al.start(env, log_path=None))
+            else:
+                p.warn("SearXNG 미설치 — @agent 웹 검색 비활성")
+        except Exception as _e_sx:
+            p.warn("SearXNG 시작 생략: %r" % _e_sx)
+
+        # 5) 컨텍스트 길이
+        _ctx = 4096
+        try:
+            from .. import runtime_guard as _rg_al
+            _ctx = int(_rg_al.compute_runtime_params().context_window)
+        except Exception:
+            pass
+
+        # 6) 기동
+        p.info("브라우저: " + _al.URL)
+        p.info("최초 실행은 1~3분 걸립니다. 진행 상황이 몇 초마다 아래에 찍히니 "
+               "멈춘 게 아니면 기다려 주세요. (중단하려면 취소 버튼)")
+        try:
+            for _ln in _al.describe():
+                p.info("  " + _ln)
+        except Exception:
+            pass
+        _started = _al.start(log=p.info, model_tag=_cfg_al.MODEL_TAG,
+                             token_limit=_ctx, cancel_check=_cancel, env_path=env)
+
+        if _started:
+            p.ok("AnythingLLM 이 응답합니다.")
+        else:
+            p.warn("응답 시간 초과 — 브라우저에서 직접 열어보세요: " + _al.URL)
+            try:
+                for _ln in _al.logs(tail=25).splitlines()[-25:]:
+                    p.info("  " + _ln[:160])
+            except Exception:
+                pass
+
+        try:
+            p.enable_entrypoint(
+                callback=lambda: _wb_al.open(_al.URL),
+                button_text="▶ 브라우저 열기 (" + _al.URL + ")",
+            )
+        except Exception:
+            p.info("브라우저에서 " + _al.URL + " 를 여세요.")
+
+        p.info("-" * 40)
+        p.info("첫 실행에는 설정 마법사가 1회 뜹니다 (LLM/임베더/벡터DB/워크스페이스).")
+        p.info("LLM 은 Ollama, 벡터DB 는 LanceDB 가 이미 채워져 있습니다.")
+        if _search_ok:
+            p.info("웹 검색: 대화창에서 '@agent 검색어' 형태로 부르세요 "
+                   "(SearXNG=" + _al.searxng_url_for_container() + ").")
+            p.warn("Open WebUI 와 달리 일반 대화는 자동 검색하지 않습니다.")
+        if _preset == "direct":
+            p.warn("직접 연결 모드 — 바깥 트래픽에 내 IP 가 그대로 노출됩니다.")
+        else:
+            p.info("바깥 트래픽은 " + _al.net_mode_label() + " 로 나갑니다 "
+                   "(HTTP_PROXY=" + str(_al.proxy_env_for_container().get("HTTP_PROXY")) + ").")
+            p.warn("Node 내장 fetch 는 HTTP_PROXY 를 기본으로 무시합니다. "
+                   "NODE_USE_ENV_PROXY=1 을 함께 넣었지만, 이미지의 Node 가 "
+                   "22.21 미만이면 일부 경로가 프록시를 우회할 수 있습니다.")
+        p.info("저장 위치: " + str(_al.storage_dir()))
+        p.info("-" * 40)
+
+        p.pause()
+    finally:
+        # p.pause() 가 _ActionCancelled 를 던져도 반드시 정리한다.
+        if not _keep:
+            try:
+                _al.stop()
+            except Exception:
+                pass
+            try:
+                from .. import searxng_runtime as _sx2_al
+                _sx2_al.stop()
+            except Exception:
+                pass
+# <<< ANYTHINGLLM_v1

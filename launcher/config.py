@@ -291,3 +291,61 @@ def all_pretool_env() -> dict:
         pass
     env.update(pretool_settings_env())
     return env
+
+
+# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
+# AnythingLLM (Open WebUI 대체) — 주소/포트/자원 정본
+# 값 출처: mintplexlabs/anything-llm docker/.env.example
+# 실행시 오버라이드: LOCAL_AI_ANYTHINGLLM_{IMAGE,CONTAINER,PORT,MEM,CPUS,EMBED,BOOT_TIMEOUT}
+ANYTHINGLLM_IMAGE = "mintplexlabs/anythingllm:latest"
+ANYTHINGLLM_CONTAINER = "llm_anythingllm"
+ANYTHINGLLM_HOST_PORT = 3001
+ANYTHINGLLM_CONTAINER_PORT = 3001
+ANYTHINGLLM_URL = "http://localhost:%d" % ANYTHINGLLM_HOST_PORT
+ANYTHINGLLM_STORAGE_MOUNT = "/app/server/storage"
+ANYTHINGLLM_SERVER_ENV_MOUNT = "/app/server/.env"
+ANYTHINGLLM_BOOT_TIMEOUT = 180
+ANYTHINGLLM_PULL_TIMEOUT = 5400
+# 기동 대기 중 진행 상황을 몇 초마다 출력할지 (0 이면 매 루프)
+ANYTHINGLLM_PROGRESS_EVERY = 8
+# docker stop 유예(초). -t 를 안 주면 도커 기본 10초를 매 종료마다 기다린다.
+ANYTHINGLLM_STOP_GRACE = 3
+# 기동 확인 주소. 윈도우에서 localhost 가 ::1 로 먼저 풀리는 경우가 있어 IPv4 우선.
+ANYTHINGLLM_PROBE_HOSTS = "127.0.0.1,localhost"
+# "auto" = 여유 RAM / CPU 수를 보고 결정. 고정하려면 "4g" / "2" 처럼 적는다.
+ANYTHINGLLM_MEM = "auto"
+ANYTHINGLLM_CPUS = "auto"
+# 내장 Chromium(문서 스크래핑)용. 빈 튜플로 두면 대신
+# ANYTHINGLLM_CHROMIUM_ARGS 를 .env 에 넣어 권한 없이 돌린다.
+ANYTHINGLLM_CAP_ADD = ("SYS_ADMIN",)
+ANYTHINGLLM_VECTOR_DB = "lancedb"
+ANYTHINGLLM_WHISPER_PROVIDER = "local"
+ANYTHINGLLM_TTS_PROVIDER = "native"
+ANYTHINGLLM_OLLAMA_TIMEOUT_MS = 7200000
+# native = 컨테이너 내장 임베더 (최초 1회 HuggingFace 에서 모델을 받음).
+# 오프라인이면 "ollama" 로 바꾸고 BASE_PATH/MODEL 을 채운 뒤
+# 호스트에서 `ollama pull nomic-embed-text` 를 먼저 하세요.
+ANYTHINGLLM_EMBEDDING_ENGINE = "native"
+ANYTHINGLLM_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2"
+ANYTHINGLLM_EMBEDDING_BASE_PATH = ""
+# .env 에 그대로 추가할 임의 키 (예: {"DISABLE_SWAGGER_DOCS": "true"})
+ANYTHINGLLM_EXTRA_ENV = {}
+# ── 네트워크(WARP/Tor) 연동 ──
+# True 면 NET_MODE 를 따라 컨테이너에 HTTP_PROXY 를 주입한다.
+#   warp -> http://llm_httpbridge:8118 (WARP 는 SOCKS 전용 -> 기존 HTTP 브리지 재사용)
+#   tor  -> http://llm_tor:8118        (Privoxy)
+# ALL_PROXY(socks5h) 는 일부러 넣지 않는다 — Node 는 SOCKS 를 못 쓰고,
+# axios 의 proxy-from-env 가 ALL_PROXY 를 읽어 그대로 깨진다.
+ANYTHINGLLM_NET_AWARE = True
+# Node 내장 fetch 는 기본적으로 HTTP_PROXY 를 무시한다. v22.21+/v24+ 는 이 값이
+# 있어야 따른다(구버전에서는 무시되는 값이라 해가 없다).
+ANYTHINGLLM_NODE_ENV_PROXY = True
+# NO_PROXY 에 더 넣을 호스트 (쉼표 구분). Ollama/SearXNG/프록시 컨테이너는 자동 포함.
+ANYTHINGLLM_NO_PROXY_EXTRA = ""
+# 이미지의 Node 가 v22.21 미만이면 내장 fetch 가 HTTP_PROXY 를 무시한다.
+# True 면 storage 에 proxy-bootstrap.js 를 심고 NODE_OPTIONS=--require 로 물려서
+# undici ProxyAgent 를 전역 디스패처로 꽂는다 (NO_PROXY 존중).
+# undici 가 이미지에 없으면 조용히 무시된다.
+ANYTHINGLLM_NODE_BOOTSTRAP = True
+ANYTHINGLLM_NODE_OPTIONS_EXTRA = ""
+# <<< ANYTHINGLLM_v1

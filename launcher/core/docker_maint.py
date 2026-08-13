@@ -211,3 +211,20 @@ __all__ = [
     "prune_unused_images", "prune_volumes", "safe_auto_prune",
     "autoclean_enabled", "set_autoclean", "register_auto_prune",
 ]
+
+
+# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
+# [10] 도커 정리 / 종료 자동정리가 AnythingLLM 컨테이너를 '우리 것' 으로 인식하게 한다.
+# (없으면 '외부 컨테이너' 로 분류되어 exited 상태로 계속 쌓인다)
+try:
+    from launcher import config as _cfg_al
+    _al_name = getattr(_cfg_al, "ANYTHINGLLM_CONTAINER", "llm_anythingllm")
+    _al_image = str(getattr(_cfg_al, "ANYTHINGLLM_IMAGE",
+                            "mintplexlabs/anythingllm:latest")).split(":")[0]
+    if _al_name and _al_name not in _NAME_PATTERNS:
+        _NAME_PATTERNS = tuple(list(_NAME_PATTERNS) + [_al_name])
+    if _al_image and _al_image not in _IMAGE_PATTERNS:
+        _IMAGE_PATTERNS = tuple(list(_IMAGE_PATTERNS) + [_al_image])
+except Exception:
+    pass
+# <<< ANYTHINGLLM_v1

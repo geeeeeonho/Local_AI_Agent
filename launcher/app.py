@@ -194,3 +194,33 @@ class Application:
             "docker_check": docker_check,
             "searxng_check": searxng_check,
         }
+
+
+# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
+# 메뉴 [1] 라벨을 Open WebUI -> AnythingLLM 으로. 항목 구성은 원본을 그대로 쓴다.
+_ANYLLM_ORIG_MENU_ITEMS = _build_menu_items
+
+
+def _build_menu_items():
+    import os as _os_al
+    items = _ANYLLM_ORIG_MENU_ITEMS()
+    if _os_al.environ.get("LOCAL_AI_CHAT_ENGINE", "").lower() in ("openwebui", "webui"):
+        return items
+    _ko = True
+    try:
+        from installer.i18n import get_language as _gl
+        _ko = (str(_gl()).lower().startswith("ko"))
+    except Exception:
+        _ko = True
+    _title = "채팅 UI (AnythingLLM)" if _ko else "Chat UI (AnythingLLM)"
+    _desc = ("브라우저 채팅 + 문서 RAG + @agent 웹 검색" if _ko
+             else "Browser chat + document RAG + @agent web search")
+    for _it in items:
+        if getattr(_it, "key", "") == "1":
+            try:
+                _it.title = _title
+                _it.description = _desc
+            except Exception:
+                pass
+    return items
+# <<< ANYTHINGLLM_v1
