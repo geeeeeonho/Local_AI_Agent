@@ -4,15 +4,17 @@
 모든 영속 설정의 정본은 프로젝트 루트의
 ``user_data/settings/user_config.json`` 이다.
 
-과거 버전의 ``launcher/settings`` 와 ``launcher/agent/settings`` 에 남은
-``user_config.json`` 은 최초 로드 시 정본으로 병합한 뒤 제거한다. 디렉터리
-junction/symlink 는 만들지 않으므로 프로젝트 이동과 권한 상태에 영향을 받지 않는다.
+과거 버전의 설정 파일은 정본으로 병합한다. 일반적인 load/save/import 경로에서는
+junction/symlink 를 만들지 않는다. 아직 레거시 경로를 직접 읽는 agent_runner 를
+위한 호환 연결만 런처 시작 시 명시적으로 한 번 구성할 수 있다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
+import subprocess
 from typing import Any, Optional
 
 from .core import user_data
@@ -36,6 +38,7 @@ _LEGACY_DIRS = (
     Path("launcher") / "settings",
     Path("launcher") / "agent" / "settings",
 )
+_AGENT_LEGACY_DIR = Path("launcher") / "agent" / "settings"
 
 
 def _root(project_root: Path | None = None) -> Path:
@@ -79,7 +82,7 @@ def _cleanup_legacy_files(root: Path) -> None:
 
 
 def migrate_legacy_settings(project_root: Path | None = None) -> bool:
-    """레거시 설정을 정본으로 병합한다. 링크나 junction 은 생성하지 않는다."""
+    """레거시 설정을 정본으로 병합한다. 링크나 junction 은 만들지 않는다."""
     root = _root(project_root)
     canonical = path(root)
     canonical_data = _read_dict(canonical) if canonical.exists() else {}
@@ -95,18 +98,87 @@ def migrate_legacy_settings(project_root: Path | None = None) -> bool:
     if merged and canonical_data != merged:
         if not _write_dict(canonical, merged):
             return False
-    elif found_legacy and not canonical.exists():
-        if not _write_dict(canonical, merged):
-            return False
 
-    if found_legacy and (canonical.exists() or not merged):
+    if found_legacy and canonical.exists():
         _cleanup_legacy_files(root)
     return True
 
 
+def _same_target(link: Path, target: Path) -> bool:
+    try:
+        return link.resolve() == target.resolve()
+    except OSError:
+        return False
+
+
+def _remove_compat_path(link: Path) -> bool:
+    """비어 있는 디렉터리나 기존 호환 링크만 안전하게 제거한다."""
+    try:
+        if link.is_symlink():
+            link.unlink()
+            return True
+        if link.is_dir():
+            if any(link.iterdir()):
+                return False
+            link.rmdir()
+            return True
+    except OSError:
+        pass
+
+    # Windows의 끊어진 junction은 Path.exists()가 False일 수 있다.
+    if os.name == "nt" and os.path.lexists(str(link)):
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        result = subprocess.run(
+            ["cmd", "/c", "rmdir", str(link)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            creationflags=creationflags,
+        )
+        return result.returncode == 0
+    return not os.path.lexists(str(link))
+
+
+def ensure_agent_settings_compat(project_root: Path | None = None) -> bool:
+    """agent_runner의 레거시 설정 경로 하나만 정본 디렉터리로 연결한다.
+
+    일반 설정 API에서는 호출하지 않는다. 런처 시작 시 한 번만 호출하도록 분리해
+    import 부작용과 반복적인 파일시스템 점검을 피한다.
+    """
+    root = _root(project_root)
+    if not migrate_legacy_settings(root):
+        return False
+
+    link = root / _AGENT_LEGACY_DIR
+    target = path(root).parent
+    if _same_target(link, target):
+        return True
+
+    if os.path.lexists(str(link)) and not _remove_compat_path(link):
+        return False
+
+    link.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                creationflags=creationflags,
+            )
+            return result.returncode == 0 and _same_target(link, target)
+        link.symlink_to(target, target_is_directory=True)
+        return _same_target(link, target)
+    except OSError:
+        return False
+
+
 def ensure_legacy_bridges(project_root: Path | None = None) -> bool:
-    """이전 API 호환 별칭. 이제 링크 대신 설정 마이그레이션만 수행한다."""
-    return migrate_legacy_settings(project_root)
+    """이전 API 호환 별칭. agent_runner 호환 연결 하나만 구성한다."""
+    return ensure_agent_settings_compat(project_root)
 
 
 def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
