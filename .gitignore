@@ -14,8 +14,7 @@ llm_environment/
 #  개인 설정 / 레거시 호환 경로
 # ─────────────────────────────────────────────
 # 정본은 user_data/settings/user_config.json.
-# launcher/settings 와 launcher/agent/settings 는 settings_store 가
-# user_data/settings 로 연결하는 호환 링크이므로 저장소에는 기록하지 않는다.
+# 아래 두 경로는 이전 버전 잔재 및 agent_runner 호환 경계이므로 추적하지 않는다.
 /launcher/settings/
 /launcher/agent/settings/
 .webui_secret_key
