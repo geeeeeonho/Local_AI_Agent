@@ -71,9 +71,19 @@ def _legacy_files(root: Path) -> list[Path]:
     return [root / rel / "user_config.json" for rel in _LEGACY_DIRS]
 
 
-def _cleanup_legacy_files(root: Path) -> None:
-    """마이그레이션된 알려진 설정 파일만 제거하고 디렉터리는 보존한다."""
+def _points_to_canonical(candidate: Path, canonical: Path) -> bool:
+    """레거시 경로가 링크/junction을 통해 정본 자체를 가리키는지 확인."""
+    try:
+        return candidate.resolve() == canonical.resolve()
+    except OSError:
+        return False
+
+
+def _cleanup_legacy_files(root: Path, canonical: Path) -> None:
+    """마이그레이션된 알려진 설정 파일만 제거하고 정본은 절대 지우지 않는다."""
     for legacy in _legacy_files(root):
+        if _points_to_canonical(legacy, canonical):
+            continue
         try:
             if legacy.is_file() or legacy.is_symlink():
                 legacy.unlink()
@@ -90,9 +100,10 @@ def migrate_legacy_settings(project_root: Path | None = None) -> bool:
     merged: dict[str, Any] = {}
     found_legacy = False
     for legacy in _legacy_files(root):
-        if legacy.exists():
-            found_legacy = True
-            merged.update(_read_dict(legacy))
+        if not legacy.exists() or _points_to_canonical(legacy, canonical):
+            continue
+        found_legacy = True
+        merged.update(_read_dict(legacy))
     merged.update(canonical_data)
 
     if merged and canonical_data != merged:
@@ -100,7 +111,7 @@ def migrate_legacy_settings(project_root: Path | None = None) -> bool:
             return False
 
     if found_legacy and canonical.exists():
-        _cleanup_legacy_files(root)
+        _cleanup_legacy_files(root, canonical)
     return True
 
 
