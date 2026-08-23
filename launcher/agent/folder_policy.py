@@ -19,7 +19,10 @@ _FILENAME = "folder_policy.json"
 
 def _root() -> Path:
     # launcher/folder_policy.py → 부모의 부모가 프로젝트 루트
-    return Path(__file__).resolve().parent.parent
+    # [PATH_UNIFY_v1] 이 파일은 launcher/agent/ 에 있으므로 세 단계 위가 루트다.
+    # 이전에는 두 단계라 launcher/ 를 가리켰고, folder_policy.json 이
+    # launcher/user_data/settings 에 생겼다. user_data.py 와 동일 유형 결함.
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def _store_path() -> Path:

@@ -212,8 +212,6 @@ def pretool_env() -> dict:
 #  RAM 이 빠듯하면 CONTEXT_WINDOW 를 6144 또는 4096 으로 낮춰도 된다
 #  (max_tokens 상향 효과는 그대로 유지된다).
 # ═══════════════════════════════════════════════════════
-AGENT_MAX_TOKENS = 2048        # 출력 길이. 모델 가중치 메모리와 무관
-AGENT_CONTEXT_WINDOW = 8192    # KV 캐시에 영향(4096 -> 8192 는 대략 수백MB~1GB)
 
 
 # ═══════════════════════════════════════════════════════
@@ -301,7 +299,6 @@ ANYTHINGLLM_IMAGE = "mintplexlabs/anythingllm:latest"
 ANYTHINGLLM_CONTAINER = "llm_anythingllm"
 ANYTHINGLLM_HOST_PORT = 3001
 ANYTHINGLLM_CONTAINER_PORT = 3001
-ANYTHINGLLM_URL = "http://localhost:%d" % ANYTHINGLLM_HOST_PORT
 ANYTHINGLLM_STORAGE_MOUNT = "/app/server/storage"
 ANYTHINGLLM_SERVER_ENV_MOUNT = "/app/server/.env"
 ANYTHINGLLM_BOOT_TIMEOUT = 180

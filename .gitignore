@@ -161,3 +161,23 @@ chat_ui/data/
 *.db
 *.sqlite
 *.sqlite3
+
+
+# ─────────────────────────────────────────────
+#  [PATH_UNIFY_v1] 경로 통합 이전 잔재 + 누락분
+# ─────────────────────────────────────────────
+# project_root() 결함으로 launcher/user_data 에 데이터가 쌓였다.
+# 통합 후에도 남아 있을 수 있으므로 양쪽 다 무시한다.
+# (기존 규칙 "/user_data/*" 는 루트에만 고정돼 launcher/ 쪽을 덮지 못했다.)
+/launcher/user_data/
+
+# 에이전트 세션 JSON — 사용자 프롬프트·파일 경로가 그대로 들어간다
+session_*.json
+!**/.gitkeep
+
+# 도구 스펙 계층 산출물 (PRETOOL_SPEC_v1)
+mcp_tools.json
+.path_unify_manifest.json
+
+# 샌드박스로 미러링된 PreTool 사본 (원본은 /PreTool 에 있다)
+**/interpreter/sandbox/PreTool/

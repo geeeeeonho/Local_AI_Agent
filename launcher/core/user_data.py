@@ -58,14 +58,18 @@ _LAYOUT = (
 def project_root() -> Path:
     """프로젝트 루트.
 
-    이 파일은 `launcher/user_data.py` 로 배치되므로
-    parent(=launcher) 의 parent 가 프로젝트 루트(Local_AI).
+    이 파일은 `launcher/core/user_data.py` 에 있으므로 세 단계 위가
+    프로젝트 루트(Local_AI) 다.  core -> launcher -> Local_AI.
     환경변수 LLM_PROJECT_ROOT 가 있으면 그것을 우선한다(테스트/이식성).
+
+    [PATH_UNIFY_v1] 이전에는 .parent.parent 로 launcher/ 를 반환했다.
+    파일이 core/ 하위로 옮겨졌는데 계산식이 따라가지 않은 것이다.
+    그 탓에 user_data 가 launcher/user_data 와 user_data 두 군데로 갈렸다.
     """
     ov = os.environ.get("LLM_PROJECT_ROOT")
     if ov:
         return Path(ov).resolve()
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def root() -> Path:

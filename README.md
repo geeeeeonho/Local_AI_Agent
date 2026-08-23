@@ -11,7 +11,9 @@
 - **적용 상태**: `APPLY_ALL.py = v39`(파일 23 + 패치 43) + **`FIX_ALL` 번들**(아래 9-A)
 - **채팅 UI**: v41 이후 **Open WebUI → AnythingLLM(Docker)** 로 교체(아래 4-B)
 - **네트워크**: **WARP 기본 / Tor 선택 / 직접 연결** 3모드(아래 4-A)
-- **진단 3종**: `DIAG_SEARCH.bat`(검색 9계층) · `TEST_ALL.bat`(패치 코드) · `DIAG_ANYTHINGLLM.bat`(컨테이너 실경로)
+- **도구 계층**: v42 이후 **PreTool 스펙 계층**(`spec`·`tools`·`agent`) 추가 — 도구를 표준 규약으로 노출(아래 6-A)
+- **모델 저장소**: `C:\LLM_Models` 로 고정(아래 7-B). 프로젝트 밖이라 백업·이동에 딸려오지 않는다
+- **진단 4종**: `DIAG_SEARCH.bat`(검색 9계층) · `TEST_ALL.bat`(패치 코드) · `DIAG_ANYTHINGLLM.bat`(컨테이너 실경로) · `DIAG_TOOLSPEC.bat`(도구 스펙 + 실모델)
 
 ---
 
@@ -24,10 +26,13 @@
 4-B. 채팅 UI — AnythingLLM ★신규
 5. 에이전트 실행 순서 (agent_chat 파이프라인)
 6. PreTool — 에이전트 도구 패키지
+6-A. 도구 스펙 계층 — spec · tools · agent ★신규
 7. 데이터 저장 구조 (`user_data/`)
+7-A. 경로 통합 — user_data 일원화 ★신규
+7-B. 모델 저장소 — C:\LLM_Models 고정 ★신규
 8. 현재 동작 상태 (해결 / 미해결 / 미검증)
 9. 패치 이력
-9-A. 통합 도구 — FIX_ALL · TEST_ALL · DIAG_ANYTHINGLLM ★신규
+9-A. 통합 도구 — FIX_ALL · TEST_ALL · DIAG_* · CLEAN_LOCAL_AI ★
 10. 설정 · 패치 규약
 11. 문제 해결 / 다음 단계
 
@@ -73,6 +78,15 @@ Local_AI/
 ├── TEST_ALL.bat / .py          ★패치된 코드 정밀 테스트 (v3, Docker 불필요)
 ├── DIAG_ANYTHINGLLM.bat / .py  ★AnythingLLM 실경로 진단 (v4)
 ├── DIAG_SEARCH.bat / .py       검색 파이프라인 계층 진단(9단계 + 마커 스캔)
+├── APPLY_PRETOOL_SPEC.bat/.py  ★도구 스펙 계층 설치 (REV=5, 신규 파일 3개만 배치)
+├── DIAG_TOOLSPEC.bat / .py     ★도구 스펙 진단 (REV=3, 정적 검사 + 실모델 3군 측정)
+├── APPLY_PATH_UNIFY.bat/.py    ★경로 통합 + 잔재 정리 (REV=4, 기본 dry-run)
+├── DIAG_PROJECT.bat / .py      ★프로젝트 전수 감사 (REV=2, 읽기 전용, 10계층)
+├── CLEAN_LOCAL_AI.bat / .py    ★증거 기반 정리 + 개인 데이터 점검 (REV=5)
+├── MODEL_HOME.bat / .py        ★모델 저장소 고정·복구 (그냥 실행하면 끝)
+├── DIAG_MODEL_PATH.bat / .py   ★모델 경로·연결 검증 (읽기 전용, 4계층)
+├── APPLY_DEAD_CONSTS.bat/.py   ★참조 0 상수 제거 (AST + 런타임 재검증)
+├── APPLY_MANAGE_MODELPATH.*    ★MANAGE.bat 에 모델 위치 표시 삽입
 ├── README.md
 │
 ├── launcher/                   ── GUI 런처 패키지 ──
@@ -129,6 +143,10 @@ Local_AI/
 │
 ├── PreTool/                    ── 에이전트 도구(컨테이너에 마운트) ──
 │   ├── __init__.py search.py excel.py report.py files.py dev.py data.py
+│   ├── spec.py                 ★스펙 생성기 — JSON Schema + openai/mcp/anthropic
+│   │                           어댑터 · call() · recover()
+│   ├── tools.py                ★선언 레지스트리 — 타입/노출이름/safe 등급 (원함수 무변경)
+│   ├── agent.py                ★Ollama 자체 tool-calling 루프
 │   └── sitecustomize.py        PYTHONPATH 자동 실행 → PreTool 함수를 builtin 으로 주입
 │
 └── user_data/                  ── 사용자 데이터(영속) ──
@@ -379,6 +397,125 @@ Ollama `/api/chat` 직접 호출 기반 단일 스텝 코드 에이전트). OI �
 - **검색 경로** — `web_search` 는 SearXNG(JSON)→SearXNG(HTML)→DuckDuckGo 3단 폴백.
 - 전체 목록: `import PreTool; print(PreTool.catalog())`.
 
+> 위 표와 `catalog()` 는 실제 시그니처와 어긋난 곳이 있다(예: 실제로는
+> `report_write(path, title, sections, fmt=None)`, 표에 없는 `open_url`·`page_links`·`research` 존재).
+> **6-A 의 스펙 계층은 코드에서 직접 뽑으므로 이 드리프트가 없다.**
+
+---
+
+## 6-A. 도구 스펙 계층 — spec · tools · agent ★신규
+
+PreTool 함수들을 **일반적인 AI 에이전트 도구 규약**으로 노출하는 계층.
+`APPLY_PRETOOL_SPEC.bat` (마커 `PRETOOL_SPEC_v1`, REV=5) 가 신규 파일 3개만 배치하며
+**기존 파일은 하나도 수정하지 않는다.** 되돌리기는 `--undo`.
+
+### 왜 필요했나
+도구 메타데이터가 `__all__` · `catalog()` · base64 시스템 프롬프트 세 곳에 흩어져 있었고,
+하나를 추가하면 세 곳을 손으로 맞춰야 했다. 그것이 프롬프트 드리프트의 원인이었다.
+이 계층은 **코드를 단일 출처로 삼는다.**
+
+- 타입 → `tools.py` 가 선언
+- 설명 → 원함수 독스트링에서 자동 추출(없으면 `_DESC` 가 공급)
+- `required` → 실제 시그니처의 기본값 유무에서 자동 판정
+
+### 원함수를 건드리지 않는 이유
+선언 스키마는 **실제 허용 입력의 부분집합**이어도 된다. 원함수는 계속 유연 입력을
+받고, 레지스트리는 그중 일부만 노출한다. 선언하지 않은 인자는 모델에게 보이지 않고
+보내도 거부된다 — 예를 들어 `report_write` 의 `fmt` 를 선언하지 않았으므로
+모델은 출력 형식을 바꿀 수 없다(확장자로만 결정).
+
+`register()` 는 선언을 `inspect.signature` 로 실제 함수와 대조한다.
+어긋나면 그 도구만 등록하지 않고 `spec.problems()` 에 사유를 남긴다.
+
+### 노출 현황 (등록 22 / 안전 15 / 부수효과 7)
+
+| 노출 이름 | 구현 | 비고 |
+|-----------|------|------|
+| `web_search` | `web_search` | 통용 명칭 그대로 |
+| `web_fetch` | `open_url` | 벤더·MCP 레퍼런스가 공유하는 이름으로 노출 |
+| `web_research` | `research` | 검색 + 본문 읽기 |
+| `web_links` | `page_links` | 링크 추출 |
+
+**노출 제외**: `search_summary` · `search_urls` · `fetch_text` (`web_search`/`web_fetch` 와
+입력이 같고 출력 형식만 달라 모델이 고를 근거가 없음), `net_diag` (사람이 보는 진단).
+넷 다 코드블록 miniloop 에서는 `PreTool.search` 로 그대로 쓸 수 있다.
+
+**부수효과 7개**(`move`·`copy`·`organize_by_ext`·`run_python`·`report_write`·`excel_write`·`csv_write`)는
+`safe_only=False` 를 줄 때만 노출·실행된다. 기본은 안전 15개.
+
+**미등록**: `run_tests`(`cases` 가 튜플 구조라 JSON 표현 미정) · `diff`(`_src()` 가 문자열을
+코드로도 경로로도 해석해 모델이 의도를 지정할 수 없음).
+
+### 사용
+
+```python
+from PreTool.spec import specs, to_openai, to_mcp, to_anthropic, call
+
+specs()                              # 안전 15개
+specs(safe_only=False)               # 전체 22개
+[to_openai(s) for s in specs()]      # OpenAI / Ollama /api/chat
+[to_mcp(s) for s in specs()]         # MCP tools/list
+call("calc", {"expr": "2*(3+4)**2"})  # -> {'ok': True, 'data': 98}
+```
+
+`call()` 은 예외를 밖으로 던지지 않고 항상 `{'ok', 'data'|'error'}` 로 돌아온다.
+
+```bat
+py -3 -m PreTool.agent --model qwen2.5-coder:14b "오늘 코스피 지수 알려줘"
+py -3 -m PreTool.agent --model qwen2.5-coder:14b --all "이 폴더 정리해줘"
+```
+
+환경변수 `OLLAMA_HOST`(기본 `http://127.0.0.1:11434`) · `PRETOOL_AGENT_MODEL`(기본 `qwen2.5-coder:14b`).
+
+### `recover()` — 도구 호출이 본문으로 새는 문제
+
+`DIAG_TOOLSPEC` 실측에서 `qwen2.5-coder:14b` + Ollama 0.32.14 의 도구 선택률이 **0%** 로 나왔다.
+그런데 응답 **본문**에는 이렇게 들어 있었다.
+
+```
+{"name": "web_search", "arguments": {"query": "오늘 코스피 지수", "n": 1}}
+```
+
+**모델은 9/9 올바른 도구를 올바른 인자로 골랐다.** 이스케이프까지 정확했다.
+깨진 것은 선택이 아니라 `tool_calls` 승격 한 곳뿐 — 모델이 `<tool_call>` 태그 없이
+맨 JSON 을 뱉어 Ollama 파서가 받지 못했다.
+
+3군 통제 실험으로 배제된 가설: 시스템 메시지(A0=A 동일), 언어(영어도 실패),
+도구 개수(1개여도 실패), 스펙 품질(선택은 100% 정확),
+모델 미지원(`capabilities` 에 `tools` 있음, 템플릿 `.Tools` 참조 True).
+
+Ollama + qwen2.5-coder 조합에서 널리 보고된 문제이며(7b·14b·32b 동일),
+여러 프로젝트가 같은 처방에 도달했다 — **`tool_calls` 가 비면 본문의
+`{"name":…, "arguments":{…}}` 를 파싱하는 폴백**. 그것이 `recover()` 다.
+
+```python
+from PreTool.spec import recover
+recover('{"name":"calc","arguments":{"expr":"1+1"}}')   # -> [('calc', {'expr': '1+1'})]
+```
+
+`<tool_call>` 태그 · 코드펜스 · 맨 JSON · 앞뒤 설명 혼재 · 복수 호출 · `function` 래핑 ·
+`arguments` 가 문자열 — 7형태를 처리하고, **레지스트리와 대조**해 확인된 것만 돌려준다.
+미등록 이름 · 쓰기 도구 · 선언 안 된 인자 · 일반 JSON · 산문은 전부 거부한다.
+
+`agent.py` 는 복구한 호출을 **정규 `tool_calls` 형태로 재구성해서** 대화에 넣는다.
+그래야 다음 턴에 모델이 자기 호출 이력을 템플릿대로 읽는다.
+
+```
+user       "2*(3+4)**2 계산해줘"
+assistant  [{"function": {"name": "calc", "arguments": {"expr": "2*(3+4)**2"}}}]
+tool       "98"
+```
+
+### 도구를 추가하려면
+`PreTool/tools.py` 의 `_TABLE` 에 한 줄. 원함수는 건드리지 않는다.
+
+```python
+("모듈명", "함수명", safe여부, "범주", {"인자": "타입"}),
+```
+타입은 `"string"` `"integer"` `"number"` `"boolean"` `"array"` `"object"` `"any"`
+또는 완전한 JSON Schema dict. 독스트링이 없으면 `_DESC`, 통용 명칭으로 노출하려면 `_NAME`.
+추가 후 `DIAG_TOOLSPEC.bat` 으로 확인 — 선언이 어긋나면 그 도구만 드롭되고 사유가 나온다.
+
 ---
 
 ## 7. 데이터 저장 구조 (`user_data/`)
@@ -405,6 +542,111 @@ user_data/
 
 ---
 
+## 7-A. 경로 통합 — user_data 일원화 ★신규
+
+`APPLY_PATH_UNIFY.bat` (마커 `PATH_UNIFY_v1`, REV=4) 로 적용 완료.
+
+### 무엇이 문제였나
+같은 유형의 off-by-one 이 **두 곳**에 있었다. 파일을 하위 폴더로 옮기면서
+`.parent` 횟수를 따라 고치지 않은 것이다.
+
+| 파일 | 위치 | 이전 식 | 반환값 |
+|------|------|---------|--------|
+| `launcher/core/user_data.py` | `core/` 하위 | `.parent.parent` | **`launcher/`** ✗ |
+| `launcher/agent/folder_policy.py` | `agent/` 하위 | `.parent.parent` | **`launcher/`** ✗ |
+| `launcher/__main__.py` (대조군) | `launcher/` | `.parent.parent` | 루트 ✓ |
+
+그 탓에 세션·AnythingLLM 저장소·설정이 `launcher/user_data/` 로 가고,
+런처 로그·`registry.json` 은 루트 `user_data/` 로 가서 **데이터가 두 갈래**였다.
+`launcher/settings` 정션은 루트를 향하는데 `settings_dir()` 는 `launcher/` 를
+반환해 설정만 **세 곳**이었다.
+
+### 적용 후 (실측)
+```
+[OK] user_data.root()                   user_data
+[OK] user_data.settings_dir()           user_data\settings
+[OK] user_data.logs_dir()               user_data\logs
+[OK] user_data.interpreter_dir()        user_data\interpreter\sandbox
+[OK] folder_policy._store_path()        user_data\settings\folder_policy.json
+launcher/user_data                      (없음)
+```
+`settings_dir()` 가 `launcher/settings` 정션의 타깃과 일치한다.
+
+### 함께 정리된 것
+- `lifelog.open_session_log()` 의 이중 join 제거 (`FIX_v1` 위에 `FIX_v2` 가 겹친 잔재)
+- `app.py` 메뉴 라벨 `Open WebUI` → `AnythingLLM`
+- `.gitignore` 에 `/launcher/user_data/` · `session_*.json` 등 누락 규칙
+
+### 충돌 해소 전략
+출발지(launcher)가 최신이고 도착지(루트)가 낡은 상태였으므로
+**mtime 기준**으로 최신을 채택하고 진 쪽을 `_conflict_<시각>/` 로 격리했다.
+단 `chat/` 의 SQLite 4종(`webui.db` · `-shm` · `-wal` · `.webui_secret_key`)은
+**세트 단위**로 움직인다. 파일별로 최신을 고르면 `.db` 와 `-wal` 이 섞여 DB 가 깨진다.
+실측에서 출발지 `-wal` 0 B / 도착지 422.5 KB 로 갈려 있었다.
+
+---
+
+## 7-B. 모델 저장소 — `C:\LLM_Models` 고정 ★신규
+
+`MODEL_HOME.bat` 을 **인자 없이 실행**하면 끝난다. 이미 맞아 있으면 아무것도 하지 않고,
+일부가 끊겨 있으면 **끊긴 것만 복구**한다.
+
+### 왜 필요했나
+`OLLAMA_MODELS` 는 `llm_environment/llm_models` 를 가리키도록 주입되지만,
+그 값은 런처가 띄우는 자식 프로세스에만 적용된다. 이미 떠 있는 Ollama
+(사용자 설치본/트레이 앱)는 기본 위치를 계속 쓴다.
+
+실측이 이를 확인했다 — `llm_environment/llm_models` 는 **0 B** 였고
+`%USERPROFILE%\.ollama\models` 에 **62.8 GB** 가 있었다.
+"환경 폴더 하나로 자기완결" 이라는 전제가 모델에 대해서는 성립하지 않았다.
+
+### 구조 — 세 갈래가 한 실체로
+
+```
+C:\LLM_Models                        <- 실체
+   ^정션              ^정션              ^환경변수
+%USERPROFILE%\.ollama\models
+llm_environment\llm_models           <- config.py 가 지정하는 경로
+OLLAMA_MODELS (사용자 계정, HKCU\Environment)
+```
+
+기본 경로를 쓰는 Ollama 도, `OLLAMA_MODELS` 를 보는 Ollama 도 같은 곳에 도착한다.
+**`config.py` 를 한 줄도 고치지 않는다** — 런처가 주입하는 경로가 정션이라
+그대로 유효해진다. 포트도 건드리지 않는다.
+
+`setx` 는 사용자 범위(`HKCU\Environment`)에, `mklink /J` 는 정션이라
+**둘 다 관리자 권한이 필요 없다.** 재부팅해도, Ollama 를 재설치해도 유지된다.
+
+### 왜 Program Files 가 아닌가
+쓰기에 관리자 권한이 필요한데 Ollama 트레이 앱은 일반 사용자 권한으로 돈다.
+폴더를 만들어도 `pull` 이 액세스 거부로 실패한다. 애초에 Program Files 는
+변하지 않는 바이너리 자리이지 수십 GB 짜리 가변 데이터 자리가 아니다.
+`C:\` 루트의 전용 폴더는 기본 ACL 상 일반 사용자도 만들 수 있다.
+
+### 검증 결과 (실측)
+
+```
+L1  세 경로가 같은 실체를 가리킵니다.
+L2  blobs 5개 8.4 GB / manifests 1개
+L3  [OK] qwen2.5-coder:14b -> manifests\registry.ollama.ai\library\qwen2.5-coder\14b
+L4  [PASS] 모델 저장 위치가 C:\LLM_Models 로 일원화되어 있고 Ollama 가 그것을 씁니다.
+```
+
+L3 이 결정적이다. 경로가 같은지 보는 데 그치지 않고 **Ollama 가 내놓는 모델의
+manifest 가 실제로 그 폴더에 있는지 파일 단위로 대조**한다. 경로만 맞춰놓고
+Ollama 는 딴 데 보는 상황을 이것으로 배제한다.
+`ollama pull` 이 처음부터 그 경로로 받은 것도 확인했다(9.0 GB 블롭).
+
+### 주의
+- 프로젝트 폴더를 옮기면 `llm_environment\llm_models` 정션이 끊긴다.
+  `MODEL_HOME.bat` 을 한 번 더 실행하면 복구된다.
+- `robocopy`/`xcopy` 는 기본값으로 정션을 따라간다. 프로젝트 백업 시 `/XJ` 를 써야
+  모델이 딸려오지 않는다.
+- `%USERPROFILE%\.ollama\` 에는 `models` 말고 `history`(CLI 프롬프트 기록)와
+  `id_ed25519`(개인키)가 남는다. 키는 지우면 안 된다.
+
+---
+
 ## 8. 현재 동작 상태
 
 ### ✅ 검증 완료
@@ -420,6 +662,27 @@ user_data/
 - **`proxy-bootstrap.js` 자체** — 실제 Node + undici 8.10 으로 검증:
   프록시 대상은 프록시 경유, `NO_PROXY` 대상은 직결, undici 없으면 무해하게 no-op.
 - **에이전트 검색 파이프라인** — `DIAG_SEARCH` 9계층 20/20(기존 유지).
+- **도구 스펙 계층(6-A)** — 시그니처 대조 22/22 일치(거부 0), 정적 적합성 ERR 0,
+  `recover()` 형태 9종 + 오탐 방어 7종 실패 0, `agent.py` 루프 시나리오 10종·단언 30건 실패 0.
+  패처 위생(diag·create·update·skip·undo·conflict·바이트 동일성) 확인,
+  **기존 파일 7개 `cmp` 동일(무손상)**.
+- **모델의 도구 이해도** — `qwen2.5-coder:14b` 가 한국어 요청 9건에서 **9/9** 올바른 도구를
+  올바른 인자로 선택(`DIAG_TOOLSPEC` L2). 잡담에는 도구를 부르지 않음.
+- **`agent.py` 실 Ollama 왕복 ★** — 실측 완료.
+  `web_search` → 결과의 url 을 `web_fetch` 로 이어 호출 → 최종 답변까지 2단계 성공.
+  `role="tool"` 되먹임을 모델이 실제로 읽고, 재구성한 `tool_calls` 턴을 Ollama 가 받아들이며,
+  `tool_name` 필드도 문제없음이 한 번에 확인됐다. **두 호출 모두 `복구경로`** 였다 —
+  `recover()` 가 없었으면 아무것도 실행되지 않았다.
+- **경로 통합(7-A)** — 적용 완료. 경로 5종 전부 `user_data/` 수렴, `launcher/user_data` 소멸.
+- **정리** — `CLEAN_LOCAL_AI` 로 40개 / 1.0 MB 정리(빈 Open WebUI DB · PreTool 미러 2벌 ·
+  `.prev` 3벌 · `__pycache__`). 증거 검사를 통과하지 못한 2건은 보류.
+- **개인 데이터 git 노출** — 0건. 추적 중인 것은 `.gitignore` 의 `!` 예외로 의도한
+  `user_data/README.txt` 하나뿐.
+- **모델 저장소 고정(7-B) ★** — `DIAG_MODEL_PATH` 4계층 전부 통과, `[PASS]`.
+  세 경로 일치 · blobs 8.4 GB · **Ollama 목록의 manifest 파일 단위 대조 일치**.
+  `ollama pull` 이 처음부터 `C:\LLM_Models` 로 받는 것도 확인했다.
+- **Windows 전용 호출 ★** — `mklink /J`(정션) · `setx`(사용자 환경변수) ·
+  `reg query`(되읽기) 셋 다 실측 성공. **관리자 권한 없이** 동작한다.
 
 ### ⚠️ 미검증 / 남은 항목
 1. **컨테이너 안에서 Node fetch 가 실제로 프록시를 타는지** — REV=8 적용 후
@@ -433,15 +696,31 @@ user_data/
 4. **`--cap-add SYS_ADMIN`** 은 컨테이너 권한 상승이다. 껄끄러우면
    `config.ANYTHINGLLM_CAP_ADD = ()` 로 비운다 — 그러면 `.env` 에
    `ANYTHINGLLM_CHROMIUM_ARGS="--no-sandbox,--disable-setuid-sandbox"` 가 자동으로 들어간다.
-5. **코드 잔재** — `config.OPEN_WEBUI_PORT/URL`, `installer/i18n.py` 의 Open WebUI 문자열 등이
-   남아 있다. 실행 경로에서 벗어난 죽은 코드이며, 미확인 참조가 깨질 수 있어 **삭제하지 않는다.**
-   `PATCH_ANYTHINGLLM.bat --audit` 가 매번 목록을 보여 준다.
-   단 `lifelog.py` · `docker_maint.py` 의 `open_webui` 문자열은 **고아 컨테이너 정리 패턴이라
+5. **코드 잔재 — 정정됨 ★** — 이전 판에서 `config.OPEN_WEBUI_PORT/URL` 을 "죽은 코드" 로
+   적었으나 **틀렸다.** `DIAG_PROJECT` L5 전수 조사에서 참조 0 이 아니었고,
+   `launcher/app.py` 의 `LOCAL_AI_CHAT_ENGINE=openwebui` 롤백 경로와 `chat.py` 가 실제로 쓴다.
+   **지우면 롤백이 깨진다.** 실제로 참조 0 인 것은 `AGENT_MAX_TOKENS` ·
+   `AGENT_CONTEXT_WINDOW` · `ANYTHINGLLM_URL` 세 개뿐이다.
+   `lifelog.py` · `docker_maint.py` 의 `open_webui` 문자열은 **고아 컨테이너 정리 패턴이라
    의도적**이며 지우면 안 된다.
 6. **디스크 회수 가능** — Open WebUI venv 약 2213MB(`--purge` 대상),
    Open Interpreter venv 약 530MB(`PATCH_HOST_MINILOOP` 적용 시 불필요해짐).
 7. **모델의 도구 shadow** — 모델이 PreTool 의 `web_search` 를 자기 urllib 로 재정의하는 경우가 있다.
    → `qwen2.5-coder:7b/14b` 권장.
+8. **검색의 실시간 취득** — `web_fetch` 가 investing.com 에서 2주 전 아카이브 사본을
+   돌려준 사례가 있다. 에이전트 루프가 아니라 검색 계층 쪽. `DIAG_SEARCH.bat` 로 확인.
+9. **`qwen3:8b` 의 `tool_calls`** — 외부 보고 기반 추정이며 미검증.
+   `DIAG_TOOLSPEC.bat --model qwen3:8b,qwen2.5-coder:14b --repeat 3` 로 비교된다.
+10. **`agent.py` 의 런처/GUI 연결** — 미착수. 현재는 CLI 와 `from PreTool.agent import run` 만.
+11. **`calc()` 오류 계약** — 실패 시 예외 대신 `"계산 불가: ..."` 문자열을 반환하므로
+   `spec.call()` 이 `ok=True` 로 처리한다. 기존 코드블록 경로의 동작 변경이라 손대지 않았다.
+12. **죽은 상수 3개** — `AGENT_MAX_TOKENS` · `AGENT_CONTEXT_WINDOW` · `ANYTHINGLLM_URL` 은
+   참조 0 으로 확정됐다. `APPLY_DEAD_CONSTS.bat` 이 준비돼 있으나 아직 적용하지 않았다.
+13. **마커 짝 불일치 2건** — `CACHE_CLEANUP_v1`(열림 2/닫힘 1) ·
+   `DOCKER_AUTOCLEAN_v1`(열림 1/닫힘 0), 둘 다 `launcher/__main__.py`.
+   동작에는 무관하지만 그 블록을 되돌리는 패처는 실패한다.
+14. **`catalog()` 호출부** — `findstr` 가 쓰기 오류로 끊겨 확정하지 못했다.
+   그래서 `catalog()` 는 **건드리지 않았다**. 호환 형식이 필요하면 `spec.catalog_like()`.
 
 ---
 
@@ -505,9 +784,74 @@ SIDEBAR_RESTORE/STARTUP_BUTTONS/PREWARM_UI · NETMODE_LOG · IO_LOG(chat_panel v
 | `launcher/actions/agent_chat.py` | `_build_cmd_for_mode` 재정의 (sandbox 는 원본 위임) |
 | `launcher/actions/agent_direct.py` | `run` 재정의 (심볼 5종 확인될 때만) |
 
+### 도구 스펙 계층 — `PRETOOL_SPEC_v1` (REV=5)
+**기존 파일 수정 0건.** 신규 파일 3개만 배치한다.
+
+| 파일 | 역할 |
+|------|------|
+| `PreTool/spec.py` | 스펙 생성기 · openai/mcp/anthropic 어댑터 · `call()` · `recover()` |
+| `PreTool/tools.py` | 선언 레지스트리 (타입 / 노출 이름 / safe 등급) |
+| `PreTool/agent.py` | Ollama 자체 tool-calling 루프 |
+
+| REV | 내용 |
+|-----|------|
+| 1 | `spec.py` + `tools.py` — 시그니처 대조 기반 등록, 26개 |
+| 2 | 독스트링이 없는 10개에 `_DESC` 로 설명 공급 (설명 자리에 함수명이 찍히던 문제) |
+| 3 | **웹 표면 통용 규약화** — `web_search`/`web_fetch`/`web_research`/`web_links`, 중복 4개 노출 제외 |
+| 4 | `recover()` — 도구 호출이 본문 텍스트로 새는 문제 대응 |
+| 5 | `agent.py` — tool-calling 루프 (복구 · 되먹임 · 루프 방어 · 안전 게이트) |
+
+### 경로 통합 — `PATH_UNIFY_v1` (REV=4)
+신규 파일 없음. 기존 4개 파일을 앵커 기반으로 고치고 데이터를 이관한다.
+**기본 실행은 계획만 출력**하며 `--apply` 를 줘야 디스크를 건드린다.
+
+| REV | 내용 |
+|-----|------|
+| 1 | `user_data.project_root()` 보정 · `lifelog` 이중 join 제거 · 메뉴 라벨 · `.gitignore` |
+| 2 | 충돌 상세(동일/다름 · 크기 · 시각) 표시 |
+| 3 | `--on-conflict=resolve` — 분류 전략(SQLite 세트 · 재생성 미러 · 잔재 · 설정) |
+| 4 | `folder_policy._root()` 보정 추가 · 정본 `PreTool/*.prev` 격리 · `--clean-pycache` |
+
+`--undo` 로 코드와 데이터가 모두 원위치한다(재현 트리 50개 파일 md5 일치로 검증).
+
+### 정리 · 감사 도구 — `CLEANUP_v1` · `PROJECT_AUDIT_v1`
+
+| 도구 | 내용 |
+|------|------|
+| `CLEAN_LOCAL_AI` (REV=4) | 증거 기반 삭제. `chat/` 은 DB 를 실제로 열어 실사용 테이블이 전부 0행인지 확인한 뒤에만 지운다. `.db`+`-wal`+`-shm` 을 함께 복사해 열므로 **WAL 에만 있는 데이터도 잡힌다.** 개인 데이터 인벤토리와 git 노출 점검 포함 |
+| `DIAG_PROJECT` (REV=2) | 읽기 전용 10계층 감사 — 경로 계산 주체 · 데이터 트리 · 중복 · 잔재 · 죽은 상수 · 참조 관계 · 패치 마커 · 인코딩 위생 · 용량 |
+
+### 모델 저장소 — `MODEL_HOME_v2`
+`MODEL_HOME.bat` 을 인자 없이 실행하면 설정·복구·확인이 한 번에 끝난다.
+세 조각(환경변수 · 정션 2개)을 따로 확인해 **빠진 것만** 다시 만든다.
+
+| 도구 | 내용 |
+|------|------|
+| `MODEL_HOME` (REV=1) | 폴더 확보 → 기존 모델 이동 → 환경변수 → 정션 2개 → 확인. `--check` 는 읽기 전용, `--undo` 로 기본 경로 복귀 |
+| `DIAG_MODEL_PATH` (REV=2) | L1 경로 해석 / L2 실체 / **L2-B 실체 탐색**(연결이 끊겼을 때 드라이브 루트를 훑어 모델을 찾는다) / L3 manifest 파일 단위 대조 / L4 판정 |
+| `APPLY_MANAGE_MODELPATH` (REV=2) | `MANAGE.bat` 에 모델 위치 표시를 삽입. 앵커를 고정하지 않고 프롤로그 끝을 런타임에 찾는다 |
+| `APPLY_DEAD_CONSTS` (REV=1) | 참조 0 상수 제거. AST 로 대입문을 찾고 **지우기 직전 프로젝트 전체를 다시 훑어 재확인**한다. 주석 언급과 코드 참조를 구분한다 |
+
+### `.bat` 실행 줄 결함 — 전량 수정 ★
+아래 형태는 **도구가 rc≠0 으로 끝나면 두 번 실행된다.**
+
+```bat
+where py >nul 2>&1 && (py -3 "...") || (python "...")
+```
+
+`py -3` 가 비정상 종료로 보여 `||` 가 발동하기 때문이다. rc=0 일 때는 드러나지 않는다.
+전체 `.bat` 을 아래 형태로 교체했다.
+
+```bat
+set "PYEXE="
+py -3 -V >nul 2>&1 && set "PYEXE=py -3"
+if not defined PYEXE where python >nul 2>&1 && set "PYEXE=python"
+%PYEXE% "%~dp0X.py" %*
+```
+
 ---
 
-## 9-A. 통합 도구 — FIX_ALL · TEST_ALL · DIAG_ANYTHINGLLM ★
+## 9-A. 통합 도구 — FIX_ALL · TEST_ALL · DIAG_* · CLEAN_LOCAL_AI ★
 
 ### `FIX_ALL.bat` — 통합 점검·수정
 검증된 도구 4개를 **gzip+base64 로 내장**하고(전개 시 SHA-256 검증) 올바른 순서로 돌린다.
@@ -566,6 +910,64 @@ SIDEBAR_RESTORE/STARTUP_BUTTONS/PREWARM_UI · NETMODE_LOG · IO_LOG(chat_panel v
 
 IP 는 뒤 두 옥텟을 가려 출력하므로 로그를 그대로 공유해도 된다.
 `--full` 을 붙이면 컨테이너 로그와 `[proxy-bootstrap]` 줄을 함께 보여 준다.
+
+---
+
+### `DIAG_TOOLSPEC.bat` — 도구 스펙 진단 (REV=3) ★신규
+도구가 **일반적인 AI 도구 규약에 맞는지**, 그리고 **실제 모델이 그대로 인식하는지**를
+두 층으로 나눠 판정한다.
+
+| 층 | 내용 |
+|----|------|
+| L0 | Ollama 버전 · 모델 `capabilities` 에 `tools` 존재 · 템플릿 `.Tools` 참조 |
+| L1 | 이름 규약 · 설명 부재/잡음 · 스키마 무결 · 직렬화 · 역할 중복 |
+| L2 | 실모델 도구선택 — 4군으로 나눠 원인을 분리 |
+
+L2 의 4군: **A0** 표준 도구 1개·영어·시스템 메시지 없음 / **A** 같은 조건 + 시스템 메시지 /
+**B** 우리 도구 1개·한국어 / **C** 우리 도구 전부·한국어.
+A 가 실패하면 모델 문제, A 만 되고 C 가 실패하면 스펙 문제로 갈린다.
+`tool_calls` 가 비면 **본문도 함께 출력**하고 `recover()` 로 복구 가능한 건수를 센다.
+
+```bat
+DIAG_TOOLSPEC.bat                                        :: L1 만
+DIAG_TOOLSPEC.bat --model qwen2.5-coder:14b --repeat 3   :: L0+L1+L2
+DIAG_TOOLSPEC.bat --model qwen3:8b,qwen2.5-coder:14b     :: 모델 비교
+DIAG_TOOLSPEC.bat --dump mcp_tools.json                  :: MCP 스펙 추출
+```
+
+Ollama 미연결 시 L2 는 한 줄로 끝나고 L1 결과는 보존된다.
+
+---
+
+### `DIAG_PROJECT.bat` — 프로젝트 전수 감사 (REV=2) ★신규
+읽기 전용. 결과를 `diag_project_<시각>.txt` 로도 남긴다.
+
+| 층 | 내용 |
+|----|------|
+| L1 | 경로 계산 주체 — 실제로 import 해서 값을 확인 + 소스 패턴 전수 |
+| L2 | 데이터 트리 실태 · 정션 전수 |
+| L3 | 중복 파일 · PreTool 정본 대 미러 |
+| L4 | 잔재(`.prev` `.bak` `.orig` `.tmp` · `__pycache__`) |
+| L5 | `config.py` 상수 참조 전수 → **죽은 상수 확정** |
+| L6 | 고아 모듈 · 중복 정의 함수 · `catalog()` 호출부 |
+| L7 | 패치 마커 짝 · 중복 적용 |
+| L8 | 인코딩 위생(.bat ASCII+CRLF · BOM · EOL 혼재) |
+| L9 | 용량 상위 |
+
+### `CLEAN_LOCAL_AI.bat` — 증거 기반 정리 (REV=4) ★신규
+
+```bat
+CLEAN_LOCAL_AI.bat                    :: 계획만 (무변경)
+CLEAN_LOCAL_AI.bat --show-held        :: 보류 항목 내용 열람
+CLEAN_LOCAL_AI.bat --apply --safe     :: 삭제 대신 _trash_<시각>/ 로 이동
+CLEAN_LOCAL_AI.bat --apply --logs 30  :: 30일 넘은 세션 로그도 포함
+```
+
+이름만 보고 지우지 않는다. `chat/` 은 DB 를 열어 실사용 테이블 17종을 세고,
+chroma 컬렉션을 세고, 예상 밖 파일이 있는지 본다. 하나라도 걸리면 **보류**하고 사유를 낸다.
+
+정리 후 **개인 데이터 점검** 과 **사후 확인** 이 자동으로 돈다 —
+경로가 다시 갈라졌는지, 잔재가 쌓였는지, 개인 데이터가 git 에 새는지.
 
 ---
 
@@ -656,11 +1058,53 @@ AnythingLLM 의 SearXNG 는 **agent 스킬**이다. `@agent 검색어` 형태로
 ### 모델이 도구를 안 쓰고 자기 코드를 짬
 8b 무검열 모델 특성. `qwen2.5-coder:7b/14b` 권장.
 
+### 도구를 고르긴 하는데 `tool_calls` 가 비어 있다
+모델이 `<tool_call>` 태그 없이 맨 JSON 을 뱉어 Ollama 파서가 승격하지 못하는 경우.
+`DIAG_TOOLSPEC.bat --model <태그> --repeat 3` 을 돌리면 본문과 복구 가능 건수가 함께 나온다.
+`agent.py` 는 `spec.recover()` 로 이 경로를 자동 우회한다(6-A).
+모델을 바꾸려면 `capabilities` 에 `tools` 가 있는 태그를 쓴다.
+
+### 모델이 어디 저장돼 있는지 모르겠다 / 연결이 끊겼다
+`MODEL_HOME.bat --check` 로 확인하고, 그냥 `MODEL_HOME.bat` 을 실행하면 복구된다.
+더 자세히 보려면 `DIAG_MODEL_PATH.bat`. 실체가 사라진 것 같으면
+L2-B 가 드라이브 루트를 훑어 찾아 주고, `--search <경로>` 로 후보를 직접 줄 수도 있다.
+
+### (참고) 도구 없이 수동으로 확인하기
+7-B 적용 전에는 `OLLAMA_MODELS` 가 `llm_environment/llm_models` 를 가리키는데도
+그 폴더가 비어 있었다. 도구를 못 쓰는 상황에서 같은 것을 손으로 확인하려면:
+
+```bat
+:: 코드가 지정하는 위치
+py -3 -c "import sys;sys.path.insert(0,'.');from pathlib import Path;print(Path.cwd()/'llm_environment'/'llm_models')"
+dir /b llm_environment\llm_models
+
+:: 실제로 블롭이 있는 곳 (Windows 기본)
+dir /b "%USERPROFILE%\.ollama\models"
+powershell -c "'{0:N1} GB' -f ((gci -Recurse \"$env:USERPROFILE\.ollama\models\" -File -EA 0 | measure Length -Sum).Sum/1GB)"
+
+:: 지금 도는 Ollama 가 무엇을 쓰는지
+echo %OLLAMA_MODELS%
+tasklist /fi "imagename eq ollama.exe"
+```
+
+`blobs/` 와 `manifests/` 가 있고 용량이 큰 쪽이 실제 위치다.
+7-B 적용 후에는 `.ollama\models` 가 정션이므로 `dir` 결과가 `C:\LLM_Models` 와 같아진다.
+손으로 고치려면 Ollama 를 완전히 종료한 뒤 두 폴더를 옮기고 **사용자 계정**
+환경변수 `OLLAMA_MODELS` 를 설정한 다음 Ollama 를 다시 켜야 한다 —
+런처가 자식 프로세스에만 주입하는 값은 이미 떠 있는 Ollama 에 적용되지 않는다.
+`MODEL_HOME.bat` 이 이 과정을 대신한다.
+
+### 도구를 추가했는데 스펙에 안 나온다
+`DIAG_TOOLSPEC.bat` 의 `[등록 거부]` 목록을 본다. `PreTool/tools.py` 의 `_TABLE` 선언이
+실제 시그니처와 어긋나면 그 도구만 드롭되고 사유가 출력된다(인자명 오타가 대부분).
+
 ### 재개 시 우선 작업
 1. `FIX_ALL.bat --test` → rc=0
 2. 런처 재기동 → `[1]` → WARP
 3. `DIAG_ANYTHINGLLM.bat --full` → **`Node fetch 프록시를 탑니다`** 확인 (남은 최대 미검증 항목)
-4. 안정 확인 후 `FIX_ALL.bat --purge` 로 약 2.2GB 회수
+4. `CLEAN_LOCAL_AI.bat` → 경로 수렴 `[OK]` 5종 · 개인 데이터 git 노출 0 확인
+5. `MODEL_HOME.bat` → 모델 저장소 `C:\LLM_Models` 연결 확인(끊겼으면 자동 복구)
+6. 안정 확인 후 `FIX_ALL.bat --purge` 로 약 2.2GB 회수
    (venv 를 지우면 `LOCAL_AI_CHAT_ENGINE=openwebui` 롤백은 못 쓴다)
 
 ---
@@ -686,3 +1130,27 @@ AnythingLLM 의 SearXNG 는 **agent 스킬**이다. `@agent 검색어` 형태로
 - `--cap-add SYS_ADMIN` 은 권한 상승이다. 샌드박스를 중시한다면
   `ANYTHINGLLM_CAP_ADD = ()` 로 비우고 Chromium 인자 방식을 쓴다.
 - 8b 무검열 모델(huihui/ARA)은 도구·지시 준수가 불안정 → 스크랩엔 `qwen2.5-coder` 권장.
+- **`qwen2.5-coder` 는 도구를 정확히 고르지만 `tool_calls` 로 승격되지 않는다** —
+  Ollama + qwen2.5-coder 조합에서 널리 보고된 문제(7b·14b·32b 동일).
+  `capabilities` 에 `tools` 가 있고 템플릿도 정상인데도 발생하므로 모델 능력 문제가 아니다.
+  `spec.recover()` 가 우회한다(6-A). 역할이 다르므로 **코드블록 miniloop 은 `qwen2.5-coder` 를
+  유지하고, tool-calling 이 필요하면 별도 모델을 쓰는 이원화**가 자연스럽다.
+- **도구 설명이 겹치면 작은 모델이 못 고른다** — 같은 인자를 받는 도구가 여러 개면
+  판단 근거가 없다. `web_search`/`web_fetch`/`web_research` 는 설명에서 서로를 명시적으로
+  참조해 구분시킨다. `DIAG_TOOLSPEC` 의 C8 경고가 이런 중복을 잡아낸다.
+- **모델 저장 위치는 설정과 다를 수 있다** — `OLLAMA_MODELS` 를 자식 프로세스에 주입해도
+  이미 떠 있는 Ollama 는 기본 위치를 계속 쓴다. 실측에서 `llm_environment/llm_models` 는
+  0 B, 기본 경로에 62.8 GB 였다. 코드만 보고 판단하면 틀린다.
+  → 7-B 의 정션 + 사용자 환경변수 조합으로 해결했다.
+- **`.bat` 에서 `&&` / `||` 로 인터프리터를 고르면 안 된다** — 도구가 rc≠0 으로 끝날 때
+  `||` 가 발동해 두 번 실행된다. rc=0 일 때는 드러나지 않아 오래 남는다.
+- **Windows 정션과 사용자 환경변수는 관리자 권한이 필요 없다** — `mklink /J` 와 `setx`
+  둘 다 실측 확인. 반면 `C:\Program Files` 는 쓰기에 권한이 필요해 Ollama 가 `pull` 에
+  실패한다.
+- **`.gitignore` 의 `!` 예외를 무시하면 오탐이 난다** — `user_data/README.txt` 는 일부러
+  추적하는 파일이다. `git rm -r --cached user_data` 처럼 통째로 해제하면 이것까지 날아간다.
+- **SQLite 는 `.db` 단독으로 판단하면 안 된다** — 데이터가 `-wal` 에만 있을 수 있다.
+  실측에서 `.db` 기준으로는 "비어 있음" 이지만 `-wal` 까지 반영하면 대화 2건이 있었다.
+  `.db` · `-shm` · `-wal` 을 **세트로** 다뤄야 한다.
+- **선언 스키마를 좁히는 것은 파괴적 변경이 아니다** — 원함수는 유연 입력을 계속 받고
+  레지스트리는 부분집합만 노출한다. 그래서 `PreTool/tools.py` 는 원함수를 수정하지 않는다.

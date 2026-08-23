@@ -16,7 +16,7 @@ def _build_menu_items() -> list[MenuItem]:
     """메뉴 항목 정의. 추가/삭제는 이 함수만 수정."""
     return [
         MenuItem(
-            key="1", title="채팅 UI (Open WebUI)",
+            key="1", title="채팅 UI (AnythingLLM)",  # PATH_UNIFY_v1
             description="브라우저 기반 채팅 + 자동 웹 검색",
         ),
         MenuItem(

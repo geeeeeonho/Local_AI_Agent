@@ -216,7 +216,7 @@ def open_session_log(name: str) -> Optional[TextIO]:
     safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in name)
     try:
         path = _llm_session_log_dir() / (safe_name + "_" + _ts_file() + ".log")  # SESSION_LOG_PATH_FIX_v2
-        fh = open(str(_llm_session_log_dir() / (path)), "w", encoding="utf-8", buffering=1)
+        fh = open(str(path), "w", encoding="utf-8", buffering=1)  # PATH_UNIFY_v1: 이중 join 제거
         fh.write("=" * 60 + "\n")
         fh.write("  Session: " + name + "\n")
         fh.write("  Started: " + datetime.datetime.now().isoformat() + "\n")

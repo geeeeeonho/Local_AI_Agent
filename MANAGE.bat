@@ -6,6 +6,16 @@ set "PYTHONIOENCODING=utf-8"
 title LLM Local Setup - Manage
 cd /d "%~dp0"
 set "PYEXE="
+
+:: >>> MODEL_PATH_v1  (APPLY_MANAGE_MODELPATH.py)
+:: Show where models are actually stored. Skipped if the tool is absent.
+if exist "%~dp0DIAG_MODEL_PATH.py" (
+  where py >nul 2>&1 && (py -3 "%~dp0DIAG_MODEL_PATH.py" --brief) ^
+    || (python "%~dp0DIAG_MODEL_PATH.py" --brief)
+  echo.
+)
+:: <<< MODEL_PATH_v1
+
 where python >nul 2>&1 && set "PYEXE=python"
 if not defined PYEXE py -3 -V >nul 2>&1 && set "PYEXE=py -3"
 if not defined PYEXE goto NOPY
