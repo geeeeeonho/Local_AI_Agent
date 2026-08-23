@@ -45,6 +45,27 @@ class SettingsStoreTests(unittest.TestCase):
             saved_again = json.loads(canonical.read_text(encoding="utf-8"))
             self.assertEqual(saved_again["future_key"], "keep-me")
 
+    def test_load_does_not_create_legacy_links_as_a_side_effect(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_launcher = root / "launcher" / "settings"
+            old_agent = root / "launcher" / "agent" / "settings"
+            old_launcher.mkdir(parents=True)
+            old_agent.mkdir(parents=True)
+            (old_launcher / "user_config.json").write_text(
+                json.dumps({"language": "ko"}), encoding="utf-8"
+            )
+            (old_agent / "user_config.json").write_text(
+                json.dumps({"logging_enabled": False}), encoding="utf-8"
+            )
+
+            settings_store.load(root)
+
+            self.assertTrue(old_launcher.is_dir())
+            self.assertTrue(old_agent.is_dir())
+            self.assertFalse(old_launcher.is_symlink())
+            self.assertFalse(old_agent.is_symlink())
+
     def test_save_uses_single_canonical_file(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -68,6 +89,9 @@ class RepositoryStructureTests(unittest.TestCase):
             and node.name == name
         )
 
+    def _text(self, relative: str) -> str:
+        return (REPO_ROOT / relative).read_text(encoding="utf-8")
+
     def test_no_shadowed_gui_module(self):
         self.assertFalse((REPO_ROOT / "launcher" / "presenter" / "gui.py").exists())
         self.assertTrue((REPO_ROOT / "launcher" / "presenter" / "gui" / "__init__.py").is_file())
@@ -79,6 +103,38 @@ class RepositoryStructureTests(unittest.TestCase):
     def test_documented_batch_entrypoints_exist(self):
         self.assertTrue((REPO_ROOT / "INSTALL.bat").is_file())
         self.assertTrue((REPO_ROOT / "RUN_TUI.bat").is_file())
+
+    def test_batch_entrypoints_use_consistent_python_resolution(self):
+        install = self._text("INSTALL.bat")
+        run = self._text("RUN.bat")
+        run_tui = self._text("RUN_TUI.bat")
+        manage = self._text("MANAGE.bat")
+
+        self.assertIn("py -3", install)
+        self.assertIn("%*", install)
+
+        self.assertIn(r"llm_environment\venv\Scripts\python.exe", run)
+        self.assertIn("%*", run)
+
+        self.assertIn(r"llm_environment\venv\Scripts\python.exe", run_tui)
+        self.assertIn("py -3", run_tui)
+        self.assertIn("%*", run_tui)
+
+        self.assertIn(r"llm_environment\venv\Scripts\python.exe", manage)
+        self.assertIn("py -3", manage)
+        self.assertIn("%*", manage)
+        self.assertNotIn("DIAG_MODEL_PATH.py", manage)
+
+    def test_agent_package_import_has_no_settings_side_effect(self):
+        init_text = self._text("launcher/agent/__init__.py")
+        self.assertNotIn("ensure_legacy_bridges", init_text)
+        self.assertNotIn("settings_store", init_text)
+
+    def test_launcher_install_guidance_references_real_entrypoint(self):
+        launcher_main = self._text("launcher/__main__.py")
+        self.assertNotIn("install.py", launcher_main)
+        self.assertIn("python -m installer", launcher_main)
+        self.assertIn("INSTALL.bat", launcher_main)
 
     def test_legacy_agent_config_is_not_tracked_as_source(self):
         self.assertFalse(
