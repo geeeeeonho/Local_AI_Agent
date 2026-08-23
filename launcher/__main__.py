@@ -171,7 +171,7 @@ def main():
     except Exception as _dce:
         _trace("도커 자동정리 등록 실패: " + str(_dce))
 
-    # ── 언어 초기화 ──
+    # ── 언어/설정 초기화 ──
     _trace("언어 초기화 직전")
     try:
         from installer.lang_setup import initialize_language
@@ -180,11 +180,22 @@ def main():
     except Exception as _le:
         _trace("언어 초기화 예외: " + str(_le))
 
+    # agent_runner의 레거시 로그 설정 경로만 정본 user_data/settings로 연결한다.
+    # 일반 import/load/save에서는 이 작업을 하지 않아 시작 경계가 명확하다.
+    try:
+        from launcher import settings_store as _settings_store
+        if _settings_store.ensure_agent_settings_compat(HERE):
+            _trace("에이전트 설정 호환 경로 준비 완료")
+        else:
+            _trace("에이전트 설정 호환 경로 준비 건너뜀")
+    except Exception as _se:
+        _trace("에이전트 설정 호환 경로 준비 실패: " + str(_se))
+
     # ── 설치 폴더 확인 ──
     _trace("설치 폴더 확인 직전 ENV=" + str(ENV))
     if not ENV.exists():
         print(f"[FAIL] 설치 폴더가 없습니다: {ENV}", file=sys.stderr)
-        print("[INFO] install.py 를 먼저 실행하세요 (또는 INSTALL.bat)",
+        print("[INFO] python -m installer 를 실행하세요 (또는 INSTALL.bat)",
               file=sys.stderr)
         # pythonw 환경에선 콘솔이 안 보이므로 fatal_log 에도 남김
         with open(_fatal_log_path(), "a", encoding="utf-8") as f:

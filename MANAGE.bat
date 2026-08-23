@@ -5,29 +5,41 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 title LLM Local Setup - Manage
 cd /d "%~dp0"
-set "PYEXE="
 
-:: >>> MODEL_PATH_v1  (APPLY_MANAGE_MODELPATH.py)
-:: Show where models are actually stored. Skipped if the tool is absent.
-if exist "%~dp0DIAG_MODEL_PATH.py" (
-  where py >nul 2>&1 && (py -3 "%~dp0DIAG_MODEL_PATH.py" --brief) ^
-    || (python "%~dp0DIAG_MODEL_PATH.py" --brief)
-  echo.
-)
-:: <<< MODEL_PATH_v1
+set "MANAGED_PY=%~dp0llm_environment\venv\Scripts\python.exe"
+if exist "%MANAGED_PY%" goto RUN_MANAGED
 
-where python >nul 2>&1 && set "PYEXE=python"
-if not defined PYEXE py -3 -V >nul 2>&1 && set "PYEXE=py -3"
-if not defined PYEXE goto NOPY
-%PYEXE% -m installer.manage_gui %*
+where python >nul 2>&1
+if not errorlevel 1 goto RUN_PYTHON
+
+py -3 -V >nul 2>&1
+if not errorlevel 1 goto RUN_PY
+
+goto NOPY
+
+:RUN_MANAGED
+"%MANAGED_PY%" -m installer.manage_gui %*
+goto CHECK
+
+:RUN_PYTHON
+python -m installer.manage_gui %*
+goto CHECK
+
+:RUN_PY
+py -3 -m installer.manage_gui %*
+goto CHECK
+
+:CHECK
 if errorlevel 1 goto ERR
-goto END
+exit /b 0
+
 :ERR
 echo.
 echo [WARN] Manage exited with an error. See messages above.
 pause
-goto END
+exit /b 1
+
 :NOPY
 echo [ERROR] Python not found. Install Python 3.11+ or add it to PATH.
 pause
-:END
+exit /b 1

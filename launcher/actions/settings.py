@@ -7,7 +7,6 @@ from ..presenter.base import MenuItem, Presenter
 
 
 def _menu_items() -> list[MenuItem]:
-    # LLM_LOG_GUI_TOGGLE_v1: 현재 로그 상태 표시
     try:
         from launcher.agent.agent_runner import logging_enabled as _le
         _log_state = "ON" if _le() else "OFF"
@@ -37,7 +36,7 @@ def _change_language(p: Presenter) -> None:
         return
 
     try:
-        from ..i18n import set_language
+        from installer.i18n import set_language
         from .. import settings_store
         set_language(new_lang)
         cfg = settings_store.load()
@@ -51,12 +50,12 @@ def _change_language(p: Presenter) -> None:
 
 
 def _toggle_logging(p: Presenter) -> None:
-    """LLM_LOG_GUI_TOGGLE_v1: 세션 로그 기록 on/off 토글."""
+    """세션 상세 로그 기록 on/off 토글."""
     try:
         from launcher.agent.agent_runner import logging_enabled
         from launcher.agent.agent_runner import set_logging_enabled
     except Exception as e:
-        p.error("로그 토글 불가 — 먼저 PATCH_VERBOSE_LOG 적용 필요: " + str(e))
+        p.error("로그 설정 모듈을 불러올 수 없습니다: " + str(e))
         p.pause()
         return
     try:
@@ -82,7 +81,11 @@ def run(env: Path, p: Presenter) -> None:
             cfg_path = settings_store.path()
         except Exception:
             cfg = None
-            cfg_path = env.parent / "launcher" / "settings" / "user_config.json"
+            try:
+                from launcher.core import user_data
+                cfg_path = user_data.settings_dir() / "user_config.json"
+            except Exception:
+                cfg_path = env.parent / "user_data" / "settings" / "user_config.json"
 
         choice = p.show_menu(
             title="설정 관리",
@@ -96,7 +99,6 @@ def run(env: Path, p: Presenter) -> None:
         if choice == "1":
             if cfg_path.exists():
                 p.section("현재 설정")
-                # SETTINGS_VIEW_v1: GUI 엔 print 가 안 보이므로 p.info 로 표시
                 p.info("설정 파일: " + str(cfg_path))
                 for _ln in cfg_path.read_text(encoding="utf-8").splitlines():
                     p.info(_ln if _ln.strip() else " ")
