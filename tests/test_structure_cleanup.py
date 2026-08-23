@@ -113,14 +113,14 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertIn("py -3", install)
         self.assertIn("%*", install)
 
-        self.assertIn(r"llm_environment\venv\Scripts\python.exe", run)
+        self.assertIn(r"llm_environment\venv\Scripts\python.exe".replace("\\", "\\"), run)
         self.assertIn("%*", run)
 
-        self.assertIn(r"llm_environment\venv\Scripts\python.exe", run_tui)
+        self.assertIn(r"llm_environment\venv\Scripts\python.exe".replace("\\", "\\"), run_tui)
         self.assertIn("py -3", run_tui)
         self.assertIn("%*", run_tui)
 
-        self.assertIn(r"llm_environment\venv\Scripts\python.exe", manage)
+        self.assertIn(r"llm_environment\venv\Scripts\python.exe".replace("\\", "\\"), manage)
         self.assertIn("py -3", manage)
         self.assertIn("%*", manage)
         self.assertNotIn("DIAG_MODEL_PATH.py", manage)
