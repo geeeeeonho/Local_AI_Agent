@@ -2,12 +2,11 @@
 
 순서:
   1. CLI 인자 --lang 가 있으면 그대로 사용
-  2. 저장된 user_config.json 의 language 가 있으면 사용
+  2. 저장된 user_data/settings/user_config.json 의 language 가 있으면 사용
   3. 둘 다 없으면 사용자에게 묻고 저장
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -15,18 +14,18 @@ from typing import Optional
 from .i18n import set_language, t, SUPPORTED_LANGUAGES, ENV_VAR
 
 
-# launcher/settings/user_config.json 위치 (프로젝트 루트 기준)
+def _settings_store():
+    from launcher import settings_store
+    return settings_store
+
+
 def _config_path(here: Path) -> Path:
-    return here / "launcher" / "settings" / "user_config.json"
+    return _settings_store().path(here)
 
 
 def _load_saved_language(here: Path) -> Optional[str]:
-    p = _config_path(here)
-    if not p.exists():
-        return None
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        lang = data.get("language")
+        lang = _settings_store().load(here).language
         if lang in SUPPORTED_LANGUAGES:
             return lang
     except Exception:
@@ -35,30 +34,13 @@ def _load_saved_language(here: Path) -> Optional[str]:
 
 
 def _save_language(here: Path, lang: str):
-    """user_config.json 의 language 필드만 추가/갱신.
-
-    파일이 없으면 새로 만들고, 있으면 다른 키는 보존.
-    """
-    p = _config_path(here)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    data = {}
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-
-    data["language"] = lang
-    if "schema_version" not in data:
-        data["schema_version"] = 1
-
+    """통합 설정 파일의 language 필드만 갱신하고 다른 설정은 보존."""
     try:
-        p.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    except OSError:
+        store = _settings_store()
+        cfg = store.load(here)
+        store.update_language(cfg, lang)
+        store.save(cfg, here)
+    except Exception:
         pass
 
 
@@ -90,6 +72,12 @@ def initialize_language(here: Path, override: Optional[str] = None) -> str:
 
     Returns: 결정된 언어 코드
     """
+    # 설정 저장소 초기화는 레거시 경로의 기존 설정도 user_data 로 이전한다.
+    try:
+        _settings_store().ensure_legacy_bridges(here)
+    except Exception:
+        pass
+
     # 1) CLI 인자
     if override and override in SUPPORTED_LANGUAGES:
         set_language(override)
@@ -116,7 +104,6 @@ def initialize_language(here: Path, override: Optional[str] = None) -> str:
     _save_language(here, chosen)
     os.environ[ENV_VAR] = chosen
 
-    # 선택 직후 한 줄 안내
     name_map = {"en": "English", "ko": "한국어"}
     print()
     print(f"  {t('lang.saved', lang=name_map[chosen])}")

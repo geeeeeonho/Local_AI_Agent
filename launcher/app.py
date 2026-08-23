@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, Dict
 
@@ -12,12 +13,32 @@ from .presenter.base import MenuItem, Presenter
 from . import actions
 
 
+def _chat_menu_text() -> tuple[str, str]:
+    """선택된 채팅 엔진과 현재 언어에 맞는 메뉴 문구."""
+    engine = os.environ.get("LOCAL_AI_CHAT_ENGINE", "").lower()
+    try:
+        from installer.i18n import get_language
+        ko = str(get_language()).lower().startswith("ko")
+    except Exception:
+        ko = True
+
+    if engine in ("openwebui", "webui"):
+        if ko:
+            return "채팅 UI (Open WebUI)", "브라우저 기반 채팅 + 자동 웹 검색"
+        return "Chat UI (Open WebUI)", "Browser chat + automatic web search"
+
+    if ko:
+        return "채팅 UI (AnythingLLM)", "브라우저 채팅 + 문서 RAG + @agent 웹 검색"
+    return "Chat UI (AnythingLLM)", "Browser chat + document RAG + @agent web search"
+
+
 def _build_menu_items() -> list[MenuItem]:
     """메뉴 항목 정의. 추가/삭제는 이 함수만 수정."""
+    chat_title, chat_description = _chat_menu_text()
     return [
         MenuItem(
-            key="1", title="채팅 UI (AnythingLLM)",  # PATH_UNIFY_v1
-            description="브라우저 기반 채팅 + 자동 웹 검색",
+            key="1", title=chat_title,
+            description=chat_description,
         ),
         MenuItem(
             key="2", title="자동화 에이전트",
@@ -33,9 +54,9 @@ def _build_menu_items() -> list[MenuItem]:
         MenuItem(key="7", title="SearXNG 검색 엔진 제어"),
         MenuItem(key="8", title="설정 관리 (보기/초기화/언어)"),
         MenuItem(key="9", title="모델 관리 (다운로드/삭제)",
-                 description="받을 모델 선택 · 사용 안 하는 모델 삭제"),  # MODEL_MANAGER_v1
+                 description="받을 모델 선택 · 사용 안 하는 모델 삭제"),
         MenuItem(key="10", title="도커 정리 (누적 캐시/이미지)",
-                 description="중지 컨테이너·dangling 이미지·빌드 캐시 청소"),  # DOCKER_CLEAN_v1
+                 description="중지 컨테이너·dangling 이미지·빌드 캐시 청소"),
         MenuItem(key="q", title="종료", separator_above=True),
     ]
 
@@ -44,14 +65,14 @@ def _build_action_map() -> Dict[str, Callable]:
     """key -> action.run 매핑. 추가는 이 한 줄만 늘리면 됨."""
     return {
         "1": actions.chat.run,
-        "2": actions.agent_chat.run,  # v7_1_unified: 통합 진입점
+        "2": actions.agent_chat.run,
         "4": actions.ollama_action.run,
         "5": actions.model_info.run,
         "6": actions.docker_image.run,
         "7": actions.searxng_action.run,
         "8": actions.settings_action.run,
-        "9": actions.model_manage.run,  # MODEL_MANAGER_v1
-        "10": actions.docker_clean.run,  # DOCKER_CLEAN_v1
+        "9": actions.model_manage.run,
+        "10": actions.docker_clean.run,
     }
 
 
@@ -82,7 +103,6 @@ class Application:
 
     @staticmethod
     def _trace(stage: str) -> None:
-        """v6_2_trace: lifelog 가 있으면 추적 로그 기록."""
         try:
             from launcher.core import lifelog as _ll
             _ll.log("TRACE", "[app] " + stage)
@@ -90,24 +110,16 @@ class Application:
             pass
 
     def run(self) -> None:
-        """메인 루프.
-
-        Presenter 가 단일 윈도우 GUI 면 _run_single_window 로 위임,
-        그렇지 않으면 기존 메뉴 루프 (TUI / 모달 GUI fallback).
-        """
+        """Presenter 종류에 따라 단일 창 GUI 또는 기존 메뉴 루프 실행."""
         self._trace("run() 진입")
-        # 단일 윈도우 GUI 분기
         try:
             from .presenter.gui import TkPresenter
             if isinstance(self.p, TkPresenter):
                 return self._run_single_window()
         except ImportError:
             pass
-
-        # 기존 루프 (TUI 등)
         return self._run_loop()
 
-    # ── TUI / 기존 루프 ──
     def _run_loop(self) -> None:
         while True:
             choice = self.p.show_menu(
@@ -137,13 +149,10 @@ class Application:
 
             self._save_last_choice(choice)
 
-    # ── 단일 윈도우 GUI ──
     def _run_single_window(self) -> None:
-        """TkPresenter 의 run_app 으로 메인 루프를 위임.
-
-        사이드바 클릭 → action_runner(key) → 패널 전환 → 결과 표시.
-        """
+        """TkPresenter 의 run_app 으로 메인 루프를 위임."""
         self._trace("_run_single_window() 진입")
+
         def action_runner(key: str):
             action = self.actions_map.get(key)
             if action is None:
@@ -151,20 +160,15 @@ class Application:
             action(self.env, self.p)
             self._save_last_choice(key)
 
-        # 상태바 폴러 — 서비스 모듈을 직접 호출
-        pollers = self._build_pollers()
-
         self.p.run_app(
             items=self.items,
             action_runner=action_runner,
             env_path_str=str(self.env),
-            pollers=pollers,
+            pollers=self._build_pollers(),
         )
 
     def _build_pollers(self) -> dict:
         """상태바에 붙일 폴러 함수들 (예외 안전)."""
-        env = self.env
-
         def ollama_check():
             try:
                 from .services.ollama import OllamaService
@@ -183,9 +187,7 @@ class Application:
             try:
                 from .services.docker import DockerService
                 from . import config
-                return DockerService.container_running(
-                    config.SEARXNG_CONTAINER
-                )
+                return DockerService.container_running(config.SEARXNG_CONTAINER)
             except Exception:
                 return False
 
@@ -194,33 +196,3 @@ class Application:
             "docker_check": docker_check,
             "searxng_check": searxng_check,
         }
-
-
-# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
-# 메뉴 [1] 라벨을 Open WebUI -> AnythingLLM 으로. 항목 구성은 원본을 그대로 쓴다.
-_ANYLLM_ORIG_MENU_ITEMS = _build_menu_items
-
-
-def _build_menu_items():
-    import os as _os_al
-    items = _ANYLLM_ORIG_MENU_ITEMS()
-    if _os_al.environ.get("LOCAL_AI_CHAT_ENGINE", "").lower() in ("openwebui", "webui"):
-        return items
-    _ko = True
-    try:
-        from installer.i18n import get_language as _gl
-        _ko = (str(_gl()).lower().startswith("ko"))
-    except Exception:
-        _ko = True
-    _title = "채팅 UI (AnythingLLM)" if _ko else "Chat UI (AnythingLLM)"
-    _desc = ("브라우저 채팅 + 문서 RAG + @agent 웹 검색" if _ko
-             else "Browser chat + document RAG + @agent web search")
-    for _it in items:
-        if getattr(_it, "key", "") == "1":
-            try:
-                _it.title = _title
-                _it.description = _desc
-            except Exception:
-                pass
-    return items
-# <<< ANYTHINGLLM_v1
