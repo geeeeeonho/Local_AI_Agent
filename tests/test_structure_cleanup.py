@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -65,6 +66,28 @@ class SettingsStoreTests(unittest.TestCase):
             self.assertTrue(old_agent.is_dir())
             self.assertFalse(old_launcher.is_symlink())
             self.assertFalse(old_agent.is_symlink())
+
+    @unittest.skipIf(os.name == "nt", "symlink creation can require Windows developer mode")
+    def test_existing_legacy_link_never_deletes_canonical_settings(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            canonical_dir = root / "user_data" / "settings"
+            canonical_dir.mkdir(parents=True)
+            canonical = canonical_dir / "user_config.json"
+            canonical.write_text(
+                json.dumps({"language": "ko", "logging_enabled": False}),
+                encoding="utf-8",
+            )
+
+            legacy = root / "launcher" / "agent" / "settings"
+            legacy.parent.mkdir(parents=True)
+            legacy.symlink_to(canonical_dir, target_is_directory=True)
+
+            cfg = settings_store.load(root)
+
+            self.assertTrue(canonical.is_file())
+            self.assertEqual(cfg.language, "ko")
+            self.assertFalse(cfg.logging_enabled)
 
     def test_save_uses_single_canonical_file(self):
         with tempfile.TemporaryDirectory() as td:
