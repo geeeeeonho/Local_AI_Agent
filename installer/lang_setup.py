@@ -72,11 +72,7 @@ def initialize_language(here: Path, override: Optional[str] = None) -> str:
 
     Returns: 결정된 언어 코드
     """
-    # 설정 저장소 초기화는 레거시 경로의 기존 설정도 user_data 로 이전한다.
-    try:
-        _settings_store().ensure_legacy_bridges(here)
-    except Exception:
-        pass
+    # load/save 단계에서 기존 설정이 있으면 user_data 정본으로 자동 마이그레이션된다.
 
     # 1) CLI 인자
     if override and override in SUPPORTED_LANGUAGES:
