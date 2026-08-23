@@ -4,17 +4,15 @@
 모든 영속 설정의 정본은 프로젝트 루트의
 ``user_data/settings/user_config.json`` 이다.
 
-과거 버전이 사용하던 ``launcher/settings`` 와
-``launcher/agent/settings`` 는 실행 시 정본 디렉터리를 가리키는 호환 링크로
-전환한다. 기존 ``user_config.json`` 이 있으면 먼저 병합한 뒤 링크를 만든다.
+과거 버전의 ``launcher/settings`` 와 ``launcher/agent/settings`` 에 남은
+``user_config.json`` 은 최초 로드 시 정본으로 병합한 뒤 제거한다. 디렉터리
+junction/symlink 는 만들지 않으므로 프로젝트 이동과 권한 상태에 영향을 받지 않는다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-import os
 from pathlib import Path
-import subprocess
 from typing import Any, Optional
 
 from .core import user_data
@@ -66,98 +64,65 @@ def _write_dict(p: Path, data: dict[str, Any]) -> bool:
     return user_data.save_json(p, data)
 
 
-def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
-    """레거시 설정을 먼저 읽고 정본 설정으로 덮어쓴 병합 결과."""
-    root = _root(project_root)
-    merged: dict[str, Any] = {}
-    for rel in _LEGACY_DIRS:
-        legacy = root / rel / "user_config.json"
-        if legacy.exists():
-            merged.update(_read_dict(legacy))
+def _legacy_files(root: Path) -> list[Path]:
+    return [root / rel / "user_config.json" for rel in _LEGACY_DIRS]
 
+
+def _cleanup_legacy_files(root: Path) -> None:
+    """마이그레이션된 알려진 설정 파일만 제거하고 디렉터리는 보존한다."""
+    for legacy in _legacy_files(root):
+        try:
+            if legacy.is_file() or legacy.is_symlink():
+                legacy.unlink()
+        except OSError:
+            pass
+
+
+def migrate_legacy_settings(project_root: Path | None = None) -> bool:
+    """레거시 설정을 정본으로 병합한다. 링크나 junction 은 생성하지 않는다."""
+    root = _root(project_root)
     canonical = path(root)
     canonical_data = _read_dict(canonical) if canonical.exists() else {}
+
+    merged: dict[str, Any] = {}
+    found_legacy = False
+    for legacy in _legacy_files(root):
+        if legacy.exists():
+            found_legacy = True
+            merged.update(_read_dict(legacy))
     merged.update(canonical_data)
 
     if merged and canonical_data != merged:
-        _write_dict(canonical, merged)
-    return merged
-
-
-def _remove_known_legacy_file(directory: Path) -> None:
-    cfg = directory / "user_config.json"
-    try:
-        if cfg.is_file() or cfg.is_symlink():
-            cfg.unlink()
-    except OSError:
-        pass
-
-
-def _same_target(link: Path, target: Path) -> bool:
-    try:
-        return link.resolve() == target.resolve()
-    except OSError:
-        return False
-
-
-def _bridge_directory(link: Path, target: Path) -> bool:
-    """link 디렉터리를 target 으로 연결한다. 알 수 없는 파일은 삭제하지 않는다."""
-    if link.exists() or link.is_symlink():
-        if _same_target(link, target):
-            return True
-        if link.is_symlink():
-            try:
-                link.unlink()
-            except OSError:
-                return False
-        elif link.is_dir():
-            _remove_known_legacy_file(link)
-            try:
-                if any(link.iterdir()):
-                    return False
-                link.rmdir()
-            except OSError:
-                return False
-        else:
+        if not _write_dict(canonical, merged):
+            return False
+    elif found_legacy and not canonical.exists():
+        if not _write_dict(canonical, merged):
             return False
 
-    link.parent.mkdir(parents=True, exist_ok=True)
-    target.mkdir(parents=True, exist_ok=True)
-
-    try:
-        if os.name == "nt":
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            result = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                creationflags=creationflags,
-            )
-            return result.returncode == 0 and _same_target(link, target)
-        link.symlink_to(target, target_is_directory=True)
-        return _same_target(link, target)
-    except OSError:
-        return False
+    if found_legacy and (canonical.exists() or not merged):
+        _cleanup_legacy_files(root)
+    return True
 
 
 def ensure_legacy_bridges(project_root: Path | None = None) -> bool:
-    """레거시 설정을 정본으로 이전하고 과거 경로를 호환 링크로 만든다."""
+    """이전 API 호환 별칭. 이제 링크 대신 설정 마이그레이션만 수행한다."""
+    return migrate_legacy_settings(project_root)
+
+
+def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
     root = _root(project_root)
-    _merged_data(root)
-    target = path(root).parent
-    results = [_bridge_directory(root / rel, target) for rel in _LEGACY_DIRS]
-    return all(results)
+    migrate_legacy_settings(root)
+    canonical = path(root)
+    return _read_dict(canonical) if canonical.exists() else {}
 
 
 def load(project_root: Path | None = None) -> Settings:
     data = _merged_data(project_root)
-    ensure_legacy_bridges(project_root)
     known = {k: v for k, v in data.items() if k in _KNOWN_FIELDS}
     extra = {k: v for k, v in data.items() if k not in _KNOWN_FIELDS}
     try:
         cfg = Settings(**known)
-    except TypeError:
+    except (TypeError, ValueError):
         cfg = Settings()
     cfg._extra = extra
     return cfg
@@ -172,10 +137,7 @@ def save(cfg: Settings, project_root: Path | None = None) -> bool:
         "last_menu_choice": cfg.last_menu_choice,
         "logging_enabled": bool(cfg.logging_enabled),
     })
-    ok = _write_dict(path(project_root), data)
-    if ok:
-        ensure_legacy_bridges(project_root)
-    return ok
+    return _write_dict(path(project_root), data)
 
 
 def reset(project_root: Path | None = None) -> bool:
