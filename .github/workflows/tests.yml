@@ -27,6 +27,7 @@ jobs:
           launcher/agent/service.py
           launcher/agent/legacy_backend.py
           launcher/agent/app_server_client.py
+          launcher/agent/agent_trace.py
           launcher/agent/instructions.py
           launcher/agent/interpreter_backend.py
           launcher/agent/sandbox_backend.py
