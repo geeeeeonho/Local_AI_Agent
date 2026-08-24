@@ -13,18 +13,29 @@ PRIVACY_CLAUSE = (
 )
 
 
+NATIVE_TOOL_GUIDANCE = (
+    "\n\n[Open Interpreter 도구 사용]\n"
+    "파일 탐색·수정, 명령 실행, 코드 실행과 검증은 Open Interpreter가 제공하는 기본 도구를 "
+    "우선 사용하십시오. 존재하지 않는 전역 Python 함수나 별도 사전 도구를 가정하지 마십시오.\n"
+    "현재 정보가 필요한 인터넷 검색은 `local_search` MCP 서버의 `search` 도구를 사용하고, "
+    "검색 결과의 공개 웹페이지 본문이 필요하면 `fetch_page`를 사용하십시오. 이 검색 경로는 "
+    "Local_AI_Agent의 로컬 SearXNG를 사용합니다. 검색어에는 개인정보, 로컬 파일 내용, 비밀값, "
+    "식별 가능한 로컬 경로를 포함하지 마십시오."
+)
+
+
 SANDBOX_GUIDANCE = (
-    "\n\n[Local_AI_Agent Sandbox]\n"
+    "\n\n[Local_AI_Agent Docker sandbox]\n"
     "This session runs inside the Local_AI_Agent Docker sandbox.\n"
     "Only mounted paths are available. Do not attempt to escape the container.\n"
-    "Open Interpreter built-in web search is disabled.\n"
-    "For current external information use PreTool.search.web_search, search_summary, or research.\n"
-    "Prefer the local SearXNG path and never include private local content in search queries."
+    "Open Interpreter built-in web search is disabled because the local Ollama provider does not provide "
+    "the provider search endpoint. Use the local_search MCP tools backed by SearXNG for current external information.\n"
+    "Never include private local content in search queries."
 )
 
 
 def build_structured_instructions(profile_message: str, *, sandbox: bool) -> str:
-    text = str(profile_message or "") + PRIVACY_CLAUSE
+    text = str(profile_message or "") + PRIVACY_CLAUSE + NATIVE_TOOL_GUIDANCE
     if sandbox:
         text += SANDBOX_GUIDANCE
     return text
