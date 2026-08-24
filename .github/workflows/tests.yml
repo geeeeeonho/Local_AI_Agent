@@ -32,11 +32,13 @@ jobs:
           launcher/agent/sandbox_backend.py
           launcher/agent/runtime_assets.py
           launcher/agent/search_mcp.py
+          launcher/agent/local_search_eval.py
           launcher/agent/native_backend.py
           launcher/agent/backend_factory.py
           launcher/agent/profiles.py
           launcher/agent/agent_lifecycle.py
           launcher/actions/agent_chat.py
+          tools/evaluate_local_search_e2e.py
           installer/core/filesystem.py
           installer/steps/python_tools.py
           installer/steps/sandbox.py
