@@ -151,13 +151,17 @@ class OpenInterpreterBackend:
         return True
 
     def _register_cleanup(self) -> None:
-        if self._cleanup_registered:
-            return
+        # Active lifecycle registration is per process start and must be restored
+        # after a stop -> start cycle.
         try:
             from launcher.agent import agent_lifecycle
             agent_lifecycle.register(self)
         except Exception:
             pass
+
+        # Global lifelog cleanup only needs one callback for this backend object.
+        if self._cleanup_registered:
+            return
         try:
             from launcher.core import lifelog
             lifelog.register_cleanup(lambda: self.stop(timeout=2.0))
