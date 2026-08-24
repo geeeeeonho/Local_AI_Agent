@@ -530,8 +530,10 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
 
     v7_0_threadfix 스레드 마샬링 내장.
     """
-    from launcher.agent.agent_runner import UnifiedAgent
-    from launcher.agent.agent_runner import LEVEL_TERMINATED
+    from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+    from launcher.agent.events import AgentEventType
+    from launcher.agent.legacy_backend import LegacyBackend
+    from launcher.agent.service import AgentService
     from ..presenter.gui.chat_panel import ChatPanel
 
     main_window = getattr(p, "_window", None)
@@ -540,22 +542,29 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         p.pause()
         return
 
-    agent = UnifiedAgent()
+    service = AgentService(LegacyBackend())
 
-    # 호스트 모드면 lifelog 에 프로세스 정리 등록
-    if is_host:
+    def _current_model_tag(runtime_cmd):
         try:
-            from launcher.core import lifelog as _ll
-            if hasattr(_ll, "register_host_process_cleanup"):
-                def _get_pid():
-                    try:
-                        proc = getattr(agent, "_proc", None)
-                        return proc.pid if proc else None
-                    except Exception:
-                        return None
-                _ll.register_host_process_cleanup(_get_pid)
-        except Exception:
-            pass
+            idx = runtime_cmd.index("--model")
+            value = str(runtime_cmd[idx + 1])
+            return value[len("ollama/"):] if value.startswith("ollama/") else value
+        except (ValueError, IndexError):
+            return ""
+
+    def _service_config(runtime_cmd, runtime_env=None, runtime_cwd=None):
+        return AgentConfig(
+            workspace=workspace,
+            mode="host" if is_host else "sandbox",
+            model=_current_model_tag(runtime_cmd),
+            network_mode=_net_mode_label(runtime_cmd),
+            profile_name=str(getattr(profile, "name", "agent")),
+            legacy_runtime=LegacyRuntimeSpec(
+                command=tuple(str(part) for part in runtime_cmd),
+                env=runtime_env,
+                cwd=runtime_cwd,
+            ),
+        )
 
     panel_holder = {"panel": None}
     nonlocal_container = [container]
@@ -665,10 +674,10 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             _nmounts = sum(1 for _x in new_cmd if _x == "-v")
             _post("system", "[정책 반영 - 컨테이너 재기동...] 마운트 " + str(_nmounts) + "개")
             try:
-                agent.stop(timeout=2.0)
+                service.stop(timeout=2.0)
             except Exception:
                 pass
-            agent.start(new_cmd)
+            service.start(_service_config(new_cmd))
             try:
                 panel.enable_send()
             except Exception:
@@ -725,11 +734,11 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _cmd_holder[0] = _cnew
                     _post("system", "[모델 변경 - 컨테이너 재기동...] " + arg)
                     try:
-                        agent.stop(timeout=2.0)
+                        service.stop(timeout=2.0)
                     except Exception:
                         pass
                     try:
-                        agent.start(_cnew)
+                        service.start(_service_config(_cnew))
                         _post("system", "모델 변경 완료: " + arg + "  (첫 응답은 적재로 다소 걸릴 수 있음)")
                     except Exception as _e:
                         _post("error", "모델 변경 실패: " + str(_e))
@@ -777,18 +786,18 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         def on_user_input(text):
             if _handle_slash(text):
                 return
-            ok = agent.send_input(text)
+            ok = service.send(text)
             if not ok:
                 panel.append_message("warn", "에이전트가 실행 중이 아닙니다")
 
         def on_stop():
             panel.append_message("system", "[중단 요청...]")
-            agent.stop(timeout=2.0)
+            service.stop(timeout=2.0)
             panel.disable_send()
 
         def on_restart():
             panel.append_message("system", "[재시작 요청...]")
-            agent.stop(timeout=2.0)
+            service.stop(timeout=2.0)
             if not is_host:
                 try:
                     new_cmd, _ = _rebuild_policy_cmd(_cmd_holder[0])  # FOLDER_POLICY_LIVE_v1
@@ -802,7 +811,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _renv = build_tor_env()
                 except Exception:
                     _renv = None
-            agent.start(_cmd_holder[0], env=_renv)
+            service.start(_service_config(_cmd_holder[0], runtime_env=_renv))
             panel.enable_send()
 
         def on_open():
@@ -909,7 +918,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         _safe_append("warn", "호스트 직접 모드 — 매 명령 확인이 필요합니다")
     try:
         from launcher.core import lifelog as _ll
-        _ll.log("TRACE", "[agent_chat] agent.start 호출 직전")
+        _ll.log("TRACE", "[agent_chat] service.start 호출 직전")
         _ll.log("INFO", "[agent_chat] 명령: " + " ".join(str(c) for c in cmd[:8]))
         _ll.log("INFO", "[agent_chat] 인터넷 모드: " + _net_mode_label(cmd)
                 + " | " + _net_flags(cmd))  # NETMODE_LOG_v1
@@ -1214,10 +1223,10 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             _safe_append("system", "[net] 호스트 인터프리터 Tor 프록시 적용 (127.0.0.1:8118 / 9050)")
         except Exception as _ete:
             _safe_append("warn", "[net] Tor env 적용 실패: %s" % _ete)
-    started = agent.start(cmd, env=_start_env)
+    started = service.start(_service_config(cmd, runtime_env=_start_env))
     try:
         from launcher.core import lifelog as _ll2
-        _ll2.log("TRACE", "[agent_chat] agent.start 반환: " + str(started))
+        _ll2.log("TRACE", "[agent_chat] service.start 반환: " + str(started))
     except Exception:
         pass
     if not started:  # AGENT_RETRY_v1: 일시적 실패(도커 재시작 직후 등) 재시도
@@ -1226,7 +1235,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             _safe_append("system", "에이전트 재시도 중... (%d/2)" % (_rai + 1))
             _trR.sleep(3)
             try:
-                started = agent.start(cmd, env=_start_env)  # HOST_TOR_ENV_v1
+                started = service.start(_service_config(cmd, runtime_env=_start_env))  # HOST_TOR_ENV_v1
             except Exception:
                 started = False
             if started:
@@ -1278,7 +1287,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             pass
         try:
             from launcher.core import lifelog as _ll3
-            _ll3.log("FAIL", "[agent_chat] agent.start 실패")
+            _ll3.log("FAIL", "[agent_chat] service.start 실패")
         except Exception:
             pass
         return
@@ -1289,13 +1298,14 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
 
     def poll():
         try:
-            msgs = agent.drain_messages(max_n=100)
-            for m in msgs:
-                if m.level == LEVEL_TERMINATED:
-                    panel.append_message("terminated", m.text)
+            events = service.poll_events(max_n=100)
+            for event in events:
+                level = event.source_level or event.type.value
+                if event.type is AgentEventType.TERMINATED:
+                    panel.append_message("terminated", event.content)
                     panel.disable_send()
                 else:
-                    panel.append_message(m.level, m.text)
+                    panel.append_message(level, event.content)
             files_refresh_counter[0] += 1
             if files_refresh_counter[0] >= 25:
                 files_refresh_counter[0] = 0
@@ -1308,4 +1318,3 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             pass
 
     main_window.root.after(poll_interval_ms, poll)
-
