@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .interpreter_backend import OpenInterpreterBackend
-from .sandbox_backend import SandboxOpenInterpreterBackend
+from .native_backend import (
+    NativeOpenInterpreterBackend as OpenInterpreterBackend,
+    NativeSandboxOpenInterpreterBackend as SandboxOpenInterpreterBackend,
+)
 
 
 def create_backend(mode: str, env: Path):
