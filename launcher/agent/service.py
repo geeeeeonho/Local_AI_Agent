@@ -24,6 +24,18 @@ class AgentService:
     def send(self, message: str) -> bool:
         return self._backend.send(message)
 
+    def approve(self, request_id: int | str, decision: str) -> bool:
+        return self._backend.approve(request_id, decision)
+
+    def cancel(self) -> bool:
+        return self._backend.cancel()
+
+    def resume(self, session_id: str) -> bool:
+        return self._backend.resume(session_id)
+
+    def session_id(self) -> str | None:
+        return self._backend.session_id()
+
     def stop(self, timeout: float = 3.0) -> None:
         self._backend.stop(timeout=timeout)
 
