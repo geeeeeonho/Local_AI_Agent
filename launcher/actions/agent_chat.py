@@ -297,13 +297,21 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
         )
         return cmd, False
     else:  # host
+        _tag = model_tag or config.MODEL_TAG
+        try:
+            from launcher.agent.interpreter_backend import managed_interpreter_exe
+            if managed_interpreter_exe(env.parent).is_file():
+                # Structured backend consumes metadata from AgentConfig; this marker is never executed.
+                return ["managed-open-interpreter", "--model", "ollama/" + _tag], True
+        except Exception:
+            pass
         from launcher.agent.agent_runner import build_host_pipe_cmd
         interp = env / "agent" / "venv" / "Scripts" / "interpreter.exe"
         if not interp.exists():
             return None, True
         cmd = build_host_pipe_cmd(
             interpreter_exe=str(interp),
-            model_tag=(model_tag or config.MODEL_TAG),
+            model_tag=_tag,
             ollama_url=config.OLLAMA_URL,
             profile_system_message=profile.system_message,
             context_window=context_window,
@@ -531,8 +539,8 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     v7_0_threadfix 스레드 마샬링 내장.
     """
     from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+    from launcher.agent.backend_factory import create_backend
     from launcher.agent.events import AgentEventType
-    from launcher.agent.legacy_backend import LegacyBackend
     from launcher.agent.service import AgentService
     from ..presenter.gui.chat_panel import ChatPanel
 
@@ -542,7 +550,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         p.pause()
         return
 
-    service = AgentService(LegacyBackend())
+    service = AgentService(create_backend("host" if is_host else "sandbox", env))
 
     def _current_model_tag(runtime_cmd):
         try:
@@ -564,6 +572,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 env=runtime_env,
                 cwd=runtime_cwd,
             ),
+            instructions=str(getattr(profile, "system_message", "")),
         )
 
     panel_holder = {"panel": None}
@@ -709,7 +718,21 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             if c0 in ("/help", "/?", "/명령"):
                 _post("system",
                       "폴더 명령: /folders 목록 · /allow <경로> · /deny <경로> · "
-                      "/unallow <경로> · /undeny <경로> · /reload 변경반영 · /model <태그> 모델변경")
+                      "/unallow <경로> · /undeny <경로> · /reload 변경반영 · /model <태그> 모델변경 · "
+                      "/session 세션ID · /resume <세션ID>")
+                return True
+            if c0 == "/session":
+                _sid = service.session_id()
+                _post("system", "현재 세션: " + _sid if _sid else "현재 backend는 구조화 세션 ID를 제공하지 않습니다.")
+                return True
+            if c0 == "/resume":
+                if not arg:
+                    _post("system", "사용법: /resume <thread-id>")
+                    return True
+                if service.resume(arg):
+                    _post("system", "세션 이어가기 완료: " + str(service.session_id() or arg))
+                else:
+                    _post("warn", "세션 이어가기 실패: " + arg)
                 return True
             try:
                 from launcher.agent import folder_policy as _fp
@@ -732,7 +755,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     if _mi + 1 < len(_cnew):
                         _cnew[_mi + 1] = "ollama/" + arg
                     _cmd_holder[0] = _cnew
-                    _post("system", "[모델 변경 - 컨테이너 재기동...] " + arg)
+                    _post("system", "[모델 변경 - 런타임 재기동...] " + arg)
                     try:
                         service.stop(timeout=2.0)
                     except Exception:
@@ -788,10 +811,14 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 return
             ok = service.send(text)
             if not ok:
-                panel.append_message("warn", "에이전트가 실행 중이 아닙니다")
+                panel.append_message("warn", "에이전트가 실행 중이 아니거나 현재 turn이 처리 중입니다")
 
         def on_stop():
             panel.append_message("system", "[중단 요청...]")
+            if is_host and service.cancel():
+                panel.append_message("system", "현재 Host turn 중단 요청 완료")
+                panel.enable_send()
+                return
             service.stop(timeout=2.0)
             panel.disable_send()
 
@@ -915,7 +942,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     except Exception:
         pass
     if is_host:
-        _safe_append("warn", "호스트 직접 모드 — 매 명령 확인이 필요합니다")
+        _safe_append("warn", "호스트 직접 모드 — Open Interpreter workspace-write + 사용자 승인 정책")
     try:
         from launcher.core import lifelog as _ll
         _ll.log("TRACE", "[agent_chat] service.start 호출 직전")
@@ -1242,7 +1269,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 _safe_append("system", "재시도 성공 — 에이전트를 시작합니다.")
                 break
     if not started:
-        _safe_append("error", "에이전트 시작 실패. Docker/Ollama 상태를 확인하세요.")
+        _safe_append("error", "에이전트 시작 실패. Docker/Ollama/Open Interpreter 상태를 확인하세요.")
         try:  # START_DIAG_v1: 실제 원인 진단(프록시 우회)
             import urllib.request as _urqD, json as _jsnD, subprocess as _spD
             _oport = 11434
@@ -1259,30 +1286,31 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                     _safe_append("system", "진단: Ollama 설치 모델 %d개 (%s)" % (len(_ms), ", ".join([x for x in _ms[:5] if x])))
                 else:
                     _safe_append("error", "진단: Ollama 에 설치된 모델이 0개입니다 — MANAGE.bat [2] 모델 관리에서 받으세요.")
-            except Exception as _eD:
+            except Exception:
                 _safe_append("error", "진단: Ollama 무응답 (127.0.0.1:%d) — Ollama 를 먼저 실행하세요." % _oport)
-            try:
-                _img = "llm-agent-sandbox"
+            if not is_host:
                 try:
-                    from .. import config as _cfgD2
-                    _img = getattr(_cfgD2, "SANDBOX_IMAGE", _img)
+                    _img = "llm-agent-sandbox"
+                    try:
+                        from .. import config as _cfgD2
+                        _img = getattr(_cfgD2, "SANDBOX_IMAGE", _img)
+                    except Exception:
+                        pass
+                    if _spD.run(["docker", "image", "inspect", _img], capture_output=True, timeout=10, creationflags=(0x08000000 if os.name == "nt" else 0)).returncode != 0:
+                        _safe_append("error", "진단: 샌드박스 이미지 '%s' 없음 — 이미지를 빌드/받으세요." % _img)
                 except Exception:
                     pass
-                if _spD.run(["docker", "image", "inspect", _img], capture_output=True, timeout=10, creationflags=(0x08000000 if os.name == "nt" else 0)).returncode != 0:
-                    _safe_append("error", "진단: 샌드박스 이미지 '%s' 없음 — 이미지를 빌드/받으세요." % _img)
-            except Exception:
-                pass
-            try:  # START_DIAG2_v1: 컨테이너 실제 출력/오류 캡처
-                import subprocess as _spC
-                _rcC = _spC.run(cmd, stdin=_spC.DEVNULL, stdout=_spC.PIPE, stderr=_spC.STDOUT,
-                                timeout=15, creationflags=(0x08000000 if os.name == "nt" else 0))
-                _outC = (_rcC.stdout or b"").decode("utf-8", "ignore").strip()
-                if _outC:
-                    _safe_append("error", "진단(컨테이너 출력, rc=%s): %s" % (_rcC.returncode, _outC[-600:]))
-                else:
-                    _safe_append("system", "진단: 컨테이너가 출력 없이 종료 (rc=%s) — 이미지/엔트리포인트 확인" % _rcC.returncode)
-            except Exception as _eC:
-                _safe_append("system", "진단: 컨테이너 재현 실패: %s" % _eC)
+                try:  # START_DIAG2_v1: 컨테이너 실제 출력/오류 캡처
+                    import subprocess as _spC
+                    _rcC = _spC.run(cmd, stdin=_spC.DEVNULL, stdout=_spC.PIPE, stderr=_spC.STDOUT,
+                                    timeout=15, creationflags=(0x08000000 if os.name == "nt" else 0))
+                    _outC = (_rcC.stdout or b"").decode("utf-8", "ignore").strip()
+                    if _outC:
+                        _safe_append("error", "진단(컨테이너 출력, rc=%s): %s" % (_rcC.returncode, _outC[-600:]))
+                    else:
+                        _safe_append("system", "진단: 컨테이너가 출력 없이 종료 (rc=%s) — 이미지/엔트리포인트 확인" % _rcC.returncode)
+                except Exception as _eC:
+                    _safe_append("system", "진단: 컨테이너 재현 실패: %s" % _eC)
         except Exception:
             pass
         try:
@@ -1296,15 +1324,56 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     poll_interval_ms = 80
     files_refresh_counter = [0]
 
+    def _approval_summary(event):
+        data = dict(event.data or {})
+        kind = data.get("kind", "approval")
+        reason = data.get("reason") or event.content or "승인이 필요합니다."
+        if kind == "command":
+            command = data.get("command") or "(명령 정보 없음)"
+            cwd = data.get("cwd") or str(workspace)
+            return "명령 실행 승인 요청\n\n명령: %s\n작업 폴더: %s\n사유: %s" % (command, cwd, reason)
+        changes = data.get("changes") or data.get("item") or "파일 변경"
+        return "파일 변경 승인 요청\n\n변경: %s\n사유: %s" % (str(changes)[:1200], reason)
+
     def poll():
         try:
             events = service.poll_events(max_n=100)
             for event in events:
-                level = event.source_level or event.type.value
+                if event.type is AgentEventType.APPROVAL_REQUIRED:
+                    from ..presenter.base import RISK_HIGH
+                    accepted = False
+                    try:
+                        accepted = p.confirm_dangerous(
+                            label="Open Interpreter 작업 승인",
+                            description=_approval_summary(event),
+                            risk=RISK_HIGH,
+                        )
+                    except Exception:
+                        accepted = False
+                    if event.request_id is not None:
+                        decision = "accept" if accepted else "decline"
+                        if service.approve(event.request_id, decision):
+                            panel.append_message("system", "작업 승인" if accepted else "작업 거절")
+                        else:
+                            panel.append_message("error", "승인 응답 전송 실패")
+                    continue
                 if event.type is AgentEventType.TERMINATED:
                     panel.append_message("terminated", event.content)
                     panel.disable_send()
+                elif event.type is AgentEventType.TEXT_DELTA:
+                    panel.append_message("stdout", event.content)
+                elif event.type is AgentEventType.REASONING:
+                    panel.append_message("info", event.content)
+                elif event.type in (AgentEventType.TOOL_STARTED, AgentEventType.TOOL_PROGRESS,
+                                     AgentEventType.TOOL_COMPLETED, AgentEventType.FILE_CHANGED,
+                                     AgentEventType.SESSION_STARTED, AgentEventType.STARTED):
+                    panel.append_message("system", event.content)
+                elif event.type is AgentEventType.ERROR:
+                    panel.append_message("error", event.content)
+                elif event.type is AgentEventType.WARNING:
+                    panel.append_message("warn", event.content)
                 else:
+                    level = event.source_level or event.type.value
                     panel.append_message(level, event.content)
             files_refresh_counter[0] += 1
             if files_refresh_counter[0] >= 25:
