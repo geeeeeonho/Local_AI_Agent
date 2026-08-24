@@ -8,6 +8,7 @@ from typing import Any
 from .app_server_client import AppServerClient
 from .backend import AgentConfig
 from .events import AgentEvent, AgentEventType
+from .instructions import build_structured_instructions
 
 OI_VERSION = "0.0.38"
 _SIMPLE_APPROVAL_DECISIONS = {"accept", "acceptForSession", "decline", "cancel"}
@@ -50,7 +51,11 @@ def _merge_no_proxy(env: dict[str, str]) -> None:
 
 
 class OpenInterpreterBackend:
-    """Structured Host backend backed by Open Interpreter App Server."""
+    """Structured backend backed by Open Interpreter App Server.
+
+    The default runtime hooks describe managed Host mode. Sandbox mode derives
+    from this class and overrides only availability/process/thread isolation.
+    """
 
     def __init__(self, client_factory=AppServerClient):
         self._client_factory = client_factory
@@ -76,27 +81,46 @@ class OpenInterpreterBackend:
             env.update({str(k): str(v) for k, v in runtime.env.items()})
         env["INTERPRETER_HOME"] = str(runtime_interpreter_home())
         env["CODEX_OSS_BASE_URL"] = "http://127.0.0.1:11434/v1"
+        root = str(_project_root())
+        current_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = root if not current_pythonpath else root + os.pathsep + current_pythonpath
         _merge_no_proxy(env)
         return env
 
+    def _runtime_available(self, config: AgentConfig) -> bool:
+        return managed_interpreter_exe().is_file()
+
+    def _client_spec(self, config: AgentConfig) -> tuple[list[str], dict[str, str], Path]:
+        return self._command(), self._runtime_env(config), config.workspace.resolve()
+
+    def _thread_sandbox_mode(self, config: AgentConfig) -> str:
+        return "workspace-write"
+
+    def _thread_cwd(self, config: AgentConfig) -> str:
+        return str(config.workspace.resolve())
+
     def _thread_params(self, config: AgentConfig) -> dict[str, Any]:
+        sandbox_mode = self._thread_sandbox_mode(config)
+        instructions = build_structured_instructions(
+            config.instructions,
+            sandbox=(sandbox_mode == "danger-full-access"),
+        )
         return {
             "model": config.model,
             "modelProvider": "ollama",
-            "cwd": str(config.workspace.resolve()),
+            "cwd": self._thread_cwd(config),
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
-            "sandbox": "workspace-write",
+            "sandbox": sandbox_mode,
             "serviceName": "Local_AI_Agent",
-            "developerInstructions": config.instructions,
+            "developerInstructions": instructions,
         }
 
     def start(self, config: AgentConfig) -> bool:
         if self.is_running():
             return False
-        exe = managed_interpreter_exe()
-        if not exe.is_file():
-            self._emit(AgentEvent(AgentEventType.ERROR, f"Managed Open Interpreter not found: {exe}", "error"))
+        if not self._runtime_available(config):
+            self._emit(AgentEvent(AgentEventType.ERROR, "Open Interpreter runtime is not available", "error"))
             return False
         try:
             config.workspace.mkdir(parents=True, exist_ok=True)
@@ -104,7 +128,12 @@ class OpenInterpreterBackend:
             self._emit(AgentEvent(AgentEventType.ERROR, f"Workspace unavailable: {exc}", "error"))
             return False
 
-        client = self._client_factory(self._command(), self._runtime_env(config), config.workspace.resolve())
+        try:
+            command, runtime_env, process_cwd = self._client_spec(config)
+        except Exception as exc:
+            self._emit(AgentEvent(AgentEventType.ERROR, f"Open Interpreter runtime setup failed: {exc}", "error"))
+            return False
+        client = self._client_factory(command, runtime_env, process_cwd)
         if not client.start():
             self._emit(AgentEvent(AgentEventType.ERROR, "Open Interpreter App Server failed to start", "error"))
             return False
@@ -151,15 +180,12 @@ class OpenInterpreterBackend:
         return True
 
     def _register_cleanup(self) -> None:
-        # Active lifecycle registration is per process start and must be restored
-        # after a stop -> start cycle.
         try:
             from launcher.agent import agent_lifecycle
             agent_lifecycle.register(self)
         except Exception:
             pass
 
-        # Global lifelog cleanup only needs one callback for this backend object.
         if self._cleanup_registered:
             return
         try:
