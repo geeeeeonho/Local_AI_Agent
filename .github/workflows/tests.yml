@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - refactor/open-interpreter-runtime
+      - refactor/oi-native-tools
   pull_request:
 
 jobs:
@@ -29,7 +30,11 @@ jobs:
           launcher/agent/instructions.py
           launcher/agent/interpreter_backend.py
           launcher/agent/sandbox_backend.py
+          launcher/agent/runtime_assets.py
+          launcher/agent/search_mcp.py
+          launcher/agent/native_backend.py
           launcher/agent/backend_factory.py
+          launcher/agent/profiles.py
           launcher/agent/agent_lifecycle.py
           launcher/actions/agent_chat.py
           installer/core/filesystem.py
