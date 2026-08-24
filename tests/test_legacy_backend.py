@@ -87,3 +87,23 @@ def test_host_cleanup_callback_is_registered_by_adapter(monkeypatch):
     assert backend.start(_config(mode="host")) is True
     assert len(callbacks) == 1
     assert callbacks[0]() == 4321
+
+
+def test_legacy_backend_fails_closed_for_structured_only_operations():
+    backend = LegacyBackend(agent_factory=FakeUnifiedAgent)
+    assert backend.approve(1, "accept") is False
+    assert backend.cancel() is False
+    assert backend.resume("thread-1") is False
+    assert backend.session_id() is None
+
+
+def test_legacy_backend_requires_runtime_spec():
+    backend = LegacyBackend(agent_factory=FakeUnifiedAgent)
+    config = AgentConfig(
+        workspace=Path("workspace"),
+        mode="host",
+        model="model:tag",
+        network_mode="direct",
+        profile_name="coding",
+    )
+    assert backend.start(config) is False
