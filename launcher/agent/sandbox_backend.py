@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .backend import AgentConfig
+from .instructions import build_structured_instructions
 from .interpreter_backend import OI_VERSION, OpenInterpreterBackend
 
 SANDBOX_RUNTIME_LABEL = "local-ai-agent.runtime"
@@ -148,6 +149,19 @@ class SandboxOpenInterpreterBackend(OpenInterpreterBackend):
 
     def _thread_cwd(self, config: AgentConfig) -> str:
         return "/home/agent/workspace"
+
+    def _thread_params(self, config: AgentConfig) -> dict:
+        params = super()._thread_params(config)
+        try:
+            from launcher.agent.profiles import build_session_addendum
+            addendum = build_session_addendum(config.workspace)
+        except Exception:
+            addendum = ""
+        params["developerInstructions"] = build_structured_instructions(
+            config.instructions + addendum,
+            sandbox=True,
+        )
+        return params
 
     def stop(self, timeout: float = 3.0) -> None:
         container_name = self._container_name
