@@ -98,7 +98,7 @@ def test_start_uses_managed_app_server_and_exact_thread_policy(tmp_path, monkeyp
 
     assert backend.start(config) is True
     client = made[0]
-    assert client.command[-3:] == ["--listen", "stdio://"][-3:]
+    assert client.command[-2:] == ["--listen", "stdio://"]
     assert "app-server" in client.command
     assert "check_for_update_on_startup=false" in client.command
     assert 'web_search="disabled"' in client.command
