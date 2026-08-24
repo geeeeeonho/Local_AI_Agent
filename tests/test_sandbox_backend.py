@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import launcher.config as config
 from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
@@ -133,6 +132,9 @@ def test_sandbox_backend_uses_outer_docker_and_inner_danger_full_access(tmp_path
     assert params["sandbox"] == "danger-full-access"
     assert params["approvalPolicy"] == "on-request"
     assert "Local_AI_Agent Docker sandbox" in params["developerInstructions"]
+    assert "■ 현재 세션 정보" in params["developerInstructions"]
+    assert str(tmp_path) in params["developerInstructions"]
+    assert "/home/agent/workspace" in params["developerInstructions"]
 
 
 def test_sandbox_stop_explicitly_stops_and_removes_container(tmp_path, monkeypatch):
