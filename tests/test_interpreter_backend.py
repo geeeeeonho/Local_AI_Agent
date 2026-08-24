@@ -187,3 +187,27 @@ def test_notifications_map_to_agent_events(tmp_path, monkeypatch):
     approval = events[5]
     assert approval.request_id == 44
     assert approval.data["kind"] == "command"
+
+
+def test_restart_reregisters_active_lifecycle_without_duplicate_global_cleanup(tmp_path, monkeypatch):
+    backend, _ = _backend(tmp_path, monkeypatch)
+    config = _config(tmp_path / "work")
+    config.workspace.mkdir()
+
+    import launcher.agent.agent_lifecycle as lifecycle
+    import launcher.core.lifelog as lifelog
+
+    registered = []
+    unregistered = []
+    cleanups = []
+    monkeypatch.setattr(lifecycle, "register", registered.append)
+    monkeypatch.setattr(lifecycle, "unregister", unregistered.append)
+    monkeypatch.setattr(lifelog, "register_cleanup", cleanups.append)
+
+    assert backend.start(config) is True
+    backend.stop()
+    assert backend.start(config) is True
+
+    assert registered == [backend, backend]
+    assert unregistered == [backend]
+    assert len(cleanups) == 1
