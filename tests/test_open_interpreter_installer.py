@@ -37,16 +37,17 @@ def test_managed_install_passes_product_scoped_environment(monkeypatch, tmp_path
 
     class Result:
         returncode = 0
-        stdout = "Open Interpreter 0.0.38\n"
+        stdout = ""
         stderr = ""
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
         return Result()
 
+    versions = iter([None, "0.0.38"])
     monkeypatch.setattr(python_tools, "_download_file", fake_download)
     monkeypatch.setattr(python_tools.subprocess, "run", fake_run)
-    monkeypatch.setattr(python_tools, "_installed_interpreter_version", lambda _exe: None)
+    monkeypatch.setattr(python_tools, "_installed_interpreter_version", lambda _exe: next(versions))
 
     assert python_tools.install_open_interpreter(paths) is True
     assert downloaded[0][0] == python_tools.OPEN_INTERPRETER_INSTALL_SCRIPT
