@@ -1,3 +1,4 @@
+from launcher.agent import profiles
 from launcher.agent.instructions import build_structured_instructions
 
 
@@ -22,3 +23,8 @@ def test_sandbox_structured_instructions_use_native_oi_and_mcp_search_guidance()
     assert "SearXNG" in text
     assert "private local content" in text
     assert "PreTool" not in text
+
+
+def test_active_profiles_do_not_reference_pretool():
+    assert profiles.PROFILES
+    assert all("PreTool" not in profile.system_message for profile in profiles.PROFILES)
