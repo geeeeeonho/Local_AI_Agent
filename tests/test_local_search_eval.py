@@ -1,5 +1,5 @@
 from launcher.agent.events import AgentEvent, AgentEventType
-from launcher.agent.local_search_eval import analyze_trace, collect_turn
+from launcher.agent.local_search_eval import analyze_trace, assess_case, collect_turn
 
 
 def _mcp_event(kind, tool, arguments=None, *, status="completed", result=None, error=None, duration_ms=None):
@@ -76,6 +76,36 @@ def test_analyze_trace_keeps_reasoning_summary_separate_from_hidden_reasoning():
 
     assert report["reasoning_summaries"] == ["Need current information; search first."]
     assert report["final_text"] == "Final answer"
+
+
+def test_assess_case_accepts_required_search_and_fetch_with_sources():
+    report = {
+        "search_calls": 1,
+        "fetch_calls": 2,
+        "failed_tool_calls": 0,
+        "repeated_identical_calls": 0,
+        "source_urls": ["https://a.test", "https://b.test"],
+        "turn_completed": True,
+        "final_text": "answer",
+    }
+    result = assess_case(report, expect_search=True, min_fetch=1, min_sources=2)
+    assert result["passed"] is True
+    assert result["failures"] == []
+
+
+def test_assess_case_rejects_unnecessary_search_for_control_prompt():
+    report = {
+        "search_calls": 1,
+        "fetch_calls": 0,
+        "failed_tool_calls": 0,
+        "repeated_identical_calls": 0,
+        "source_urls": ["https://example.test"],
+        "turn_completed": True,
+        "final_text": "4",
+    }
+    result = assess_case(report, expect_search=False)
+    assert result["passed"] is False
+    assert "unexpected_search" in result["failures"]
 
 
 def test_collect_turn_returns_real_service_events_until_turn_completed():
