@@ -2,22 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .interpreter_backend import OpenInterpreterBackend, managed_interpreter_exe
-from .legacy_backend import LegacyBackend
-from .sandbox_backend import SandboxOpenInterpreterBackend, sandbox_image_supports_app_server
+from .interpreter_backend import OpenInterpreterBackend
+from .sandbox_backend import SandboxOpenInterpreterBackend
 
 
 def create_backend(mode: str, env: Path):
-    """Select managed structured runtimes only when their pinned assets exist."""
+    """Return the managed Open Interpreter backend for the selected boundary.
+
+    Runtime availability is checked by the backend itself. We intentionally do
+    not fall back to the retired custom agent loop because changing runtimes
+    silently also changes tool, approval, session, and security semantics.
+    """
     if mode == "sandbox":
-        if sandbox_image_supports_app_server():
-            return SandboxOpenInterpreterBackend()
-        return LegacyBackend()
-
+        return SandboxOpenInterpreterBackend()
     if mode == "host":
-        env_path = Path(env)
-        project_root = env_path.parent if env_path.name == "llm_environment" else None
-        if managed_interpreter_exe(project_root).is_file():
-            return OpenInterpreterBackend()
-
-    return LegacyBackend()
+        return OpenInterpreterBackend()
+    raise ValueError(f"unsupported agent mode: {mode}")
