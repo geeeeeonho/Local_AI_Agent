@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+      - refactor/open-interpreter-runtime
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependency
+        run: python -m pip install pytest
+      - name: Compile migration modules
+        run: >-
+          python -m py_compile
+          launcher/agent/events.py
+          launcher/agent/backend.py
+          launcher/agent/service.py
+          launcher/agent/legacy_backend.py
+          launcher/agent/app_server_client.py
+          launcher/agent/interpreter_backend.py
+          launcher/agent/backend_factory.py
+          launcher/agent/agent_lifecycle.py
+          launcher/actions/agent_chat.py
+          installer/core/filesystem.py
+          installer/steps/python_tools.py
+      - name: Run tests
+        run: python -m pytest -q
