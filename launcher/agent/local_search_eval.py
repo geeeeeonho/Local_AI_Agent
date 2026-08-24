@@ -67,6 +67,43 @@ def collect_turn(
         sleep_fn(max(0.0, poll_interval_s))
 
 
+def assess_case(
+    report: dict,
+    *,
+    expect_search: bool,
+    min_fetch: int = 0,
+    min_sources: int = 0,
+) -> dict:
+    """Evaluate an observable trace against one E2E case contract."""
+    failures: list[str] = []
+    search_calls = int(report.get("search_calls") or 0)
+    fetch_calls = int(report.get("fetch_calls") or 0)
+    failed_calls = int(report.get("failed_tool_calls") or 0)
+    repeated_calls = int(report.get("repeated_identical_calls") or 0)
+    sources = report.get("source_urls") or []
+
+    if not report.get("turn_completed"):
+        failures.append("turn_not_completed")
+    if not str(report.get("final_text") or "").strip():
+        failures.append("empty_answer")
+    if failed_calls:
+        failures.append("tool_failure")
+    if repeated_calls:
+        failures.append("repeated_identical_call")
+
+    if expect_search:
+        if search_calls < 1:
+            failures.append("missing_search")
+        if fetch_calls < max(0, int(min_fetch)):
+            failures.append("missing_fetch")
+        if len(sources) < max(0, int(min_sources)):
+            failures.append("insufficient_sources")
+    elif search_calls or fetch_calls:
+        failures.append("unexpected_search")
+
+    return {"passed": not failures, "failures": failures}
+
+
 def analyze_trace(events: Iterable[AgentEvent]) -> dict:
     """Summarize observable Open Interpreter agent behavior for local web search.
 
