@@ -99,11 +99,16 @@ class OpenInterpreterBackend:
     def _thread_cwd(self, config: AgentConfig) -> str:
         return str(config.workspace.resolve())
 
+    def _instruction_profile(self, config: AgentConfig) -> str:
+        return config.instructions
+
+    def _instruction_is_sandbox(self, config: AgentConfig) -> bool:
+        return False
+
     def _thread_params(self, config: AgentConfig) -> dict[str, Any]:
-        sandbox_mode = self._thread_sandbox_mode(config)
         instructions = build_structured_instructions(
-            config.instructions,
-            sandbox=(sandbox_mode == "danger-full-access"),
+            self._instruction_profile(config),
+            sandbox=self._instruction_is_sandbox(config),
         )
         return {
             "model": config.model,
@@ -111,7 +116,7 @@ class OpenInterpreterBackend:
             "cwd": self._thread_cwd(config),
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
-            "sandbox": sandbox_mode,
+            "sandbox": self._thread_sandbox_mode(config),
             "serviceName": "Local_AI_Agent",
             "developerInstructions": instructions,
         }
