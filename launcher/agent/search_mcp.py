@@ -4,6 +4,7 @@ import html
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import urllib.parse
@@ -17,6 +18,18 @@ PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_SEARXNG_URL = "http://127.0.0.1:8888"
 DEFAULT_TIMEOUT = 25.0
 DEFAULT_PAGE_LIMIT = 12000
+_CHARSET_RE = re.compile(rb"(?i)charset\s*=\s*[\"']?\s*([a-z0-9._-]+)")
+_CHARSET_ALIASES = {
+    "euc-kr": "cp949",
+    "euckr": "cp949",
+    "ks_c_5601-1987": "cp949",
+    "ks_c_5601-1989": "cp949",
+    "ms949": "cp949",
+    "x-windows-949": "cp949",
+    "shift_jis": "cp932",
+    "sjis": "cp932",
+    "gb2312": "gbk",
+}
 
 
 class _TextExtractor(HTMLParser):
@@ -47,6 +60,35 @@ def _read_json_url(url: str, *, timeout: float) -> dict[str, Any]:
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8", "replace"))
+
+
+def _decode_body(raw: bytes, content_type: str = "") -> str:
+    """Decode common web encodings without silently destroying Korean text."""
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8", "replace")
+
+    declared = ""
+    match = re.search(r"(?i)charset\s*=\s*[\"']?\s*([a-z0-9._-]+)", content_type or "")
+    if match:
+        declared = match.group(1).lower()
+    if not declared:
+        meta = _CHARSET_RE.search(raw[:4096])
+        if meta:
+            declared = meta.group(1).decode("ascii", "ignore").lower()
+    declared = _CHARSET_ALIASES.get(declared, declared)
+
+    candidates = [declared] if declared else []
+    candidates.extend(["utf-8", "cp949", "cp932", "gbk"])
+    seen: set[str] = set()
+    for encoding in candidates:
+        if not encoding or encoding in seen:
+            continue
+        seen.add(encoding)
+        try:
+            return raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", "replace")
 
 
 def _text_result(text: str, *, is_error: bool = False) -> dict[str, Any]:
@@ -111,7 +153,8 @@ def _is_public_http_url(url: str) -> tuple[bool, str]:
         return False, "URLs with embedded credentials are not allowed"
     host = parsed.hostname
     try:
-        addresses = {info[4][0] for info in socket.getaddrinfo(host, parsed.port or 443)}
+        default_port = 443 if parsed.scheme == "https" else 80
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, parsed.port or default_port)}
     except OSError as exc:
         return False, f"host resolution failed: {exc}"
     for raw in addresses:
@@ -131,6 +174,14 @@ def _is_public_http_url(url: str) -> tuple[bool, str]:
     return True, ""
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        allowed, reason = _is_public_http_url(newurl)
+        if not allowed:
+            raise urllib.error.URLError(f"redirect blocked: {reason}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
     url = str(arguments.get("url") or "").strip()
     allowed, reason = _is_public_http_url(url)
@@ -142,15 +193,16 @@ def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
         url,
         headers={"User-Agent": "Local_AI_Agent/1 local-search-mcp"},
     )
+    opener = urllib.request.build_opener(_SafeRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            content_type = str(response.headers.get("Content-Type") or "").lower()
+        with opener.open(request, timeout=timeout) as response:
+            content_type = str(response.headers.get("Content-Type") or "")
             raw = response.read(max(limit * 4, limit))
     except Exception as exc:
         return _text_result(f"page fetch failed: {type(exc).__name__}: {exc}", is_error=True)
 
-    text = raw.decode("utf-8", "replace")
-    if "html" in content_type or "<html" in text[:1000].lower():
+    text = _decode_body(raw, content_type)
+    if "html" in content_type.lower() or "<html" in text[:1000].lower():
         parser = _TextExtractor()
         try:
             parser.feed(text)
