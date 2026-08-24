@@ -159,6 +159,7 @@ def test_notifications_map_to_agent_events(tmp_path, monkeypatch):
     config = _config(tmp_path / "work")
     config.workspace.mkdir()
     assert backend.start(config)
+    backend.poll_events(10)  # discard STARTED + SESSION_STARTED for this focused mapping test
     client = made[0]
     client.messages.extend([
         {"method": "item/agentMessage/delta", "params": {"delta": "hi"}},
