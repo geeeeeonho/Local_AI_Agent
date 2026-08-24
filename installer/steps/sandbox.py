@@ -1,6 +1,8 @@
 """sandbox — Docker 기반 격리 에이전트 환경 설치."""
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional
@@ -10,6 +12,10 @@ from installer.i18n import t
 from installer.resources import SafetyProfile
 
 IMAGE_NAME = "llm-agent-sandbox"
+OPEN_INTERPRETER_VERSION = "0.0.38"
+RUNTIME_LABEL = "local-ai-agent.runtime"
+RUNTIME_VALUE = "app-server"
+OI_VERSION_LABEL = "local-ai-agent.open-interpreter-version"
 
 
 class DockerNotAvailable(RuntimeError):
@@ -19,8 +25,11 @@ class DockerNotAvailable(RuntimeError):
 DOCKERFILE = """# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
+LABEL local-ai-agent.runtime="app-server" \\
+      local-ai-agent.open-interpreter-version="0.0.38"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \\
-        git curl wget build-essential ca-certificates \\
+        git curl wget build-essential ca-certificates tar gzip \\
         nano vim less procps \\
     && rm -rf /var/lib/apt/lists/*
 
@@ -28,12 +37,20 @@ RUN useradd --create-home --shell /bin/bash agent
 USER agent
 WORKDIR /home/agent
 
-RUN pip install --user --no-cache-dir --upgrade pip \\
-    && pip install --user --no-cache-dir open-interpreter
-
 ENV PATH="/home/agent/.local/bin:${PATH}"
 ENV PYTHONUNBUFFERED=1
 ENV TERM=xterm-256color
+
+RUN curl -fsSL \\
+        https://raw.githubusercontent.com/openinterpreter/openinterpreter/rust-v0.0.38/scripts/install/install.sh \\
+        -o /tmp/install-open-interpreter.sh \\
+    && OPEN_INTERPRETER_RELEASE=0.0.38 \\
+       OPEN_INTERPRETER_NONINTERACTIVE=1 \\
+       OPEN_INTERPRETER_INSTALL_DIR=/home/agent/.local/bin \\
+       INTERPRETER_HOME=/home/agent/.openinterpreter-package \\
+       sh /tmp/install-open-interpreter.sh \\
+    && /home/agent/.local/bin/interpreter --version \\
+    && rm -f /tmp/install-open-interpreter.sh
 
 RUN mkdir -p /home/agent/workspace
 WORKDIR /home/agent/workspace
@@ -60,6 +77,40 @@ def _check_docker():
         raise DockerNotAvailable("Docker daemon not responding")
 
 
+def _image_has_current_runtime(image: str = IMAGE_NAME) -> bool:
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": 15,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x08000000
+    try:
+        result = subprocess.run(
+            [
+                "docker", "image", "inspect", image,
+                "--format", "{{json .Config.Labels}}",
+            ],
+            **kwargs,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        labels = json.loads((result.stdout or "").strip())
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(labels, dict):
+        return False
+    return (
+        labels.get(RUNTIME_LABEL) == RUNTIME_VALUE
+        and labels.get(OI_VERSION_LABEL) == OPEN_INTERPRETER_VERSION
+    )
+
+
 def install(
     paths: Dict[str, Path],
     profile: Optional[SafetyProfile] = None,
@@ -70,21 +121,14 @@ def install(
     _check_docker()
     utils.ok(t("install.docker_check_ok"))
 
-    # 이미 빌드된 이미지가 있으면 전체 건너뜀 (작동 중 이미지/Dockerfile 보호 — 멱등)
-    try:
-        _chk = subprocess.run(
-            ["docker", "image", "inspect", IMAGE_NAME],
-            capture_output=True, timeout=15,
-        )
-        if _chk.returncode == 0:
-            from installer.i18n import get_language
-            _msg = (f"{IMAGE_NAME} 이미지 이미 존재 — 빌드 건너뜀"
-                    if get_language() == "ko"
-                    else f"{IMAGE_NAME} image already exists - skipping build")
-            utils.ok(_msg)
-            return
-    except Exception:
-        pass
+    # Existence alone is not enough: old Python-OI images must be rebuilt.
+    if _image_has_current_runtime(IMAGE_NAME):
+        from installer.i18n import get_language
+        _msg = (f"{IMAGE_NAME} App Server {OPEN_INTERPRETER_VERSION} 이미지 이미 존재 — 빌드 건너뜀"
+                if get_language() == "ko"
+                else f"{IMAGE_NAME} App Server {OPEN_INTERPRETER_VERSION} image already exists - skipping build")
+        utils.ok(_msg)
+        return
 
     df = paths["sandbox"] / "Dockerfile"
     df.write_text(DOCKERFILE, encoding="utf-8")

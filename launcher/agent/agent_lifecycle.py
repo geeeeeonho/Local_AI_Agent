@@ -1,4 +1,4 @@
-"""agent_lifecycle — 활성 UnifiedAgent global registry + bulk cleanup.
+"""agent_lifecycle — 활성 Agent global registry + bulk cleanup.
 
 v4 lifecycle patch (v4_lifecycle).
 
@@ -9,7 +9,7 @@ v4 lifecycle patch (v4_lifecycle).
 
 해결
 ────
-모든 UnifiedAgent 가 시작 시 register() 호출, 종료 시 unregister() 호출.
+모든 활성 Agent 런타임이 시작 시 register() 호출, 종료 시 unregister() 호출.
 런처 종료 시 cleanup_all() 로 일괄 정리.
 
 Thread-safety: 모든 함수는 어느 스레드에서나 호출 가능 (내부 RLock).
@@ -18,26 +18,27 @@ from __future__ import annotations
 
 import threading
 import weakref
-from typing import TYPE_CHECKING
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from launcher.agent.agent_runner import UnifiedAgent
+__all__ = ["StoppableAgent", "register", "unregister", "cleanup_all", "count_active"]
 
-__all__ = ["register", "unregister", "cleanup_all", "count_active"]
+
+class StoppableAgent(Protocol):
+    def stop(self, timeout: float = 3.0) -> None: ...
 
 
 _lock = threading.RLock()
 # weakref.WeakSet -- agent 가 GC 되면 자동 제거
-_active: "weakref.WeakSet[UnifiedAgent]" = weakref.WeakSet()
+_active: "weakref.WeakSet[StoppableAgent]" = weakref.WeakSet()
 
 
-def register(agent: "UnifiedAgent") -> None:
+def register(agent: StoppableAgent) -> None:
     """에이전트를 활성 목록에 등록."""
     with _lock:
         _active.add(agent)
 
 
-def unregister(agent: "UnifiedAgent") -> None:
+def unregister(agent: StoppableAgent) -> None:
     """에이전트를 활성 목록에서 제거."""
     with _lock:
         _active.discard(agent)

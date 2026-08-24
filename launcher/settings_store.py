@@ -43,7 +43,13 @@ _AGENT_LEGACY_DIR = Path("launcher") / "agent" / "settings"
 
 def _root(project_root: Path | None = None) -> Path:
     if project_root is not None:
-        return Path(project_root).resolve()
+        # Preserve an explicitly supplied root exactly as the caller expressed
+        # it. On Windows, Path.resolve() can expand an 8.3 short path such as
+        # RUNNER~1 to its long form, which changes the canonical path object's
+        # representation even though it points at the same directory.
+        # Target-comparison helpers below resolve paths explicitly when actual
+        # filesystem identity is required.
+        return Path(project_root)
     return user_data.project_root()
 
 
