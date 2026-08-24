@@ -7,7 +7,7 @@ from typing import Callable, Iterable
 
 from .events import AgentEvent, AgentEventType
 
-_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+_URL_RE = re.compile(r"https?://[^\s\\\"'<>]+")
 
 
 def _event_item(event: AgentEvent) -> dict:
