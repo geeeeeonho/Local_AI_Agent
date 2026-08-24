@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from launcher.agent import search_mcp
 
 
@@ -58,6 +56,18 @@ def test_search_tool_uses_searxng_json_endpoint(monkeypatch):
     assert payload[0]["title"] == "Open Interpreter"
     assert payload[0]["url"] == "https://example.test/oi"
     assert response["result"]["isError"] is False
+
+
+def test_decode_body_honors_cp949_content_type():
+    raw = "한글 본문입니다".encode("cp949")
+    text = search_mcp._decode_body(raw, "text/html; charset=euc-kr")
+    assert text == "한글 본문입니다"
+
+
+def test_decode_body_honors_html_meta_charset():
+    raw = '<meta charset="euc-kr"><p>한글 페이지</p>'.encode("cp949")
+    text = search_mcp._decode_body(raw, "text/html")
+    assert "한글 페이지" in text
 
 
 def test_fetch_page_rejects_non_http_urls():
