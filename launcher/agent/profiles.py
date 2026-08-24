@@ -45,7 +45,7 @@ def build_session_addendum(host_workspace=None) -> str:
     parts: list[str] = []
     if host_workspace is not None:
         parts.append(
-            "\n■ 현재 세션 작업 위치\n"
+            "\n■ 현재 세션 정보\n"
             "- 호스트 작업 폴더: " + str(host_workspace) + "\n"
             "- Sandbox 내부 기본 작업 폴더: /home/agent/workspace\n"
             "- 두 경로는 같은 마운트를 가리킵니다.\n"
