@@ -26,11 +26,14 @@ jobs:
           launcher/agent/service.py
           launcher/agent/legacy_backend.py
           launcher/agent/app_server_client.py
+          launcher/agent/instructions.py
           launcher/agent/interpreter_backend.py
+          launcher/agent/sandbox_backend.py
           launcher/agent/backend_factory.py
           launcher/agent/agent_lifecycle.py
           launcher/actions/agent_chat.py
           installer/core/filesystem.py
           installer/steps/python_tools.py
+          installer/steps/sandbox.py
       - name: Run tests
         run: python -m pytest -q
