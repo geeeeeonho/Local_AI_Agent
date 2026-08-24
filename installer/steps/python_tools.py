@@ -1,8 +1,11 @@
-"""python_tools — 채팅 UI / Open Interpreter 설치."""
+"""python_tools — 채팅 UI / managed Open Interpreter 설치."""
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+import tempfile
+import urllib.request
 import venv
 from pathlib import Path
 from typing import Dict, Optional
@@ -10,6 +13,12 @@ from typing import Dict, Optional
 from installer import utils
 from installer.i18n import t
 from installer.resources import SafetyProfile, env_for_pip
+
+OPEN_INTERPRETER_VERSION = "0.0.38"
+OPEN_INTERPRETER_INSTALL_SCRIPT = (
+    "https://raw.githubusercontent.com/openinterpreter/openinterpreter/"
+    "rust-v0.0.38/scripts/install/install.ps1"
+)
 
 
 def _already(tool_exe, label):
@@ -150,25 +159,95 @@ def install_open_webui(paths: Dict[str, Path], profile: Optional[SafetyProfile] 
     return _install_anythingllm(paths, profile)
 
 
+def _download_file(url: str, destination: Path) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Local_AI_Agent installer"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        data = response.read()
+    Path(destination).write_bytes(data)
+
+
+def _installed_interpreter_version(exe: Path) -> str | None:
+    if not exe.is_file():
+        return None
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": 15,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x08000000
+    try:
+        result = subprocess.run([str(exe), "--version"], **kwargs)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    text = ((result.stdout or "") + " " + (result.stderr or "")).strip()
+    match = re.search(r"(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)", text)
+    return match.group(1) if match else None
+
+
 def install_open_interpreter(
     paths: Dict[str, Path], profile: Optional[SafetyProfile] = None
-):
+) -> bool:
+    """Install the pinned standalone Rust Open Interpreter distribution.
+
+    Existing ``agent/venv`` content is intentionally left untouched as the
+    Stage 2 legacy fallback. New installs no longer create a Python OI venv.
+    """
+    del profile  # standalone distribution is not built locally
     utils.section(t("install.interpreter_section"))
-    profile = _profile(paths, profile)
-    vdir = paths["agent"] / "venv"
-    if _already(vdir / "Scripts" / "interpreter.exe", "Open Interpreter"):
-        return
-    _make_venv(vdir)
-    pip = _pip(vdir)
 
-    utils.info(t("install.pip_upgrade"))
+    bin_dir = paths.get("open_interpreter_bin", paths["env"] / "open_interpreter" / "bin")
+    package_home = paths.get("open_interpreter_home", paths["env"] / "open_interpreter" / "home")
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    package_home.mkdir(parents=True, exist_ok=True)
+    exe = bin_dir / "interpreter.exe"
+
+    current = _installed_interpreter_version(exe)
+    if current == OPEN_INTERPRETER_VERSION:
+        utils.ok(f"Open Interpreter {OPEN_INTERPRETER_VERSION} already installed: {exe}")
+        return True
+    if current:
+        utils.info(f"Open Interpreter update: {current} -> {OPEN_INTERPRETER_VERSION}")
+
+    install_env = dict(os.environ)
+    install_env["OPEN_INTERPRETER_INSTALL_DIR"] = str(bin_dir)
+    install_env["OPEN_INTERPRETER_RELEASE"] = OPEN_INTERPRETER_VERSION
+    install_env["OPEN_INTERPRETER_NONINTERACTIVE"] = "1"
+    install_env["INTERPRETER_HOME"] = str(package_home)
+
     try:
-        subprocess.run(
-            [str(pip), "install", "--upgrade", "pip", "wheel", "setuptools"],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-        )
-    except subprocess.CalledProcessError:
-        utils.warn("pip upgrade failed - continuing")
+        with tempfile.TemporaryDirectory(prefix="local-ai-oi-") as temp_dir:
+            script = Path(temp_dir) / "install-open-interpreter.ps1"
+            utils.info(f"Open Interpreter installer download: {OPEN_INTERPRETER_VERSION}")
+            _download_file(OPEN_INTERPRETER_INSTALL_SCRIPT, script)
+            command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(script),
+            ]
+            result = subprocess.run(command, env=install_env, check=False)
+            if result.returncode != 0:
+                utils.err(f"Open Interpreter standalone install failed: rc={result.returncode}")
+                return False
+    except (OSError, urllib.error.URLError, subprocess.SubprocessError) as exc:
+        utils.err(f"Open Interpreter standalone install failed: {exc}")
+        return False
 
-    if _safe_pip_install(pip, "open-interpreter", profile, "Open Interpreter"):
-        utils.ok(t("install.tool_done", path=str(vdir)))
+    installed = _installed_interpreter_version(exe)
+    if installed != OPEN_INTERPRETER_VERSION:
+        utils.err(
+            "Open Interpreter version verification failed: "
+            f"expected {OPEN_INTERPRETER_VERSION}, got {installed or 'unknown'}"
+        )
+        return False
+
+    utils.ok(f"Open Interpreter {installed} ready: {exe}")
+    return True
