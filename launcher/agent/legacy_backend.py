@@ -16,6 +16,8 @@ class LegacyBackend:
 
     def start(self, config: AgentConfig) -> bool:
         runtime = config.legacy_runtime
+        if runtime is None:
+            return False
         started = self._agent.start(
             list(runtime.command),
             env=runtime.env,
@@ -40,6 +42,18 @@ class LegacyBackend:
 
     def send(self, message: str) -> bool:
         return self._agent.send_input(message)
+
+    def approve(self, request_id: int | str, decision: str) -> bool:
+        return False
+
+    def cancel(self) -> bool:
+        return False
+
+    def resume(self, session_id: str) -> bool:
+        return False
+
+    def session_id(self) -> str | None:
+        return None
 
     def stop(self, timeout: float = 3.0) -> None:
         self._agent.stop(timeout=timeout)
