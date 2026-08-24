@@ -5,6 +5,7 @@ import queue
 from pathlib import Path
 from typing import Any
 
+from .agent_trace import AgentTrace
 from .app_server_client import AppServerClient
 from .backend import AgentConfig
 from .events import AgentEvent, AgentEventType
@@ -65,6 +66,21 @@ class OpenInterpreterBackend:
         self._turn_id: str | None = None
         self._events: queue.Queue = queue.Queue(maxsize=10000)
         self._cleanup_registered = False
+        self._trace: AgentTrace | None = None
+
+    def _trace_record(self, event: str, details: Any = None, *, turn_id: str | None = None) -> None:
+        trace = self._trace
+        if trace is None:
+            return
+        try:
+            trace.record(
+                event,
+                thread_id=self._thread_id,
+                turn_id=self._turn_id if turn_id is None else turn_id,
+                details=details,
+            )
+        except Exception:
+            pass
 
     def _command(self) -> list[str]:
         return [
@@ -124,22 +140,50 @@ class OpenInterpreterBackend:
     def start(self, config: AgentConfig) -> bool:
         if self.is_running():
             return False
+        self._trace = AgentTrace(
+            mode=config.mode,
+            model=config.model,
+            network_mode=config.network_mode,
+            profile_name=config.profile_name,
+            workspace=config.workspace,
+        )
+        self._trace_record(
+            "backend_starting",
+            {
+                "oi_version": OI_VERSION,
+                "runtime": str(managed_interpreter_exe()),
+                "sandbox": self._thread_sandbox_mode(config),
+            },
+        )
         if not self._runtime_available(config):
+            self._trace_record("backend_start_failed", {"reason": "runtime_unavailable"})
             self._emit(AgentEvent(AgentEventType.ERROR, "Open Interpreter runtime is not available", "error"))
             return False
         try:
             config.workspace.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
+            self._trace_record("backend_start_failed", {"reason": "workspace_unavailable", "error": str(exc)})
             self._emit(AgentEvent(AgentEventType.ERROR, f"Workspace unavailable: {exc}", "error"))
             return False
 
         try:
             command, runtime_env, process_cwd = self._client_spec(config)
+            self._trace_record(
+                "app_server_starting",
+                {
+                    "command": command,
+                    "cwd": str(process_cwd),
+                    "interpreter_home": runtime_env.get("INTERPRETER_HOME"),
+                    "ollama_base_url": runtime_env.get("CODEX_OSS_BASE_URL"),
+                },
+            )
         except Exception as exc:
+            self._trace_record("backend_start_failed", {"reason": "runtime_setup", "error": str(exc)})
             self._emit(AgentEvent(AgentEventType.ERROR, f"Open Interpreter runtime setup failed: {exc}", "error"))
             return False
         client = self._client_factory(command, runtime_env, process_cwd)
         if not client.start():
+            self._trace_record("backend_start_failed", {"reason": "app_server_start"})
             self._emit(AgentEvent(AgentEventType.ERROR, "Open Interpreter App Server failed to start", "error"))
             return False
 
@@ -162,19 +206,23 @@ class OpenInterpreterBackend:
             )
             if not client.notify("initialized", {}):
                 raise RuntimeError("failed to send initialized notification")
-            result = client.request("thread/start", self._thread_params(config), timeout=20.0)
+            thread_params = self._thread_params(config)
+            self._trace_record("thread_starting", thread_params)
+            result = client.request("thread/start", thread_params, timeout=20.0)
             thread = result.get("thread") or {}
             thread_id = thread.get("id")
             if not thread_id:
                 raise RuntimeError("thread/start returned no thread id")
             self._thread_id = str(thread_id)
         except Exception as exc:
+            self._trace_record("backend_start_failed", {"reason": "initialization", "error": str(exc)})
             self._emit(AgentEvent(AgentEventType.ERROR, f"Open Interpreter initialization failed: {exc}", "error"))
             client.stop(timeout=2.0)
             self._client = None
             return False
 
         self._register_cleanup()
+        self._trace_record("session_started", {"session_id": self._thread_id, "resumed": False})
         self._emit(AgentEvent(AgentEventType.STARTED, "Open Interpreter App Server started", "info"))
         self._emit(AgentEvent(
             AgentEventType.SESSION_STARTED,
@@ -203,8 +251,10 @@ class OpenInterpreterBackend:
     def send(self, message: str) -> bool:
         client = self._client
         if client is None or not client.is_running() or not self._thread_id or self._turn_id:
+            self._trace_record("turn_start_rejected", {"reason": "backend_not_ready_or_busy"})
             return False
         try:
+            self._trace_record("turn_starting", {"input": message})
             result = client.request(
                 "turn/start",
                 {
@@ -216,24 +266,32 @@ class OpenInterpreterBackend:
             turn = result.get("turn") or {}
             turn_id = turn.get("id")
             if not turn_id:
+                self._trace_record("turn_start_failed", {"reason": "missing_turn_id"})
                 return False
             self._turn_id = str(turn_id)
+            self._trace_record("turn_started", {"input": message})
             return True
         except Exception as exc:
+            self._trace_record("turn_start_failed", {"error": str(exc)})
             self._emit(AgentEvent(AgentEventType.ERROR, f"turn/start failed: {exc}", "error"))
             return False
 
     def approve(self, request_id: int | str, decision: str) -> bool:
         if decision not in _SIMPLE_APPROVAL_DECISIONS:
+            self._trace_record("approval_rejected", {"request_id": request_id, "decision": decision, "reason": "invalid_decision"})
             return False
         client = self._client
         if client is None or not client.is_running():
+            self._trace_record("approval_rejected", {"request_id": request_id, "decision": decision, "reason": "backend_not_running"})
             return False
-        return client.respond(request_id, {"decision": decision})
+        ok = client.respond(request_id, {"decision": decision})
+        self._trace_record("approval_response", {"request_id": request_id, "decision": decision, "sent": ok})
+        return ok
 
     def cancel(self) -> bool:
         client = self._client
         if client is None or not client.is_running() or not self._thread_id or not self._turn_id:
+            self._trace_record("turn_interrupt_rejected", {"reason": "no_active_turn"})
             return False
         turn_id = self._turn_id
         try:
@@ -242,9 +300,11 @@ class OpenInterpreterBackend:
                 {"threadId": self._thread_id, "turnId": turn_id},
                 timeout=10.0,
             )
+            self._trace_record("turn_interrupted", {"turn_id": turn_id}, turn_id=turn_id)
             self._turn_id = None
             return True
         except Exception as exc:
+            self._trace_record("turn_interrupt_failed", {"error": str(exc)}, turn_id=turn_id)
             self._emit(AgentEvent(AgentEventType.ERROR, f"turn/interrupt failed: {exc}", "error"))
             return False
 
@@ -252,16 +312,20 @@ class OpenInterpreterBackend:
         client = self._client
         config = self._config
         if client is None or not client.is_running() or config is None or not session_id:
+            self._trace_record("session_resume_rejected", {"session_id": session_id})
             return False
         if self._turn_id:
+            self._trace_record("session_resume_rejected", {"session_id": session_id, "reason": "turn_active"})
             return False
         params = self._thread_params(config)
         params["threadId"] = session_id
         try:
+            self._trace_record("session_resuming", {"session_id": session_id})
             result = client.request("thread/resume", params, timeout=20.0)
             thread = result.get("thread") or {}
             thread_id = thread.get("id") or session_id
             self._thread_id = str(thread_id)
+            self._trace_record("session_started", {"session_id": self._thread_id, "resumed": True})
             self._emit(AgentEvent(
                 AgentEventType.SESSION_STARTED,
                 self._thread_id,
@@ -270,6 +334,7 @@ class OpenInterpreterBackend:
             ))
             return True
         except Exception as exc:
+            self._trace_record("session_resume_failed", {"session_id": session_id, "error": str(exc)})
             self._emit(AgentEvent(AgentEventType.ERROR, f"thread/resume failed: {exc}", "error"))
             return False
 
@@ -277,11 +342,15 @@ class OpenInterpreterBackend:
         return self._thread_id
 
     def stop(self, timeout: float = 3.0) -> None:
+        thread_id = self._thread_id
+        turn_id = self._turn_id
+        self._trace_record("backend_stopping", {"timeout": timeout}, turn_id=turn_id)
         if self._turn_id:
             self.cancel()
         client = self._client
         if client is not None:
             client.stop(timeout=timeout)
+        self._trace_record("backend_stopped", {"thread_id": thread_id}, turn_id=turn_id)
         self._client = None
         self._turn_id = None
         self._thread_id = None
@@ -322,6 +391,8 @@ class OpenInterpreterBackend:
     def _map_message(self, message: dict) -> AgentEvent | None:
         method = str(message.get("method") or "")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        current_turn_id = self._turn_id
+        self._trace_record("oi_notification", {"method": method, "params": params}, turn_id=current_turn_id)
 
         if method == "item/agentMessage/delta":
             return AgentEvent(AgentEventType.TEXT_DELTA, str(params.get("delta") or ""), "stdout", data=params)
@@ -332,11 +403,19 @@ class OpenInterpreterBackend:
         if method == "item/started":
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
             item_type = str(item.get("type") or "tool")
+            if item_type == "mcpToolCall":
+                self._trace_record("mcp_tool_started", item, turn_id=current_turn_id)
+            else:
+                self._trace_record("tool_started", item, turn_id=current_turn_id)
             content = str(item.get("command") or item.get("tool") or item_type)
             return AgentEvent(AgentEventType.TOOL_STARTED, content, "system", data=params)
         if method == "item/completed":
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
             item_type = str(item.get("type") or "tool")
+            if item_type == "mcpToolCall":
+                self._trace_record("mcp_tool_completed", item, turn_id=current_turn_id)
+            else:
+                self._trace_record("tool_completed", item, turn_id=current_turn_id)
             if item_type == "fileChange":
                 return AgentEvent(AgentEventType.FILE_CHANGED, "File changes completed", "system", data=params)
             if item_type == "agentMessage":
@@ -348,6 +427,11 @@ class OpenInterpreterBackend:
             reason = str(params.get("reason") or "Approval required")
             data = dict(params)
             data["kind"] = kind
+            self._trace_record(
+                "approval_required",
+                {"request_id": message.get("id"), "kind": kind, "params": data},
+                turn_id=current_turn_id,
+            )
             return AgentEvent(
                 AgentEventType.APPROVAL_REQUIRED,
                 reason,
@@ -356,13 +440,16 @@ class OpenInterpreterBackend:
                 data=data,
             )
         if method == "turn/completed":
+            self._trace_record("turn_completed", params, turn_id=current_turn_id)
             self._turn_id = None
             return AgentEvent(AgentEventType.STATUS, "Turn completed", "info", data=params)
         if method == "local/stderr":
             return AgentEvent(AgentEventType.WARNING, str(params.get("text") or ""), "warn", data=params)
         if method == "local/protocolError":
+            self._trace_record("protocol_error", params, turn_id=current_turn_id)
             return AgentEvent(AgentEventType.ERROR, str(params.get("text") or "Protocol error"), "error", data=params)
         if method == "local/terminated":
+            self._trace_record("app_server_terminated", params, turn_id=current_turn_id)
             self._turn_id = None
             return AgentEvent(
                 AgentEventType.TERMINATED,
@@ -371,6 +458,7 @@ class OpenInterpreterBackend:
                 data=params,
             )
         if method == "error":
+            self._trace_record("app_server_error", params, turn_id=current_turn_id)
             return AgentEvent(AgentEventType.ERROR, str(params.get("message") or params), "error", data=params)
         if method:
             return AgentEvent(AgentEventType.STATUS, method, "info", data=params)
