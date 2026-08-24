@@ -1,5 +1,5 @@
 from launcher.agent.events import AgentEvent, AgentEventType
-from launcher.agent.local_search_eval import analyze_trace
+from launcher.agent.local_search_eval import analyze_trace, collect_turn
 
 
 def _mcp_event(kind, tool, arguments=None, *, status="completed", result=None, error=None, duration_ms=None):
@@ -76,3 +76,54 @@ def test_analyze_trace_keeps_reasoning_summary_separate_from_hidden_reasoning():
 
     assert report["reasoning_summaries"] == ["Need current information; search first."]
     assert report["final_text"] == "Final answer"
+
+
+def test_collect_turn_returns_real_service_events_until_turn_completed():
+    class FakeService:
+        def __init__(self):
+            self.sent = []
+            self.polls = 0
+
+        def send(self, message):
+            self.sent.append(message)
+            return True
+
+        def poll_events(self, max_n=200):
+            self.polls += 1
+            if self.polls == 1:
+                return [_mcp_event(AgentEventType.TOOL_COMPLETED, "search", {"query": "fresh fact"})]
+            return [
+                AgentEvent(AgentEventType.TEXT_DELTA, "done"),
+                AgentEvent(AgentEventType.STATUS, "Turn completed"),
+            ]
+
+    ticks = iter([0.0, 0.1, 0.2, 0.3])
+    service = FakeService()
+    events = collect_turn(
+        service,
+        "find a fresh fact",
+        timeout_s=2.0,
+        poll_interval_s=0.0,
+        time_fn=lambda: next(ticks),
+        sleep_fn=lambda _: None,
+    )
+
+    assert service.sent == ["find a fresh fact"]
+    assert [event.type for event in events] == [
+        AgentEventType.TOOL_COMPLETED,
+        AgentEventType.TEXT_DELTA,
+        AgentEventType.STATUS,
+    ]
+
+
+def test_collect_turn_raises_when_turn_cannot_start():
+    class FakeService:
+        def send(self, message):
+            return False
+
+    try:
+        collect_turn(FakeService(), "search", timeout_s=1)
+    except RuntimeError as exc:
+        assert "turn" in str(exc).lower()
+    else:
+        raise AssertionError("collect_turn should reject a failed turn start")
