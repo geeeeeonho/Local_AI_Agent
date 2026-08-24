@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Iterable
+import time
+from typing import Callable, Iterable
 
 from .events import AgentEvent, AgentEventType
 
@@ -36,6 +37,34 @@ def _extract_urls(value) -> list[str]:
     except (TypeError, ValueError):
         text = str(value)
     return _URL_RE.findall(text)
+
+
+def collect_turn(
+    service,
+    prompt: str,
+    *,
+    timeout_s: float = 180.0,
+    poll_interval_s: float = 0.1,
+    time_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> list[AgentEvent]:
+    """Run one already-started AgentService turn and collect observable events."""
+    if not service.send(prompt):
+        raise RuntimeError("Agent turn could not be started")
+
+    started = time_fn()
+    events: list[AgentEvent] = []
+    while True:
+        if time_fn() - started > timeout_s:
+            raise TimeoutError(f"Agent turn exceeded {timeout_s:.1f}s")
+        batch = service.poll_events(max_n=500)
+        events.extend(batch)
+        if any(
+            event.type == AgentEventType.STATUS and event.content == "Turn completed"
+            for event in batch
+        ):
+            return events
+        sleep_fn(max(0.0, poll_interval_s))
 
 
 def analyze_trace(events: Iterable[AgentEvent]) -> dict:
