@@ -6,7 +6,11 @@ on:
       - main
       - refactor/open-interpreter-runtime
       - refactor/oi-native-tools
+      - refactor/src-layout-entrypoints
   pull_request:
+
+env:
+  PYTHONPATH: ${{ github.workspace }}\src
 
 jobs:
   pytest:
@@ -22,26 +26,29 @@ jobs:
       - name: Compile migration modules
         run: >-
           python -m py_compile
-          launcher/agent/events.py
-          launcher/agent/backend.py
-          launcher/agent/service.py
-          launcher/agent/legacy_backend.py
-          launcher/agent/app_server_client.py
-          launcher/agent/agent_trace.py
-          launcher/agent/instructions.py
-          launcher/agent/interpreter_backend.py
-          launcher/agent/sandbox_backend.py
-          launcher/agent/runtime_assets.py
-          launcher/agent/search_mcp.py
-          launcher/agent/local_search_eval.py
-          launcher/agent/native_backend.py
-          launcher/agent/backend_factory.py
-          launcher/agent/profiles.py
-          launcher/agent/agent_lifecycle.py
-          launcher/actions/agent_chat.py
-          tools/evaluate_local_search_e2e.py
-          installer/core/filesystem.py
-          installer/steps/python_tools.py
-          installer/steps/sandbox.py
+          src/project_paths.py
+          src/launcher/agent/events.py
+          src/launcher/agent/backend.py
+          src/launcher/agent/service.py
+          src/launcher/agent/legacy_backend.py
+          src/launcher/agent/app_server_client.py
+          src/launcher/agent/agent_trace.py
+          src/launcher/agent/instructions.py
+          src/launcher/agent/interpreter_backend.py
+          src/launcher/agent/sandbox_backend.py
+          src/launcher/agent/runtime_assets.py
+          src/launcher/agent/search_mcp.py
+          src/launcher/agent/local_search_eval.py
+          src/launcher/agent/native_backend.py
+          src/launcher/agent/backend_factory.py
+          src/launcher/agent/profiles.py
+          src/launcher/agent/agent_lifecycle.py
+          src/launcher/actions/agent_chat.py
+          src/tools/evaluate_local_search_e2e.py
+          src/installer/__main__.py
+          src/installer/manage_gui.py
+          src/installer/core/filesystem.py
+          src/installer/steps/python_tools.py
+          src/installer/steps/sandbox.py
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q src/tests

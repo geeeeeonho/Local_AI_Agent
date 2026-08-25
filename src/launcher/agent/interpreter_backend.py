@@ -5,6 +5,7 @@ import queue
 from pathlib import Path
 from typing import Any
 
+from project_paths import PROJECT_ROOT, SRC_ROOT
 from .agent_trace import AgentTrace
 from .app_server_client import AppServerClient
 from .backend import AgentConfig
@@ -19,7 +20,7 @@ def _project_root() -> Path:
     override = os.environ.get("LLM_PROJECT_ROOT")
     if override:
         return Path(override).resolve()
-    return Path(__file__).resolve().parent.parent.parent
+    return PROJECT_ROOT
 
 
 def managed_interpreter_exe(project_root: Path | None = None) -> Path:
@@ -97,9 +98,9 @@ class OpenInterpreterBackend:
             env.update({str(k): str(v) for k, v in runtime.env.items()})
         env["INTERPRETER_HOME"] = str(runtime_interpreter_home())
         env["CODEX_OSS_BASE_URL"] = "http://127.0.0.1:11434/v1"
-        root = str(_project_root())
+        src = str(SRC_ROOT)
         current_pythonpath = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = root if not current_pythonpath else root + os.pathsep + current_pythonpath
+        env["PYTHONPATH"] = src if not current_pythonpath else src + os.pathsep + current_pythonpath
         _merge_no_proxy(env)
         return env
 

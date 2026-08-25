@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-설치 진입점 — `python -m installer` 로 실행.
-
-INSTALL.bat 가 호출함.
-"""
+"""설치/관리 통합 진입점 — `SETUP.bat` 또는 `python -m installer` 로 실행."""
 from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
+from project_paths import ENV_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
 from installer.steps import model
@@ -19,21 +15,54 @@ from installer.steps import sandbox
 from installer.steps import searxng
 from installer.i18n import t
 
-# 프로젝트 루트 = installer/__main__.py 의 부모의 부모
-HERE = Path(__file__).resolve().parent.parent
-ENV  = HERE / "llm_environment"
+HERE = PROJECT_ROOT
+ENV = ENV_DIR
 
 
-def main():
-    p = argparse.ArgumentParser(description="LLM Integrated Environment Installer (Windows)")
+def _parse_args():
+    p = argparse.ArgumentParser(description="LLM Integrated Environment Setup (Windows)")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--install", action="store_true",
+                      help="설치/재설치 흐름을 강제로 실행")
+    mode.add_argument("--manage", action="store_true",
+                      help="설치된 환경 관리 화면을 강제로 실행")
     p.add_argument("--skip-model",   action="store_true")
     p.add_argument("--skip-sandbox", action="store_true")
     p.add_argument("--skip-build",   action="store_true")
     p.add_argument("--skip-search",  action="store_true")
     p.add_argument("--lang",         default=None,
                    help="ko or en (default: ask user / use saved)")
-    args = p.parse_args()
+    return p.parse_args()
 
+
+def _should_manage(args) -> bool:
+    """기본(auto) 모드에서 관리 화면으로 갈지 결정한다.
+
+    기존 내부 호출인 ``python -m installer --skip-*`` 는 설치 작업으로 유지한다.
+    이렇게 해야 관리 GUI의 환경 업데이트가 다시 관리 GUI를 여는 재귀를 만들지 않는다.
+    """
+    if args.manage:
+        return True
+    if args.install:
+        return False
+    install_flags = (
+        args.skip_model,
+        args.skip_sandbox,
+        args.skip_build,
+        args.skip_search,
+    )
+    if any(install_flags):
+        return False
+    return ENV.exists()
+
+
+def _run_manage(args) -> int:
+    lang_setup.initialize_language(HERE, override=args.lang)
+    from installer import manage_gui
+    return int(manage_gui.main([]) or 0)
+
+
+def _run_install(args) -> int:
     # ─── 언어 설정 (저장된 값 → CLI 인자 → 사용자 선택 순) ───
     lang_setup.initialize_language(HERE, override=args.lang)
 
@@ -107,11 +136,19 @@ def main():
         input("\n" + t("common.exit_prompt"))
     except (EOFError, KeyboardInterrupt):
         pass
+    return 0
+
+
+def main() -> int:
+    args = _parse_args()
+    if _should_manage(args):
+        return _run_manage(args)
+    return _run_install(args)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         print(f"\n{t('install.user_interrupt')}")
         sys.exit(130)
