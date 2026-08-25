@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from project_paths import PROJECT_ROOT
+
 _SECRET_KEYS = {
     "authorization",
     "cookie",
@@ -33,7 +35,7 @@ def _project_root() -> Path:
     override = os.environ.get("LLM_PROJECT_ROOT")
     if override:
         return Path(override).resolve()
-    return Path(__file__).resolve().parent.parent.parent
+    return PROJECT_ROOT
 
 
 def _redact_text(value: str) -> str:
