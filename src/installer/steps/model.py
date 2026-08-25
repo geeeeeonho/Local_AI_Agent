@@ -40,7 +40,7 @@ _MSG = {
         "fail": "  [실패] {tag} (rc={rc})",
         "summary": "요약 — 받음 {pulled} · 건너뜀 {skipped} · 실패 {failed}",
         "all_ok": "모든 역할 모델 준비 완료.",
-        "some_fail": "일부 모델을 받지 못했습니다. 네트워크 확인 후 INSTALL.bat 재실행 시 받지 못한 것만 다시 시도합니다.",
+        "some_fail": "일부 모델을 받지 못했습니다. 네트워크 확인 후 SETUP.bat --install 재실행 시 받지 못한 것만 다시 시도합니다.",
         "no_exe": "ollama.exe 를 찾을 수 없어 모델 단계를 건너뜁니다.",
     },
     "en": {
@@ -53,7 +53,7 @@ _MSG = {
         "fail": "  [FAIL] {tag} (rc={rc})",
         "summary": "Summary - pulled {pulled} / skipped {skipped} / failed {failed}",
         "all_ok": "All role models are ready.",
-        "some_fail": "Some models failed. Re-running INSTALL.bat will retry only the missing ones.",
+        "some_fail": "Some models failed. Re-running SETUP.bat --install will retry only the missing ones.",
         "no_exe": "ollama.exe not found - skipping model step.",
     },
 }
