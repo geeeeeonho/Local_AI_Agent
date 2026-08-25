@@ -11,8 +11,8 @@
 GUI 가 사용 불가능한 환경 (tkinter 모듈 없음 / DISPLAY 없는 헤드리스 등)
 에서는 자동으로 TUI 로 폴백합니다.
 
-RUN.bat     → 인자 없이 호출 → 기본 GUI
-RUN_TUI.bat → --tui 로 호출 → 터미널
+RUN.bat       → 인자 없이 호출 → 기본 GUI
+RUN.bat --tui → 터미널 UI 강제
 """
 from __future__ import annotations
 
@@ -20,9 +20,10 @@ import argparse
 import sys
 from pathlib import Path
 
-# 프로젝트 루트
-HERE = Path(__file__).resolve().parent.parent
-ENV = HERE / "llm_environment"
+from project_paths import ENV_DIR, PROJECT_ROOT
+
+HERE = PROJECT_ROOT
+ENV = ENV_DIR
 
 
 def parse_args():
@@ -195,8 +196,7 @@ def main():
     _trace("설치 폴더 확인 직전 ENV=" + str(ENV))
     if not ENV.exists():
         print(f"[FAIL] 설치 폴더가 없습니다: {ENV}", file=sys.stderr)
-        print("[INFO] python -m installer 를 실행하세요 (또는 INSTALL.bat)",
-              file=sys.stderr)
+        print("[INFO] SETUP.bat --install 을 실행하세요", file=sys.stderr)
         # pythonw 환경에선 콘솔이 안 보이므로 fatal_log 에도 남김
         with open(_fatal_log_path(), "a", encoding="utf-8") as f:
             f.write(f"\n[FAIL] 설치 폴더 없음: {ENV}\n")
