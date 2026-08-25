@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""manage_gui — MANAGE 대시보드 (MANAGE_GUI_v2, 완전 임베드).
+"""설치/관리 통합 대시보드 (MANAGE_GUI_v2, 완전 임베드).
 
-MANAGE.bat -> python -m installer.manage_gui
+SETUP.bat 의 관리 모드에서 사용한다.
 한 창에서: 진단(상태) + 클래스별 사다리 모델 관리(설치/삭제) + 진행 로그.
 모델 pull/rm 은 **새 콘솔 없이** 창 안 로그로 스트리밍. 오직 명시적 [적용] 에서
 체크된 것만 처리 -> '선택 안 한 것 자동 설치' 경로 없음. 삭제는 화면에 표시된
@@ -18,6 +18,8 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from project_paths import PROJECT_ROOT
+
 _BG = "#1e1e1e"
 _CARD = "#252526"
 _DIM = "#9d9d9d"
@@ -31,7 +33,7 @@ _LINE = "#3c3c3c"
 
 
 def _root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return PROJECT_ROOT
 
 
 def _ollama_exe() -> str:
@@ -46,9 +48,9 @@ def _new_console_flags() -> dict:
     return kw
 
 
-def _spawn_module(mod: str) -> None:
+def _spawn_module(mod: str, *args: str) -> None:
     try:
-        subprocess.Popen([sys.executable, "-m", mod], cwd=str(_root()),
+        subprocess.Popen([sys.executable, "-m", mod, *args], cwd=str(_root()),
                          **_new_console_flags())
     except Exception as e:
         print("[WARN] 실행 실패: %s (%r)" % (mod, e))
@@ -194,7 +196,7 @@ def _text_menu() -> int:
         except (EOFError, KeyboardInterrupt):
             return 0
         if c == "1":
-            _spawn_module("installer")
+            _spawn_module("installer", "--install")
         elif c in ("q", ""):
             return 0
 
@@ -575,7 +577,7 @@ def _run_gui() -> int:
             root.after(0, _logln, "[설치] 환경 구성 중 (모델 제외)...")
             try:
                 pr = subprocess.Popen(
-                    [sys.executable, "-m", "installer", "--skip-model"],
+                    [sys.executable, "-m", "installer", "--install", "--skip-model"],
                     cwd=str(_root()), stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1)
@@ -649,7 +651,7 @@ def main(argv=None) -> int:
     if argv:
         a = argv[0].lower()
         if a in ("install", "setup"):
-            _spawn_module("installer"); return 0
+            _spawn_module("installer", "--install"); return 0
         if a in ("diagnose", "diag", "--diagnose"):
             for name, ok, msg in collect_status():
                 print("  [%s] %-7s: %s" % ("OK" if ok else "--", name, msg))
