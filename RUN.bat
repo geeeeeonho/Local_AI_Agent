@@ -1,23 +1,43 @@
 @echo off
 setlocal
 chcp 65001 >nul 2>&1
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONPATH=%~dp0src;%PYTHONPATH%"
 cd /d "%~dp0"
 
 set "MANAGED_PYW=%~dp0llm_environment\venv\Scripts\pythonw.exe"
 set "MANAGED_PY=%~dp0llm_environment\venv\Scripts\python.exe"
+set "FORCE_TUI="
+echo %* | findstr /I /C:"--tui" >nul 2>&1 && set "FORCE_TUI=1"
 
+if defined FORCE_TUI goto RUN_TUI
 if exist "%MANAGED_PYW%" goto RUN_MANAGED_GUI
 if exist "%MANAGED_PY%" goto RUN_MANAGED_CONSOLE
 
 where pythonw.exe >nul 2>&1
 if not errorlevel 1 goto RUN_SYSTEM_GUI
-
 where python >nul 2>&1
 if not errorlevel 1 goto RUN_SYSTEM_CONSOLE
-
 py -3 -V >nul 2>&1
 if not errorlevel 1 goto RUN_PY
+goto NOPY
 
+:RUN_TUI
+if exist "%MANAGED_PY%" (
+  "%MANAGED_PY%" -m launcher %*
+  goto CHECK
+)
+where python >nul 2>&1
+if not errorlevel 1 (
+  python -m launcher %*
+  goto CHECK
+)
+py -3 -V >nul 2>&1
+if not errorlevel 1 (
+  py -3 -m launcher %*
+  goto CHECK
+)
 goto NOPY
 
 :RUN_MANAGED_GUI
@@ -51,6 +71,6 @@ pause
 exit /b 1
 
 :NOPY
-echo [ERROR] Python not found. Install Python 3.11+ or run INSTALL.bat.
+echo [ERROR] Python not found. Install Python 3.11+ or run SETUP.bat.
 pause
 exit /b 1
