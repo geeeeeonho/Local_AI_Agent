@@ -17,6 +17,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Optional
 
+from project_paths import PROJECT_ROOT, SRC_ROOT
 from .core import user_data
 
 
@@ -39,6 +40,7 @@ _LEGACY_DIRS = (
     Path("launcher") / "agent" / "settings",
 )
 _AGENT_LEGACY_DIR = Path("launcher") / "agent" / "settings"
+_AGENT_SRC_RUNTIME_DIR = Path("launcher") / "agent" / "settings"
 
 
 def _root(project_root: Path | None = None) -> Path:
@@ -156,8 +158,24 @@ def _remove_compat_path(link: Path) -> bool:
     return not os.path.lexists(str(link))
 
 
+def _agent_runtime_compat_dir(root: Path) -> Path:
+    """agent_runner가 실제로 읽는 설정 호환 디렉터리를 반환한다.
+
+    현재 애플리케이션은 ``src/launcher/agent`` 에서 실행되므로 정본 프로젝트
+    루트에 대해서는 그 실제 소스 위치를 사용한다. 임의의 외부 프로젝트 루트를
+    넘기는 마이그레이션/테스트 호출은 과거 레이아웃을 그대로 유지한다.
+    """
+    candidate = Path(root)
+    try:
+        if candidate.resolve() == PROJECT_ROOT.resolve():
+            return SRC_ROOT / _AGENT_SRC_RUNTIME_DIR
+    except OSError:
+        pass
+    return candidate / _AGENT_LEGACY_DIR
+
+
 def ensure_agent_settings_compat(project_root: Path | None = None) -> bool:
-    """agent_runner의 레거시 설정 경로 하나만 정본 디렉터리로 연결한다.
+    """agent_runner의 직접 설정 경로 하나만 정본 디렉터리로 연결한다.
 
     일반 설정 API에서는 호출하지 않는다. 런처 시작 시 한 번만 호출하도록 분리해
     import 부작용과 반복적인 파일시스템 점검을 피한다.
@@ -166,7 +184,7 @@ def ensure_agent_settings_compat(project_root: Path | None = None) -> bool:
     if not migrate_legacy_settings(root):
         return False
 
-    link = root / _AGENT_LEGACY_DIR
+    link = _agent_runtime_compat_dir(root)
     target = path(root).parent
     if _same_target(link, target):
         return True
