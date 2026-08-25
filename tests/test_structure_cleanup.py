@@ -10,7 +10,10 @@ import unittest
 from launcher import settings_store
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = next(
+    parent for parent in Path(__file__).resolve().parents
+    if (parent / ".gitignore").is_file()
+)
 
 
 class SettingsStoreTests(unittest.TestCase):
@@ -115,54 +118,63 @@ class RepositoryStructureTests(unittest.TestCase):
     def _text(self, relative: str) -> str:
         return (REPO_ROOT / relative).read_text(encoding="utf-8")
 
-    def test_no_shadowed_gui_module(self):
-        self.assertFalse((REPO_ROOT / "launcher" / "presenter" / "gui.py").exists())
-        self.assertTrue((REPO_ROOT / "launcher" / "presenter" / "gui" / "__init__.py").is_file())
+    def test_src_layout_is_the_only_tracked_program_layout(self):
+        for name in ("launcher", "installer", "tools", "tests", "docs"):
+            self.assertTrue((REPO_ROOT / "src" / name).is_dir(), name)
+            self.assertFalse((REPO_ROOT / name).exists(), name)
+        self.assertTrue((REPO_ROOT / "user_data").is_dir())
 
-    def test_patch_redefinitions_are_flattened(self):
-        self.assertEqual(self._function_count("launcher/app.py", "_build_menu_items"), 1)
-        self.assertEqual(self._function_count("installer/steps/python_tools.py", "install_open_webui"), 1)
+    def test_only_unified_batch_entrypoints_remain(self):
+        self.assertTrue((REPO_ROOT / "SETUP.bat").is_file())
+        self.assertTrue((REPO_ROOT / "RUN.bat").is_file())
+        self.assertFalse((REPO_ROOT / "INSTALL.bat").exists())
+        self.assertFalse((REPO_ROOT / "MANAGE.bat").exists())
+        self.assertFalse((REPO_ROOT / "RUN_TUI.bat").exists())
 
-    def test_documented_batch_entrypoints_exist(self):
-        self.assertTrue((REPO_ROOT / "INSTALL.bat").is_file())
-        self.assertTrue((REPO_ROOT / "RUN_TUI.bat").is_file())
-
-    def test_batch_entrypoints_use_consistent_python_resolution(self):
-        install = self._text("INSTALL.bat")
+    def test_batch_entrypoints_load_src_and_forward_arguments(self):
+        setup = self._text("SETUP.bat")
         run = self._text("RUN.bat")
-        run_tui = self._text("RUN_TUI.bat")
-        manage = self._text("MANAGE.bat")
 
-        self.assertIn("py -3", install)
-        self.assertIn("%*", install)
+        for text in (setup, run):
+            self.assertIn("PYTHONPATH", text)
+            self.assertIn("%~dp0src", text)
+            self.assertIn("%*", text)
 
         managed_python = "llm_environment\\venv\\Scripts\\python.exe"
+        self.assertIn(managed_python, setup)
         self.assertIn(managed_python, run)
-        self.assertIn("%*", run)
+        self.assertIn("-m installer", setup)
+        self.assertIn("-m launcher", run)
 
-        self.assertIn(managed_python, run_tui)
-        self.assertIn("py -3", run_tui)
-        self.assertIn("%*", run_tui)
+    def test_project_paths_keep_runtime_data_at_repository_root(self):
+        path_module = REPO_ROOT / "src" / "project_paths.py"
+        self.assertTrue(path_module.is_file())
+        text = path_module.read_text(encoding="utf-8")
+        self.assertIn('USER_DATA_DIR = PROJECT_ROOT / "user_data"', text)
+        self.assertIn('ENV_DIR = PROJECT_ROOT / "llm_environment"', text)
 
-        self.assertIn(managed_python, manage)
-        self.assertIn("py -3", manage)
-        self.assertIn("%*", manage)
-        self.assertNotIn("DIAG_MODEL_PATH.py", manage)
+    def test_no_shadowed_gui_module(self):
+        self.assertFalse((REPO_ROOT / "src" / "launcher" / "presenter" / "gui.py").exists())
+        self.assertTrue((REPO_ROOT / "src" / "launcher" / "presenter" / "gui" / "__init__.py").is_file())
+
+    def test_patch_redefinitions_are_flattened(self):
+        self.assertEqual(self._function_count("src/launcher/app.py", "_build_menu_items"), 1)
+        self.assertEqual(self._function_count("src/installer/steps/python_tools.py", "install_open_webui"), 1)
 
     def test_agent_package_import_has_no_settings_side_effect(self):
-        init_text = self._text("launcher/agent/__init__.py")
+        init_text = self._text("src/launcher/agent/__init__.py")
         self.assertNotIn("ensure_legacy_bridges", init_text)
         self.assertNotIn("settings_store", init_text)
 
-    def test_launcher_install_guidance_references_real_entrypoint(self):
-        launcher_main = self._text("launcher/__main__.py")
-        self.assertNotIn("install.py", launcher_main)
-        self.assertIn("python -m installer", launcher_main)
-        self.assertIn("INSTALL.bat", launcher_main)
+    def test_launcher_install_guidance_references_setup_entrypoint(self):
+        launcher_main = self._text("src/launcher/__main__.py")
+        self.assertNotIn("INSTALL.bat", launcher_main)
+        self.assertNotIn("MANAGE.bat", launcher_main)
+        self.assertIn("SETUP.bat", launcher_main)
 
     def test_legacy_agent_config_is_not_tracked_as_source(self):
         self.assertFalse(
-            (REPO_ROOT / "launcher" / "agent" / "settings" / "user_config.json").is_file()
+            (REPO_ROOT / "src" / "launcher" / "agent" / "settings" / "user_config.json").is_file()
         )
 
 
