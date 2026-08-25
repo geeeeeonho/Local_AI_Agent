@@ -14,15 +14,13 @@ import os
 from pathlib import Path
 from typing import List, Tuple
 
+from project_paths import PROJECT_ROOT
+
 _FILENAME = "folder_policy.json"
 
 
 def _root() -> Path:
-    # launcher/folder_policy.py → 부모의 부모가 프로젝트 루트
-    # [PATH_UNIFY_v1] 이 파일은 launcher/agent/ 에 있으므로 세 단계 위가 루트다.
-    # 이전에는 두 단계라 launcher/ 를 가리켰고, folder_policy.json 이
-    # launcher/user_data/settings 에 생겼다. user_data.py 와 동일 유형 결함.
-    return Path(__file__).resolve().parent.parent.parent
+    return PROJECT_ROOT
 
 
 def _store_path() -> Path:
@@ -56,7 +54,6 @@ def save(data: dict) -> bool:
 
 
 def _cmpkey(path: str) -> str:
-    # FOLDER_POLICY_CASE_v1: 비교 전용 정규화 (Windows 대소문자 무시)
     return os.path.normcase(_norm(path))
 
 
@@ -112,7 +109,7 @@ def add_denied(path: str) -> str:
         return "exists"
     dl.append(n)
     d["denied"] = dl
-    d["allowed"] = [x for x in d.get("allowed", []) if _cmpkey(x) != _cmpkey(n)]  # 금지 시 허용에서 제거
+    d["allowed"] = [x for x in d.get("allowed", []) if _cmpkey(x) != _cmpkey(n)]
     return "ok" if save(d) else "fail"
 
 
@@ -136,7 +133,6 @@ def _container_name(host: str, used: set) -> str:
 
 
 def _plan():
-    # FOLDER_POLICY_OVERLAY_v1: 마운트와 tmpfs 마스크를 동일 루프에서 산출(이름 정합 보장).
     mounts = []
     masks = []
     used = set()
@@ -184,9 +180,6 @@ def summary() -> str:
     return "허용 " + str(len(list_allowed())) + "개 · 금지 " + str(len(list_denied())) + "개"
 
 
-# ─────────────────────────────────────────────
-#  관리 UI (presenter 기반)
-# ─────────────────────────────────────────────
 def _toast(p, msg: str) -> None:
     try:
         p.info(msg)
@@ -255,9 +248,9 @@ def manage(p, env=None) -> None:
 
 
 def maybe_manage(p, env=None) -> None:
-    """에이전트 진입 시 호출: 정책 요약 + 설정 진입 선택. 진행을 누를 때까지 반복(여러 개 설정 후 진입)."""
+    """에이전트 진입 시 호출: 정책 요약 + 설정 진입 선택."""
     from launcher.presenter.base import MenuItem
-    while True:  # FOLDER_POLICY_LIVE_v1
+    while True:
         items = [
             MenuItem(key="1", title="이대로 진행"),
             MenuItem(key="2", title="허용/금지 폴더 설정"),
