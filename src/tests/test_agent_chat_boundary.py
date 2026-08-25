@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -16,8 +17,9 @@ def test_agent_chat_uses_service_boundary_without_unified_agent_private_access()
     assert "LegacyBackend()" not in source
     assert "UnifiedAgent" not in source
     assert "agent._proc" not in source
-    assert "build_sandbox_pipe_cmd" in source
-    assert "build_host_pipe_cmd" in source
+    assert "build_sandbox_docker_command" in source
+    # Host mode runs the managed runtime only; there is no venv-interpreter path.
+    assert "build_host_pipe_cmd" not in source
 
 
 def test_agent_chat_handles_structured_host_controls():
@@ -42,3 +44,81 @@ def test_danger_full_access_is_confined_to_structured_sandbox_module():
     assert 'return "workspace-write"' in host_source
     assert "danger-full-access" not in host_source
     assert 'return "danger-full-access"' in sandbox_source
+
+
+def _source_files():
+    for path in SRC_ROOT.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        yield path
+
+
+def test_no_module_ships_an_embedded_agent_payload():
+    """No module may carry a whole program as an encoded string literal.
+
+    The retired custom agent loop lived here as a 30KB base64 blob shipped into
+    the container through an environment variable. It carried its own system
+    prompt instructing the model to call undefined global helpers (web_search,
+    report_write, ...), which directly contradicts the current tool guidance and
+    is exactly the behaviour that produces fabricated tool calls.
+    """
+    for path in _source_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                assert len(node.value) < 8000, (
+                    f"{path}:{node.lineno} embeds a {len(node.value)}-char literal"
+                )
+
+
+def test_agent_runtime_never_executes_a_decoded_source_payload():
+    """The agent path must not assemble and execute source at runtime.
+
+    Scoped to the agent runtime rather than the whole tree: http_bridge legitimately
+    ships a small, plainly readable stdlib script into a container this way, and
+    that script carries no model instructions. An encoded payload on the agent
+    path is what let a second, contradictory system prompt reach the model.
+    """
+    paths = list((SRC_ROOT / "launcher" / "agent").rglob("*.py"))
+    paths.append(SRC_ROOT / "launcher" / "actions" / "agent_chat.py")
+    for path in paths:
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "b64decode" not in text, path
+        assert "exec(" not in text, path
+
+
+def test_sandbox_still_filters_retired_runtime_env_keys():
+    """Defence in depth: a stale command must not smuggle the old payload in."""
+    from launcher.agent.sandbox_backend import _LEGACY_ENV_KEYS
+
+    assert "AGENT_REPL_SRC" in _LEGACY_ENV_KEYS
+
+
+def test_start_failure_diagnostics_never_run_the_agent_command():
+    """A failed start must not be "diagnosed" by launching a second container.
+
+    The previous diagnostic re-ran the full docker command with the user's
+    workspace and allowed folders mounted.
+    """
+    source = _source("launcher/actions/agent_chat.py")
+    assert "START_DIAG2_v1" not in source
+    assert "_spC.run(cmd" not in source
+    assert "subprocess.run(cmd" not in source
+
+
+def test_pretool_subsystem_is_fully_removed_from_the_agent_path():
+    source = _source("launcher/actions/agent_chat.py")
+    assert "PreTool" not in source
+
+
+def test_host_network_label_reflects_the_actual_proxy_decision():
+    from launcher.actions.agent_chat import _net_mode_label
+
+    marker = ["managed-open-interpreter", "--model", "ollama/qwen3:8b"]
+    assert _net_mode_label(marker, is_host=True, tor_proxy=False) == "개방 (직접 연결)"
+    assert _net_mode_label(marker, is_host=True, tor_proxy=True) != "개방 (직접 연결)"
+
+    blocked = ["docker", "run", "--dns=0.0.0.0", "image"]
+    assert _net_mode_label(blocked) == "차단 (인터넷 없음)"

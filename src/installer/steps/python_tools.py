@@ -13,12 +13,12 @@ from typing import Dict, Optional
 from installer import utils
 from installer.i18n import t
 from installer.resources import SafetyProfile, env_for_pip
-
-OPEN_INTERPRETER_VERSION = "0.0.38"
-OPEN_INTERPRETER_INSTALL_SCRIPT = (
-    "https://raw.githubusercontent.com/openinterpreter/openinterpreter/"
-    "rust-v0.0.38/scripts/install/install.ps1"
+from runtime_versions import (
+    OPEN_INTERPRETER_VERSION,
+    open_interpreter_install_script,
 )
+
+OPEN_INTERPRETER_INSTALL_SCRIPT = open_interpreter_install_script("ps1")
 
 
 def _already(tool_exe, label):

@@ -8,8 +8,8 @@ from ..presenter.base import MenuItem, Presenter
 
 def _menu_items() -> list[MenuItem]:
     try:
-        from launcher.agent.agent_runner import logging_enabled as _le
-        _log_state = "ON" if _le() else "OFF"
+        from .. import settings_store
+        _log_state = "ON" if settings_store.logging_enabled() else "OFF"
     except Exception:
         _log_state = "?"
     return [
@@ -52,20 +52,20 @@ def _change_language(p: Presenter) -> None:
 def _toggle_logging(p: Presenter) -> None:
     """세션 상세 로그 기록 on/off 토글."""
     try:
-        from launcher.agent.agent_runner import logging_enabled
-        from launcher.agent.agent_runner import set_logging_enabled
+        from .. import settings_store
     except Exception as e:
         p.error("로그 설정 모듈을 불러올 수 없습니다: " + str(e))
         p.pause()
         return
     try:
-        cur = logging_enabled()
-        if set_logging_enabled(not cur):
+        cur = settings_store.logging_enabled()
+        if settings_store.set_logging_enabled(not cur):
             p.ok("로그 기록: " + ("ON" if cur else "OFF") + " -> " + ("OFF" if cur else "ON"))
             if cur:
                 p.info("세부 입출력이 세션 로그에 더 이상 기록되지 않습니다. 진단 시 다시 켜세요.")
+                p.info("다음 에이전트 세션부터 적용됩니다 (실행 중인 세션은 그대로).")
             else:
-                p.info("입력/출력/턴 번호가 세션 로그에 기록됩니다 (디버그에 유용).")
+                p.info("입력/출력/도구 호출이 세션 로그에 기록됩니다 (디버그에 유용).")
         else:
             p.error("로그 설정 저장 실패")
     except Exception as e:

@@ -4,9 +4,9 @@
 모든 영속 설정의 정본은 프로젝트 루트의
 ``user_data/settings/user_config.json`` 이다.
 
-과거 버전의 설정 파일은 정본으로 병합한다. 일반적인 load/save/import 경로에서는
-junction/symlink 를 만들지 않는다. 아직 레거시 경로를 직접 읽는 agent_runner 를
-위한 호환 연결만 런처 시작 시 명시적으로 한 번 구성할 수 있다.
+과거 버전의 설정 파일은 정본으로 병합한다. 이 저장소는 junction/symlink 를 만들지
+않는다. 예전에는 레거시 경로를 직접 읽는 agent_runner 를 위해 소스 트리 안으로
+junction 을 걸었지만, 그 런타임이 사라져 호환 연결도 함께 제거했다.
 """
 from __future__ import annotations
 
@@ -14,10 +14,8 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-import subprocess
 from typing import Any, Optional
 
-from project_paths import PROJECT_ROOT, SRC_ROOT
 from .core import user_data
 
 
@@ -39,8 +37,6 @@ _LEGACY_DIRS = (
     Path("launcher") / "settings",
     Path("launcher") / "agent" / "settings",
 )
-_AGENT_LEGACY_DIR = Path("launcher") / "agent" / "settings"
-_AGENT_SRC_RUNTIME_DIR = Path("launcher") / "agent" / "settings"
 
 
 def _root(project_root: Path | None = None) -> Path:
@@ -123,99 +119,6 @@ def migrate_legacy_settings(project_root: Path | None = None) -> bool:
     return True
 
 
-def _same_target(link: Path, target: Path) -> bool:
-    try:
-        return link.resolve() == target.resolve()
-    except OSError:
-        return False
-
-
-def _remove_compat_path(link: Path) -> bool:
-    """비어 있는 디렉터리나 기존 호환 링크만 안전하게 제거한다."""
-    try:
-        if link.is_symlink():
-            link.unlink()
-            return True
-        if link.is_dir():
-            if any(link.iterdir()):
-                return False
-            link.rmdir()
-            return True
-    except OSError:
-        pass
-
-    # Windows의 끊어진 junction은 Path.exists()가 False일 수 있다.
-    if os.name == "nt" and os.path.lexists(str(link)):
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        result = subprocess.run(
-            ["cmd", "/c", "rmdir", str(link)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            creationflags=creationflags,
-        )
-        return result.returncode == 0
-    return not os.path.lexists(str(link))
-
-
-def _agent_runtime_compat_dir(root: Path) -> Path:
-    """agent_runner가 실제로 읽는 설정 호환 디렉터리를 반환한다.
-
-    현재 애플리케이션은 ``src/launcher/agent`` 에서 실행되므로 정본 프로젝트
-    루트에 대해서는 그 실제 소스 위치를 사용한다. 임의의 외부 프로젝트 루트를
-    넘기는 마이그레이션/테스트 호출은 과거 레이아웃을 그대로 유지한다.
-    """
-    candidate = Path(root)
-    try:
-        if candidate.resolve() == PROJECT_ROOT.resolve():
-            return SRC_ROOT / _AGENT_SRC_RUNTIME_DIR
-    except OSError:
-        pass
-    return candidate / _AGENT_LEGACY_DIR
-
-
-def ensure_agent_settings_compat(project_root: Path | None = None) -> bool:
-    """agent_runner의 직접 설정 경로 하나만 정본 디렉터리로 연결한다.
-
-    일반 설정 API에서는 호출하지 않는다. 런처 시작 시 한 번만 호출하도록 분리해
-    import 부작용과 반복적인 파일시스템 점검을 피한다.
-    """
-    root = _root(project_root)
-    if not migrate_legacy_settings(root):
-        return False
-
-    link = _agent_runtime_compat_dir(root)
-    target = path(root).parent
-    if _same_target(link, target):
-        return True
-
-    if os.path.lexists(str(link)) and not _remove_compat_path(link):
-        return False
-
-    link.parent.mkdir(parents=True, exist_ok=True)
-    target.mkdir(parents=True, exist_ok=True)
-    try:
-        if os.name == "nt":
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            result = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                creationflags=creationflags,
-            )
-            return result.returncode == 0 and _same_target(link, target)
-        link.symlink_to(target, target_is_directory=True)
-        return _same_target(link, target)
-    except OSError:
-        return False
-
-
-def ensure_legacy_bridges(project_root: Path | None = None) -> bool:
-    """이전 API 호환 별칭. agent_runner 호환 연결 하나만 구성한다."""
-    return ensure_agent_settings_compat(project_root)
-
-
 def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
     root = _root(project_root)
     migrate_legacy_settings(root)
@@ -265,3 +168,17 @@ def update_last_menu_choice(cfg: Settings, choice: str | None) -> Settings:
 def update_last_workspace(cfg: Settings, workspace: str | Path | None) -> Settings:
     cfg.last_workspace = None if workspace is None else str(workspace)
     return cfg
+
+
+def logging_enabled(project_root: Path | None = None) -> bool:
+    """Detailed agent input/output logging switch (settings menu [5])."""
+    try:
+        return bool(load(project_root).logging_enabled)
+    except Exception:
+        return True
+
+
+def set_logging_enabled(enabled: bool, project_root: Path | None = None) -> bool:
+    cfg = load(project_root)
+    cfg.logging_enabled = bool(enabled)
+    return save(cfg, project_root)

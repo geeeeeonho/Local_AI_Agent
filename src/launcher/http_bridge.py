@@ -1,8 +1,8 @@
 """http_bridge — HTTP 프록시 -> SOCKS5 브리지 컨테이너 (HTTP_BRIDGE_v1).
 
 왜 필요한가
-  Cloudflare WARP 는 SOCKS5 만 제공한다. 그런데 PreTool 의 검색·본문 수집은
-  파이썬 표준 urllib 을 쓰고, urllib 은 SOCKS 를 지원하지 않는다.
+  Cloudflare WARP 는 SOCKS5 만 제공한다. 그런데 local_search MCP 서버의
+  검색·본문 수집은 파이썬 표준 urllib 을 쓰고, urllib 은 SOCKS 를 지원하지 않는다.
   HTTP_PROXY=socks5h://... 로 두면 urllib 이 SOCKS 포트에 평문 HTTP 를 보내
   'Connection reset by peer' 로 실패한다.
   (기존 Tor 는 Privoxy(8118) 라는 HTTP 프록시를 함께 제공해서 동작했다.)

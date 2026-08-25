@@ -157,3 +157,97 @@ def test_collect_turn_raises_when_turn_cannot_start():
         assert "turn" in str(exc).lower()
     else:
         raise AssertionError("collect_turn should reject a failed turn start")
+
+
+def test_analyze_trace_flags_a_url_the_answer_invented():
+    events = [
+        _mcp_event(
+            AgentEventType.TOOL_COMPLETED,
+            "search",
+            {"query": "current release"},
+            result={"content": [{"type": "text", "text": '[{"url":"https://real.test/a"}]'}]},
+        ),
+        AgentEvent(
+            AgentEventType.TEXT_DELTA,
+            "See https://real.test/a and https://invented.test/b for details.",
+        ),
+        AgentEvent(AgentEventType.STATUS, "Turn completed"),
+    ]
+    report = analyze_trace(events)
+
+    assert report["cited_sources"] == ["https://real.test/a"]
+    assert report["fabricated_source_urls"] == ["https://invented.test/b"]
+    assert report["observable_agent_score"] < 100
+
+
+def test_analyze_trace_flags_an_answer_that_cites_nothing_it_retrieved():
+    events = [
+        _mcp_event(
+            AgentEventType.TOOL_COMPLETED,
+            "search",
+            {"query": "current release"},
+            result={"content": [{"type": "text", "text": '[{"url":"https://real.test/a"}]'}]},
+        ),
+        AgentEvent(AgentEventType.TEXT_DELTA, "The current release is 9.9.9."),
+        AgentEvent(AgentEventType.STATUS, "Turn completed"),
+    ]
+    report = analyze_trace(events)
+
+    assert report["source_urls"] == ["https://real.test/a"]
+    assert report["cited_sources"] == []
+    assert report["observable_agent_score"] < 100
+
+
+def test_assess_case_rejects_a_fabricated_citation():
+    report = {
+        "search_calls": 1,
+        "fetch_calls": 1,
+        "failed_tool_calls": 0,
+        "repeated_identical_calls": 0,
+        "source_urls": ["https://real.test/a"],
+        "cited_sources": ["https://real.test/a"],
+        "fabricated_source_urls": ["https://invented.test/b"],
+        "turn_completed": True,
+        "final_text": "answer",
+    }
+    result = assess_case(report, expect_search=True, min_fetch=1, min_sources=1)
+    assert result["passed"] is False
+    assert "fabricated_source" in result["failures"]
+
+
+def test_assess_case_can_require_the_answer_to_cite_its_sources():
+    report = {
+        "search_calls": 1,
+        "fetch_calls": 1,
+        "failed_tool_calls": 0,
+        "repeated_identical_calls": 0,
+        "source_urls": ["https://real.test/a"],
+        "cited_sources": [],
+        "fabricated_source_urls": [],
+        "turn_completed": True,
+        "final_text": "The answer is 42.",
+    }
+    strict = assess_case(
+        report, expect_search=True, min_fetch=1, min_sources=1, require_citation=True
+    )
+    assert strict["passed"] is False
+    assert "missing_citation" in strict["failures"]
+
+    lenient = assess_case(report, expect_search=True, min_fetch=1, min_sources=1)
+    assert lenient["passed"] is True
+
+
+def test_tool_usage_alone_no_longer_earns_a_perfect_score():
+    """One search call plus an invented answer used to score 100."""
+    events = [
+        _mcp_event(
+            AgentEventType.TOOL_COMPLETED,
+            "search",
+            {"query": "todays exchange rate"},
+            result={"content": [{"type": "text", "text": '[{"url":"https://real.test/rate"}]'}]},
+        ),
+        AgentEvent(AgentEventType.TEXT_DELTA, "It is 1234.5 according to https://made-up.test/x."),
+        AgentEvent(AgentEventType.STATUS, "Turn completed"),
+    ]
+    report = analyze_trace(events)
+    assert report["observable_agent_score"] <= 60

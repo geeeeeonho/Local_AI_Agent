@@ -1,17 +1,19 @@
 import json
 
 import launcher.config as config
-from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+from runtime_versions import OPEN_INTERPRETER_VERSION
+from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
 from launcher.agent.sandbox_backend import (
     SANDBOX_OI_LABEL,
     SANDBOX_RUNTIME_LABEL,
     SandboxOpenInterpreterBackend,
     sandbox_image_supports_app_server,
-    transform_legacy_sandbox_command,
+    normalize_sandbox_command,
 )
 
 
 def _legacy_command():
+    """A command in the retired format, as a stale caller might still produce."""
     return [
         "docker", "run", "--rm", "-i",
         "--name", "llm_agent_chat_test",
@@ -38,7 +40,7 @@ def _legacy_command():
 
 
 def test_transform_preserves_outer_security_and_replaces_only_runtime_tail():
-    transformed = transform_legacy_sandbox_command(_legacy_command())
+    transformed = normalize_sandbox_command(_legacy_command())
     joined = " ".join(transformed)
 
     assert transformed[:2] == ["docker", "run"]
@@ -81,7 +83,7 @@ def test_transform_preserves_outer_security_and_replaces_only_runtime_tail():
 
 def test_transform_rejects_non_sandbox_command():
     try:
-        transform_legacy_sandbox_command(["python", "agent.py"])
+        normalize_sandbox_command(["python", "agent.py"])
     except ValueError as exc:
         assert "docker run" in str(exc)
     else:
@@ -95,7 +97,7 @@ def test_image_label_detection_requires_both_exact_labels(monkeypatch):
         returncode = 0
         stdout = json.dumps({
             SANDBOX_RUNTIME_LABEL: "app-server",
-            SANDBOX_OI_LABEL: "0.0.38",
+            SANDBOX_OI_LABEL: OPEN_INTERPRETER_VERSION,
         })
         stderr = ""
 
@@ -104,7 +106,7 @@ def test_image_label_detection_requires_both_exact_labels(monkeypatch):
 
     Result.stdout = json.dumps({
         SANDBOX_RUNTIME_LABEL: "app-server",
-        SANDBOX_OI_LABEL: "0.0.37",
+        SANDBOX_OI_LABEL: "0.0.0-other",
     })
     assert sandbox_image_supports_app_server(config.SANDBOX_IMAGE) is False
 
@@ -120,7 +122,7 @@ def test_sandbox_backend_uses_outer_docker_and_inner_danger_full_access(tmp_path
         model="qwen3:8b",
         network_mode="block",
         profile_name="coding",
-        legacy_runtime=LegacyRuntimeSpec(command=tuple(_legacy_command())),
+        runtime_spec=ProcessRuntimeSpec(command=tuple(_legacy_command())),
         instructions="coding profile",
     )
     command, env, cwd = backend._client_spec(cfg)

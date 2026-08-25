@@ -181,16 +181,16 @@ def main():
     except Exception as _le:
         _trace("언어 초기화 예외: " + str(_le))
 
-    # agent_runner의 레거시 로그 설정 경로만 정본 user_data/settings로 연결한다.
-    # 일반 import/load/save에서는 이 작업을 하지 않아 시작 경계가 명확하다.
+    # 과거 레이아웃의 설정 파일을 정본 user_data/settings 로 한 번 병합한다.
+    # 소스 트리 안으로 junction 을 만들던 호환 단계는 제거되었다.
     try:
         from launcher import settings_store as _settings_store
-        if _settings_store.ensure_agent_settings_compat(HERE):
-            _trace("에이전트 설정 호환 경로 준비 완료")
+        if _settings_store.migrate_legacy_settings(HERE):
+            _trace("설정 마이그레이션 확인 완료")
         else:
-            _trace("에이전트 설정 호환 경로 준비 건너뜀")
+            _trace("설정 마이그레이션 실패 — 기본값으로 계속")
     except Exception as _se:
-        _trace("에이전트 설정 호환 경로 준비 실패: " + str(_se))
+        _trace("설정 마이그레이션 예외: " + str(_se))
 
     # ── 설치 폴더 확인 ──
     _trace("설치 폴더 확인 직전 ENV=" + str(ENV))

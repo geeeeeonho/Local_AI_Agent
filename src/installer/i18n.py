@@ -26,7 +26,7 @@ from typing import Dict
 SUPPORTED_LANGUAGES = ("en", "ko")
 DEFAULT_LANGUAGE = "en"
 
-# 환경변수로 강제 설정 가능 (RUN.bat / INSTALL.bat 가 사용)
+# 환경변수로 강제 설정 가능 (RUN.bat / SETUP.bat 가 사용)
 ENV_VAR = "LLM_LOCAL_SETUP_LANG"
 
 _current_lang = os.environ.get(ENV_VAR, DEFAULT_LANGUAGE)

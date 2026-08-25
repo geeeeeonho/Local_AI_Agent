@@ -8,7 +8,13 @@ from .events import AgentEvent
 
 
 @dataclass(frozen=True)
-class LegacyRuntimeSpec:
+class ProcessRuntimeSpec:
+    """How to launch the backend's runtime process.
+
+    In sandbox mode this is the full ``docker run`` command including the outer
+    security policy. In host mode the backend builds its own command and only
+    ``env`` is consulted (for proxy settings).
+    """
     command: tuple[str, ...]
     env: Mapping[str, str] | None = None
     cwd: Path | None = None
@@ -21,7 +27,7 @@ class AgentConfig:
     model: str
     network_mode: str
     profile_name: str
-    legacy_runtime: LegacyRuntimeSpec | None = None
+    runtime_spec: ProcessRuntimeSpec | None = None
     instructions: str = ""
 
 

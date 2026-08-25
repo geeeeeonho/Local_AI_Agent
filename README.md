@@ -59,6 +59,7 @@ Local_AI_Agent/
 │
 ├─ src/
 │  ├─ project_paths.py      프로젝트 경로 정본
+│  ├─ runtime_versions.py   외부 런타임 버전 정본 (Open Interpreter 등)
 │  ├─ launcher/             런처 / 서비스 / Agent runtime
 │  ├─ installer/            설치 / 관리 구현
 │  ├─ tools/                개발·평가 도구
@@ -83,6 +84,12 @@ ENV_DIR        -> <project>/llm_environment
 ```
 
 따라서 `launcher/`와 `installer/`가 `src/` 아래로 이동해도 사용자 데이터와 설치 환경 위치는 바뀌지 않습니다.
+
+## 버전 정책
+
+Open Interpreter 버전은 `src/runtime_versions.py` 한 곳에서만 정의합니다.
+설치 스크립트, 샌드박스 이미지 라벨, 런처의 이미지 검사가 모두 이 값을 읽습니다.
+세 곳이 어긋나면 샌드박스가 조용히 사용 불가가 되므로 리터럴로 적지 마세요.
 
 ## 주요 구성
 
@@ -114,6 +121,37 @@ python -m pytest -q src\tests
 ```
 
 GitHub Actions에서도 동일하게 저장소의 `src`를 `PYTHONPATH`로 사용합니다.
+
+## Agent 동작 보증
+
+Agent에 전달되는 지시는 `src/launcher/agent/instructions.py` 에서 조립되며,
+프로필 역할 뒤에 다음 제약이 항상 붙습니다.
+
+- **개인정보 보호** — 개인정보를 외부로 전송하지 않음
+- **도구 실체성** — 존재하지 않는 함수·도구를 가정하지 않음
+- **사실 근거** — 최신 정보는 `local_search` 로 실제 조회한 결과로만 답하고,
+  출처 URL을 밝히며, 도구가 실패하면 실패를 그대로 보고하고, 확실하지 않으면
+  모른다고 말함
+- **경계 안내** — 샌드박스/호스트 각각의 격리 수준과 허용·금지 폴더
+
+프롬프트만으로 강제하지 않는 부분:
+
+- 명령·파일 변경은 `approvalPolicy: on-request` 로 사용자 승인을 거칩니다
+  (호스트 모드). 샌드박스는 Docker 마운트 자체가 경계입니다.
+- Open Interpreter 내장 웹 검색은 꺼져 있고, `local_search` MCP 서버만 사용합니다.
+  이 서버는 사설·루프백 주소를 차단하며 리다이렉트마다 다시 검사합니다.
+
+`src/tools/evaluate_local_search_e2e.py` 는 이 동작을 관찰 가능한 이벤트만으로
+채점합니다. 검색 호출 여부뿐 아니라 **답변이 인용한 URL이 실제로 조회된
+URL인지**까지 확인하므로, 검색을 한 번 호출하고 나머지를 지어낸 답변은
+만점을 받을 수 없습니다.
+
+## 로그
+
+Agent 세션마다 `user_data/logs/agent_trace_*.jsonl` 이 하나 생성됩니다.
+설정 메뉴 **[8] → [5] 로그 기록**을 끄면 프롬프트·모델 출력·명령·도구 인자 같은
+세부 입출력이 기록되지 않습니다(수명주기와 실패 원인은 계속 남습니다).
+비밀값은 항상 마스킹되며, 오래된 트레이스 파일은 자동으로 정리됩니다.
 
 ## 데이터 보존
 

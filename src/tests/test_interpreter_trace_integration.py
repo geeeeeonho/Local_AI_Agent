@@ -107,3 +107,94 @@ def test_backend_traces_lifecycle_turn_and_completed_mcp(tmp_path, monkeypatch):
     assert mcp["details"]["tool"] == "search"
     assert mcp["details"]["arguments"]["api_key"] == "[REDACTED]"
     assert "never-log" not in paths[0].read_text(encoding="utf-8")
+
+
+def test_streaming_deltas_are_counted_not_traced_per_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
+    exe = tmp_path / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("fake", encoding="utf-8")
+
+    made = []
+
+    def factory(command, env, cwd):
+        client = FakeClient(command, env, cwd)
+        made.append(client)
+        return client
+
+    config = AgentConfig(
+        workspace=tmp_path / "work",
+        mode="host",
+        model="model:q4",
+        network_mode="warp",
+        profile_name="universal",
+        instructions="trace test",
+    )
+    backend = OpenInterpreterBackend(client_factory=factory)
+    assert backend.start(config)
+    assert backend.send("hello")
+
+    made[0].messages.extend(
+        [{"method": "item/agentMessage/delta", "params": {"delta": "tok"}} for _ in range(50)]
+        + [{"method": "turn/completed", "params": {}}]
+    )
+    events = backend.poll_events(200)
+    backend.stop()
+
+    # Deltas still reach the UI.
+    assert sum(1 for e in events if e.type.value == "text_delta") == 50
+
+    path = next((tmp_path / "user_data" / "logs").glob("agent_trace_*.jsonl"))
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    notifications = [r for r in rows if r["event"] == "oi_notification"]
+    assert all(
+        r["details"]["method"] != "item/agentMessage/delta" for r in notifications
+    ), "per-token deltas must not each produce a trace row"
+
+    summary = next(r for r in rows if r["event"] == "stream_summary")
+    assert summary["details"]["item/agentMessage/delta"] == 50
+
+
+def test_trace_omits_payload_rows_when_logging_disabled(tmp_path, monkeypatch):
+    from launcher import settings_store
+
+    monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
+    assert settings_store.set_logging_enabled(False, tmp_path)
+
+    exe = tmp_path / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("fake", encoding="utf-8")
+
+    made = []
+
+    def factory(command, env, cwd):
+        client = FakeClient(command, env, cwd)
+        made.append(client)
+        return client
+
+    config = AgentConfig(
+        workspace=tmp_path / "work",
+        mode="host",
+        model="model:q4",
+        network_mode="warp",
+        profile_name="universal",
+        instructions="trace test",
+    )
+    backend = OpenInterpreterBackend(client_factory=factory)
+    assert backend.start(config)
+    assert backend.send("a very private prompt")
+    made[0].messages.append({"method": "turn/completed", "params": {}})
+    backend.poll_events(20)
+    backend.stop()
+
+    path = next((tmp_path / "user_data" / "logs").glob("agent_trace_*.jsonl"))
+    text = path.read_text(encoding="utf-8")
+    assert "a very private prompt" not in text
+
+    rows = [json.loads(line) for line in text.splitlines()]
+    names = [row["event"] for row in rows]
+    # Lifecycle stays diagnosable with logging off.
+    assert "backend_starting" in names
+    assert "session_started" in names
+    assert "turn_started" in names
+    assert next(r for r in rows if r["event"] == "turn_started")["detail_omitted"] is True

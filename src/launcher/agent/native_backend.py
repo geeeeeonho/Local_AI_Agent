@@ -27,9 +27,12 @@ class NativeSandboxOpenInterpreterBackend(SandboxOpenInterpreterBackend):
     def _client_spec(self, config: AgentConfig) -> tuple[list[str], dict[str, str], Path]:
         from launcher.core import user_data
 
+        try:
+            from launcher import config as launcher_config
+            searxng_url = str(launcher_config.SEARXNG_INTERNAL_URL)
+        except Exception:
+            from .sandbox_backend import SANDBOX_SEARXNG_URL_FALLBACK
+            searxng_url = SANDBOX_SEARXNG_URL_FALLBACK
         state_dir = user_data.interpreter_dir("sandbox")
-        prepare_sandbox_runtime_assets(
-            state_dir,
-            searxng_url="http://llm_searxng:8080",
-        )
+        prepare_sandbox_runtime_assets(state_dir, searxng_url=searxng_url)
         return super()._client_spec(config)

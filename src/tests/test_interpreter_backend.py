@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
 from launcher.agent.events import AgentEventType
 from launcher.agent.interpreter_backend import OI_VERSION, OpenInterpreterBackend
 
@@ -65,7 +65,7 @@ def _config(tmp_path):
         model="qwen3:8b",
         network_mode="direct",
         profile_name="coding",
-        legacy_runtime=LegacyRuntimeSpec(
+        runtime_spec=ProcessRuntimeSpec(
             command=("legacy",), env={"HTTP_PROXY": "http://127.0.0.1:8118"}
         ),
         instructions="You are the coding profile.",

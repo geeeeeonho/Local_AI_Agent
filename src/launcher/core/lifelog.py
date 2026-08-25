@@ -37,7 +37,7 @@ def _llm_session_log_dir():
         cands = [Path.cwd()]
     for c in cands:
         try:
-            if (c / "llm_environment").is_dir() or (c / "RUN.bat").exists() or (c / "INSTALL.bat").exists():
+            if (c / "llm_environment").is_dir() or (c / "RUN.bat").exists() or (c / "SETUP.bat").exists():
                 d = c / "llm_environment" / "logs"
                 d.mkdir(parents=True, exist_ok=True)
                 return d
@@ -878,34 +878,6 @@ def warmup_ollama_model(model_tag: str, host: str = "http://127.0.0.1:11434",
         log("WARN", "모델 warm-up 실패: " + str(e))
         return False
 
-
-def assert_v68_applied(agent_sandbox_path) -> bool:
-    """v6.8 의 환경변수/max_tokens 가 적용됐는지 검증.
-
-    사용자가 콘솔에서 직접 호출 가능:
-        from launcher.lifelog import assert_v68_applied
-        from pathlib import Path
-        assert_v68_applied(Path("launcher/actions/agent_sandbox.py"))
-    """
-    from pathlib import Path as _P
-    p = _P(agent_sandbox_path) if not isinstance(agent_sandbox_path, _P) else agent_sandbox_path
-    if not p.exists():
-        log("FAIL", "agent_sandbox.py 없음")
-        return False
-    text = p.read_text(encoding="utf-8")
-    checks = [
-        ("PYTHONUNBUFFERED", "PYTHONUNBUFFERED=1 환경변수"),
-        ("LITELLM_LOG", "LITELLM_LOG=ERROR 환경변수"),
-        ("max_tokens", "--max_tokens 인자"),
-    ]
-    all_ok = True
-    for marker, desc in checks:
-        if marker in text:
-            log("OK", "v6.8 적용 확인: " + desc)
-        else:
-            log("FAIL", "v6.8 미적용: " + desc)
-            all_ok = False
-    return all_ok
 
 # v7_1_unified: 호스트 프로세스 정리
 

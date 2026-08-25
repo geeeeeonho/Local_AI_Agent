@@ -177,6 +177,47 @@ class RepositoryStructureTests(unittest.TestCase):
             (REPO_ROOT / "src" / "launcher" / "agent" / "settings" / "user_config.json").is_file()
         )
 
+    def test_retired_runtime_and_compat_shims_are_gone(self):
+        """These were unreachable from the menu but still shipped.
+
+        agent_direct in particular launched the interpreter with no system
+        message at all: no privacy clause, no tool guidance, no folder policy.
+        """
+        for relative in (
+            "src/launcher/agent/agent_runner.py",
+            "src/launcher/agent/legacy_backend.py",
+            "src/launcher/handlers.py",
+            "src/launcher/menu.py",
+            "src/launcher/ui.py",
+            "src/launcher/actions/agent_sandbox.py",
+            "src/launcher/actions/agent_direct.py",
+        ):
+            self.assertFalse((REPO_ROOT / relative).exists(), relative)
+
+    def test_actions_package_exposes_only_reachable_actions(self):
+        from launcher import actions
+        from launcher.app import _build_action_map
+
+        exported = {name for name in actions.__all__}
+        reachable = set()
+        for run in _build_action_map().values():
+            reachable.add(run.__module__.rsplit(".", 1)[-1])
+        # Every exported action module must be wired into the menu.
+        for name in exported:
+            module = getattr(actions, name)
+            self.assertIn(module.__name__.rsplit(".", 1)[-1], reachable, name)
+
+    def test_settings_store_no_longer_links_into_the_source_tree(self):
+        text = self._text("src/launcher/settings_store.py")
+        self.assertNotIn("mklink", text)
+        self.assertNotIn("ensure_agent_settings_compat", text)
+        self.assertNotIn("symlink_to", text)
+
+    def test_ci_compiles_every_module_instead_of_a_hand_listed_subset(self):
+        workflow = self._text(".github/workflows/tests.yml")
+        self.assertIn("compileall", workflow)
+        self.assertNotIn("legacy_backend.py", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

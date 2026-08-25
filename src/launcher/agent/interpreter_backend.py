@@ -6,14 +6,23 @@ from pathlib import Path
 from typing import Any
 
 from project_paths import PROJECT_ROOT, SRC_ROOT
+from runtime_versions import OPEN_INTERPRETER_VERSION as OI_VERSION
 from .agent_trace import AgentTrace
 from .app_server_client import AppServerClient
 from .backend import AgentConfig
 from .events import AgentEvent, AgentEventType
 from .instructions import build_structured_instructions
 
-OI_VERSION = "0.0.38"
 _SIMPLE_APPROVAL_DECISIONS = {"accept", "acceptForSession", "decline", "cancel"}
+
+#: Notifications the App Server emits once per streamed token. They are counted
+#: rather than traced individually.
+_STREAM_DELTA_METHODS = frozenset({
+    "item/agentMessage/delta",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/textDelta",
+    "item/commandExecution/outputDelta",
+})
 
 
 def _project_root() -> Path:
@@ -68,8 +77,22 @@ class OpenInterpreterBackend:
         self._events: queue.Queue = queue.Queue(maxsize=10000)
         self._cleanup_registered = False
         self._trace: AgentTrace | None = None
+        self._stream_deltas: dict[str, int] = {}
 
-    def _trace_record(self, event: str, details: Any = None, *, turn_id: str | None = None) -> None:
+    def _trace_record(
+        self,
+        event: str,
+        details: Any = None,
+        *,
+        turn_id: str | None = None,
+        detailed: bool = False,
+    ) -> None:
+        """Append one trace row.
+
+        ``detailed`` marks rows whose details carry prompt, model output,
+        command or tool payload. AgentTrace drops those payloads when the user
+        has turned detailed logging off.
+        """
         trace = self._trace
         if trace is None:
             return
@@ -79,9 +102,16 @@ class OpenInterpreterBackend:
                 thread_id=self._thread_id,
                 turn_id=self._turn_id if turn_id is None else turn_id,
                 details=details,
+                detailed=detailed,
             )
         except Exception:
             pass
+
+    def _flush_stream_counts(self, turn_id: str | None) -> None:
+        if not self._stream_deltas:
+            return
+        counts, self._stream_deltas = self._stream_deltas, {}
+        self._trace_record("stream_summary", counts, turn_id=turn_id)
 
     def _command(self) -> list[str]:
         return [
@@ -93,7 +123,7 @@ class OpenInterpreterBackend:
 
     def _runtime_env(self, config: AgentConfig) -> dict[str, str]:
         env = dict(os.environ)
-        runtime = config.legacy_runtime
+        runtime = config.runtime_spec
         if runtime is not None and runtime.env:
             env.update({str(k): str(v) for k, v in runtime.env.items()})
         env["INTERPRETER_HOME"] = str(runtime_interpreter_home())
@@ -117,7 +147,11 @@ class OpenInterpreterBackend:
         return str(config.workspace.resolve())
 
     def _instruction_profile(self, config: AgentConfig) -> str:
-        return config.instructions
+        try:
+            from launcher.agent.profiles import build_host_session_addendum
+            return config.instructions + build_host_session_addendum(config.workspace)
+        except Exception:
+            return config.instructions
 
     def _instruction_is_sandbox(self, config: AgentConfig) -> bool:
         return False
@@ -177,6 +211,7 @@ class OpenInterpreterBackend:
                     "interpreter_home": runtime_env.get("INTERPRETER_HOME"),
                     "ollama_base_url": runtime_env.get("CODEX_OSS_BASE_URL"),
                 },
+                detailed=True,
             )
         except Exception as exc:
             self._trace_record("backend_start_failed", {"reason": "runtime_setup", "error": str(exc)})
@@ -208,7 +243,7 @@ class OpenInterpreterBackend:
             if not client.notify("initialized", {}):
                 raise RuntimeError("failed to send initialized notification")
             thread_params = self._thread_params(config)
-            self._trace_record("thread_starting", thread_params)
+            self._trace_record("thread_starting", thread_params, detailed=True)
             result = client.request("thread/start", thread_params, timeout=20.0)
             thread = result.get("thread") or {}
             thread_id = thread.get("id")
@@ -255,7 +290,7 @@ class OpenInterpreterBackend:
             self._trace_record("turn_start_rejected", {"reason": "backend_not_ready_or_busy"})
             return False
         try:
-            self._trace_record("turn_starting", {"input": message})
+            self._trace_record("turn_starting", {"input": message}, detailed=True)
             result = client.request(
                 "turn/start",
                 {
@@ -270,7 +305,7 @@ class OpenInterpreterBackend:
                 self._trace_record("turn_start_failed", {"reason": "missing_turn_id"})
                 return False
             self._turn_id = str(turn_id)
-            self._trace_record("turn_started", {"input": message})
+            self._trace_record("turn_started", {"input": message}, detailed=True)
             return True
         except Exception as exc:
             self._trace_record("turn_start_failed", {"error": str(exc)})
@@ -345,6 +380,7 @@ class OpenInterpreterBackend:
     def stop(self, timeout: float = 3.0) -> None:
         thread_id = self._thread_id
         turn_id = self._turn_id
+        self._flush_stream_counts(turn_id)
         self._trace_record("backend_stopping", {"timeout": timeout}, turn_id=turn_id)
         if self._turn_id:
             self.cancel()
@@ -355,6 +391,12 @@ class OpenInterpreterBackend:
         self._client = None
         self._turn_id = None
         self._thread_id = None
+        trace, self._trace = self._trace, None
+        if trace is not None:
+            try:
+                trace.close()
+            except Exception:
+                pass
         try:
             from launcher.agent import agent_lifecycle
             agent_lifecycle.unregister(self)
@@ -393,7 +435,18 @@ class OpenInterpreterBackend:
         method = str(message.get("method") or "")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         current_turn_id = self._turn_id
-        self._trace_record("oi_notification", {"method": method, "params": params}, turn_id=current_turn_id)
+        if method in _STREAM_DELTA_METHODS:
+            # These arrive once per streamed token. Writing a trace row for each
+            # one duplicates content that item/completed already carries and
+            # dominates the cost of streaming, so only their volume is kept.
+            self._stream_deltas[method] = self._stream_deltas.get(method, 0) + 1
+        else:
+            self._trace_record(
+                "oi_notification",
+                {"method": method, "params": params},
+                turn_id=current_turn_id,
+                detailed=True,
+            )
 
         if method == "item/agentMessage/delta":
             return AgentEvent(AgentEventType.TEXT_DELTA, str(params.get("delta") or ""), "stdout", data=params)
@@ -405,18 +458,18 @@ class OpenInterpreterBackend:
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
             item_type = str(item.get("type") or "tool")
             if item_type == "mcpToolCall":
-                self._trace_record("mcp_tool_started", item, turn_id=current_turn_id)
+                self._trace_record("mcp_tool_started", item, turn_id=current_turn_id, detailed=True)
             else:
-                self._trace_record("tool_started", item, turn_id=current_turn_id)
+                self._trace_record("tool_started", item, turn_id=current_turn_id, detailed=True)
             content = str(item.get("command") or item.get("tool") or item_type)
             return AgentEvent(AgentEventType.TOOL_STARTED, content, "system", data=params)
         if method == "item/completed":
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
             item_type = str(item.get("type") or "tool")
             if item_type == "mcpToolCall":
-                self._trace_record("mcp_tool_completed", item, turn_id=current_turn_id)
+                self._trace_record("mcp_tool_completed", item, turn_id=current_turn_id, detailed=True)
             else:
-                self._trace_record("tool_completed", item, turn_id=current_turn_id)
+                self._trace_record("tool_completed", item, turn_id=current_turn_id, detailed=True)
             if item_type == "fileChange":
                 return AgentEvent(AgentEventType.FILE_CHANGED, "File changes completed", "system", data=params)
             if item_type == "agentMessage":
@@ -432,6 +485,7 @@ class OpenInterpreterBackend:
                 "approval_required",
                 {"request_id": message.get("id"), "kind": kind, "params": data},
                 turn_id=current_turn_id,
+                detailed=True,
             )
             return AgentEvent(
                 AgentEventType.APPROVAL_REQUIRED,
@@ -441,7 +495,8 @@ class OpenInterpreterBackend:
                 data=data,
             )
         if method == "turn/completed":
-            self._trace_record("turn_completed", params, turn_id=current_turn_id)
+            self._flush_stream_counts(current_turn_id)
+            self._trace_record("turn_completed", params, turn_id=current_turn_id, detailed=True)
             self._turn_id = None
             return AgentEvent(AgentEventType.STATUS, "Turn completed", "info", data=params)
         if method == "local/stderr":
@@ -450,6 +505,7 @@ class OpenInterpreterBackend:
             self._trace_record("protocol_error", params, turn_id=current_turn_id)
             return AgentEvent(AgentEventType.ERROR, str(params.get("text") or "Protocol error"), "error", data=params)
         if method == "local/terminated":
+            self._flush_stream_counts(current_turn_id)
             self._trace_record("app_server_terminated", params, turn_id=current_turn_id)
             self._turn_id = None
             return AgentEvent(

@@ -67,3 +67,96 @@ def test_agent_trace_writes_flush_safe_jsonl_under_user_data_logs(tmp_path, monk
     assert row["details"]["arguments"]["query"] == "Open Interpreter"
     assert row["details"]["arguments"]["token"] == "[REDACTED]"
     assert "do-not-log" not in line
+
+
+def test_detailed_rows_are_omitted_when_user_turns_logging_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
+    trace = AgentTrace(
+        mode="host",
+        model="model:q4",
+        network_mode="direct",
+        profile_name="universal",
+        workspace=tmp_path / "workspace",
+        detailed=False,
+    )
+
+    trace.record("session_started", details={"session_id": "t-1", "resumed": False})
+    trace.record("turn_started", details={"input": "my private prompt"}, detailed=True)
+    trace.close()
+
+    text = trace.path.read_text(encoding="utf-8")
+    assert "my private prompt" not in text
+
+    rows = [json.loads(line) for line in text.splitlines()]
+    lifecycle = next(row for row in rows if row["event"] == "session_started")
+    assert lifecycle["details"]["session_id"] == "t-1"
+    assert "detail_omitted" not in lifecycle
+
+    turn = next(row for row in rows if row["event"] == "turn_started")
+    assert turn["detail_omitted"] is True
+    assert turn["details"] == "[OMITTED: detailed logging disabled]"
+
+
+def test_detailed_rows_are_kept_when_logging_is_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
+    trace = AgentTrace(
+        mode="host",
+        model="model:q4",
+        network_mode="direct",
+        profile_name="universal",
+        workspace=tmp_path / "workspace",
+        detailed=True,
+    )
+    trace.record("turn_started", details={"input": "keep this"}, detailed=True)
+    trace.close()
+
+    row = json.loads(trace.path.read_text(encoding="utf-8").strip())
+    assert row["details"]["input"] == "keep this"
+    assert "detail_omitted" not in row
+
+
+def test_trace_detail_flag_follows_the_user_setting(tmp_path, monkeypatch):
+    from launcher import settings_store
+    from launcher.agent.agent_trace import detailed_logging_enabled
+
+    monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
+    assert detailed_logging_enabled(tmp_path) is True
+
+    assert settings_store.set_logging_enabled(False, tmp_path)
+    assert detailed_logging_enabled(tmp_path) is False
+
+    trace = AgentTrace(
+        mode="host",
+        model="m",
+        network_mode="direct",
+        profile_name="universal",
+        workspace=tmp_path,
+    )
+    assert trace.detailed is False
+    trace.close()
+
+
+def test_old_trace_files_are_pruned(tmp_path, monkeypatch):
+    import launcher.agent.agent_trace as module
+
+    monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(module, "_KEEP_TRACE_FILES", 3)
+    logs = tmp_path / "user_data" / "logs"
+    logs.mkdir(parents=True)
+    for i in range(6):
+        (logs / f"agent_trace_old_{i}.jsonl").write_text("{}\n", encoding="utf-8")
+
+    trace = AgentTrace(
+        mode="host",
+        model="m",
+        network_mode="direct",
+        profile_name="universal",
+        workspace=tmp_path,
+        detailed=True,
+    )
+    trace.record("backend_starting")
+    trace.close()
+
+    remaining = list(logs.glob("agent_trace_*.jsonl"))
+    assert len(remaining) == 4  # 3 kept + the new one
+    assert trace.path in remaining

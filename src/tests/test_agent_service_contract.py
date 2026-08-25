@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
 from launcher.agent.events import AgentEvent, AgentEventType
 from launcher.agent.service import AgentService
 
@@ -65,7 +65,7 @@ def _config():
         model="model:tag",
         network_mode="block",
         profile_name="coding",
-        legacy_runtime=LegacyRuntimeSpec(command=("python", "-V")),
+        runtime_spec=ProcessRuntimeSpec(command=("python", "-V")),
         instructions="Follow project rules.",
     )
 
@@ -117,5 +117,5 @@ def test_config_can_describe_non_legacy_backend_without_fake_command():
         profile_name="coding",
         instructions="Use only the selected workspace.",
     )
-    assert config.legacy_runtime is None
+    assert config.runtime_spec is None
     assert config.instructions == "Use only the selected workspace."
