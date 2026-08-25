@@ -26,12 +26,7 @@ def _model_roles():
         return mr
     except Exception:
         pass
-    try:
-        from launcher.models import model_roles as mr
-        return mr
-    except Exception:
-        pass
-    from launcher import model_roles as mr
+    from launcher.models import model_roles as mr
     return mr
 
 
@@ -43,10 +38,7 @@ def _catalog_by_tag():
         try:
             from launcher.models import model_catalog as mc  # noqa
         except Exception:
-            try:
-                from launcher import model_catalog as mc  # noqa
-            except Exception:
-                mc = None
+            mc = None
     if mc is None:
         return {}
     try:

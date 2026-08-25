@@ -104,10 +104,7 @@ def _free_gb():
     try:
         from launcher.models import model_roles as mr
     except Exception:
-        try:
-            from launcher import model_roles as mr
-        except Exception:
-            return None
+        return None
     try:
         return mr.detect_free_memory_gb()
     except Exception:
@@ -143,10 +140,7 @@ def _class_view(free_gb=None, installed=None):
     try:
         from launcher.models import model_classes as mcls
     except Exception:
-        try:
-            from launcher import model_classes as mcls
-        except Exception:
-            return []
+        return []
     return mcls.build_view(free_gb=free_gb, installed=installed)
 
 
@@ -154,10 +148,7 @@ def _installed_set():
     try:
         from launcher.models import model_roles as mr
     except Exception:
-        try:
-            from launcher import model_roles as mr
-        except Exception:
-            return None
+        return None
     try:
         return mr.installed_models()
     except Exception:

@@ -54,9 +54,7 @@ DEFAULT_UI_MODE = UI_MODE_GUI
 #  NET_CONFIG_v1 — 네트워크 엔드포인트 '정본(single source of truth)'
 #
 #  주소/포트/컨테이너명을 여기서만 정의한다. 다른 모듈은 반드시 이 값을 읽고,
-#  리터럴을 직접 적지 않는다. (컨테이너 안에서 도는 PreTool 은 config 를 import
-#  할 수 없으므로 환경변수로 주입받고, 기본값만 여기 값을 '미러'한다.
-#  미러가 어긋나면 CHECK_ENDPOINTS 가 잡아낸다.)
+#  리터럴을 직접 적지 않는다.
 #
 #  ★ Docker Desktop 제약: 컨테이너끼리는 host.docker.internal 로 서로의 게시
 #    포트에 도달할 수 없다. 반드시 공유 네트워크 + '컨테이너 이름' 으로 통신할 것.
@@ -195,15 +193,6 @@ def agent_proxy_env(tor_host: str = None) -> dict:
     return env
 
 
-def pretool_env() -> dict:
-    """PreTool(컨테이너 안)에 주입할 엔드포인트 환경변수."""
-    return {
-        "SEARXNG_URL": SEARXNG_INTERNAL_URL,
-        "DDG_ONION_HOST": DDG_ONION_HOST,
-        "DDG_LITE_URL": DDG_LITE_URL,
-    }
-
-
 # ═══════════════════════════════════════════════════════
 #  TOKEN_LIMITS_v1 — 에이전트 생성 한도 (정본)
 #
@@ -216,79 +205,11 @@ def pretool_env() -> dict:
 
 # ═══════════════════════════════════════════════════════
 #  SETTINGS_v1 — 조정 가능한 설정 (정본)
-#
-#  여기 값만 고치면 런처와 컨테이너 안 PreTool 까지 함께 바뀐다.
-#  (PreTool 은 config 를 import 할 수 없으므로 pretool_env() 로 환경변수 전달)
 # ═══════════════════════════════════════════════════════
-
-# ── 검색/열람 타임아웃 (초) ───────────────────────────
-SEARCH_TIMEOUT = 25          # 검색 1회 (Tor 는 느리므로 여유 있게)
-SEARCH_ONION_TIMEOUT = 25    # onion 은 회로 구축이 더 걸릴 수 있음
-PAGE_TIMEOUT = 25            # 페이지 본문 가져오기
-ARCHIVE_TIMEOUT = 20         # Wayback 아카이브 조회
-# 실측: 25초 안에 응답 없는 사이트는 90초를 기다려도 대개 실패한다.
-# 빨리 포기하고 아카이브로 넘어가는 편이 전체 소요를 줄인다.
-
-# ── 재시도 ────────────────────────────────────────────
-SEARCH_RETRIES = 3           # 검색 재시도
-PUBLIC_SEARX_TRIES = 3       # 공용 인스턴스 시도 개수
-
-# ── 본문 길이 한도 (자) ───────────────────────────────
-PAGE_BODY_LIMIT = 6000       # open_url 이 돌려주는 최대 길이
-RESEARCH_BODY_CHARS = 1800   # research() 가 기사당 붙이는 본문 길이
-MIN_BODY_CHARS = 400         # 이보다 짧으면 '기사 본문' 으로 보지 않음
 
 # ── 컨테이너 내부 경로 ────────────────────────────────
 AGENT_WORKSPACE = "/home/agent/workspace"
 AGENT_STATE_DIR = "/home/agent/.agent_state"
-
-# ── 검색 경로 선택 ────────────────────────────────────
-#   race(기본) | onion | clearnet | searxng
-SEARCH_PATH_MODE = "race"
-
-# 공용 SearXNG 인스턴스 (Tor 로 경유 -> 구글 차단 회피)
-PUBLIC_SEARX_INSTANCES = (
-    "https://searx.be",
-    "https://search.inetol.net",
-    "https://priv.au",
-    "https://opnxng.com",
-    "https://searxng.site",
-    "https://search.bus-hit.me",
-)
-
-# Tor 를 우회할 도메인 (막히는 사이트만 예외 처리).
-# 비워 두면 전부 Tor 를 지난다. 호스트에 VPN 을 켜 두면 이 경로도 실제 IP 는 가려진다.
-SEARCH_DIRECT_DOMAINS = ()
-
-
-def pretool_settings_env() -> dict:
-    """PreTool(컨테이너 안)에 전달할 설정 환경변수."""
-    return {
-        "SEARCH_TIMEOUT": str(SEARCH_TIMEOUT),
-        "SEARCH_ONION_TIMEOUT": str(SEARCH_ONION_TIMEOUT),
-        "PAGE_TIMEOUT": str(PAGE_TIMEOUT),
-        "ARCHIVE_TIMEOUT": str(ARCHIVE_TIMEOUT),
-        "SEARCH_RETRIES": str(SEARCH_RETRIES),
-        "PUBLIC_SEARX_TRIES": str(PUBLIC_SEARX_TRIES),
-        "PAGE_BODY_LIMIT": str(PAGE_BODY_LIMIT),
-        "RESEARCH_BODY_CHARS": str(RESEARCH_BODY_CHARS),
-        "MIN_BODY_CHARS": str(MIN_BODY_CHARS),
-        "SEARCH_PATH": SEARCH_PATH_MODE,
-        "SEARXNG_PUBLIC": ",".join(PUBLIC_SEARX_INSTANCES),
-        "SEARCH_DIRECT_DOMAINS": ",".join(SEARCH_DIRECT_DOMAINS),
-        "AGENT_WORKSPACE": AGENT_WORKSPACE,
-    }
-
-
-def all_pretool_env() -> dict:
-    """엔드포인트 + 설정을 합친 전체 환경변수 (컨테이너 주입용)."""
-    env = {}
-    try:
-        env.update(pretool_env())
-    except Exception:
-        pass
-    env.update(pretool_settings_env())
-    return env
 
 
 # >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8

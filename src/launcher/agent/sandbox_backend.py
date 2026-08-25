@@ -5,26 +5,52 @@ import os
 import subprocess
 from pathlib import Path
 
+from runtime_versions import (
+    SANDBOX_OI_LABEL,
+    SANDBOX_RUNTIME_LABEL,
+    SANDBOX_RUNTIME_VALUE,
+)
+
 from .backend import AgentConfig
 from .interpreter_backend import OI_VERSION, OpenInterpreterBackend
 
-SANDBOX_RUNTIME_LABEL = "local-ai-agent.runtime"
-SANDBOX_RUNTIME_VALUE = "app-server"
-SANDBOX_OI_LABEL = "local-ai-agent.open-interpreter-version"
+#: Used only when launcher.config cannot be imported at all.
+SANDBOX_SEARXNG_URL_FALLBACK = "http://llm_searxng:8080"
 
+#: Environment keys from the retired custom agent loop. Nothing produces them
+#: any more; they are still filtered so a stale or hand-built command cannot
+#: smuggle that payload — and its conflicting system prompt — into the runtime.
 _LEGACY_ENV_KEYS = {
     "AGENT_REPL_SRC",
     "AGENT_MODEL_LADDER",
     "LITELLM_LOG",
 }
-_OVERRIDE_ENV = {
-    "INTERPRETER_HOME": "/home/agent/.agent_state/open_interpreter",
-    "CODEX_OSS_BASE_URL": "http://host.docker.internal:11434/v1",
-    "NO_PROXY": "host.docker.internal,localhost,127.0.0.1,::1,llm_searxng",
-    "no_proxy": "host.docker.internal,localhost,127.0.0.1,::1,llm_searxng",
-    "SEARXNG_URL": "http://llm_searxng:8080",
-    "PYTHONPATH": "/home/agent/.agent_state",
-}
+
+
+def _override_env() -> dict[str, str]:
+    """Environment the container runtime must use, whatever the caller passed.
+
+    The Ollama port follows configuration: hardcoding 11434 silently broke every
+    sandbox session for users who moved the service.
+    """
+    try:
+        from launcher import config
+        ollama_port = int(getattr(config, "OLLAMA_PORT", 11434))
+        searxng_url = str(config.SEARXNG_INTERNAL_URL)
+        state_dir = str(config.AGENT_STATE_DIR)
+    except Exception:
+        ollama_port = 11434
+        searxng_url = SANDBOX_SEARXNG_URL_FALLBACK
+        state_dir = "/home/agent/.agent_state"
+    no_proxy = "host.docker.internal,localhost,127.0.0.1,::1,llm_searxng"
+    return {
+        "INTERPRETER_HOME": f"{state_dir}/open_interpreter",
+        "CODEX_OSS_BASE_URL": f"http://host.docker.internal:{ollama_port}/v1",
+        "NO_PROXY": no_proxy,
+        "no_proxy": no_proxy,
+        "SEARXNG_URL": searxng_url,
+        "PYTHONPATH": state_dir,
+    }
 
 
 def _sandbox_image() -> str:
@@ -71,8 +97,30 @@ def _env_key(value: str) -> str:
     return str(value).split("=", 1)[0]
 
 
-def transform_legacy_sandbox_command(command: tuple[str, ...] | list[str]) -> list[str]:
-    """Reuse the legacy Docker policy while replacing only its runtime tail."""
+def app_server_tail(image: str | None = None) -> list[str]:
+    """Canonical container runtime tail: image plus the App Server invocation.
+
+    Both the command builder and :func:`normalize_sandbox_command` use
+    this, so transforming an already-current command is a no-op.
+    """
+    return [
+        image or _sandbox_image(),
+        "interpreter",
+        "-c", "check_for_update_on_startup=false",
+        "-c", 'web_search="disabled"',
+        "app-server", "--listen", "stdio://",
+    ]
+
+
+def normalize_sandbox_command(command: tuple[str, ...] | list[str]) -> list[str]:
+    """Force any ``docker run`` command onto the current runtime contract.
+
+    The caller's outer security policy — mounts, tmpfs masks, network flags,
+    resource ceilings — is preserved exactly. Everything the runtime owns is
+    replaced: environment keys from the retired agent loop are dropped, the
+    runtime environment is re-applied, and the tail becomes the App Server
+    invocation. Running this on an already-current command is a no-op.
+    """
     source = [str(token) for token in command]
     if len(source) < 3 or source[0:2] != ["docker", "run"]:
         raise ValueError("structured sandbox requires a docker run command")
@@ -85,7 +133,8 @@ def transform_legacy_sandbox_command(command: tuple[str, ...] | list[str]) -> li
 
     prefix = source[:2]
     i = 2
-    override_keys = set(_OVERRIDE_ENV)
+    override_env = _override_env()
+    override_keys = set(override_env)
     while i < image_index:
         token = source[i]
         if token == "-e" and i + 1 < image_index:
@@ -100,16 +149,10 @@ def transform_legacy_sandbox_command(command: tuple[str, ...] | list[str]) -> li
         prefix.append(token)
         i += 1
 
-    for key, value in _OVERRIDE_ENV.items():
+    for key, value in override_env.items():
         prefix.extend(["-e", f"{key}={value}"])
 
-    return prefix + [
-        image,
-        "interpreter",
-        "-c", "check_for_update_on_startup=false",
-        "-c", 'web_search="disabled"',
-        "app-server", "--listen", "stdio://",
-    ]
+    return prefix + app_server_tail(image)
 
 
 def _container_name(command: list[str]) -> str | None:
@@ -131,13 +174,13 @@ class SandboxOpenInterpreterBackend(OpenInterpreterBackend):
         self._container_name: str | None = None
 
     def _runtime_available(self, config: AgentConfig) -> bool:
-        return config.legacy_runtime is not None and sandbox_image_supports_app_server()
+        return config.runtime_spec is not None and sandbox_image_supports_app_server()
 
     def _client_spec(self, config: AgentConfig) -> tuple[list[str], dict[str, str], Path]:
-        runtime = config.legacy_runtime
+        runtime = config.runtime_spec
         if runtime is None:
-            raise ValueError("Sandbox backend requires legacy Docker policy command")
-        command = transform_legacy_sandbox_command(runtime.command)
+            raise ValueError("Sandbox backend requires a docker run command")
+        command = normalize_sandbox_command(runtime.command)
         self._container_name = _container_name(command)
         return command, dict(os.environ), config.workspace.resolve()
 

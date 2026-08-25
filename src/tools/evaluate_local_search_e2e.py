@@ -12,8 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from runtime_versions import OPEN_INTERPRETER_VERSION
+
 from launcher import config as launcher_config
-from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
 from launcher.agent.backend_factory import create_backend
 from launcher.agent.events import AgentEvent
 from launcher.agent.local_search_eval import analyze_trace, assess_case, collect_turn
@@ -31,17 +33,19 @@ CASES = [
         "expect_search": True,
         "min_fetch": 0,
         "min_sources": 1,
+        "require_citation": True,
     },
     {
         "name": "oi_search_architecture",
         "prompt": (
-            "Open Interpreter 0.0.38의 MCP 기능과 web search 구현 방식을 웹에서 조사해줘. "
+            f"Open Interpreter {OPEN_INTERPRETER_VERSION}의 MCP 기능과 web search 구현 방식을 웹에서 조사해줘. "
             "서로 다른 공개 출처 최소 2개의 본문을 실제로 읽고, 일반 검색이 Playwright 브라우저 자동화인지 "
             "HTTP/provider search 방식인지 근거 URL과 함께 짧게 결론 내줘."
         ),
         "expect_search": True,
         "min_fetch": 2,
         "min_sources": 2,
+        "require_citation": True,
     },
     {
         "name": "arithmetic_control",
@@ -59,7 +63,7 @@ def build_agent_config(
     mode: str,
     model: str,
     network_mode: str,
-    legacy_runtime: LegacyRuntimeSpec | None = None,
+    runtime_spec: ProcessRuntimeSpec | None = None,
 ) -> AgentConfig:
     profile = default_profile()
     return AgentConfig(
@@ -68,7 +72,7 @@ def build_agent_config(
         model=model,
         network_mode=network_mode,
         profile_name=profile.name,
-        legacy_runtime=legacy_runtime,
+        runtime_spec=runtime_spec,
         instructions=profile.system_message,
     )
 
@@ -123,7 +127,7 @@ def _preflight(model: str) -> dict:
     return result
 
 
-def _runtime_spec_for_case(*, mode: str, workspace: Path, model: str) -> tuple[LegacyRuntimeSpec | None, bool]:
+def _runtime_spec_for_case(*, mode: str, workspace: Path, model: str) -> tuple[ProcessRuntimeSpec | None, bool]:
     if mode == "host":
         return None, True
 
@@ -145,7 +149,7 @@ def _runtime_spec_for_case(*, mode: str, workspace: Path, model: str) -> tuple[L
     )
     if command is None or is_host:
         raise RuntimeError("Could not build the sandbox runtime command")
-    return LegacyRuntimeSpec(command=tuple(str(part) for part in command)), False
+    return ProcessRuntimeSpec(command=tuple(str(part) for part in command)), False
 
 
 def _run_case(*, case: dict, mode: str, model: str, timeout_s: float, workspace_root: Path) -> dict:
@@ -157,7 +161,7 @@ def _run_case(*, case: dict, mode: str, model: str, timeout_s: float, workspace_
         mode=mode,
         model=model,
         network_mode=launcher_config.NET_MODE,
-        legacy_runtime=runtime_spec,
+        runtime_spec=runtime_spec,
     )
     service = AgentService(create_backend(mode, ROOT / "llm_environment"))
     events: list[AgentEvent] = []
@@ -172,6 +176,7 @@ def _run_case(*, case: dict, mode: str, model: str, timeout_s: float, workspace_
         report = analyze_trace(events)
         assessment = assess_case(
             report,
+            require_citation=bool(case.get("require_citation")),
             expect_search=bool(case["expect_search"]),
             min_fetch=int(case.get("min_fetch", 0)),
             min_sources=int(case.get("min_sources", 0)),

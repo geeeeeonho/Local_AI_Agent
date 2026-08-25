@@ -275,49 +275,35 @@ def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
 
     Returns: (cmd, is_host) 또는 (None, _) 실패 시
     """
+    del profile, context_window  # instructions and limits travel via AgentConfig
     from .. import config
     if mode == "sandbox":
-        from launcher.agent.agent_runner import build_sandbox_pipe_cmd
-        from launcher.agent import profiles as _profiles  # FOLDER_WS_v1: 작업 폴더 + 허용 폴더 안내 주입
-        _sysmsg = profile.system_message + _profiles.build_session_addendum(workspace)
-        cmd = build_sandbox_pipe_cmd(
+        from launcher.agent.sandbox_policy import build_sandbox_docker_command
+        cmd = build_sandbox_docker_command(
             image=config.SANDBOX_IMAGE,
             container_name=container_name,
             workspace=workspace,
             workspace_mount=config.SANDBOX_WORKSPACE_MOUNT,
-            model_tag=(model_tag or config.MODEL_TAG),
-            ollama_port=config.OLLAMA_PORT,
-            profile_system_message=_sysmsg,
-            context_window=context_window,
             memory_limit=run_mem,
             cpu_limit=run_cpus,
             block_internet=(not tor_proxy),  # TOR_TOGGLE_v1
             tor_proxy=tor_proxy,
-            auto_run=True,   # 샌드박스 안이라 안전
         )
         return cmd, False
-    else:  # host
-        _tag = model_tag or config.MODEL_TAG
-        try:
-            from launcher.agent.interpreter_backend import managed_interpreter_exe
-            if managed_interpreter_exe(env.parent).is_file():
-                # Structured backend consumes metadata from AgentConfig; this marker is never executed.
-                return ["managed-open-interpreter", "--model", "ollama/" + _tag], True
-        except Exception:
-            pass
-        from launcher.agent.agent_runner import build_host_pipe_cmd
-        interp = env / "agent" / "venv" / "Scripts" / "interpreter.exe"
-        if not interp.exists():
+
+    # Host mode runs the managed Open Interpreter runtime only. There is no
+    # fallback to the retired venv interpreter: swapping runtimes silently would
+    # also swap tool, approval, session and security semantics.
+    _tag = model_tag or config.MODEL_TAG
+    try:
+        from launcher.agent.interpreter_backend import managed_interpreter_exe
+        if not managed_interpreter_exe(env.parent).is_file():
             return None, True
-        cmd = build_host_pipe_cmd(
-            interpreter_exe=str(interp),
-            model_tag=_tag,
-            ollama_url=config.OLLAMA_URL,
-            profile_system_message=profile.system_message,
-            context_window=context_window,
-            auto_run=False,  # 호스트는 매 명령 확인 (안전)
-        )
-        return cmd, True
+    except Exception:
+        return None, True
+    # The structured backend builds its own process command from AgentConfig.
+    # This marker only carries the model tag back to the caller and is never run.
+    return ["managed-open-interpreter", "--model", "ollama/" + _tag], True
 
 
 def run(env, p):
@@ -466,7 +452,7 @@ def run(env, p):
                 pass
             _matched, _note = _mri.auto_match_installed(agent_model_tag, _rn, _freei, host=_hosti)
             if _matched is None:
-                p.error(_note or "설치된 모델이 없습니다 — MANAGE.bat [2] 에서 받으세요.")
+                p.error(_note or "설치된 모델이 없습니다 — SETUP.bat --manage 에서 받으세요.")
                 p.pause()
                 return
             if _matched != agent_model_tag:
@@ -506,11 +492,30 @@ def run(env, p):
     # ── 7) GUI 통합 대화창 실행 (v7.0 스레드 마샬링) ──
     _v63_trace("_run_gui_chat 호출 직전 (통합)")
     _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
-                          run_mem, run_cpus, tor_proxy=_tor_on)  # HOST_TOR_ENV_v1
+                          run_mem, run_cpus, tor_proxy=_tor_on,
+                          model_tag=agent_model_tag)
     _v63_trace("_run_gui_chat 반환됨 (통합)")
 
 
-def _net_mode_label(cmd):  # NETMODE_RUNTIME_v1: WARP/Tor 구분 라벨
+def _net_mode_label(cmd, *, is_host=False, tor_proxy=False):
+    """Human-readable network posture for the panel, trace and logs.
+
+    The sandbox command carries its own network flags, so it can be described by
+    inspecting it. The host marker command carries none — its proxying is
+    applied through the process environment — so host mode must be described
+    from the decision that was actually made, or every host session would be
+    labelled "직접 연결" even while routed through Tor.
+    """
+    if is_host:
+        if not tor_proxy:
+            return "개방 (직접 연결)"
+        try:
+            from .. import config as _cfg
+            mode = str(getattr(_cfg, "NET_MODE", "tor")).strip().lower()
+        except Exception:
+            mode = "tor"
+        return "WARP 경유 (빠름)" if mode == "warp" else "Tor 경유 (최고 익명)"
+
     j = " ".join(str(c) for c in cmd)
     if "--dns=0.0.0.0" in j:
         return "차단 (인터넷 없음)"
@@ -533,12 +538,14 @@ def _net_flags(cmd):  # NETMODE_LOG_v1
 
 
 def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
-                          run_mem, run_cpus, tor_proxy=False):  # HOST_TOR_ENV_v1
+                          run_mem, run_cpus, tor_proxy=False, model_tag=""):
     """통합 GUI 대화창 — 샌드박스/호스트 공통.
 
     v7_0_threadfix 스레드 마샬링 내장.
     """
-    from launcher.agent.backend import AgentConfig, LegacyRuntimeSpec
+    import threading as _threading
+
+    from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
     from launcher.agent.backend_factory import create_backend
     from launcher.agent.events import AgentEventType
     from launcher.agent.service import AgentService
@@ -551,23 +558,59 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         return
 
     service = AgentService(create_backend("host" if is_host else "sandbox", env))
+    panel_holder = {"panel": None}
 
-    def _current_model_tag(runtime_cmd):
+    # Single source of truth for the active model. The runtime command no longer
+    # carries it: the App Server takes the model over thread/start, so switching
+    # models restarts the session instead of rewriting a command string.
+    model_holder = [str(model_tag or "")]
+
+    def _ui(fn):
+        """Run ``fn`` on the Tk main loop."""
         try:
-            idx = runtime_cmd.index("--model")
-            value = str(runtime_cmd[idx + 1])
-            return value[len("ollama/"):] if value.startswith("ollama/") else value
-        except (ValueError, IndexError):
-            return ""
+            main_window.root.after(0, fn)
+        except Exception:
+            try:
+                fn()
+            except Exception:
+                pass
+
+    def _safe_append(level, txt):
+        """Append to the chat panel from any thread."""
+        panel = panel_holder.get("panel")
+        if panel is None:
+            return
+        _ui(lambda: panel.append_message(level, txt))
+
+    # Service calls used to be serialized by running on the single Tk thread.
+    # Moving them to workers keeps that guarantee explicit: start/stop/send must
+    # not interleave, or a restart can race a turn already being started.
+    _service_lock = _threading.Lock()
+
+    def _off_ui(name, fn):
+        """Run a blocking service call off the Tk thread.
+
+        Panel callbacks arrive on the Tk main loop, and every service call below
+        is a JSON-RPC round trip with a multi-second timeout. Running them inline
+        froze the whole window for as long as the runtime took to answer.
+        """
+        def worker():
+            try:
+                with _service_lock:
+                    fn()
+            except Exception as exc:
+                _safe_append("error", "%s 실패: %s" % (name, exc))
+
+        _threading.Thread(target=worker, daemon=True, name="agent-" + name).start()
 
     def _service_config(runtime_cmd, runtime_env=None, runtime_cwd=None):
         return AgentConfig(
             workspace=workspace,
             mode="host" if is_host else "sandbox",
-            model=_current_model_tag(runtime_cmd),
-            network_mode=_net_mode_label(runtime_cmd),
+            model=model_holder[0],
+            network_mode=_net_mode_label(runtime_cmd, is_host=is_host, tor_proxy=tor_proxy),
             profile_name=str(getattr(profile, "name", "agent")),
-            legacy_runtime=LegacyRuntimeSpec(
+            runtime_spec=ProcessRuntimeSpec(
                 command=tuple(str(part) for part in runtime_cmd),
                 env=runtime_env,
                 cwd=runtime_cwd,
@@ -575,26 +618,22 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             instructions=str(getattr(profile, "system_message", "")),
         )
 
-    panel_holder = {"panel": None}
     nonlocal_container = [container]
 
     def build_panel(parent):
         mode_label = "호스트 직접 (위험)" if is_host else "샌드박스 (격리)"
+        net_label = _net_mode_label(cmd, is_host=is_host, tor_proxy=tor_proxy)
         _plabel = getattr(profile, "label", None) or getattr(profile, "name", "에이전트")
         panel = ChatPanel(
             parent,
             title="에이전트 대화 — " + str(_plabel),
-            subtitle="모드: " + mode_label + "  |  마운트: " + str(workspace),
+            subtitle=("모드: " + mode_label + "  |  네트워크: " + net_label
+                      + "  |  마운트: " + str(workspace)),
             workspace=workspace,
         )
         try:  # MODEL_DISPLAY_v1: 현재 모델을 드롭다운 라벨에 표시
-            _mc0 = list(cmd)
-            if "--model" in _mc0:
-                _mt0 = _mc0[_mc0.index("--model") + 1]
-                if isinstance(_mt0, str) and _mt0.startswith("ollama/"):
-                    _mt0 = _mt0[len("ollama/"):]
-                if hasattr(panel, "set_current_model"):
-                    panel.set_current_model(_mt0)
+            if model_holder[0] and hasattr(panel, "set_current_model"):
+                panel.set_current_model(model_holder[0])
         except Exception:
             pass
 
@@ -642,14 +681,8 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             except Exception:
                 pass
             out[insert_at:insert_at] = fresh
-            # FOLDER_WS_RELOAD_v1: 시스템 메시지(허용 폴더 안내)도 현재 정책으로 갱신
-            try:
-                from launcher.agent import profiles as _profiles
-                _sm = profile.system_message + _profiles.build_session_addendum(workspace)
-                _si = out.index("--system_message")
-                out[_si + 1] = _sm
-            except Exception:
-                pass
+            # The session addendum (allowed folders) is rebuilt by the backend
+            # from AgentConfig on every start, so no argument needs rewriting.
             return out, new_name
 
         def _allowed_sig(c):  # FOLDER_WS_RELOAD_v1: 허용 마운트/마스크 집합의 서명
@@ -682,15 +715,18 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             _cmd_holder[0] = new_cmd
             _nmounts = sum(1 for _x in new_cmd if _x == "-v")
             _post("system", "[정책 반영 - 컨테이너 재기동...] 마운트 " + str(_nmounts) + "개")
-            try:
-                service.stop(timeout=2.0)
-            except Exception:
-                pass
-            service.start(_service_config(new_cmd))
-            try:
-                panel.enable_send()
-            except Exception:
-                pass
+
+            def reapply():
+                try:
+                    service.stop(timeout=2.0)
+                except Exception:
+                    pass
+                if service.start(_service_config(new_cmd)):
+                    _ui(panel.enable_send)
+                else:
+                    _post("error", "정책 반영 후 재기동 실패 — Docker 상태를 확인하세요.")
+
+            _off_ui("reload", reapply)
             try:
                 panel.refresh_files(workspace)
             except Exception:
@@ -749,28 +785,26 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 if not arg:
                     _post("system", "사용법: /model <태그>  예: /model qwen2.5-coder:7b")
                     return True
-                _cnew = list(_cmd_holder[0])
-                if "--model" in _cnew:
-                    _mi = _cnew.index("--model")
-                    if _mi + 1 < len(_cnew):
-                        _cnew[_mi + 1] = "ollama/" + arg
-                    _cmd_holder[0] = _cnew
-                    _post("system", "[모델 변경 - 런타임 재기동...] " + arg)
+                previous = model_holder[0]
+                _post("system", "[모델 변경 - 런타임 재기동...] " + arg)
+
+                def switch_model():
+                    model_holder[0] = arg
                     try:
                         service.stop(timeout=2.0)
                     except Exception:
                         pass
-                    try:
-                        service.start(_service_config(_cnew))
+                    if service.start(_service_config(_cmd_holder[0])):
                         _post("system", "모델 변경 완료: " + arg + "  (첫 응답은 적재로 다소 걸릴 수 있음)")
-                    except Exception as _e:
-                        _post("error", "모델 변경 실패: " + str(_e))
-                    try:
-                        panel.enable_send()
-                    except Exception:
-                        pass
-                else:
-                    _post("error", "현재 명령에 --model 이 없어 변경할 수 없습니다.")
+                        if hasattr(panel, "set_current_model"):
+                            _ui(lambda: panel.set_current_model(arg))
+                    else:
+                        model_holder[0] = previous
+                        _post("error", "모델 변경 실패 — 이전 모델(" + previous + ")로 되돌립니다.")
+                        service.start(_service_config(_cmd_holder[0]))
+                    _ui(panel.enable_send)
+
+                _off_ui("model", switch_model)
                 return True
             if c0 in ("/allow", "/허용"):
                 if not arg:
@@ -809,37 +843,50 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         def on_user_input(text):
             if _handle_slash(text):
                 return
-            ok = service.send(text)
-            if not ok:
-                panel.append_message("warn", "에이전트가 실행 중이 아니거나 현재 turn이 처리 중입니다")
+
+            def send():
+                if not service.send(text):
+                    _post("warn", "에이전트가 실행 중이 아니거나 현재 turn이 처리 중입니다")
+
+            _off_ui("send", send)
 
         def on_stop():
             panel.append_message("system", "[중단 요청...]")
-            if is_host and service.cancel():
-                panel.append_message("system", "현재 Host turn 중단 요청 완료")
-                panel.enable_send()
-                return
-            service.stop(timeout=2.0)
-            panel.disable_send()
+
+            def stop():
+                if is_host and service.cancel():
+                    _post("system", "현재 Host turn 중단 요청 완료")
+                    _ui(panel.enable_send)
+                    return
+                service.stop(timeout=2.0)
+                _ui(panel.disable_send)
+
+            _off_ui("stop", stop)
 
         def on_restart():
             panel.append_message("system", "[재시작 요청...]")
-            service.stop(timeout=2.0)
-            if not is_host:
-                try:
-                    new_cmd, _ = _rebuild_policy_cmd(_cmd_holder[0])  # FOLDER_POLICY_LIVE_v1
-                    _cmd_holder[0] = new_cmd
-                except Exception:
-                    pass
-            _renv = None  # HOST_TOR_ENV_v1
-            if is_host and tor_proxy:
-                try:
-                    from launcher.agent.agent_runner import build_tor_env
-                    _renv = build_tor_env()
-                except Exception:
-                    _renv = None
-            service.start(_service_config(_cmd_holder[0], runtime_env=_renv))
-            panel.enable_send()
+
+            def restart():
+                service.stop(timeout=2.0)
+                if not is_host:
+                    try:
+                        new_cmd, _ = _rebuild_policy_cmd(_cmd_holder[0])  # FOLDER_POLICY_LIVE_v1
+                        _cmd_holder[0] = new_cmd
+                    except Exception:
+                        pass
+                _renv = None  # HOST_TOR_ENV_v1
+                if is_host and tor_proxy:
+                    try:
+                        from launcher.agent.sandbox_policy import build_tor_env
+                        _renv = build_tor_env()
+                    except Exception:
+                        _renv = None
+                if service.start(_service_config(_cmd_holder[0], runtime_env=_renv)):
+                    _ui(panel.enable_send)
+                else:
+                    _post("error", "재시작 실패 — Docker/Ollama 상태를 확인하세요.")
+
+            _off_ui("restart", restart)
 
         def on_open():
             _open_folder_in_explorer(workspace)
@@ -859,8 +906,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         return panel
 
     # v7_0_threadfix: ChatPanel 생성을 메인 스레드로 마샬링
-    import threading as _thr
-    _panel_ready = _thr.Event()
+    _panel_ready = _threading.Event()
     _build_error = [None]
 
     def _build_on_main():
@@ -916,15 +962,6 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         return
 
     # 메인 스레드 마샬링 append
-    def _safe_append(level, txt):
-        try:
-            main_window.root.after(0, lambda: panel.append_message(level, txt))
-        except Exception:
-            try:
-                panel.append_message(level, txt)
-            except Exception:
-                pass
-
     try:
         _pl = getattr(profile, "label", None) or getattr(profile, "name", "에이전트")
     except Exception:
@@ -1069,94 +1106,38 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
             pass
 
     # PREWARM_UI_v1: 모델 적재/롤백을 대화창(워커 스레드)에서 진행 표시
-    if not is_host:
+    if not is_host and model_holder[0]:
         try:
-            from .. import model_roles as _mrp
-            if "--model" in cmd:
-                _mi = cmd.index("--model")
-                if _mi + 1 < len(cmd) and str(cmd[_mi + 1]).startswith("ollama/"):
-                    _curtag = str(cmd[_mi + 1])[len("ollama/"):]
-                    _role = None
-                    for _kk, _lad in getattr(_mrp, "LADDERS", {}).items():
-                        if any(_m == _curtag for _m, _n in _lad):
-                            _role = _kk
-                            break
-                    if _role and hasattr(_mrp, "resolve_with_rollback"):
-                        _safe_append("system", "모델 적재 확인 중... (여유 메모리 점검 · 최초 1회 다소 걸릴 수 있음)")
+            from ..models import model_roles as _mrp
+            _curtag = model_holder[0]
+            _role = None
+            for _kk, _lad in getattr(_mrp, "LADDERS", {}).items():
+                if any(_m == _curtag for _m, _n in _lad):
+                    _role = _kk
+                    break
+            if _role and hasattr(_mrp, "resolve_with_rollback"):
+                _safe_append("system", "모델 적재 확인 중... (여유 메모리 점검 · 최초 1회 다소 걸릴 수 있음)")
 
-                        class _PWPresenter:
-                            def warn(self, _m):
-                                _safe_append("warn", str(_m))
+                class _PWPresenter:
+                    def warn(self, _m):
+                        _safe_append("warn", str(_m))
 
-                            def info(self, _m):
-                                _safe_append("system", str(_m))
+                    def info(self, _m):
+                        _safe_append("system", str(_m))
 
-                        try:
-                            _free_pw = _mrp.detect_free_memory_gb()
-                        except Exception:
-                            _free_pw = None
-                        _rolled = _mrp.resolve_with_rollback(_role, _free_pw, presenter=_PWPresenter())
-                        if _rolled and _rolled != _curtag:
-                            cmd[_mi + 1] = "ollama/" + _rolled
-                            _safe_append("system", "적재 실패 감지 -> " + _rolled + " 로 자동 변경")
-                        else:
-                            _safe_append("system", "모델 적재 확인 완료: " + _curtag)
-        except Exception:
-            pass
-
-    try:  # SYSMSG_FILE_v1: 긴 시스템 메시지를 파일로 (WinError 206 방지)
-        if "--system_message" in cmd and any("/home/agent/.agent_state" in str(_x) for _x in cmd):
-            _si = cmd.index("--system_message")
-            if _si + 1 < len(cmd) and not str(cmd[_si + 1]).startswith("@FILE:") and len(str(cmd[_si + 1])) > 1500:
-                from ..core import user_data as _udS
-                import os as _osS
-                _sdir = str(_udS.interpreter_dir("sandbox"))
-                _osS.makedirs(_sdir, exist_ok=True)
-                _spath = _osS.path.join(_sdir, "system_message.txt")
-                with open(_spath, "w", encoding="utf-8") as _sf:
-                    _sf.write(str(cmd[_si + 1]))
-                cmd[_si + 1] = "@FILE:/home/agent/.agent_state/system_message.txt"
-    except Exception:
-        pass
-    try:  # PRETOOL_PATH_v1: PreTool 를 모든 코드블록에서 import 가능하게
-        if any("/home/agent/.agent_state" in str(_xp) for _xp in cmd) \
-                and not any("PYTHONPATH=" in str(_xp) for _xp in cmd):
-            _pos = (cmd.index("--rm") + 1) if "--rm" in cmd else (cmd.index("run") + 1 if "run" in cmd else 2)
-            cmd[_pos:_pos] = ["-e", "PYTHONPATH=/home/agent/.agent_state"]
-    except Exception:
-        pass
-    try:  # PRETOOL_SYNC_v2: 루트 ./PreTool 만 정본. 마운트 사본은 매번 새로 만든다.
-        from ..core import user_data as _udP
-        import os as _osP, shutil as _shP
-        _dstP = str(_udP.interpreter_dir("sandbox"))
-        _rootP = _osP.path.dirname(_osP.path.dirname(_osP.path.dirname(_osP.path.abspath(__file__))))
-        _srcP = _osP.path.join(_rootP, "PreTool")
-        if _osP.path.isdir(_srcP):
-            _mirP = _osP.path.join(_dstP, "PreTool")
-            # 1) 기존 사본 제거. copytree(dirs_exist_ok=True) 는 지우지 않으므로
-            #    루트에서 삭제·개명한 모듈이 사본에 남아 import 를 가로챈다.
-            if _osP.path.isdir(_mirP):
-                _shP.rmtree(_mirP, ignore_errors=True)
-            # 2) __pycache__ 와 sitecustomize.py 는 사본에 넣지 않는다.
-            #    sitecustomize 는 sys.path 최상위에서만 자동 실행되므로
-            #    PreTool/ 안쪽 사본은 절대 실행되지 않는 죽은 파일이다.
-            #    dirs_exist_ok=True 는 파일 잠김 등으로 rmtree 가 실패했을 때의 안전망.
-            _shP.copytree(_srcP, _mirP, dirs_exist_ok=True,
-                          ignore=_shP.ignore_patterns("__pycache__", "*.pyc",
-                                                      "sitecustomize.py"))
-            # 3) 실제로 실행되는 위치는 상태 폴더 최상위 한 곳뿐이다.
-            _scS = _osP.path.join(_srcP, "sitecustomize.py")
-            if _osP.path.exists(_scS):
-                _shP.copy2(_scS, _osP.path.join(_dstP, "sitecustomize.py"))
-            # 4) 이전 버전이 남긴 죽은 사본 제거(있을 때만).
-            _deadP = _osP.path.join(_mirP, "sitecustomize.py")
-            if _osP.path.isfile(_deadP):
                 try:
-                    _osP.remove(_deadP)
-                except OSError:
-                    pass
-    except Exception:
-        pass
+                    _free_pw = _mrp.detect_free_memory_gb()
+                except Exception:
+                    _free_pw = None
+                _rolled = _mrp.resolve_with_rollback(_role, _free_pw, presenter=_PWPresenter())
+                if _rolled and _rolled != _curtag:
+                    model_holder[0] = _rolled
+                    _safe_append("system", "적재 실패 감지 -> " + _rolled + " 로 자동 변경")
+                else:
+                    _safe_append("system", "모델 적재 확인 완료: " + _curtag)
+        except Exception as _epw:
+            _safe_append("warn", "모델 적재 확인 생략: %s" % _epw)
+
     try:  # SEARXNG_AUTOSTART_v1: 로컬 검색엔진 기동(web_search 가 8888 로 붙음)
         if any("HTTP_PROXY=" in str(_xs) or "--add-host" in str(_xs) for _xs in cmd):
             from .. import searxng_runtime as _sxr
@@ -1245,7 +1226,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
     _start_env = None  # HOST_TOR_ENV_v1
     if is_host and tor_proxy:
         try:
-            from launcher.agent.agent_runner import build_tor_env
+            from launcher.agent.sandbox_policy import build_tor_env
             _start_env = build_tor_env()
             _safe_append("system", "[net] 호스트 인터프리터 Tor 프록시 적용 (127.0.0.1:8118 / 9050)")
         except Exception as _ete:
@@ -1285,7 +1266,7 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                 if _ms:
                     _safe_append("system", "진단: Ollama 설치 모델 %d개 (%s)" % (len(_ms), ", ".join([x for x in _ms[:5] if x])))
                 else:
-                    _safe_append("error", "진단: Ollama 에 설치된 모델이 0개입니다 — MANAGE.bat [2] 모델 관리에서 받으세요.")
+                    _safe_append("error", "진단: Ollama 에 설치된 모델이 0개입니다 — SETUP.bat --manage 에서 받으세요.")
             except Exception:
                 _safe_append("error", "진단: Ollama 무응답 (127.0.0.1:%d) — Ollama 를 먼저 실행하세요." % _oport)
             if not is_host:
@@ -1300,17 +1281,24 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
                         _safe_append("error", "진단: 샌드박스 이미지 '%s' 없음 — 이미지를 빌드/받으세요." % _img)
                 except Exception:
                     pass
-                try:  # START_DIAG2_v1: 컨테이너 실제 출력/오류 캡처
-                    import subprocess as _spC
-                    _rcC = _spC.run(cmd, stdin=_spC.DEVNULL, stdout=_spC.PIPE, stderr=_spC.STDOUT,
-                                    timeout=15, creationflags=(0x08000000 if os.name == "nt" else 0))
-                    _outC = (_rcC.stdout or b"").decode("utf-8", "ignore").strip()
-                    if _outC:
-                        _safe_append("error", "진단(컨테이너 출력, rc=%s): %s" % (_rcC.returncode, _outC[-600:]))
-                    else:
-                        _safe_append("system", "진단: 컨테이너가 출력 없이 종료 (rc=%s) — 이미지/엔트리포인트 확인" % _rcC.returncode)
-                except Exception as _eC:
-                    _safe_append("system", "진단: 컨테이너 재현 실패: %s" % _eC)
+                # The image label check is the cheap, side-effect-free reason a
+                # sandbox start fails most often. Re-running the agent command
+                # here would launch a second real container with the user's
+                # folders mounted, so it is reported instead of reproduced.
+                try:  # START_DIAG_LABEL_v1
+                    from launcher.agent.sandbox_backend import (
+                        sandbox_image_supports_app_server,
+                    )
+                    from runtime_versions import OPEN_INTERPRETER_VERSION
+                    if not sandbox_image_supports_app_server(_img):
+                        _safe_append(
+                            "error",
+                            "진단: 샌드박스 이미지 '%s' 가 App Server %s 런타임이 아닙니다 "
+                            "— SETUP.bat 에서 이미지를 다시 빌드하세요."
+                            % (_img, OPEN_INTERPRETER_VERSION),
+                        )
+                except Exception:
+                    pass
         except Exception:
             pass
         try:
@@ -1335,46 +1323,66 @@ def _run_gui_chat_unified(env, p, profile, workspace, cmd, container, is_host,
         changes = data.get("changes") or data.get("item") or "파일 변경"
         return "파일 변경 승인 요청\n\n변경: %s\n사유: %s" % (str(changes)[:1200], reason)
 
+    def _handle_approval(event):
+        from ..presenter.base import RISK_HIGH
+        try:
+            accepted = p.confirm_dangerous(
+                label="Open Interpreter 작업 승인",
+                description=_approval_summary(event),
+                risk=RISK_HIGH,
+            )
+        except Exception:
+            # A dialog that could not be shown must never read as consent.
+            accepted = False
+        if event.request_id is None:
+            return
+        decision = "accept" if accepted else "decline"
+        if service.approve(event.request_id, decision):
+            panel.append_message("system", "작업 승인" if accepted else "작업 거절")
+        else:
+            panel.append_message("error", "승인 응답 전송 실패")
+
+    def _handle_event(event):
+        if event.type is AgentEventType.APPROVAL_REQUIRED:
+            _handle_approval(event)
+        elif event.type is AgentEventType.TERMINATED:
+            panel.append_message("terminated", event.content)
+            panel.disable_send()
+        elif event.type is AgentEventType.TEXT_DELTA:
+            panel.append_message("stdout", event.content)
+        elif event.type is AgentEventType.REASONING:
+            panel.append_message("info", event.content)
+        elif event.type in (AgentEventType.TOOL_STARTED, AgentEventType.TOOL_PROGRESS,
+                            AgentEventType.TOOL_COMPLETED, AgentEventType.FILE_CHANGED,
+                            AgentEventType.SESSION_STARTED, AgentEventType.STARTED):
+            panel.append_message("system", event.content)
+        elif event.type is AgentEventType.ERROR:
+            panel.append_message("error", event.content)
+        elif event.type is AgentEventType.WARNING:
+            panel.append_message("warn", event.content)
+        else:
+            level = event.source_level or event.type.value
+            panel.append_message(level, event.content)
+
     def poll():
         try:
             events = service.poll_events(max_n=100)
-            for event in events:
-                if event.type is AgentEventType.APPROVAL_REQUIRED:
-                    from ..presenter.base import RISK_HIGH
-                    accepted = False
-                    try:
-                        accepted = p.confirm_dangerous(
-                            label="Open Interpreter 작업 승인",
-                            description=_approval_summary(event),
-                            risk=RISK_HIGH,
-                        )
-                    except Exception:
-                        accepted = False
-                    if event.request_id is not None:
-                        decision = "accept" if accepted else "decline"
-                        if service.approve(event.request_id, decision):
-                            panel.append_message("system", "작업 승인" if accepted else "작업 거절")
-                        else:
-                            panel.append_message("error", "승인 응답 전송 실패")
-                    continue
-                if event.type is AgentEventType.TERMINATED:
-                    panel.append_message("terminated", event.content)
-                    panel.disable_send()
-                elif event.type is AgentEventType.TEXT_DELTA:
-                    panel.append_message("stdout", event.content)
-                elif event.type is AgentEventType.REASONING:
-                    panel.append_message("info", event.content)
-                elif event.type in (AgentEventType.TOOL_STARTED, AgentEventType.TOOL_PROGRESS,
-                                     AgentEventType.TOOL_COMPLETED, AgentEventType.FILE_CHANGED,
-                                     AgentEventType.SESSION_STARTED, AgentEventType.STARTED):
-                    panel.append_message("system", event.content)
-                elif event.type is AgentEventType.ERROR:
-                    panel.append_message("error", event.content)
-                elif event.type is AgentEventType.WARNING:
-                    panel.append_message("warn", event.content)
-                else:
-                    level = event.source_level or event.type.value
-                    panel.append_message(level, event.content)
+        except Exception:
+            events = []
+        # Events are already drained from the queue, so each one is handled
+        # separately: one failing render must not discard the rest of the batch,
+        # which previously lost approval requests and terminations for good.
+        for event in events:
+            try:
+                _handle_event(event)
+            except Exception as exc:
+                try:
+                    panel.append_message(
+                        "error", "이벤트 처리 실패 (%s): %s" % (event.type.value, exc)
+                    )
+                except Exception:
+                    pass
+        try:
             files_refresh_counter[0] += 1
             if files_refresh_counter[0] >= 25:
                 files_refresh_counter[0] = 0

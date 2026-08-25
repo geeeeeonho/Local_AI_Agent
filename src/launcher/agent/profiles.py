@@ -40,8 +40,42 @@ RESPONSE_DISCIPLINE = (
 SAFETY_PREAMBLE = SAFETY_PREAMBLE + RESPONSE_DISCIPLINE
 
 
+def _folder_policy():
+    try:
+        from launcher.agent import folder_policy
+        return folder_policy
+    except Exception:
+        return None
+
+
+def _denied_section() -> str:
+    """Render the standing deny-list as an instruction guard.
+
+    In the sandbox a non-mounted path is physically absent, so the deny-list is
+    advisory there. On the host nothing enforces it but this text, which is why
+    the host session must always carry it.
+    """
+    policy = _folder_policy()
+    denied = []
+    if policy is not None:
+        try:
+            denied = policy.list_denied()
+        except Exception:
+            denied = []
+    if not denied:
+        return ""
+    lines = ["\n■ 접근 금지 폴더 — 반드시 준수\n"]
+    for path in denied:
+        lines.append(f"- {path}\n")
+    lines.append(
+        "위 경로와 그 하위에서는 읽기·쓰기·삭제·실행을 하지 마십시오. "
+        "사용자가 요청하더라도 수행하지 말고 금지된 경로임을 알리십시오.\n"
+    )
+    return "".join(lines)
+
+
 def build_session_addendum(host_workspace=None) -> str:
-    """Append dynamic workspace/mount information for a sandbox session."""
+    """Dynamic workspace/mount information for a sandboxed session."""
     parts: list[str] = []
     if host_workspace is not None:
         parts.append(
@@ -50,17 +84,52 @@ def build_session_addendum(host_workspace=None) -> str:
             "- Sandbox 내부 기본 작업 폴더: /home/agent/workspace\n"
             "- 두 경로는 같은 마운트를 가리킵니다.\n"
         )
-    try:
-        from launcher.agent import folder_policy as _fp
-        mounts = _fp.mounts_for()
-    except Exception:
-        mounts = []
+    policy = _folder_policy()
+    mounts = []
+    if policy is not None:
+        try:
+            mounts = policy.mounts_for()
+        except Exception:
+            mounts = []
     if mounts:
         lines = ["\n■ 추가 허용 폴더\n"]
         for host, container in mounts:
             lines.append(f"- {container} (호스트: {host})\n")
         lines.append("사용자가 해당 폴더 작업을 요청하면 위 컨테이너 경로를 사용할 수 있습니다.\n")
         parts.append("".join(lines))
+    parts.append(_denied_section())
+    return "".join(parts)
+
+
+def build_host_session_addendum(workspace=None) -> str:
+    """Dynamic folder information for a host session.
+
+    Host mode previously received no addendum at all: neither its workspace nor
+    the standing allow/deny policy reached the model, even though folder_policy
+    documents the deny-list as the host-mode guard.
+    """
+    parts: list[str] = []
+    if workspace is not None:
+        parts.append(
+            "\n■ 현재 세션 정보\n"
+            "- 작업 폴더: " + str(workspace) + "\n"
+            "- 이 세션은 호스트에서 직접 실행되며 컨테이너 격리가 없습니다.\n"
+            "- 별도 요청이 없으면 작업 폴더 안에서만 파일을 만들고 수정하십시오.\n"
+        )
+    policy = _folder_policy()
+    allowed = []
+    if policy is not None:
+        try:
+            allowed = policy.list_allowed()
+        except Exception:
+            allowed = []
+    if allowed:
+        lines = ["\n■ 추가 허용 폴더\n"]
+        for path in allowed:
+            lines.append(f"- {path}\n")
+        lines.append("사용자가 해당 폴더 작업을 요청하면 위 경로를 사용할 수 있습니다.\n")
+        parts.append("".join(lines))
+    parts.append(_denied_section())
     return "".join(parts)
 
 
@@ -169,6 +238,7 @@ __all__ = [
     "SAFETY_PREAMBLE",
     "RESPONSE_DISCIPLINE",
     "build_session_addendum",
+    "build_host_session_addendum",
     "by_key",
     "by_name",
     "default",

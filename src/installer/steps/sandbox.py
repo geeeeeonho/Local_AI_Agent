@@ -10,23 +10,36 @@ from typing import Dict, Optional
 from installer import utils
 from installer.i18n import t
 from installer.resources import SafetyProfile
+from runtime_versions import (
+    OPEN_INTERPRETER_VERSION,
+    SANDBOX_OI_LABEL,
+    SANDBOX_RUNTIME_LABEL,
+    SANDBOX_RUNTIME_VALUE,
+    open_interpreter_install_script,
+)
 
 IMAGE_NAME = "llm-agent-sandbox"
-OPEN_INTERPRETER_VERSION = "0.0.38"
-RUNTIME_LABEL = "local-ai-agent.runtime"
-RUNTIME_VALUE = "app-server"
-OI_VERSION_LABEL = "local-ai-agent.open-interpreter-version"
+RUNTIME_LABEL = SANDBOX_RUNTIME_LABEL
+RUNTIME_VALUE = SANDBOX_RUNTIME_VALUE
+OI_VERSION_LABEL = SANDBOX_OI_LABEL
 
 
 class DockerNotAvailable(RuntimeError):
     """Docker not installed / not running."""
 
 
-DOCKERFILE = """# syntax=docker/dockerfile:1
+def build_dockerfile(version: str = OPEN_INTERPRETER_VERSION) -> str:
+    """Render the sandbox Dockerfile for one pinned Open Interpreter release.
+
+    The version is interpolated rather than written out, because the launcher
+    refuses to use an image whose label does not equal the constant exactly.
+    """
+    install_script = open_interpreter_install_script("sh")
+    return f"""# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
-LABEL local-ai-agent.runtime="app-server" \\
-      local-ai-agent.open-interpreter-version="0.0.38"
+LABEL {SANDBOX_RUNTIME_LABEL}="{SANDBOX_RUNTIME_VALUE}" \\
+      {SANDBOX_OI_LABEL}="{version}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
         git curl wget build-essential ca-certificates tar gzip \\
@@ -37,14 +50,14 @@ RUN useradd --create-home --shell /bin/bash agent
 USER agent
 WORKDIR /home/agent
 
-ENV PATH="/home/agent/.local/bin:${PATH}"
+ENV PATH="/home/agent/.local/bin:${{PATH}}"
 ENV PYTHONUNBUFFERED=1
 ENV TERM=xterm-256color
 
 RUN curl -fsSL \\
-        https://raw.githubusercontent.com/openinterpreter/openinterpreter/rust-v0.0.38/scripts/install/install.sh \\
+        {install_script} \\
         -o /tmp/install-open-interpreter.sh \\
-    && OPEN_INTERPRETER_RELEASE=0.0.38 \\
+    && OPEN_INTERPRETER_RELEASE={version} \\
        OPEN_INTERPRETER_NONINTERACTIVE=1 \\
        OPEN_INTERPRETER_INSTALL_DIR=/home/agent/.local/bin \\
        INTERPRETER_HOME=/home/agent/.openinterpreter-package \\
@@ -57,6 +70,9 @@ WORKDIR /home/agent/workspace
 
 CMD ["bash"]
 """
+
+
+DOCKERFILE = build_dockerfile()
 
 
 def _check_docker():

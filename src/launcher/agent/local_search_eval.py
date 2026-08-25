@@ -73,14 +73,27 @@ def assess_case(
     expect_search: bool,
     min_fetch: int = 0,
     min_sources: int = 0,
+    require_citation: bool = False,
 ) -> dict:
-    """Evaluate an observable trace against one E2E case contract."""
+    """Evaluate an observable trace against one E2E case contract.
+
+    Tool usage alone is not grounding: an answer that calls ``search`` once and
+    then invents everything else would previously score a clean pass. Two
+    grounding checks are applied on top of the tool-flow checks:
+
+    ``fabricated_source``
+        the answer cites a URL that never appeared in any tool result.
+    ``missing_citation``
+        the run retrieved sources but the answer cites none of them.
+    """
     failures: list[str] = []
     search_calls = int(report.get("search_calls") or 0)
     fetch_calls = int(report.get("fetch_calls") or 0)
     failed_calls = int(report.get("failed_tool_calls") or 0)
     repeated_calls = int(report.get("repeated_identical_calls") or 0)
     sources = report.get("source_urls") or []
+    cited = report.get("cited_sources") or []
+    fabricated = report.get("fabricated_source_urls") or []
 
     if not report.get("turn_completed"):
         failures.append("turn_not_completed")
@@ -90,6 +103,8 @@ def assess_case(
         failures.append("tool_failure")
     if repeated_calls:
         failures.append("repeated_identical_call")
+    if fabricated:
+        failures.append("fabricated_source")
 
     if expect_search:
         if search_calls < 1:
@@ -98,6 +113,8 @@ def assess_case(
             failures.append("missing_fetch")
         if len(sources) < max(0, int(min_sources)):
             failures.append("insufficient_sources")
+        if require_citation and sources and not cited:
+            failures.append("missing_citation")
     elif search_calls or fetch_calls:
         failures.append("unexpected_search")
 
@@ -110,6 +127,11 @@ def analyze_trace(events: Iterable[AgentEvent]) -> dict:
     This intentionally analyzes only externally observable App Server events.
     It does not claim access to hidden model chain-of-thought. Reasoning summary
     events are reported separately when the runtime exposes them.
+
+    Grounding is measured by comparing the URLs the answer cites against the
+    URLs that actually appeared in tool arguments and results. A cited URL that
+    was never retrieved is a fabricated source, which is directly observable
+    even though the truth of the surrounding prose is not.
     """
     search_calls = 0
     fetch_calls = 0
@@ -163,6 +185,11 @@ def analyze_trace(events: Iterable[AgentEvent]) -> dict:
     source_urls = _dedupe(source_urls)
     final_text = "".join(text_parts).strip()
 
+    answer_urls = _dedupe(_extract_urls(final_text))
+    retrieved = set(source_urls)
+    cited_sources = [url for url in answer_urls if url in retrieved]
+    fabricated_source_urls = [url for url in answer_urls if url not in retrieved]
+
     score = 100
     score -= min(60, failed_tool_calls * 25)
     score -= min(40, repeated_identical_calls * 20)
@@ -172,6 +199,11 @@ def analyze_trace(events: Iterable[AgentEvent]) -> dict:
         score -= 15
     if search_calls > 0 and not turn_completed:
         score -= 10
+    # A URL in the answer that was never retrieved is a fabricated citation.
+    score -= min(50, len(fabricated_source_urls) * 25)
+    # Retrieving sources and then citing none of them is an ungrounded answer.
+    if search_calls > 0 and source_urls and not cited_sources:
+        score -= 20
     score = max(0, min(100, score))
 
     return {
@@ -181,6 +213,9 @@ def analyze_trace(events: Iterable[AgentEvent]) -> dict:
         "repeated_identical_calls": repeated_identical_calls,
         "tool_sequence": tool_sequence,
         "source_urls": source_urls,
+        "answer_urls": answer_urls,
+        "cited_sources": cited_sources,
+        "fabricated_source_urls": fabricated_source_urls,
         "reasoning_summaries": reasoning_summaries,
         "final_text": final_text,
         "turn_completed": turn_completed,

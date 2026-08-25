@@ -144,7 +144,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
             utils.warn("선택 GUI 불가 — 권장 세트 자동 설치 (" + repr(_ge) + ")")
             _picked = "AUTO"
         if _picked is None:
-            utils.warn("모델 선택 취소 — 나중에 RUN.bat -> [9] 모델 관리 에서 받으세요.")
+            utils.warn("모델 선택 취소 — 나중에 SETUP.bat --manage 에서 받으세요.")
             return []
         if _picked != "AUTO":
             _desired = set(_picked)

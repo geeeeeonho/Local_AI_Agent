@@ -135,4 +135,3 @@ session_*.json
 !**/.gitkeep
 mcp_tools.json
 .path_unify_manifest.json
-**/interpreter/sandbox/PreTool/
