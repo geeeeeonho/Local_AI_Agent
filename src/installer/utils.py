@@ -15,13 +15,13 @@ from .core.preflight import (
     preflight_windows, preflight_python, preflight_disk,
 )
 from .core.download import download_with_progress
-from .core.filesystem import create_environment
+from .core.filesystem import create_environment, write_install_manifest
 
 __all__ = [
     "C", "init_console",
     "section", "info", "ok", "warn", "err",
     "preflight_windows", "preflight_python", "preflight_disk",
     "download_with_progress",
-    "create_environment",
+    "create_environment", "write_install_manifest",
     "finalize_summary",
 ]

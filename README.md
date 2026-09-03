@@ -8,6 +8,7 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 - `RUN.bat` — 프로그램 실행(GUI/TUI)
 
 사용자 설정·로그·세션 같은 영속 데이터는 루트의 `user_data/`에 유지되고, 프로그램 소스와 개발용 파일은 `src/` 아래에 모여 있습니다.
+대용량 Ollama 모델은 프로젝트와 분리된 공용 저장소 `C:\LLM_Models`에 저장됩니다.
 
 ## 빠른 시작
 
@@ -20,7 +21,8 @@ SETUP.bat
 기본 동작은 현재 상태를 자동으로 판단합니다.
 
 - `llm_environment/`가 없으면 → 최초 설치
-- 이미 설치되어 있으면 → 관리 화면
+- 이전 `llm_environment/llm_models` 또는 중단된 모델 이전 작업이 남아 있으면 → 마이그레이션을 포함한 설치/업데이트 흐름
+- 그 외 이미 설치되어 있으면 → 관리 화면
 
 필요하면 모드를 명시할 수 있습니다.
 
@@ -50,6 +52,9 @@ GUI를 사용할 수 없는 환경에서는 런처가 TUI로 폴백할 수 있�
 ## 현재 디렉터리 구조
 
 ```text
+C:\
+└─ LLM_Models\              Ollama 공용 모델 저장소
+
 Local_AI_Agent/
 ├─ .github/                 GitHub Actions
 ├─ .gitignore
@@ -58,7 +63,7 @@ Local_AI_Agent/
 ├─ RUN.bat                  GUI + TUI 통합 실행 진입점
 │
 ├─ src/
-│  ├─ project_paths.py      프로젝트 경로 정본
+│  ├─ project_paths.py      프로젝트/공용 모델 경로 정본
 │  ├─ runtime_versions.py   외부 런타임 버전 정본 (Open Interpreter 등)
 │  ├─ launcher/             런처 / 서비스 / Agent runtime
 │  ├─ installer/            설치 / 관리 구현
@@ -70,6 +75,11 @@ Local_AI_Agent/
 ```
 
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
+설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
+
+과거 버전의 `llm_environment/llm_models`가 있고 `C:\LLM_Models`가 비어 있으면 설치 과정에서 공용 저장소로 자동 이동합니다. 다른 드라이브에서 이동하는 도중 중단되어도 최종 저장소에 부분 복사본이 노출되지 않도록 `C:\LLM_Models.migrating`을 임시 staging으로 사용하고 완료 marker로 복사 완료 여부를 구분합니다. 다음 `SETUP.bat` 실행은 완료된 staging을 승격하거나 부분 staging을 버리고 원본에서 다시 시작합니다. 두 위치에 모두 모델이 이미 있으면 데이터 충돌을 피하기 위해 자동 병합하지 않고 경고만 표시합니다.
+
+업데이트 직후 이전 모델 또는 staging이 남은 상태에서 `RUN.bat`을 먼저 실행하면 Ollama를 빈 공용 저장소로 시작하지 않고 실행을 중단하며 `SETUP.bat`으로 이전/복구를 먼저 완료하도록 안내합니다.
 
 ## 경로 정책
 
@@ -77,13 +87,24 @@ Local_AI_Agent/
 `src/project_paths.py`가 다음 경로의 정본입니다.
 
 ```text
-SRC_ROOT       -> <project>/src
-PROJECT_ROOT   -> <project>
-USER_DATA_DIR  -> <project>/user_data
-ENV_DIR        -> <project>/llm_environment
+SRC_ROOT          -> <project>/src
+PROJECT_ROOT      -> <project>
+USER_DATA_DIR     -> <project>/user_data
+ENV_DIR           -> <project>/llm_environment
+MODEL_STORAGE_DIR -> C:\LLM_Models
 ```
 
 따라서 `launcher/`와 `installer/`가 `src/` 아래로 이동해도 사용자 데이터와 설치 환경 위치는 바뀌지 않습니다.
+모델은 체크아웃 위치와 분리되어 같은 PC의 여러 프로젝트/사용자가 동일한 저장소를 읽어 사용할 수 있습니다. 설치기는 `BUILTIN\Users`에 기존 파일까지 포함한 읽기/실행 권한을 재귀적으로 추가하지만 모든 사용자에게 쓰기 권한을 새로 부여하지는 않습니다. 기존 ACL도 강제로 초기화하지 않으므로 모델 다운로드·삭제는 해당 계정이 이미 필요한 쓰기 권한을 가진 경우에만 가능합니다. 관리형 배포나 테스트에서만 `LLM_MODEL_DIR` 환경변수로 경로를 재정의할 수 있습니다.
+
+## Ollama 서비스 소유권
+
+프로그램은 `11434` 포트가 응답한다는 이유만으로 임의의 Ollama를 재사용하지 않습니다. 포트 소유 프로세스가 현재 프로젝트의 `llm_environment/ollama_runtime/ollama.exe`인지 확인하고, 관리형 Ollama가 현재 `C:\LLM_Models` 설정으로 시작된 상태인지 런타임 상태 파일로 함께 확인합니다.
+
+- 이전 버전에서 시작된 같은 관리형 Ollama는 공용 모델 경로를 확실히 적용하기 위해 한 번 재시작할 수 있습니다.
+- 별도로 설치한 Ollama나 다른 프로젝트의 Ollama가 `11434`를 사용 중이면 이를 강제 종료하지 않고 실행/설치를 중단합니다. 해당 Ollama를 종료한 뒤 다시 실행하세요.
+- 설치 중 레거시 모델을 옮길 때는 먼저 현재 프로젝트의 관리형 Ollama만 종료해 Windows 파일 잠금을 피한 뒤 이동하고 다시 시작합니다.
+- GUI 상태바와 서비스 메뉴도 단순 포트 응답이 아니라 관리형 프로세스 소유권과 런타임 상태를 기준으로 판단합니다.
 
 ## 버전 정책
 
@@ -163,6 +184,7 @@ llm_environment/
 ```
 
 특히 `user_data/settings/user_config.json`, Agent trace, 인터프리터 세션, 폴더 정책 등은 계속 프로젝트 루트의 `user_data/`를 기준으로 사용합니다.
+대용량 모델만 `C:\LLM_Models`로 분리되어 프로젝트 복사·업데이트에 따라 중복되지 않습니다.
 
 ## 이전 상세 README
 

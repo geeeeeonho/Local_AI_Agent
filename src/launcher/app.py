@@ -172,7 +172,7 @@ class Application:
         def ollama_check():
             try:
                 from .services.ollama import OllamaService
-                return OllamaService.is_running()
+                return OllamaService(self.env).is_managed_running()
             except Exception:
                 return False
 
