@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from installer.core.filesystem import create_environment, write_install_manifest
+from installer.core.filesystem import (
+    create_environment,
+    ensure_shared_model_access,
+    write_install_manifest,
+)
 from launcher.services.ollama import OllamaService
 from project_paths import MODEL_STORAGE_DIR
 
@@ -33,6 +37,32 @@ def test_create_environment_migrates_legacy_models_when_shared_storage_is_empty(
     assert paths["models"] == shared_models
     assert (shared_models / "blobs" / "sha256-test").read_text(encoding="utf-8") == "model"
     assert not legacy.exists()
+
+
+def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
+    model_dir = tmp_path / "LLM_Models"
+    model_dir.mkdir()
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    monkeypatch.setattr("installer.core.filesystem.subprocess.run", fake_run)
+
+    assert ensure_shared_model_access(model_dir, windows=True) is True
+    assert calls[0][0] == [
+        "icacls",
+        str(model_dir),
+        "/grant",
+        "*S-1-5-32-545:(OI)(CI)(RX)",
+        "/Q",
+    ]
 
 
 def test_ollama_service_uses_same_shared_model_directory(tmp_path):
