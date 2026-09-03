@@ -64,6 +64,15 @@ class OllamaService:
     def is_installed(self) -> bool:
         return self.exe.exists()
 
+    def is_managed_running(self) -> bool:
+        """부작용 없이 현재 포트가 추적 중인 관리형 Ollama인지 확인한다."""
+        if not self.is_running():
+            return False
+        pid = self._listener_pid()
+        if pid is None or not self._listener_is_managed(pid):
+            return False
+        return self._state_matches(pid)
+
     def _powershell(self, script: str) -> Optional[str]:
         """Windows 프로세스 소유권 확인용 PowerShell 한 줄 실행."""
         if os.name != "nt":
