@@ -26,7 +26,34 @@ def test_auto_mode_manages_when_environment_exists(tmp_path, monkeypatch):
     env = tmp_path / "llm_environment"
     env.mkdir()
     monkeypatch.setattr(setup_main, "ENV", env)
+    monkeypatch.setattr(setup_main, "MODEL_STORAGE_DIR", tmp_path / "LLM_Models")
     assert setup_main._should_manage(_args()) is True
+
+
+def test_auto_mode_runs_install_flow_for_legacy_model_migration(tmp_path, monkeypatch):
+    env = tmp_path / "llm_environment"
+    legacy = env / "llm_models" / "blobs"
+    legacy.mkdir(parents=True)
+    (legacy / "sha256-old").write_text("model", encoding="utf-8")
+    shared = tmp_path / "LLM_Models"
+
+    monkeypatch.setattr(setup_main, "ENV", env)
+    monkeypatch.setattr(setup_main, "MODEL_STORAGE_DIR", shared)
+
+    assert setup_main._should_manage(_args()) is False
+
+
+def test_auto_mode_runs_install_flow_for_interrupted_model_migration(tmp_path, monkeypatch):
+    env = tmp_path / "llm_environment"
+    env.mkdir()
+    shared = tmp_path / "LLM_Models"
+    staging = shared.with_name(shared.name + ".migrating")
+    staging.mkdir()
+
+    monkeypatch.setattr(setup_main, "ENV", env)
+    monkeypatch.setattr(setup_main, "MODEL_STORAGE_DIR", shared)
+
+    assert setup_main._should_manage(_args()) is False
 
 
 def test_explicit_install_wins_even_when_environment_exists(tmp_path, monkeypatch):
