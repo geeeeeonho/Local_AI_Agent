@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Protocol
 
+from project_paths import MODEL_STORAGE_DIR
 from .. import config
 
 
@@ -31,10 +32,16 @@ class OllamaService:
     UI 종류에 무관하게 동작.
     """
 
-    def __init__(self, env: Path, logger: Optional[_Logger] = None):
+    def __init__(
+        self,
+        env: Path,
+        logger: Optional[_Logger] = None,
+        model_dir: Optional[Path] = None,
+    ):
         self.env = env
         self.exe = env / "ollama_runtime" / "ollama.exe"
         self.log_file = env / "logs" / "ollama_run.log"
+        self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
 
     # ── 상태 확인 ──
@@ -54,7 +61,7 @@ class OllamaService:
     # ── 환경변수 ──
     def env_vars(self, base: Optional[dict] = None) -> dict:
         e = (base or os.environ).copy()
-        e["OLLAMA_MODELS"] = str(self.env / "llm_models")
+        e["OLLAMA_MODELS"] = str(self.model_dir)
         e["OLLAMA_HOST"] = f"{config.OLLAMA_HOST}:{config.OLLAMA_PORT}"
         # AGENT_MEM_v1: 모델 중복 적재 방지(누적 메모리 감소) + 유휴 시 자동 언로드
         e.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
@@ -74,6 +81,7 @@ class OllamaService:
 
         self._info("Ollama 가 응답 없음 — 백그라운드 시작 시도…")
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
 
         # 자식 프로세스에 fd 전달 후 호스트 핸들은 즉시 닫기 (fd 누수 방지)
         f = open(self.log_file, "ab")
