@@ -1,6 +1,7 @@
 """installer.core.filesystem — 환경 폴더 구조와 설치 식별 정보 관리."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ from .console import section, ok, warn
 
 
 INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
+_MIGRATION_COMPLETE_MARKER = ".LOCAL_AI_MIGRATION_COMPLETE"
 _BUILTIN_USERS_SID = "S-1-5-32-545"
 
 
@@ -64,59 +66,78 @@ def _remove_migration_staging(staging: Path) -> None:
         staging.unlink()
 
 
+def _promote_staging(staging: Path, models: Path) -> None:
+    marker = staging / _MIGRATION_COMPLETE_MARKER
+    marker.unlink(missing_ok=True)
+    staging.replace(models)
+    ok(f"  staged models       → {models}")
+
+
 def _migrate_legacy_models(env: Path, models: Path) -> None:
     """과거 ``llm_environment/llm_models`` 를 공용 저장소로 안전하게 옮긴다.
 
-    프로젝트가 다른 드라이브에 있으면 ``shutil.move`` 는 내부적으로 복사 후
-    원본 삭제가 된다. 중간 종료 시 최종 ``LLM_Models`` 가 부분 상태로 보이지
-    않도록 같은 대상 드라이브의 ``.migrating`` 폴더를 staging 으로 사용한다.
+    같은 볼륨에서는 rename 으로 이동한다. 다른 볼륨에서는 staging 에 전체 복사한
+    뒤 완료 marker 를 기록하고 원본을 지운다. 따라서 복사·원본 정리·최종 승격 중
+    어느 지점에서 중단돼도 다음 실행이 완성본과 부분 복사본을 구분할 수 있다.
     """
     legacy = env / "llm_models"
     staging = models.with_name(models.name + ".migrating")
+    marker = staging / _MIGRATION_COMPLETE_MARKER
     if legacy == models:
         return
 
     models.parent.mkdir(parents=True, exist_ok=True)
 
-    # 이전 실행에서 staging 이동까지 끝났지만 최종 이름 승격 직전에 중단된 경우.
-    if staging.exists() and not legacy.exists() and not models.exists():
-        staging.replace(models)
-        ok(f"  staged models       → {models}")
+    # 이전 실행이 빈 최종 폴더만 만든 경우에는 복구/마이그레이션을 계속할 수 있다.
+    if models.exists() and models.is_dir() and not any(models.iterdir()):
+        models.rmdir()
+
+    # 사용 중인 최종 저장소와 레거시/스테이징을 임의 병합하지 않는다.
+    if models.exists():
+        if legacy.exists() or staging.exists():
+            warn(
+                f"기존 모델 데이터가 남아 있습니다: {legacy} / {staging} / "
+                f"공용 저장소가 이미 사용 중이므로 자동 병합하지 않습니다: {models}"
+            )
         return
 
-    # 복사 도중 중단되면 shutil.move 는 원본을 남긴다. 이 경우 부분 staging 만
-    # 버리고 원본에서 다시 시작한다.
-    if staging.exists() and legacy.exists() and not models.exists():
+    if staging.exists():
+        if marker.is_file():
+            # 복사는 완전히 끝났고 원본 삭제 중 중단된 상태일 수 있다. marker가
+            # staging 완전성을 증명하므로 남은 원본보다 staging을 정본으로 삼는다.
+            if legacy.exists():
+                shutil.rmtree(legacy)
+            _promote_staging(staging, models)
+            return
+
+        if not legacy.exists():
+            # 같은 볼륨 rename 뒤 최종 승격 직전에 중단됐거나, 이전 버전이 만든
+            # 유일한 staging이다. 원본이 없으므로 staging을 보존한다.
+            _promote_staging(staging, models)
+            return
+
+        # marker 없이 원본도 남아 있으면 복사 도중 중단된 부분 staging으로 본다.
         _remove_migration_staging(staging)
 
     if not legacy.exists():
         return
 
-    # create_environment 의 이전 실행 등이 빈 최종 폴더만 만든 경우에는 제거하고
-    # staging 마이그레이션을 계속할 수 있다.
-    if models.exists() and models.is_dir() and not any(models.iterdir()):
-        models.rmdir()
+    try:
+        # 같은 볼륨은 원본 삭제와 복사를 분리할 필요 없이 atomic rename 가능.
+        legacy.replace(staging)
+    except OSError as exc:
+        cross_volume = exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17
+        if not cross_volume:
+            raise
 
-    if models.exists():
-        # 최종 저장소가 이미 사용 중이면 사용자의 두 데이터 세트를 임의 병합하지
-        # 않는다. staging 이 있고 legacy 도 남아 있다면 staging 은 부분 복사본으로
-        # 확정할 수 있으므로 그것만 정리한다.
-        if staging.exists() and legacy.exists():
-            _remove_migration_staging(staging)
-        warn(
-            f"기존 모델 폴더가 남아 있습니다: {legacy} / "
-            f"공용 저장소가 이미 사용 중이므로 자동 병합하지 않습니다: {models}"
-        )
-        return
+        # 다른 볼륨은 명시적으로 copy → marker → source cleanup 순서를 지킨다.
+        # copytree가 실패하면 원본은 그대로 남고 marker가 없으므로 다음 실행에서
+        # 부분 staging을 폐기하고 다시 시작한다.
+        shutil.copytree(legacy, staging, copy_function=shutil.copy2, symlinks=True)
+        marker.write_text("complete\n", encoding="utf-8")
+        shutil.rmtree(legacy)
 
-    if staging.exists():
-        # 여기까지 왔는데 staging 이 남아 있으면 원본이 유일한 기준이므로 안전하게
-        # 지우고 다시 이동한다.
-        _remove_migration_staging(staging)
-
-    shutil.move(str(legacy), str(staging))
-    staging.replace(models)
-    ok(f"  legacy models       → {models}")
+    _promote_staging(staging, models)
 
 
 def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str, Path]:
