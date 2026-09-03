@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from project_paths import ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
@@ -35,11 +36,32 @@ def _parse_args():
     return p.parse_args()
 
 
+def _dir_has_entries(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
+def _needs_model_storage_migration() -> bool:
+    """기존/중단된 모델 저장소가 공용 경로로 수렴해야 하는지 확인."""
+    legacy = ENV / "llm_models"
+    shared = Path(MODEL_STORAGE_DIR)
+    staging = shared.with_name(shared.name + ".migrating")
+
+    # 이미 사용 중인 공용 저장소가 있으면 자동 병합하지 않는다. 설치/관리 화면에서
+    # 사용자가 충돌을 확인하도록 두 데이터 세트를 그대로 보존한다.
+    if _dir_has_entries(shared):
+        return False
+    return _dir_has_entries(legacy) or staging.exists()
+
+
 def _should_manage(args) -> bool:
     """기본(auto) 모드에서 관리 화면으로 갈지 결정한다.
 
     기존 내부 호출인 ``python -m installer --skip-*`` 는 설치 작업으로 유지한다.
-    이렇게 해야 관리 GUI의 환경 업데이트가 다시 관리 GUI를 여는 재귀를 만들지 않는다.
+    또한 이전 버전 모델이나 중단된 staging이 남아 있으면 일반 ``SETUP.bat``도
+    설치 흐름으로 보내 공용 ``C:\\LLM_Models`` 마이그레이션을 먼저 완료한다.
     """
     if args.manage:
         return True
@@ -52,6 +74,8 @@ def _should_manage(args) -> bool:
         args.skip_search,
     )
     if any(install_flags):
+        return False
+    if ENV.exists() and _needs_model_storage_migration():
         return False
     return ENV.exists()
 
