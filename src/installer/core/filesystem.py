@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Optional
@@ -13,6 +15,45 @@ from .console import section, ok, warn
 
 
 INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
+_BUILTIN_USERS_SID = "S-1-5-32-545"
+
+
+def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) -> bool:
+    """다른 로컬 사용자도 공용 모델을 읽을 수 있도록 최소 권한을 보장한다.
+
+    모델 저장소는 AI 동작에 영향을 주는 신뢰 자산이므로 모든 사용자에게 쓰기
+    권한을 열지는 않는다. ``BUILTIN\\Users`` 에 읽기/실행만 상속시키고, 모델
+    추가/삭제는 폴더 소유자나 관리자 권한으로 수행한다.
+    """
+    use_windows = (os.name == "nt") if windows is None else bool(windows)
+    if not use_windows:
+        return True
+
+    command = [
+        "icacls",
+        str(model_dir),
+        "/grant",
+        f"*{_BUILTIN_USERS_SID}:(OI)(CI)(RX)",
+        "/Q",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            creationflags=0x08000000,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        warn(f"공용 모델 폴더 읽기 권한 설정 실패: {exc}")
+        return False
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        warn(f"공용 모델 폴더 읽기 권한 설정 실패: {detail or 'icacls error'}")
+        return False
+    return True
 
 
 def _migrate_legacy_models(env: Path, models: Path) -> None:
@@ -49,27 +90,40 @@ def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str,
     except Exception:
         section("Creating environment folders")
 
+    env = Path(env)
     models = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
     _migrate_legacy_models(env, models)
 
     paths = {
-        "env":                  env,
-        "ollama":               env / "ollama_runtime",
-        "models":               models,
-        "chat":                 env / "chat_ui",
-        "agent":                env / "agent",
-        "sandbox":              env / "agent" / "sandbox",
-        "workspace":            env / "agent" / "workspace",
-        "open_interpreter":     env / "open_interpreter",
-        "open_interpreter_bin": env / "open_interpreter" / "bin",
+        "env":                   env,
+        "ollama":                env / "ollama_runtime",
+        "models":                models,
+        "chat":                  env / "chat_ui",
+        "agent":                 env / "agent",
+        "sandbox":               env / "agent" / "sandbox",
+        "workspace":             env / "agent" / "workspace",
+        "open_interpreter":      env / "open_interpreter",
+        "open_interpreter_bin":  env / "open_interpreter" / "bin",
         "open_interpreter_home": env / "open_interpreter" / "home",
-        "searxng":              env / "searxng",
-        "scripts":              env / "scripts",
-        "logs":                 env / "logs",
+        "searxng":               env / "searxng",
+        "scripts":               env / "scripts",
+        "logs":                  env / "logs",
     }
     for name, p in paths.items():
-        p.mkdir(parents=True, exist_ok=True)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            if name == "models":
+                raise RuntimeError(
+                    f"공용 모델 저장소를 만들 권한이 없습니다: {p}. "
+                    "관리자 계정에서 SETUP.bat을 한 번 실행하거나 폴더 권한을 확인하세요."
+                ) from exc
+            raise
         ok(f"  {name:<20} → {p}")
+
+    # 기본 머신 공용 경로에서만 Windows 로컬 사용자 읽기 권한을 보장한다.
+    if model_dir is None:
+        ensure_shared_model_access(models)
     return paths
 
 
@@ -99,6 +153,7 @@ def write_install_manifest(
         "project_root": str(Path(project_root).resolve()),
         "environment_path": str(paths["env"].resolve()),
         "model_storage": str(paths["models"].resolve()),
+        "model_storage_access": "local-users-read; owner/admin-manage",
         "components": list(components),
         "installed_at": installed_at,
         "updated_at": now,
