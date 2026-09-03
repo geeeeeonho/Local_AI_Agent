@@ -5,7 +5,10 @@ from installer.steps import python_tools
 
 
 def test_environment_contains_managed_interpreter_paths(tmp_path):
-    paths = create_environment(tmp_path / "llm_environment")
+    paths = create_environment(
+        tmp_path / "llm_environment",
+        model_dir=tmp_path / "LLM_Models",
+    )
     assert paths["open_interpreter"] == tmp_path / "llm_environment" / "open_interpreter"
     assert paths["open_interpreter_bin"] == tmp_path / "llm_environment" / "open_interpreter" / "bin"
     assert paths["open_interpreter_home"] == tmp_path / "llm_environment" / "open_interpreter" / "home"
