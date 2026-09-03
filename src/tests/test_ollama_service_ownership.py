@@ -11,6 +11,26 @@ def _service(tmp_path):
     return OllamaService(env, model_dir=tmp_path / "LLM_Models")
 
 
+def test_managed_status_requires_owned_listener_and_matching_runtime_state(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 31337)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: svc.exe)
+    monkeypatch.setattr(svc, "_state_matches", lambda _pid: True)
+
+    assert svc.is_managed_running() is True
+
+
+def test_managed_status_rejects_untracked_managed_listener(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 31337)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: svc.exe)
+    monkeypatch.setattr(svc, "_state_matches", lambda _pid: False)
+
+    assert svc.is_managed_running() is False
+
+
 def test_running_foreign_ollama_is_rejected(monkeypatch, tmp_path):
     svc = _service(tmp_path)
     monkeypatch.setattr(svc, "is_running", lambda: True)
