@@ -104,3 +104,34 @@ def test_tracked_managed_ollama_is_reused_without_restart(monkeypatch, tmp_path)
     )
 
     assert svc.ensure_running() is True
+
+
+def test_launch_is_blocked_until_legacy_models_are_migrated(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    legacy = svc.env / "llm_models" / "blobs"
+    legacy.mkdir(parents=True)
+    (legacy / "sha256-old").write_text("model", encoding="utf-8")
+
+    monkeypatch.setattr(svc, "is_running", lambda: False)
+    monkeypatch.setattr(
+        svc,
+        "_launch",
+        lambda: (_ for _ in ()).throw(AssertionError("must not launch before migration")),
+    )
+
+    assert svc.ensure_running(boot_timeout=1) is False
+
+
+def test_launch_is_blocked_until_interrupted_migration_is_recovered(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    staging = svc.model_dir.with_name(svc.model_dir.name + ".migrating")
+    staging.mkdir(parents=True)
+
+    monkeypatch.setattr(svc, "is_running", lambda: False)
+    monkeypatch.setattr(
+        svc,
+        "_launch",
+        lambda: (_ for _ in ()).throw(AssertionError("must not launch before migration recovery")),
+    )
+
+    assert svc.ensure_running(boot_timeout=1) is False
