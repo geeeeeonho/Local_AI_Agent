@@ -34,6 +34,7 @@ def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) 
         str(model_dir),
         "/grant",
         f"*{_BUILTIN_USERS_SID}:(OI)(CI)(RX)",
+        "/T",
         "/Q",
     ]
     try:
