@@ -21,6 +21,20 @@ def test_create_environment_keeps_models_outside_project_environment(tmp_path):
     assert not (env / "llm_models").exists()
 
 
+def test_create_environment_migrates_legacy_models_when_shared_storage_is_empty(tmp_path):
+    env = tmp_path / "project" / "llm_environment"
+    legacy = env / "llm_models"
+    shared_models = tmp_path / "shared" / "LLM_Models"
+    (legacy / "blobs").mkdir(parents=True)
+    (legacy / "blobs" / "sha256-test").write_text("model", encoding="utf-8")
+
+    paths = create_environment(env, model_dir=shared_models)
+
+    assert paths["models"] == shared_models
+    assert (shared_models / "blobs" / "sha256-test").read_text(encoding="utf-8") == "model"
+    assert not legacy.exists()
+
+
 def test_ollama_service_uses_same_shared_model_directory(tmp_path):
     env = tmp_path / "llm_environment"
     shared_models = tmp_path / "LLM_Models"
