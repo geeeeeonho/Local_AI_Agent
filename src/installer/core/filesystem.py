@@ -1,30 +1,24 @@
-"""installer.core.filesystem — 환경 폴더 구조 생성."""
+"""installer.core.filesystem — 환경 폴더 구조와 설치 식별 정보 관리."""
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Iterable, Optional
+
+from project_paths import MODEL_STORAGE_DIR
 
 from .console import section, ok
 
 
-def create_environment(env: Path) -> Dict[str, Path]:
-    """llm_environment/ 트리 생성 후 경로 dict 반환.
+INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
 
-    구조:
-        env/
-        ├── ollama_runtime/  ollama.exe
-        ├── llm_models/      *.gguf 모델
-        ├── chat_ui/         Open WebUI venv
-        ├── agent/
-        │   ├── venv/        legacy Python Open Interpreter fallback
-        │   ├── sandbox/     Dockerfile
-        │   └── workspace/   호스트<->컨테이너 공유
-        ├── open_interpreter/
-        │   ├── bin/         managed standalone interpreter.exe
-        │   └── home/        standalone package store
-        ├── searxng/         SearXNG 설정
-        ├── scripts/         보조 스크립트
-        └── logs/            세션 로그
+
+def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str, Path]:
+    """관리 환경 트리와 공용 모델 저장소를 생성해 경로 dict를 반환한다.
+
+    모델은 프로젝트 체크아웃과 분리된 ``C:\\LLM_Models`` 를 기본으로 사용한다.
+    테스트나 관리형 배포에서는 ``model_dir`` 로 명시적으로 재정의할 수 있다.
     """
     try:
         from ..i18n import t
@@ -32,10 +26,11 @@ def create_environment(env: Path) -> Dict[str, Path]:
     except Exception:
         section("Creating environment folders")
 
+    models = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
     paths = {
         "env":                  env,
         "ollama":               env / "ollama_runtime",
-        "models":               env / "llm_models",
+        "models":               models,
         "chat":                 env / "chat_ui",
         "agent":                env / "agent",
         "sandbox":              env / "agent" / "sandbox",
@@ -51,3 +46,41 @@ def create_environment(env: Path) -> Dict[str, Path]:
         p.mkdir(parents=True, exist_ok=True)
         ok(f"  {name:<20} → {p}")
     return paths
+
+
+def write_install_manifest(
+    paths: Dict[str, Path],
+    project_root: Path,
+    status: str,
+    components: Iterable[str] = (),
+) -> Path:
+    """설치 루트에 사람이 읽을 수 있는 설치 식별 JSON을 기록한다."""
+    manifest = paths["env"] / INSTALL_MANIFEST
+    now = datetime.now(timezone.utc).isoformat()
+
+    installed_at = now
+    if manifest.exists():
+        try:
+            previous = json.loads(manifest.read_text(encoding="utf-8"))
+            installed_at = previous.get("installed_at", now)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    data = {
+        "product": "Local AI Agent",
+        "repository": "geeeeeonho/Local_AI_Agent",
+        "managed_environment": True,
+        "status": status,
+        "project_root": str(Path(project_root).resolve()),
+        "environment_path": str(paths["env"].resolve()),
+        "model_storage": str(paths["models"].resolve()),
+        "components": list(components),
+        "installed_at": installed_at,
+        "updated_at": now,
+        "note": "This directory is managed by Local AI Agent SETUP.bat.",
+    }
+    manifest.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return manifest
