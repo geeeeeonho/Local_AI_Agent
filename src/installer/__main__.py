@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from project_paths import ENV_DIR, PROJECT_ROOT
+from project_paths import ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
 from installer.steps import model
@@ -73,7 +73,8 @@ def _run_install(args) -> int:
     # ─── 사전 검사 ───
     utils.preflight_windows()
     utils.preflight_python()
-    utils.preflight_disk(ENV.parent, need_gb=20 if not args.skip_model else 5)
+    # 대용량 모델은 프로젝트 위치가 아니라 C:\LLM_Models 에 저장된다.
+    utils.preflight_disk(MODEL_STORAGE_DIR.parent, need_gb=20 if not args.skip_model else 5)
 
     # ─── 시스템 자원 감지 + 안전 프로필 ───
     utils.section(t("install.resources_section"))
@@ -94,25 +95,32 @@ def _run_install(args) -> int:
         import time
         time.sleep(5)
 
-    # ─── 환경 폴더 ───
+    # ─── 환경 폴더 + 설치 식별 정보 ───
     paths = utils.create_environment(ENV)
+    components = []
+    utils.write_install_manifest(paths, HERE, "installing", components)
 
     # ─── 핵심 ───
     ollama.install_portable(paths)
     ollama.start_service(paths)
+    components.append("ollama")
 
     if not args.skip_model:
         model.download(paths)
+        components.append("models")
     else:
         utils.warn("Model download skipped (--skip-model)")
 
     python_tools.install_open_webui(paths, profile)
+    components.append("open_webui")
     python_tools.install_open_interpreter(paths, profile)
+    components.append("open_interpreter")
 
     # ─── 샌드박스 ───
     if not args.skip_sandbox:
         try:
             sandbox.install(paths, profile=profile, build_image=not args.skip_build)
+            components.append("sandbox")
         except sandbox.DockerNotAvailable as e:
             utils.warn(t("install.sandbox_skip", reason=str(e)))
             utils.warn(t("install.sandbox_skip_later"))
@@ -124,12 +132,14 @@ def _run_install(args) -> int:
         try:
             sandbox._check_docker()
             searxng.install(paths)
+            components.append("searxng")
         except sandbox.DockerNotAvailable as e:
             utils.warn(t("install.searxng_skip", reason=str(e)))
     else:
         utils.warn(t("install.searxng_skip_optional"))
 
     # ─── 마무리 ───
+    utils.write_install_manifest(paths, HERE, "installed", components)
     utils.finalize_summary(paths, HERE)
 
     try:
