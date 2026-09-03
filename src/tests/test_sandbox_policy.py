@@ -56,7 +56,9 @@ def test_outer_security_flags_are_present():
     joined = " ".join(cmd)
     assert cmd[:2] == ["docker", "run"]
     assert "--rm" in cmd and "-i" in cmd
-    assert "/tmp/ws:/home/agent/workspace" in cmd
+    # Path('/tmp/ws') is intentionally rendered using the host platform because
+    # Docker Desktop accepts Windows host paths on Windows and POSIX paths on Linux.
+    assert f"{Path('/tmp/ws')}:/home/agent/workspace" in cmd
     assert "--cpus=2.5" in cmd
     assert "--memory=6g" in cmd
     for forbidden in ("--privileged", "CAP_SYS_ADMIN", "seccomp=unconfined", "--network=host"):
