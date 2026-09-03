@@ -95,6 +95,12 @@ def _run_install(args) -> int:
         import time
         time.sleep(5)
 
+    # ─── Ollama 소유권/파일 잠금 확인 ───
+    # 레거시 llm_models 를 옮기기 전에 기존 관리형 Ollama를 종료해야 Windows의
+    # 파일 잠금에 걸리지 않는다. 외부 Ollama가 같은 포트를 쓰면 강제 종료하지
+    # 않고 설치를 중단한다.
+    ollama.prepare_install(ENV, MODEL_STORAGE_DIR)
+
     # ─── 환경 폴더 + 설치 식별 정보 ───
     paths = utils.create_environment(ENV)
     components = []
