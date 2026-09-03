@@ -39,6 +39,38 @@ def test_create_environment_migrates_legacy_models_when_shared_storage_is_empty(
     assert not legacy.exists()
 
 
+def test_create_environment_promotes_completed_staging_after_interruption(tmp_path):
+    env = tmp_path / "project" / "llm_environment"
+    shared_models = tmp_path / "shared" / "LLM_Models"
+    staging = shared_models.with_name(shared_models.name + ".migrating")
+    (staging / "blobs").mkdir(parents=True)
+    (staging / "blobs" / "sha256-complete").write_text("complete", encoding="utf-8")
+
+    paths = create_environment(env, model_dir=shared_models)
+
+    assert paths["models"] == shared_models
+    assert (shared_models / "blobs" / "sha256-complete").read_text(encoding="utf-8") == "complete"
+    assert not staging.exists()
+
+
+def test_create_environment_discards_partial_staging_when_legacy_source_remains(tmp_path):
+    env = tmp_path / "project" / "llm_environment"
+    legacy = env / "llm_models"
+    shared_models = tmp_path / "shared" / "LLM_Models"
+    staging = shared_models.with_name(shared_models.name + ".migrating")
+    (legacy / "blobs").mkdir(parents=True)
+    (legacy / "blobs" / "sha256-real").write_text("real", encoding="utf-8")
+    (staging / "blobs").mkdir(parents=True)
+    (staging / "blobs" / "sha256-partial").write_text("partial", encoding="utf-8")
+
+    paths = create_environment(env, model_dir=shared_models)
+
+    assert (shared_models / "blobs" / "sha256-real").read_text(encoding="utf-8") == "real"
+    assert not (shared_models / "blobs" / "sha256-partial").exists()
+    assert not staging.exists()
+    assert not legacy.exists()
+
+
 def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
     model_dir = tmp_path / "LLM_Models"
     model_dir.mkdir()
