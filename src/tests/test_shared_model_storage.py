@@ -71,6 +71,33 @@ def test_create_environment_discards_partial_staging_when_legacy_source_remains(
     assert not legacy.exists()
 
 
+def test_completed_staging_wins_if_source_cleanup_was_interrupted(tmp_path):
+    env = tmp_path / "project" / "llm_environment"
+    legacy = env / "llm_models"
+    shared_models = tmp_path / "shared" / "LLM_Models"
+    staging = shared_models.with_name(shared_models.name + ".migrating")
+
+    # Source cleanup has already removed one file, while staging has the complete copy.
+    (legacy / "blobs").mkdir(parents=True)
+    (legacy / "blobs" / "sha256-still-left").write_text("left", encoding="utf-8")
+    (staging / "blobs").mkdir(parents=True)
+    (staging / "blobs" / "sha256-still-left").write_text("left", encoding="utf-8")
+    (staging / "blobs" / "sha256-already-removed-from-source").write_text(
+        "complete-copy", encoding="utf-8"
+    )
+    (staging / ".LOCAL_AI_MIGRATION_COMPLETE").write_text("complete\n", encoding="utf-8")
+
+    paths = create_environment(env, model_dir=shared_models)
+
+    assert paths["models"] == shared_models
+    assert (
+        shared_models / "blobs" / "sha256-already-removed-from-source"
+    ).read_text(encoding="utf-8") == "complete-copy"
+    assert not (shared_models / ".LOCAL_AI_MIGRATION_COMPLETE").exists()
+    assert not staging.exists()
+    assert not legacy.exists()
+
+
 def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
     model_dir = tmp_path / "LLM_Models"
     model_dir.mkdir()
