@@ -34,6 +34,13 @@ def _same_path(left: Path, right: Path) -> bool:
     )
 
 
+def _dir_has_entries(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
 class OllamaService:
     """프로젝트가 설치한 Ollama 포터블 서비스 제어."""
 
@@ -72,6 +79,14 @@ class OllamaService:
         if pid is None or not self._listener_is_managed(pid):
             return False
         return self._state_matches(pid)
+
+    def _migration_pending(self) -> bool:
+        """공용 저장소가 비어 있고 이전/중단 모델 데이터가 남았는지 확인."""
+        if _dir_has_entries(self.model_dir):
+            return False
+        legacy = self.env / "llm_models"
+        staging = self.model_dir.with_name(self.model_dir.name + ".migrating")
+        return _dir_has_entries(legacy) or staging.exists()
 
     def _powershell(self, script: str) -> Optional[str]:
         """Windows 프로세스 소유권 확인용 PowerShell 한 줄 실행."""
@@ -279,6 +294,11 @@ class OllamaService:
         if not self.is_installed():
             self._err(f"Ollama 미설치: {self.exe}")
             self._err("SETUP.bat --install 을 다시 실행하세요.")
+            return False
+
+        if self._migration_pending():
+            self._err("이전 버전의 모델 저장소 마이그레이션이 아직 완료되지 않았습니다.")
+            self._err("SETUP.bat을 실행해 C:\\LLM_Models 이전/복구를 먼저 완료하세요.")
             return False
 
         self._info("Ollama 가 응답 없음 — 관리형 서비스 시작 시도…")
