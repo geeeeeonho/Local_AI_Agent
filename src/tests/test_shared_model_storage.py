@@ -155,4 +155,7 @@ def test_install_manifest_identifies_product_and_external_model_storage(tmp_path
     assert data["status"] == "installed"
     assert Path(data["environment_path"]) == env
     assert Path(data["model_storage"]) == shared_models
+    assert data["model_storage_access"] == (
+        "builtin-users-read-execute-requested; existing-acl-preserved"
+    )
     assert data["components"] == ["ollama", "open_webui", "open_interpreter"]
