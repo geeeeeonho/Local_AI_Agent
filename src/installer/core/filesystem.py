@@ -24,8 +24,8 @@ def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) 
     """다른 로컬 사용자도 공용 모델을 읽을 수 있도록 최소 권한을 보장한다.
 
     모델 저장소는 AI 동작에 영향을 주는 신뢰 자산이므로 모든 사용자에게 쓰기
-    권한을 열지는 않는다. ``BUILTIN\\Users`` 에 읽기/실행만 상속시키고, 모델
-    추가/삭제는 폴더 소유자나 관리자 권한으로 수행한다.
+    권한을 열지는 않는다. ``BUILTIN\\Users`` 에 읽기/실행 권한을 재귀적으로
+    추가하고 기존 ACL은 보존한다.
     """
     use_windows = (os.name == "nt") if windows is None else bool(windows)
     if not use_windows:
@@ -215,7 +215,9 @@ def write_install_manifest(
         "project_root": str(Path(project_root).resolve()),
         "environment_path": str(paths["env"].resolve()),
         "model_storage": str(paths["models"].resolve()),
-        "model_storage_access": "local-users-read; owner/admin-manage",
+        "model_storage_access": (
+            "builtin-users-read-execute-requested; existing-acl-preserved"
+        ),
         "components": list(components),
         "installed_at": installed_at,
         "updated_at": now,
