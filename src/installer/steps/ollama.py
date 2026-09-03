@@ -1,17 +1,15 @@
-"""ollama — 포터블 ollama.exe 다운/설치 + 서비스 시작."""
+"""ollama — 포터블 ollama.exe 설치와 관리형 서비스 수명주기."""
 from __future__ import annotations
 
 import os
-import subprocess
-import time
-import urllib.error
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Dict
 
 from installer import utils
 from installer.i18n import t
+from launcher import config
+from launcher.services.ollama import OllamaService
 
 OLLAMA_ZIP_URL = (
     "https://github.com/ollama/ollama/releases/latest/download/"
@@ -19,8 +17,33 @@ OLLAMA_ZIP_URL = (
 )
 
 
+class _InstallerLogger:
+    def info(self, msg: str) -> None:
+        utils.info(msg)
+
+    def ok(self, msg: str) -> None:
+        utils.ok(msg)
+
+    def warn(self, msg: str) -> None:
+        utils.warn(msg)
+
+    def error(self, msg: str) -> None:
+        utils.err(msg)
+
+
 def _exe(paths: Dict[str, Path]) -> Path:
     return paths["ollama"] / "ollama.exe"
+
+
+def _service(env: Path, model_dir: Path) -> OllamaService:
+    return OllamaService(env, logger=_InstallerLogger(), model_dir=model_dir)
+
+
+def prepare_install(env: Path, model_dir: Path) -> None:
+    """레거시 모델 이동 전에 관리형 Ollama를 멈추고 외부 충돌을 차단."""
+    svc = _service(Path(env), Path(model_dir))
+    if not svc.prepare_install():
+        raise RuntimeError("Another Ollama service is using the configured port")
 
 
 def install_portable(paths: Dict[str, Path]):
@@ -46,52 +69,19 @@ def install_portable(paths: Dict[str, Path]):
 
 
 def is_running() -> bool:
-    """11434 포트 응답 여부."""
-    try:
-        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
-        return True
-    except (urllib.error.URLError, OSError):
-        return False
+    return OllamaService.is_running()
 
 
 def env_for(paths: Dict[str, Path]) -> dict:
-    """OLLAMA_MODELS 등 환경변수 세팅된 dict."""
+    """모델 관리 CLI가 관리형 서버와 같은 경로/호스트를 사용하도록 한다."""
     env = os.environ.copy()
     env["OLLAMA_MODELS"] = str(paths["models"])
-    env["OLLAMA_HOST"]   = "127.0.0.1:11434"
+    env["OLLAMA_HOST"] = f"{config.OLLAMA_HOST}:{config.OLLAMA_PORT}"
     return env
 
 
 def start_service(paths: Dict[str, Path]):
     utils.section(t("install.ollama_service_section"))
-
-    if is_running():
-        utils.ok(t("install.ollama_running"))
-        return
-
-    log = paths["logs"] / "ollama_install.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    utils.info(t("install.ollama_starting_bg", path=str(log)))
-
-    CREATE_NO_WINDOW = 0x08000000
-
-    # 자식 프로세스에 fd 전달 후 호스트 핸들은 즉시 닫아 누수 방지.
-    f = open(log, "ab")
-    try:
-        subprocess.Popen(
-            [str(_exe(paths)), "serve"],
-            stdout=f, stderr=f,
-            env=env_for(paths),
-            creationflags=CREATE_NO_WINDOW,
-        )
-    finally:
-        f.close()
-
-    for i in range(30):
-        if is_running():
-            utils.ok(t("install.ollama_started", sec=i + 1))
-            return
-        time.sleep(1)
-
-    utils.err(t("install.ollama_failed"))
-    raise RuntimeError("Ollama service start failed")
+    svc = _service(paths["env"], paths["models"])
+    if not svc.ensure_running(boot_timeout=30):
+        raise RuntimeError("Managed Ollama service start failed")
