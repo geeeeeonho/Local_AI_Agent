@@ -8,6 +8,7 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 - `RUN.bat` — 프로그램 실행(GUI/TUI)
 
 사용자 설정·로그·세션 같은 영속 데이터는 루트의 `user_data/`에 유지되고, 프로그램 소스와 개발용 파일은 `src/` 아래에 모여 있습니다.
+대용량 Ollama 모델은 프로젝트와 분리된 공용 저장소 `C:\LLM_Models`에 저장됩니다.
 
 ## 빠른 시작
 
@@ -50,6 +51,9 @@ GUI를 사용할 수 없는 환경에서는 런처가 TUI로 폴백할 수 있�
 ## 현재 디렉터리 구조
 
 ```text
+C:\
+└─ LLM_Models\              Ollama 공용 모델 저장소
+
 Local_AI_Agent/
 ├─ .github/                 GitHub Actions
 ├─ .gitignore
@@ -58,7 +62,7 @@ Local_AI_Agent/
 ├─ RUN.bat                  GUI + TUI 통합 실행 진입점
 │
 ├─ src/
-│  ├─ project_paths.py      프로젝트 경로 정본
+│  ├─ project_paths.py      프로젝트/공용 모델 경로 정본
 │  ├─ runtime_versions.py   외부 런타임 버전 정본 (Open Interpreter 등)
 │  ├─ launcher/             런처 / 서비스 / Agent runtime
 │  ├─ installer/            설치 / 관리 구현
@@ -70,6 +74,9 @@ Local_AI_Agent/
 ```
 
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
+설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
+
+과거 버전의 `llm_environment/llm_models`가 있고 `C:\LLM_Models`가 비어 있으면 설치 과정에서 공용 저장소로 자동 이동합니다. 두 위치에 모두 모델이 이미 있으면 데이터 충돌을 피하기 위해 자동 병합하지 않고 경고만 표시합니다.
 
 ## 경로 정책
 
@@ -77,13 +84,15 @@ Local_AI_Agent/
 `src/project_paths.py`가 다음 경로의 정본입니다.
 
 ```text
-SRC_ROOT       -> <project>/src
-PROJECT_ROOT   -> <project>
-USER_DATA_DIR  -> <project>/user_data
-ENV_DIR        -> <project>/llm_environment
+SRC_ROOT          -> <project>/src
+PROJECT_ROOT      -> <project>
+USER_DATA_DIR     -> <project>/user_data
+ENV_DIR           -> <project>/llm_environment
+MODEL_STORAGE_DIR -> C:\LLM_Models
 ```
 
 따라서 `launcher/`와 `installer/`가 `src/` 아래로 이동해도 사용자 데이터와 설치 환경 위치는 바뀌지 않습니다.
+모델은 체크아웃 위치와 분리되어 같은 PC의 여러 프로젝트/사용자가 동일한 저장소를 가리킬 수 있습니다. 관리형 배포나 테스트에서만 `LLM_MODEL_DIR` 환경변수로 경로를 재정의할 수 있습니다.
 
 ## 버전 정책
 
@@ -163,6 +172,7 @@ llm_environment/
 ```
 
 특히 `user_data/settings/user_config.json`, Agent trace, 인터프리터 세션, 폴더 정책 등은 계속 프로젝트 루트의 `user_data/`를 기준으로 사용합니다.
+대용량 모델만 `C:\LLM_Models`로 분리되어 프로젝트 복사·업데이트에 따라 중복되지 않습니다.
 
 ## 이전 상세 README
 
