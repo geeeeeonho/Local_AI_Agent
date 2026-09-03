@@ -93,6 +93,7 @@ def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_
         str(model_dir),
         "/grant",
         "*S-1-5-32-545:(OI)(CI)(RX)",
+        "/T",
         "/Q",
     ]
 
