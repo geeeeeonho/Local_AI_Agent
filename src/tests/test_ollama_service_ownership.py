@@ -24,6 +24,33 @@ def test_running_foreign_ollama_is_rejected(monkeypatch, tmp_path):
     assert svc.ensure_running() is False
 
 
+def test_prepare_install_stops_managed_listener_before_storage_migration(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    running = iter([True, False])
+    monkeypatch.setattr(svc, "is_running", lambda: next(running))
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 31337)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: svc.exe)
+
+    terminated = []
+    monkeypatch.setattr(svc, "_terminate_listener", lambda pid: terminated.append(pid) or True)
+
+    assert svc.prepare_install(stop_timeout=1) is True
+    assert terminated == [31337]
+
+
+def test_prepare_install_rejects_foreign_listener(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 4242)
+    monkeypatch.setattr(
+        svc,
+        "_process_executable",
+        lambda _pid: Path(r"C:\Program Files\Ollama\ollama.exe"),
+    )
+
+    assert svc.prepare_install(stop_timeout=1) is False
+
+
 def test_untracked_managed_ollama_is_restarted_with_shared_model_path(monkeypatch, tmp_path):
     svc = _service(tmp_path)
     running = iter([True, False, True])
