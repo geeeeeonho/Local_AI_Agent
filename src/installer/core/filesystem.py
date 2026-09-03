@@ -2,16 +2,39 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
 from project_paths import MODEL_STORAGE_DIR
 
-from .console import section, ok
+from .console import section, ok, warn
 
 
 INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
+
+
+def _migrate_legacy_models(env: Path, models: Path) -> None:
+    """과거 ``llm_environment/llm_models`` 를 공용 저장소로 안전하게 옮긴다."""
+    legacy = env / "llm_models"
+    if not legacy.exists() or legacy == models:
+        return
+
+    models.parent.mkdir(parents=True, exist_ok=True)
+    target_is_empty = models.exists() and not any(models.iterdir())
+    if target_is_empty:
+        models.rmdir()
+
+    if not models.exists():
+        shutil.move(str(legacy), str(models))
+        ok(f"  legacy models       → {models}")
+        return
+
+    warn(
+        f"기존 모델 폴더가 남아 있습니다: {legacy} / "
+        f"공용 저장소가 이미 사용 중이므로 자동 병합하지 않습니다: {models}"
+    )
 
 
 def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str, Path]:
@@ -27,6 +50,8 @@ def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str,
         section("Creating environment folders")
 
     models = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
+    _migrate_legacy_models(env, models)
+
     paths = {
         "env":                  env,
         "ollama":               env / "ollama_runtime",
