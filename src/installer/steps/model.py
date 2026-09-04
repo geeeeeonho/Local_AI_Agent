@@ -1,7 +1,7 @@
-"""model — 역할별 모델 다운로드 (model_roles 레지스트리 기반, 멱등).
+"""model — 모델 다운로드 (model_catalog 기반, 멱등).
 
-기존 단일 Gemma 모델 대신, 4개 역할(무검열 검색/번역 · 코딩 · 맥락 · 균형)에
-필요한 모델을 순회 설치한다. 코딩 역할은 14b(기본) + 7b(대체)를 모두 받는다.
+설치 세트의 정본은 launcher.models.model_catalog.CORE 다.
+카탈로그를 못 읽을 때만 model_roles → 인라인 목록 순으로 내려간다.
 이미 설치된 모델은 `ollama list` 로 확인해 건너뛴다(멱등 — 재실행 안전).
 
 설치기의 다른 단계와 동일하게 installer.core 콘솔 출력을 쓰고,
@@ -19,13 +19,13 @@ from installer.i18n import get_language
 
 # model_roles 가 없을 때를 대비한 인라인 폴백 (역할 라벨, 모델)
 # MODEL_FINAL_v8 inline 폴백 (model_roles import 실패 시)
+# model_catalog.CORE 와 같은 세트여야 한다 (test_model_catalog_tiers 가 확인).
 _INLINE: List[Tuple[str, str]] = [
-    ("무검열 검색/번역", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
-    ("무검열 검색/번역 (대체)", "huihui_ai/qwen3-abliterated:8b"),
-    ("코딩 (기본)", "qwen3-coder:30b"),  # CATALOG_ALIGN_v9
-    ("코딩 (대체 7b)", "qwen2.5-coder:7b"),
-    ("맥락/균형", "gemma4:12b"),
-    ("자동화 에이전트", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
+    ("무검열·범용·에이전트 (Gemma ARA)", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
+    ("코딩 에이전트 (Open Interpreter)", "qwen3-coder:30b"),
+    ("맥락/범용 + Gemma 폴백", "gemma4:12b"),
+    ("코딩 폴백", "qwen2.5-coder:7b"),
+    ("무검열 경량 폴백", "huihui_ai/qwen3-abliterated:8b"),
 ]
 
 # 자체 ko/en 메시지 (i18n.py 를 건드리지 않기 위해 모듈 로컬)
@@ -107,14 +107,6 @@ def _installed(exe: Path, env: dict) -> set:
         return set()
 
 
-def _present(tag: str, installed: set) -> bool:
-    if tag in installed:
-        return True
-    # 태그 없는 베이스가 같고 동일 quant 로 끝나면 동일로 간주 (보수적)
-    base = tag.split(":")[0]
-    return tag in installed  # PRESENT_FIX_v1 (base-match 분기는 비활성 상태였음 — 현행 동작 보존)
-
-
 def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     utils.section(_m("section"))
     utils.info(_m("intro"))
@@ -186,8 +178,3 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     else:
         utils.warn(_m("some_fail"))
     return ok_tags
-
-
-# 하위호환: 과거 단일 모델 태그를 참조하던 코드가 있을 경우를 위한 표시용 상수
-PRIMARY = "qwen2.5-coder:14b"
-FALLBACK = "qwen2.5-coder:7b"

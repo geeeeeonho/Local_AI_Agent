@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """model_roles — 모델-역할 레지스트리 + 메모리 적응형 모델 선택.
 
-MODEL_GEMMA_v9 — Gemma 4 26B-A4B ARA abliterated 중심 (다운로드 카탈로그 v3 정합).
-각 역할은 모델/샘플링/컨텍스트/설명을 묶고, 사이즈 다단계 롤백 사다리(LADDERS)와
+MODEL_GEMMA_v10 — Gemma 4 26B-A4B 중심 (다운로드 카탈로그 v4 정합).
+각 역할은 라벨/샘플링/설명을 묶고, 사이즈 다단계 롤백 사다리(LADDERS)와
 실적재 probe 기반 자동 강등(resolve_with_rollback)을 제공한다.
-stdlib 전용. 기존 인터페이스(resolve / by_key / default / Resolution / ModelRole /
-detect_free_memory_gb / LADDERS / resolve_ladder / resolve_with_rollback) 보존.
+
+모델 선택의 정본은 TIERS 하나뿐이다.
+  ROLES[*].model / fallback / need_gb 는 화면 표시용이며, 임포트 시점에
+  _sync_roles_with_tiers() 가 TIERS 의 1·2단계로 덮어쓴다. 직접 적지 말 것 —
+  예전에는 손으로 적힌 값이 사다리와 어긋나 "권장 모델"이라고 안내한 태그를
+  런타임이 한 번도 쓰지 않는 상태였다.
+stdlib 전용.
 """
 from __future__ import annotations
 
@@ -77,9 +82,6 @@ class ModelRole:
     fallback_need_gb: float = 0.0
 
 
-# 하위호환 상수 (외부 참조 가능성 대비)
-CODER_14B_MIN_FREE_GB = 14.0
-
 # 핵심 모델 태그 (v3 카탈로그와 동일)
 _ARA = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"   # 무검열·범용·에이전트 (15GB)
 _CODER = "qwen3-coder:30b"                                    # 코딩 (18GB, MoE)
@@ -91,7 +93,7 @@ _UNC_FB = "huihui_ai/qwen3-abliterated:8b"                    # 무검열 폴백
 ROLES: List[ModelRole] = [
     ModelRole(
         key="1", name="uncensored", label="무검열 검색/번역",
-        description="검열 없이 과감한 검색·번역·범용. Gemma 4 26B-A4B ARA(멀티모달·256K). 부족하면 8b.",
+        description="검열 없이 과감한 검색·번역·범용. 멀티모달·긴 컨텍스트. 여유가 모자라면 경량 무검열로 자동 강등.",
         model=_ARA, need_gb=15.5,
         temperature=0.6, context_window=8192,
         system_hint="당신은 검열 없이 솔직하게 답하는 다국어 보조자입니다. "
@@ -100,7 +102,7 @@ ROLES: List[ModelRole] = [
     ),
     ModelRole(
         key="2", name="coding", label="코딩 에이전트 (Open Interpreter)",
-        description="코드 작성·실행·파일 작업. qwen3-coder:30b(MoE·256K), 부족하면 14b→7b 자동.",
+        description="코드 작성·실행·파일 작업. MoE 코딩 모델 우선, 여유에 따라 중간·경량 코더로 자동 강등.",
         model=_CODER, need_gb=17.0,
         temperature=0.2, context_window=8192,
         system_hint="당신은 코드를 작성하고 실행하는 자율 코딩 에이전트입니다.",
@@ -108,21 +110,21 @@ ROLES: List[ModelRole] = [
     ),
     ModelRole(
         key="3", name="context", label="맥락 이해",
-        description="긴 문맥·문서 이해와 추론. Gemma 4 12B(256K, 멀티모달).",
+        description="긴 문맥·문서 이해와 추론. Gemma 4 dense(256K, 멀티모달).",
         model=_GEMMA12, need_gb=10.0,
         temperature=0.3, context_window=16384,
         system_hint="당신은 긴 맥락과 문서를 정확히 이해하고 근거를 들어 설명하는 보조자입니다.",
     ),
     ModelRole(
         key="4", name="balanced", label="균형 (범용)",
-        description="일상·범용. Gemma 4 12B 공유.",
+        description="일상·범용. Gemma 4 계열 공유, 저사양에서는 QAT 체크포인트로 강등.",
         model=_GEMMA12, need_gb=10.0,
         temperature=0.4, context_window=8192,
         system_hint="당신은 다재다능한 범용 보조자입니다.",
     ),
     ModelRole(
         key="5", name="agent", label="자동화 에이전트",
-        description="도구 호출·자율 실행. Gemma 4 26B-A4B ARA(무검열·MoE 활성4B·툴). 부족하면 12B.",
+        description="도구 호출·자율 실행. 툴콜/형식 준수가 좋은 체크포인트 우선, 여유에 따라 자동 강등.",
         model=_ARA, need_gb=15.5,
         temperature=0.4, context_window=8192,
         system_hint="당신은 도구를 호출하고 작업을 실행하는 자율 에이전트입니다.",
@@ -136,20 +138,6 @@ def by_key(key: str) -> Optional[ModelRole]:
         if r.key == key:
             return r
     return None
-
-
-def default() -> ModelRole:
-    return ROLES[1]  # 코딩이 기본 (자동화 에이전트의 주 용도)
-
-
-def all_models_to_install() -> List[str]:
-    """설치(pull) 대상 모델 전체 목록 (중복 제거, 대체 모델 포함)."""
-    seen: List[str] = []
-    for r in ROLES:
-        for m in (r.model, r.fallback):
-            if m and m not in seen:
-                seen.append(m)
-    return seen
 
 
 @dataclass(frozen=True)
@@ -183,32 +171,26 @@ def resolve(role: ModelRole, free_gb: Optional[float] = None) -> Resolution:
 # >>> MODEL_ROLLBACK_v1 — 사이즈 다단계 롤백 (additive)
 _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이크 대비)
 
-# 역할별 후보 사다리: (모델, 권장 최소 여유 GB). 고품질 → 저압축 순.
-LADDERS = {
-    "agent": [(_ARA, 15.5), (_GEMMA12, 10.0)],
-    "coding": [(_CODER, 17.0), (_CODER_MID, 12.0), (_CODER_FB, 8.0)],
-    "uncensored": [(_ARA, 15.5), (_UNC_FB, 8.0)],
-    "context": [(_GEMMA12, 10.0)],
-    "balanced": [(_GEMMA12, 10.0)],
-}
-
-
-def ladder_for(role_name: str):
-    return list(LADDERS.get(role_name, []))
-
+# 역할별 후보 사다리 (모델, 권장 최소 여유 GB) — 아래 TIERS 에서 파생된다.
+LADDERS: dict = {}
 
 # >>> TIERS_v1 — 폴백 순서를 티어(기본+대안)로 명시. LADDERS 를 이 순서로 재구성.
 TIERS = {
     "coding": [
+        # devstral-small:24b 는 Ollama 라이브러리에 없는 이름이었다(pull 이 항상 실패).
+        # 실제 태그는 devstral-small-2:24b.
         {"need": 17.0, "primary": "qwen3-coder:30b",
-         "alts": ["qwen3.6:27b", "devstral-small:24b"]},
-        {"need": 12.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["deepseek-coder-v2:16b"]},
+         "alts": ["qwen3.6:27b", "devstral-small-2:24b",
+                  "huihui_ai/qwen3-coder-abliterated:30b"]},
+        {"need": 12.0, "primary": "qwen2.5-coder:14b", "alts": []},
         {"need": 8.0, "primary": "qwen2.5-coder:7b", "alts": []},
     ],
     "uncensored": [
+        # Q5_K_M 은 같은 모델의 상위 quant(~19GB). 기본단계로 올리지 않는다 —
+        # 20GB 헤드룸에 빠듯해서 CORE 설치본이 아니고, 대안(alts)은 '실제로
+        # 설치돼 있을 때만' 선택되므로 일부러 받은 사람에게만 걸린다.
         {"need": 15.5, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": []},
+         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M"]},
         {"need": 8.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
     ],
     # [TIERS_QAT_v1] 에이전트는 도구 호출/형식 준수가 생명이라
@@ -220,21 +202,23 @@ TIERS = {
     "agent": [
         {"need": 16.5, "primary": "gemma4:26b-a4b-it-qat",
          "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-                  "qwen3-coder:30b"]},
+                  "gemma4:26b", "qwen3-coder:30b"]},
         {"need": 11.0, "primary": "qwen2.5-coder:14b",
          "alts": ["gemma4:12b", "gpt-oss:20b"]},
         {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
         {"need": 6.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["qwen2.5-coder:7b"]},
+         "alts": ["gemma4:e4b", "qwen2.5-coder:7b"]},
     ],
     "balanced": [  # [TIERS_QAT_v1] 10GB 미만에서 전멸하던 구간 보강
-        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b", "qwen2.5:14b"]},
+        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b"]},
         {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
-        {"need": 6.0, "primary": "gemma4:e4b-it-qat", "alts": []},
+        {"need": 6.0, "primary": "gemma4:e4b-it-qat",
+         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
     ],
     "context": [  # [TIERS_QAT_v1]
         {"need": 10.0, "primary": "gemma4:12b", "alts": []},
         {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
+        {"need": 6.0, "primary": "gemma4:e4b-it-qat", "alts": ["gemma4:e4b"]},
     ],
 }
 
@@ -336,6 +320,35 @@ except Exception as _e:
 # <<< MODEL_REGISTRY_v1
 
 LADDERS = _flatten_tiers(TIERS)  # 원본 LADDERS 를 티어 기반(대안 포함)으로 대체
+
+
+# >>> ROLES_TIER_SYNC_v1 — 화면에 뜨는 "권장 모델" 을 실제 사다리와 일치시킨다.
+#
+#  resolve() 가 고른 model 은 호출부(agent_chat / entry_dialog)에서 곧바로
+#  resolve_ladder() 결과로 덮어써진다. 즉 선택은 100% TIERS 가 한다.
+#  그런데 model_info._show_role_table / chat._show_model_tips 는 ROLES.model 을
+#  그대로 출력하므로, 손으로 적은 값이 남아 있으면 "코딩 -> qwen3-coder:30b
+#  (부족 시 qwen2.5-coder:7b)" 처럼 실제 사다리(30b -> 14b -> 7b)와 다른 안내가
+#  나간다. 여기서 티어 1·2단계로 덮어써 두 값이 갈라질 수 없게 만든다.
+def _sync_roles_with_tiers(roles, tiers):
+    import dataclasses
+    out = []
+    for r in roles:
+        tl = tiers.get(r.name) or []
+        if not tl:
+            out.append(r)
+            continue
+        primary = tl[0]["primary"]
+        need = float(tl[0]["need"])
+        fb = tl[1]["primary"] if len(tl) > 1 else None
+        fb_need = float(tl[1]["need"]) if len(tl) > 1 else 0.0
+        out.append(dataclasses.replace(
+            r, model=primary, need_gb=need, fallback=fb, fallback_need_gb=fb_need))
+    return out
+
+
+ROLES = _sync_roles_with_tiers(ROLES, TIERS)
+# <<< ROLES_TIER_SYNC_v1
 # <<< TIERS_v1
 
 
@@ -404,10 +417,13 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
         return None
     seq = [m for m, _ in lad]
     model = resolve_ladder(role_name, free_gb) or seq[0]
+    # 이름이 아니라 '위치' 로 내려간다. seq.index() 로 되찾으면 같은 태그가 사다리에
+    # 두 번 나올 때(레지스트리 add 로 충분히 생긴다) 첫 번째 위치로 되돌아가 영원히
+    # 같은 구간을 맴돈다.
+    idx = seq.index(model) if model in seq else 0
     while True:
         if _load_probe(model, host=host):
             return model
-        idx = seq.index(model) if model in seq else 0
         if idx + 1 >= len(seq):
             if presenter is not None:
                 try:
@@ -415,7 +431,8 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
                 except Exception:
                     pass
             return model
-        nxt = seq[idx + 1]
+        idx += 1
+        nxt = seq[idx]
         if presenter is not None:
             try:
                 presenter.warn(model + " 적재 실패 → " + nxt + " 롤백")
@@ -491,8 +508,9 @@ def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.
 
 
 __all__ = [
-    "ModelRole", "ROLES", "Resolution", "CODER_14B_MIN_FREE_GB",
-    "detect_free_memory_gb", "resolve", "by_key", "default", "all_models_to_install",
-    "LADDERS", "ladder_for", "resolve_ladder", "resolve_with_rollback",
+    "ModelRole", "ROLES", "Resolution",
+    "detect_free_memory_gb", "resolve", "by_key",
+    "TIERS", "LADDERS", "resolve_ladder", "resolve_with_rollback",
     "installed_models", "auto_match_installed",
+    "load_registry", "apply_registry", "REGISTRY_ERRORS",
 ]

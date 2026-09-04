@@ -80,25 +80,37 @@ def _model_purpose_map() -> dict:
 
 
 def _show_role_table(p) -> None:
-    """용도별 권장 모델 표를 패널에 표시."""
+    """용도별 권장 모델 표를 패널에 표시.
+
+    사다리 1단계(최고 품질)와 '지금 이 PC 에서 실제로 뜰 모델'을 함께 보여준다.
+    예전에는 1단계만 찍어서, 그 모델이 미설치라 다른 게 뜨는 상황에서도
+    화면은 계속 1단계를 권장 모델이라고 안내했다.
+    """
     try:
         from launcher.models import model_roles as _mr
         roles = getattr(_mr, "ROLES", None)
     except Exception:
-        roles = None
+        _mr, roles = None, None
     p.info("-" * 40)
     p.info("용도별 권장 모델")
     if not roles:
-        p.info("  - 자동화 에이전트: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (부족 시 12b)")  # CATALOG_ALIGN_v9
-        p.info("  - 코딩: qwen3-coder:30b (부족 시 7b)")
-        p.info("  - 무검열 검색/번역: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (대체 huihui 8b)")
-        p.info("  - 맥락/범용: gemma4:12b")
+        p.info("  모델 레지스트리를 불러오지 못했습니다 — SETUP.bat --manage 에서 확인하세요.")
         return
     for r in roles:
-        line = "  - " + r.label + " -> " + r.model
-        if getattr(r, "fallback", None):
-            line += " (부족 시 " + r.fallback + ")"
-        p.info(line)
+        p.info("  - " + r.label + " -> " + r.model + _actual_suffix(_mr, r))
         if getattr(r, "description", ""):
             p.info("      " + r.description)
+
+
+def _actual_suffix(mr, role) -> str:
+    """'-> 실제 사용' 꼬리표. 조회 실패 시 조용히 빈 문자열."""
+    if mr is None:
+        return ""
+    try:
+        actual = mr.resolve_ladder(role.name)
+    except Exception:
+        return ""
+    if not actual or actual == role.model:
+        return ""
+    return "   (현재 여유/설치 기준 실제 사용: " + actual + ")"
 # <<< MODELINFO_PURPOSE_v1 helper

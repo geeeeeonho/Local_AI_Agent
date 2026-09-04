@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 # ─── 모델 ─────────────────────────────────────────────
-MODEL_TAG = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"  # MODEL_GEMMA_v9 (무검열 범용/에이전트)
-MODEL_TAG_FALLBACK = "gemma4:12b"  # MODEL_GEMMA_v9 (메모리 부족 시 롤백)
+# model_roles 를 못 불러왔을 때만 쓰는 최후 기본값. 평상시 모델 선택은
+# model_roles.TIERS 사다리가 전담한다(메모리 롤백 포함) — 여기에 폴백 태그를
+# 따로 두면 사다리와 갈라지기만 하고 아무도 읽지 않는다.
+MODEL_TAG = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"
 
 # ─── Docker ───────────────────────────────────────────
 SANDBOX_IMAGE = "llm-agent-sandbox"
@@ -194,13 +196,20 @@ def agent_proxy_env(tor_host: str = None) -> dict:
 
 
 # ═══════════════════════════════════════════════════════
-#  TOKEN_LIMITS_v1 — 에이전트 생성 한도 (정본)
+#  TOKEN_LIMITS_v1 — 채팅 런타임 토큰 한도 (정본)
 #
-#  max_tokens 가 작으면 보고서용 긴 코드 블록이 중간에 잘려 실행조차 되지 않는다
-#  (실측된 실패 모드). context_window 는 시스템 메시지 + 대화 이력을 담을 공간이다.
-#  RAM 이 빠듯하면 CONTEXT_WINDOW 를 6144 또는 4096 으로 낮춰도 된다
-#  (max_tokens 상향 효과는 그대로 유지된다).
+#  context_window 는 시스템 메시지 + 대화 이력을 담을 공간이다.
+#  RAM 이 빠듯하면 낮춰도 되고, 긴 문서 RAG 를 자주 쓰면 올려도 된다.
+#
+#  이 섹션에는 원래 설명만 있고 상수가 없었다. 값은 launcher.runtime_guard 가
+#  준다고 적혀 있었지만 그 모듈은 저장소에 존재하지 않아, 호출부의 try/except 가
+#  매번 조용히 실패하고 하드코딩된 4096 이 쓰이고 있었다. 정본을 여기로 되돌린다.
+#
+#  AnythingLLM 은 이 값을 OLLAMA_MODEL_TOKEN_LIMIT 로 받는다.
+#  (Agent 런타임은 컨텍스트 길이를 AgentConfig 가 아니라 Open Interpreter/Ollama
+#   기본값에 맡기므로 이 상수를 읽지 않는다.)
 # ═══════════════════════════════════════════════════════
+CHAT_CONTEXT_WINDOW = 4096
 
 
 # ═══════════════════════════════════════════════════════

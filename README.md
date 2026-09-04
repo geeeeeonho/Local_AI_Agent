@@ -112,6 +112,25 @@ Open Interpreter 버전은 `src/runtime_versions.py` 한 곳에서만 정의합�
 설치 스크립트, 샌드박스 이미지 라벨, 런처의 이미지 검사가 모두 이 값을 읽습니다.
 세 곳이 어긋나면 샌드박스가 조용히 사용 불가가 되므로 리터럴로 적지 마세요.
 
+같은 이유로 저장소 안의 모듈을 가리키는 `import` 는 `src/tests/test_no_phantom_imports.py`
+가 검사합니다. 선택 기능을 `try: ... except Exception: pass` 로 감싸는 자리가 많아,
+경로가 틀리면 `ImportError` 가 그대로 삼켜지고 기능만 조용히 사라집니다.
+
+## 모델 정책
+
+받을 수 있는 모델(`src/launcher/models/model_catalog.py`)과 런타임이 고를 수 있는
+모델(`src/launcher/models/model_roles.py` 의 `TIERS`)은 **서로의 거울**이어야 합니다.
+
+- `TIERS` 에만 있는 태그 → 사다리가 1순위로 고르지만 `SETUP.bat` 어디에서도 받을 수 없습니다.
+- 카탈로그에만 있는 태그 → 받아서 디스크를 써도 런타임이 한 번도 고르지 않습니다.
+
+둘 다 예외도 경고도 없이 지나가므로 `src/tests/test_model_catalog_tiers.py` 가 양방향을
+강제합니다. 모델을 추가·교체할 때는 두 파일을 함께 고치세요.
+
+모델 선택의 정본은 `TIERS` 하나입니다. `ROLES[*].model / fallback` 은 화면 표시용이며
+임포트 시점에 `TIERS` 의 1·2단계로 덮어써집니다(직접 적지 마세요). 사용자별 재정의는
+`user_data/models/registry.json` 의 `replace` / `add` 로 합니다.
+
 ## 주요 구성
 
 - **ChatService**: AnythingLLM 기반 로컬 채팅/RAG

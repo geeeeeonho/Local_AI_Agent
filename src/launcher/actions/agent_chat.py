@@ -269,13 +269,13 @@ def _select_internet_mode(p):  # NETMODE_3WAY_v1: WARP(빠름)/Tor(최고익명)
 
 
 def _build_cmd_for_mode(mode, env, profile, workspace, container_name,
-                        context_window, run_mem, run_cpus, model_tag=None,
+                        run_mem, run_cpus, model_tag=None,
                         tor_proxy=False):
     """모드별 PIPE 명령 조립.
 
     Returns: (cmd, is_host) 또는 (None, _) 실패 시
     """
-    del profile, context_window  # instructions and limits travel via AgentConfig
+    del profile  # instructions travel via AgentConfig
     from .. import config
     if mode == "sandbox":
         from launcher.agent.sandbox_policy import build_sandbox_docker_command
@@ -426,7 +426,9 @@ def run(env, p):
             if _rname8:
                 _rolled8 = _mr8.resolve_ladder(_rname8, _free8)  # PREWARM_UI_v1: 전환 전 적재 안 함
                 if _rolled8 and _rolled8 != agent_model_tag:
-                    p.warn("적재 실패 감지 -> " + _rolled8 + " 로 롤백")
+                    # 여기서는 적재 probe 를 돌리지 않는다(PREWARM_UI_v1).
+                    # 여유 메모리/설치 목록만 다시 본 결과이므로 그렇게 말한다.
+                    p.warn("여유 메모리·설치 상태 기준 -> " + _rolled8 + " 로 조정")
                     agent_model_tag = _rolled8
     except Exception:
         pass
@@ -464,19 +466,11 @@ def run(env, p):
     # ── 6) 명령 조립 ──
     run_mem, run_cpus = _resolve_resource_limits(env)
     container = config.SANDBOX_CONTAINER_PREFIX + "chat_" + secrets.token_hex(4)
-    context_window = 4096
-    try:
-        from .. import runtime_guard
-        rt = runtime_guard.compute_runtime_params()
-        context_window = rt.context_window
-    except Exception:
-        pass
-
     _tor_on = (_uni.get("tor", False) if isinstance(_uni, dict)
                else (_select_internet_mode(p) if mode == "sandbox" else False))  # UNIFIED_ENTRY_v1
     cmd, is_host = _build_cmd_for_mode(
         mode, env, profile, workspace, container,
-        context_window, run_mem, run_cpus,
+        run_mem, run_cpus,
         model_tag=agent_model_tag,
         tor_proxy=_tor_on,
     )
