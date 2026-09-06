@@ -16,9 +16,7 @@ ollama 실행 파일로 진짜 저장소를 만들어 놓고, 사슬 전체를 �
 """
 import hashlib
 import json
-import os
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,71 +25,73 @@ from launcher.models import model_catalog as catalog
 from launcher.models import model_files
 from launcher.models import model_roles as roles
 
-# 가짜 ollama: list / pull 만 흉내낸다. 진짜와 같은 디렉터리 구조를 만든다.
-_FAKE_OLLAMA = '''#!@PYTHON@
-import hashlib, json, os, sys
-from pathlib import Path
+class _FakeOllama:
+    """`ollama list` / `ollama pull` 을 진짜와 같은 디스크 레이아웃으로 흉내낸다.
 
-root = Path(os.environ["OLLAMA_MODELS"])
-blobs = root / "blobs"
-manifests = root / "manifests" / "registry.ollama.ai"
+    실행 파일을 만들어 두고 셔뱅으로 돌리면 Windows CI 에서는 못 돌아
+    검증이 통째로 건너뛰어진다. 그래서 subprocess.run 자리에 끼워 넣어
+    두 플랫폼에서 똑같이 돈다.
+    """
+
+    SHARED = hashlib.sha256(b"shared-template").hexdigest()
+
+    def __init__(self, store: Path):
+        self.store = store
+        self.blobs = store / "blobs"
+        self.manifests = store / "manifests" / "registry.ollama.ai"
+        self.pulled = []
+
+    def installed(self):
+        out = []
+        if self.manifests.is_dir():
+            for path in sorted(self.manifests.rglob("*")):
+                if not path.is_file():
+                    continue
+                namespace, name, tag = path.relative_to(self.manifests).parts[-3:]
+                out.append("%s:%s" % (name, tag) if namespace == "library"
+                           else "%s/%s:%s" % (namespace, name, tag))
+        return out
+
+    def _pull(self, tag: str) -> None:
+        name, _, version = tag.partition(":")
+        namespace, _, short = name.rpartition("/")
+        namespace = namespace or "library"
+        digest = hashlib.sha256(tag.encode()).hexdigest()
+
+        self.blobs.mkdir(parents=True, exist_ok=True)
+        (self.blobs / ("sha256-" + digest)).write_bytes(b"W" * 4096)
+        (self.blobs / ("sha256-" + self.SHARED)).write_bytes(b"T" * 64)
+
+        folder = self.manifests / namespace / short
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / version).write_text(json.dumps({
+            "schemaVersion": 2,
+            "layers": [
+                {"mediaType": "application/vnd.ollama.image.model",
+                 "digest": "sha256:" + digest, "size": 4096},
+                {"mediaType": "application/vnd.ollama.image.template",
+                 "digest": "sha256:" + self.SHARED, "size": 64},
+            ],
+        }), encoding="utf-8")
+        self.pulled.append(tag)
+
+    def run(self, argv, **kwargs):
+        """subprocess.run 대역. 설치기가 부르는 형태만 처리한다."""
+        args = [str(a) for a in argv]
+        verb = args[1] if len(args) > 1 else ""
+        stdout = ""
+        if verb == "list":
+            stdout = "NAME\tID\tSIZE\tMODIFIED\n" + "".join(
+                name + "\tabc123\t1 GB\t1 day ago\n" for name in self.installed())
+        elif verb == "pull":
+            self._pull(args[2])
+        elif verb == "rm":
+            pass
+        else:
+            return subprocess.CompletedProcess(args, 1, "", "unknown command")
+        return subprocess.CompletedProcess(args, 0, stdout, "")
 
 
-def installed():
-    out = []
-    if manifests.is_dir():
-        for path in manifests.rglob("*"):
-            if path.is_file():
-                parts = path.relative_to(manifests).parts
-                name, tag = parts[-2], parts[-1]
-                ns = parts[-3]
-                out.append(name + ":" + tag if ns == "library" else
-                           ns + "/" + name + ":" + tag)
-    return sorted(out)
-
-
-cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-if cmd == "list":
-    print("NAME\\tID\\tSIZE\\tMODIFIED")
-    for name in installed():
-        print(name + "\\tabc123\\t1 GB\\t1 day ago")
-    sys.exit(0)
-
-if cmd == "pull":
-    tag = sys.argv[2]
-    name, _, ver = tag.partition(":")
-    ns, _, short = name.rpartition("/")
-    ns = ns or "library"
-    digest = hashlib.sha256(tag.encode()).hexdigest()
-    shared = hashlib.sha256(b"shared-template").hexdigest()
-    blobs.mkdir(parents=True, exist_ok=True)
-    (blobs / ("sha256-" + digest)).write_bytes(b"W" * 4096)
-    (blobs / ("sha256-" + shared)).write_bytes(b"T" * 64)
-    folder = manifests / ns / short
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / ver).write_text(json.dumps({
-        "schemaVersion": 2,
-        "layers": [
-            {"mediaType": "application/vnd.ollama.image.model",
-             "digest": "sha256:" + digest, "size": 4096},
-            {"mediaType": "application/vnd.ollama.image.template",
-             "digest": "sha256:" + shared, "size": 64},
-        ],
-    }), encoding="utf-8")
-    sys.exit(0)
-
-sys.exit(1)
-'''
-
-
-def _fake_ollama(path: Path) -> Path:
-    exe = path / "ollama.exe"
-    exe.write_text(_FAKE_OLLAMA.replace("@PYTHON@", sys.executable), encoding="utf-8")
-    exe.chmod(0o755)
-    return exe
-
-
-@unittest.skipIf(os.name == "nt", "가짜 실행 파일은 POSIX 셔뱅에 기댄다")
 class ModelPipelineTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -102,8 +102,15 @@ class ModelPipelineTests(unittest.TestCase):
         self.ollama_dir = self.env / "ollama_runtime"
         self.ollama_dir.mkdir(parents=True)
         self.store.mkdir(parents=True)
-        _fake_ollama(self.ollama_dir)
+        # 설치기는 실행 파일의 존재만 확인하고, 호출은 아래에서 가로챈다.
+        (self.ollama_dir / "ollama.exe").write_bytes(b"")
         self.paths = {"env": self.env, "ollama": self.ollama_dir, "models": self.store}
+
+        from installer.steps import model as installer_model
+        self.ollama = _FakeOllama(self.store)
+        real_run = installer_model.subprocess.run
+        self.addCleanup(setattr, installer_model.subprocess, "run", real_run)
+        installer_model.subprocess.run = self.ollama.run
 
     # ── 설치 ────────────────────────────────────────────────────
     def _install(self):
