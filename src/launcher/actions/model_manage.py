@@ -38,6 +38,27 @@ def _installed_tags(svc) -> set:
         return set()
 
 
+def _free_gb():
+    try:
+        from launcher.models import model_roles as mr
+        return mr.detect_free_memory_gb()
+    except Exception:
+        return None
+
+
+def _refresh_file_map(svc, p) -> None:
+    """MODEL_FILES_v1: blobs/sha256-... 가 어느 모델인지 적은 CSV 를 다시 쓴다."""
+    try:
+        from launcher.models import model_files as mf
+    except Exception:
+        return
+    out = mf.refresh(svc.model_dir)
+    if out:
+        p.info("파일-모델 대응표 갱신: " + str(out))
+    else:
+        p.warn("파일-모델 대응표를 쓰지 못했습니다 (저장소 쓰기 권한 확인).")
+
+
 def _download_flow(env, p) -> None:
     cat = _catalog()
     svc = OllamaService(env, logger=p)
@@ -50,23 +71,32 @@ def _download_flow(env, p) -> None:
         return
 
     installed = _installed_tags(svc)
+    free_gb = _free_gb()
+    wanted = cat.recommended_for(free_gb)
     opts = []
     for e in cat.all_entries():
         done = e.tag in installed
         tail = "  [설치됨]" if done else ""
         grp = "" if e.group == "core" else " (선택)"
+        # 다운로드 크기와 상주 메모리는 다르다 (gemma4:e4b 는 9.6GB 받아 ~5GB 로 돈다).
+        sizes = "~" + format(e.size_gb, ".1f") + "GB 받기"
+        if abs(e.memory_gb - e.size_gb) >= 0.2:
+            sizes += " / " + format(e.memory_gb, ".1f") + "GB 적재"
         opts.append(Option(
             id=e.tag,
-            label=e.tag + "  ·  " + e.role + grp + "  ·  ~" + format(e.size_gb, ".1f") + "GB" + tail,
-            default=(done or (e.recommended and not done)),
+            label=e.tag + "  ·  " + e.role + grp + "  ·  " + sizes + tail,
+            default=(done or e.tag in wanted),
             description=e.desc,
             locked=done,
         ))
+    fit_line = ("여유 메모리 %.1fGB 감지 — 지금 실제로 돌아가는 단계를 미리 체크했습니다."
+                % free_gb) if free_gb else "여유 메모리 감지 실패 — 기본 권장 세트를 체크했습니다."
     sel = p.show_checkbox(
         title="모델 다운로드 선택",
         subtitle="체크한 모델을 받습니다 · 이미 설치된 모델은 잠금(설치됨)",
         options=opts,
         extra_lines=[
+            fit_line,
             "한 번에 하나만 메모리에 적재되므로 RAM 무관, 디스크만 사용합니다.",
             "(선택) 표시는 상위/특수 모델 — 필요할 때만 받으세요.",
         ],
@@ -97,6 +127,7 @@ def _download_flow(env, p) -> None:
             p.error("  실패: " + tag + " (rc=" + str(rc) + ")")
             failc += 1
     p.info("요약 — 받음 " + str(okc) + " · 실패 " + str(failc))
+    _refresh_file_map(svc, p)
     p.pause()
 
 
@@ -168,6 +199,7 @@ def _remove_flow(env, p) -> None:
             p.error("  실패: " + tag + " (rc=" + str(rc) + ")")
             failc += 1
     p.info("요약 — 삭제 " + str(okc) + " · 실패 " + str(failc))
+    _refresh_file_map(svc, p)
     p.pause()
 
 

@@ -94,17 +94,27 @@ def build_view(free_gb: Optional[float] = None, installed=None) -> List[dict]:
         # 추천 티어 = need <= usable 인 첫 티어(없으면 마지막)
         rec_t = None
         for ti, (_p, need, _a) in enumerate(tiers):
-            if usable and need <= usable:
+            _e = cat.get(_p)
+            _n = getattr(_e, "memory_gb", None) if _e else None
+            if usable and float(_n or need) <= usable:
                 rec_t = ti
                 break
         if rec_t is None and tiers:
             rec_t = len(tiers) - 1
 
         # 순서대로 후보 나열 (티어별 [기본]+대안)
+        # 적재 판정은 모델마다 카탈로그의 상주 메모리(run_gb)로 한다. 티어 need 를
+        # 대안까지 그대로 물려주면, 다운로드 9.6GB 지만 상주 5GB 인 gemma4:e4b 를
+        # 실제보다 무겁게 보고 저사양 구간에서 "안 맞는다"고 걸러 버린다.
+        def _need_of(tag, tier_need):
+            e = cat.get(tag)
+            got = getattr(e, "memory_gb", None) if e else None
+            return float(got) if got else float(tier_need)
+
         ordered = []
         for ti, (p, need, alts) in enumerate(tiers):
             for si, tag in enumerate([p] + alts):
-                ordered.append((ti, si, tag, need))
+                ordered.append((ti, si, tag, _need_of(tag, need)))
         # 실제 사용 후보 = 조건 맞으면서 설치된 첫 후보 (없으면 설치된 첫 후보)
         act = None
         if installed_known:
@@ -123,12 +133,14 @@ def build_view(free_gb: Optional[float] = None, installed=None) -> List[dict]:
             for si, tag in enumerate([p] + alts):
                 e = cat.get(tag)
                 label = ("%d" % (ti + 1)) if si == 0 else ("%d-%d" % (ti + 1, si))
+                rung_need = _need_of(tag, need)
                 rungs.append({
                     "label": label, "tier": ti + 1, "sub": si, "is_primary": si == 0,
-                    "tag": tag, "size_gb": getattr(e, "size_gb", None), "need_gb": need,
+                    "tag": tag, "size_gb": getattr(e, "size_gb", None),
+                    "run_gb": getattr(e, "memory_gb", None), "need_gb": rung_need,
                     "desc": getattr(e, "desc", "") or "",
                     "installed": (tag in inst) if installed_known else None,
-                    "fits": bool(usable and need <= usable),
+                    "fits": bool(usable and rung_need <= usable),
                     "recommended": (ti == rec_t and si == 0),
                     "actual": (act == (ti, si)),
                 })
@@ -147,6 +159,7 @@ def format_text(view: Optional[List[dict]] = None, free_gb: Optional[float] = No
     fg = view[0]["free_gb"] if view else free_gb
     if fg:
         lines.append("현재 여유 메모리 %.1fGB 기준 (숫자=티어, 1-1/1-2=같은 티어 대안)" % fg)
+        lines.append("크기는 '받기→적재'. 여유>= 는 적재에 필요한 메모리입니다.")
     else:
         lines.append("여유 메모리 감지 실패 — 아래는 티어 구조만")
     for c in view:
@@ -156,7 +169,13 @@ def format_text(view: Optional[List[dict]] = None, free_gb: Optional[float] = No
             lines.append("  (사다리 없음)")
             continue
         for r in c["rungs"]:
-            size = ("%.1fGB" % r["size_gb"]) if r["size_gb"] else "  ? "
+            # 받는 크기와 올라가는 크기가 다르면 둘 다 보여 준다 (gemma4:e4b 등).
+            if not r["size_gb"]:
+                size = "  ? "
+            elif r["run_gb"] and abs(r["run_gb"] - r["size_gb"]) >= 0.2:
+                size = "%.1f→%.1fGB" % (r["size_gb"], r["run_gb"])
+            else:
+                size = "%.1fGB" % r["size_gb"]
             if r["installed"] is None:
                 badge = "설치?"
             else:

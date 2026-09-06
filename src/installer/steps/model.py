@@ -22,7 +22,7 @@ from installer.i18n import get_language
 # model_catalog.CORE 와 같은 세트여야 한다 (test_model_catalog_tiers 가 확인).
 _INLINE: List[Tuple[str, str]] = [
     ("무검열·범용·에이전트 (Gemma ARA)", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
-    ("코딩 에이전트 (Open Interpreter)", "qwen3-coder:30b"),
+    ("코딩 에이전트 (Open Interpreter)", "qwen3.6:27b"),
     ("맥락/범용 + Gemma 폴백", "gemma4:12b"),
     ("코딩 폴백", "qwen2.5-coder:7b"),
     ("무검열 경량 폴백", "huihui_ai/qwen3-abliterated:8b"),
@@ -42,6 +42,8 @@ _MSG = {
         "all_ok": "모든 역할 모델 준비 완료.",
         "some_fail": "일부 모델을 받지 못했습니다. 네트워크 확인 후 SETUP.bat --install 재실행 시 받지 못한 것만 다시 시도합니다.",
         "no_exe": "ollama.exe 를 찾을 수 없어 모델 단계를 건너뜁니다.",
+        "mem_fit": "여유 메모리 {free:.1f}GB 에 맞춰 {n}개(~{gb:.1f}GB)를 고릅니다.",
+        "csv": "파일-모델 대응표: {path}",
     },
     "en": {
         "section": "Download role models (5 roles)",
@@ -55,6 +57,8 @@ _MSG = {
         "all_ok": "All role models are ready.",
         "some_fail": "Some models failed. Re-running SETUP.bat --install will retry only the missing ones.",
         "no_exe": "ollama.exe not found - skipping model step.",
+        "mem_fit": "Picking {n} model(s) (~{gb:.1f} GB) for {free:.1f} GB of free memory.",
+        "csv": "File-to-model map: {path}",
     },
 }
 
@@ -64,11 +68,31 @@ def _m(key: str, **kw) -> str:
     return d.get(key, _MSG["en"].get(key, key)).format(**kw) if kw else d.get(key, key)
 
 
+def _free_gb() -> Optional[float]:
+    try:
+        from launcher.models import model_roles as _mr  # type: ignore
+        return _mr.detect_free_memory_gb()
+    except Exception:
+        return None
+
+
 def _load_models() -> List[Tuple[str, str]]:
-    """역할 라벨이 붙은 (label, model) 목록. 카탈로그 > model_roles > 인라인."""
-    # MODEL_CATALOG_v1: 카탈로그 설치 세트 우선
+    """역할 라벨이 붙은 (label, model) 목록. 카탈로그 > model_roles > 인라인.
+
+    카탈로그가 있으면 감지된 여유 메모리에 맞는 세트를 고른다. 예전에는 CORE 를
+    통째로 받아서, 여유 8GB 짜리 PC 도 50GB 를 내려받고 정작 그 PC 의 사다리가
+    쓰는 저사양 단계는 하나도 받지 않았다.
+    """
     try:
         from launcher.models import model_catalog as _cat  # type: ignore
+        _free = _free_gb()
+        _wanted = _cat.recommended_for(_free)
+        if _wanted:
+            _role = {e.tag: e.role for e in _cat.all_entries()}
+            if _free is not None:
+                utils.info(_m("mem_fit", free=_free, n=len(_wanted),
+                              gb=_cat.download_gb(_wanted)))
+            return [(_role.get(t, t), t) for t in sorted(_wanted)]
         _pairs = _cat.install_pairs()
         if _pairs:
             return _pairs
@@ -131,7 +155,8 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         try:
             from installer.steps import model_select_gui as _msg_gui
             utils.info("모델 선택 창을 띄웁니다. 창이 안 보이면 작업표시줄/Alt+Tab 에서 '설치할 모델 선택' 창을 확인하세요.")
-            _picked = _msg_gui.select_models(_entries, installed, lang=get_language())
+            _picked = _msg_gui.select_models(_entries, installed, lang=get_language(),
+                                             free_gb=_free_gb())
         except Exception as _ge:
             utils.warn("선택 GUI 불가 — 권장 세트 자동 설치 (" + repr(_ge) + ")")
             _picked = "AUTO"
@@ -171,6 +196,15 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         except Exception as e:
             utils.err(_m("fail", tag=tag, rc=repr(e)))
             failed += 1
+
+    # MODEL_FILES_v1: blobs/sha256-... 가 어느 모델인지 알 수 있게 표를 남긴다.
+    try:
+        from launcher.models import model_files as _mfiles  # type: ignore
+        _csv = _mfiles.refresh(paths["models"])
+        if _csv:
+            utils.info(_m("csv", path=str(_csv)))
+    except Exception:
+        pass
 
     utils.info(_m("summary", pulled=pulled, skipped=skipped, failed=failed))
     if failed == 0:

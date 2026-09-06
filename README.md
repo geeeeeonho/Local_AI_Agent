@@ -126,10 +126,71 @@ Open Interpreter 버전은 `src/runtime_versions.py` 한 곳에서만 정의합�
 
 둘 다 예외도 경고도 없이 지나가므로 `src/tests/test_model_catalog_tiers.py` 가 양방향을
 강제합니다. 모델을 추가·교체할 때는 두 파일을 함께 고치세요.
+(임베더는 `kind="embed"` 로 표시하며 역할 사다리에서 제외됩니다.)
 
 모델 선택의 정본은 `TIERS` 하나입니다. `ROLES[*].model / fallback` 은 화면 표시용이며
 임포트 시점에 `TIERS` 의 1·2단계로 덮어써집니다(직접 적지 마세요). 사용자별 재정의는
 `user_data/models/registry.json` 의 `replace` / `add` 로 합니다.
+
+### 크기는 두 가지입니다
+
+```text
+size_gb  받는 크기(디스크)   — 설치 화면의 "몇 GB 받나"
+run_gb   상주 크기(메모리)   — 사다리의 적재 가능 판정
+```
+
+대부분 GGUF 는 둘이 같지만 Gemma 4 E 계열은 다릅니다. `gemma4:e4b` 는 9.6GB를 받아도
+활성 파라미터만 올려 **약 5GB로 돕니다**. 하나로 뭉뚱그리면 저사양 PC 에서 실제로 잘
+돌아가는 모델을 "안 맞는다"고 걸러 버립니다.
+
+### 도구 호출
+
+Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사다리에는 `tools=True`
+인 모델만 들어갈 수 있고, 테스트가 이를 막습니다. 도구를 못 부르는 모델을 고르면
+에이전트가 오류 없이 그냥 멈춘 것처럼 보입니다.
+
+### 설치 세트는 이 PC 기준으로 정해집니다
+
+기본 체크는 정적 목록이 아니라 감지된 여유 메모리에서 계산합니다
+(`model_catalog.recommended_for`).
+
+1. `CORE` 중 이 PC 에 **상주 가능한 것만** 남깁니다.
+2. `coding` · `agent` 는 이 PC 에서 가능한 **최상단 단계**를 반드시 넣습니다.
+3. 그러고도 받을 모델이 하나도 없는 역할이 있으면 그 역할의 최상단을 채웁니다.
+
+여유 8GB PC 는 약 19GB, 20GB PC 는 약 68GB를 받습니다. 예전에는 어느 쪽이든 같은
+50GB 세트를 받아서, 저사양 PC 는 **돌릴 수 없는 모델만 받고 정작 자기 사다리가 쓰는
+단계는 하나도 받지 않는** 상태가 됐습니다. 디스크 사전 검사도 고정 20GB 가 아니라
+이 계산 결과를 씁니다.
+
+## 모델 파일 ↔ 이름 대응표
+
+Ollama 는 받은 모델을 내용 해시로만 저장합니다. `C:\LLM_Models` 를 열면 이렇게 보입니다.
+
+```text
+C:\LLM_Models\
+  blobs\sha256-3f1c...          <- 15GB 짜리인데 어느 모델인지 알 수 없음
+  manifests\registry.ollama.ai\
+    library\gemma4\12b          <- 이 JSON 이 위 해시를 가리킴
+```
+
+`src/launcher/models/model_files.py` 가 manifest 를 읽어 대응을 복원하고
+**`C:\LLM_Models\MODEL_FILES.csv`** 로 저장합니다(저장소에 쓸 수 없으면
+`user_data/models/` 로). 모델 설치·삭제 후 자동으로 갱신되고, `RUN.bat` →
+**[모델 정보]** 에서도 다시 씁니다.
+
+| 열 | 뜻 |
+| --- | --- |
+| `file_name` | `blobs/` 안의 실제 파일 이름 (`sha256-...`) |
+| `model` | 그 파일을 쓰는 모델 (`gemma4:12b`) |
+| `role` | 카탈로그의 역할 라벨 |
+| `layer` | `weights`(가중치) / `template` / `params` / `license` / `projector` … |
+| `size_bytes`, `size_gb` | 파일 크기 |
+| `shared_with` | 이 파일을 함께 쓰는 모델 수. **2 이상이면 한 모델을 지워도 파일은 남습니다** |
+| `status` | `ok` / `missing`(받다 만 파일 — 다시 pull) / `orphan`(아무도 안 쓰는 잔여물) |
+| `rel_path` | 저장소 루트 기준 경로 |
+
+Excel 에서 한글이 깨지지 않도록 UTF-8 BOM 으로 씁니다.
 
 ## 주요 구성
 

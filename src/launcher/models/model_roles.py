@@ -174,64 +174,97 @@ _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이�
 # 역할별 후보 사다리 (모델, 권장 최소 여유 GB) — 아래 TIERS 에서 파생된다.
 LADDERS: dict = {}
 
-# >>> TIERS_v1 — 폴백 순서를 티어(기본+대안)로 명시. LADDERS 를 이 순서로 재구성.
+# >>> TIERS_v2 — 역할별 선호 순서. 각 티어는 "비슷한 크기의 대안 묶음"이다.
+#
+#  need 는 그 티어 기본 모델의 상주 메모리(model_catalog.run_gb)와 같다.
+#  실제 적재 가능 판정은 _flatten_tiers 가 모델마다 카탈로그 값을 다시 읽어
+#  개별로 한다 — 같은 티어라도 크기가 조금씩 다르기 때문이다.
+#
+#  근거 요약(2026-09 기준):
+#   * 코딩은 Qwen3.6-27B dense 가 SWE-bench Verified 77.2 로 이 체급 최고고,
+#     Ollama OpenAI 호환 엔드포인트에서 도구 호출이 검증됐다. qwen3.5/3.8 계열은
+#     도구 호출 결함이 보고돼 REPLACED 로 뺐다.
+#   * 에이전트는 도구 왕복이 많아 토큰 속도가 곧 체감 속도다. 그래서 dense 최상위
+#     대신 MoE(활성 ~4B) 인 Gemma 4 26B-A4B 를 위에 둔다. Gemma 4 는 τ2-bench
+#     86.4 로 도구 사용 자체는 강하다(Gemma 3 27B 는 6.6).
+#     [TIERS_QAT_v1] 그중에서도 QAT 체크포인트를 먼저 쓴다 — 학습 중 4비트를
+#     시뮬레이션해 양자화 오차에 미리 적응하므로, 사후 반올림(PTQ)보다 툴콜·
+#     코드블록 형식이 덜 깨진다. 실측: 8b abliterated 는 코드블록 펜스를 못 지켜
+#     미니루프가 실행조차 못 했고, qwen2.5-coder:14b 로 바꾸자 정상 동작했다.
+#   * 반대로 맥락/범용은 속도보다 품질이라 dense 31B 를 최상단에 둔다.
 TIERS = {
     "coding": [
-        # devstral-small:24b 는 Ollama 라이브러리에 없는 이름이었다(pull 이 항상 실패).
-        # 실제 태그는 devstral-small-2:24b.
-        {"need": 17.0, "primary": "qwen3-coder:30b",
-         "alts": ["qwen3.6:27b", "devstral-small-2:24b",
-                  "huihui_ai/qwen3-coder-abliterated:30b"]},
-        {"need": 12.0, "primary": "qwen2.5-coder:14b", "alts": []},
-        {"need": 8.0, "primary": "qwen2.5-coder:7b", "alts": []},
+        {"need": 18.0, "primary": "qwen3.6:27b",
+         "alts": ["qwen3-coder:30b",                       # MoE — 품질 조금 낮고 훨씬 빠름
+                  "huihui_ai/qwen3-coder-abliterated:30b"]},  # 무검열 코딩
+        {"need": 15.0, "primary": "devstral-small-2:24b",
+         "alts": ["gpt-oss:20b"]},
+        {"need": 9.0, "primary": "qwen2.5-coder:14b", "alts": []},
+        {"need": 4.7, "primary": "qwen2.5-coder:7b", "alts": []},
     ],
-    "uncensored": [
-        # Q5_K_M 은 같은 모델의 상위 quant(~19GB). 기본단계로 올리지 않는다 —
-        # 20GB 헤드룸에 빠듯해서 CORE 설치본이 아니고, 대안(alts)은 '실제로
-        # 설치돼 있을 때만' 선택되므로 일부러 받은 사람에게만 걸린다.
-        {"need": 15.5, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M"]},
-        {"need": 8.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
-    ],
-    # [TIERS_QAT_v1] 에이전트는 도구 호출/형식 준수가 생명이라
-    # 양자화 내성이 좋은 QAT 체크포인트를 우선한다.
-    #   QAT = 학습 중 4비트 연산을 시뮬레이션 -> 양자화 오차에 미리 적응
-    #   PTQ(학습 후 반올림)보다 품질 저하가 훨씬 적다
-    # 실측 근거: 8b abliterated 는 코드블록 펜스를 못 지켜 미니루프가 실행조차
-    #           못 했다. qwen2.5-coder:14b 로 바꾸자 정상 동작했다.
     "agent": [
-        {"need": 16.5, "primary": "gemma4:26b-a4b-it-qat",
-         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-                  "gemma4:26b", "qwen3-coder:30b"]},
-        {"need": 11.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["gemma4:12b", "gpt-oss:20b"]},
-        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
-        {"need": 6.0, "primary": "gemma4:e4b-it-qat",
+        {"need": 18.0, "primary": "gemma4:26b-a4b-it-qat",
+         "alts": ["gemma4:26b"]},
+        {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+         "alts": ["gpt-oss:20b"]},
+        {"need": 9.0, "primary": "qwen2.5-coder:14b",
+         "alts": ["gemma4:12b-it-qat", "gemma4:12b"]},
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
          "alts": ["gemma4:e4b", "qwen2.5-coder:7b"]},
     ],
-    "balanced": [  # [TIERS_QAT_v1] 10GB 미만에서 전멸하던 구간 보강
-        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b"]},
-        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
-        {"need": 6.0, "primary": "gemma4:e4b-it-qat",
+    "uncensored": [
+        # Q5 는 같은 모델의 상위 quant(19GB). 티어 기본으로 올리면 기본 설치가
+        # 그만큼 커지므로 대안으로 둔다 — 대안은 실제로 설치돼 있을 때만 뽑힌다.
+        {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M"]},
+        {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
+    ],
+    "balanced": [
+        {"need": 18.0, "primary": "gemma4:26b", "alts": ["gemma4:31b"]},
+        {"need": 14.0, "primary": "gpt-oss:20b", "alts": []},
+        {"need": 7.6, "primary": "gemma4:12b", "alts": ["gemma4:12b-it-qat"]},
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
          "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
     ],
-    "context": [  # [TIERS_QAT_v1]
-        {"need": 10.0, "primary": "gemma4:12b", "alts": []},
-        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
-        {"need": 6.0, "primary": "gemma4:e4b-it-qat", "alts": ["gemma4:e4b"]},
+    "context": [
+        {"need": 18.0, "primary": "gemma4:26b", "alts": ["gemma4:31b"]},
+        {"need": 7.6, "primary": "gemma4:12b", "alts": ["gemma4:12b-it-qat"]},
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat", "alts": ["gemma4:e4b"]},
     ],
 }
 
 
+def _catalog_memory(tag):
+    """카탈로그가 아는 상주 메모리(GB). 모르면 None."""
+    try:
+        from . import model_catalog as _cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as _cat
+        except Exception:
+            return None
+    try:
+        return _cat.memory_gb(tag)
+    except Exception:
+        return None
+
+
 def _flatten_tiers(_tiers):
-    """티어 -> 평탄 사다리 [(model, need), ...]. 같은 티어의 기본+대안은 같은 need 공유."""
+    """티어 -> 평탄 사다리 [(model, need), ...].
+
+    need 는 모델마다 카탈로그의 run_gb 를 쓴다. 예전에는 같은 티어면 대안까지
+    티어 need 를 그대로 물려받아, 다운로드 9.6GB 지만 상주는 5GB 인 gemma4:e4b
+    같은 모델을 실제보다 무겁게 봤고 반대로 18GB 모델을 17GB 로 가볍게 봤다.
+    카탈로그에 없는 태그(레지스트리로 추가한 것)는 티어 need 를 그대로 쓴다.
+    """
     _out = {}
     for _role, _tl in _tiers.items():
         _seq = []
         for _t in _tl:
-            _seq.append((_t["primary"], float(_t["need"])))
-            for _a in _t.get("alts", []):
-                _seq.append((_a, float(_t["need"])))
+            _fallback = float(_t["need"])
+            for _m in [_t["primary"]] + list(_t.get("alts", [])):
+                _known = _catalog_memory(_m)
+                _seq.append((_m, float(_known) if _known else _fallback))
         _out[_role] = _seq
     return _out
 

@@ -59,13 +59,27 @@ def _texts(ko: bool) -> dict:
     }
 
 
-def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
+def _default_checked(entries, free_gb):
+    """기본 체크 집합. 여유 메모리를 알면 그에 맞는 세트, 모르면 정적 플래그."""
+    try:
+        from launcher.models import model_catalog as _cat
+        picked = _cat.recommended_for(free_gb)
+        if picked:
+            return picked
+    except Exception:
+        pass
+    return {e.tag for e in entries if getattr(e, "recommended", False)}
+
+
+def select_models(entries, installed, lang: str = "ko",
+                  free_gb=None) -> Optional[Set[str]]:
     import tkinter as tk
     from tkinter import messagebox
 
     ko = str(lang).startswith("ko")
     T = _texts(ko)
     installed = set(installed or [])
+    wanted = _default_checked(entries, free_gb)
     cat_tags = {e.tag for e in entries}
     extra_installed = sorted(installed - cat_tags)
     size_of = {e.tag: float(getattr(e, "size_gb", 0.0)) for e in entries}
@@ -86,7 +100,14 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
     head.pack(fill="x", padx=22, pady=(18, 4))
     tk.Label(head, text=T["title"], bg=_BG, fg="#ffffff",
              font=("Segoe UI", 16, "bold"), anchor="w").pack(fill="x")
-    tk.Label(head, text=T["intro"], bg=_BG, fg=_DIM, font=("Segoe UI", 9),
+    intro = T["intro"]
+    if free_gb:
+        # 왜 이 조합이 체크돼 있는지 보이게 한다.
+        intro += ("\n여유 메모리 %.1fGB 를 감지해 지금 실제로 돌아가는 단계를 "
+                  "미리 체크했습니다." % float(free_gb))
+    else:
+        intro += "\n여유 메모리를 감지하지 못해 기본 권장 세트를 체크했습니다."
+    tk.Label(head, text=intro, bg=_BG, fg=_DIM, font=("Segoe UI", 9),
              anchor="w", justify="left", wraplength=740).pack(fill="x", pady=(4, 0))
     sum_lbl = tk.Label(head, text="", bg=_BG, fg=_OK,
                        font=("Segoe UI", 10, "bold"), anchor="w")
@@ -149,13 +170,13 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
         for e in core:
             done = e.tag in installed
             _row(e.tag, getattr(e, "role", ""), getattr(e, "size_gb", 0.0),
-                 getattr(e, "desc", ""), done or bool(getattr(e, "recommended", True)))
+                 getattr(e, "desc", ""), done or e.tag in wanted)
     if adv:
         _group(T["adv"])
         for e in adv:
             done = e.tag in installed
             _row(e.tag, getattr(e, "role", ""), getattr(e, "size_gb", 0.0),
-                 getattr(e, "desc", ""), done or bool(getattr(e, "recommended", False)))
+                 getattr(e, "desc", ""), done or e.tag in wanted)
     if extra_installed:
         _group(T["extra"])
         for tag in extra_installed:
@@ -171,7 +192,7 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
 
     def _set_rec():
         for e in entries:
-            vars_[e.tag].set(e.tag in installed or bool(getattr(e, "recommended", True)))
+            vars_[e.tag].set(e.tag in installed or e.tag in wanted)
         for tag in extra_installed:
             vars_[tag].set(True)
         _recompute()
