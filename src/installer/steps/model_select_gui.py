@@ -59,11 +59,12 @@ def _texts(ko: bool) -> dict:
     }
 
 
-def _default_checked(entries, free_gb):
-    """기본 체크 집합. 여유 메모리를 알면 그에 맞는 세트, 모르면 정적 플래그."""
+def _default_checked(entries, budget_gb):
+    """기본 체크 집합 = 메모리 예산 안의 3단계 기본단계."""
     try:
         from launcher.models import model_catalog as _cat
-        picked = _cat.recommended_for(free_gb)
+        picked = _cat.recommended_for(
+            _cat.MEMORY_BUDGET_GB if budget_gb is None else budget_gb)
         if picked:
             return picked
     except Exception:
@@ -72,7 +73,7 @@ def _default_checked(entries, free_gb):
 
 
 def select_models(entries, installed, lang: str = "ko",
-                  free_gb=None) -> Optional[Set[str]]:
+                  budget_gb=None) -> Optional[Set[str]]:
     import tkinter as tk
     from tkinter import messagebox
 
@@ -101,12 +102,20 @@ def select_models(entries, installed, lang: str = "ko",
     tk.Label(head, text=T["title"], bg=_BG, fg="#ffffff",
              font=("Segoe UI", 16, "bold"), anchor="w").pack(fill="x")
     intro = T["intro"]
-    if free_gb:
-        # 왜 이 조합이 체크돼 있는지 보이게 한다.
-        intro += ("\n여유 메모리 %.1fGB 를 감지해 지금 실제로 돌아가는 단계를 "
-                  "미리 체크했습니다." % float(free_gb))
-    else:
-        intro += "\n여유 메모리를 감지하지 못해 기본 권장 세트를 체크했습니다."
+    try:
+        from launcher.models import model_catalog as _cat
+        budget = float(budget_gb if budget_gb is not None else _cat.MEMORY_BUDGET_GB)
+        plan = _cat.plan_by_level(budget)
+        # 왜 이 조합이 체크돼 있는지, 각 등급이 얼마인지 보이게 한다.
+        intro += ("\n메모리 예산 %.0fGB 기준 3단계를 미리 체크했습니다 "
+                  "(여유 메모리는 오르내리므로 세 단계를 모두 둡니다)." % budget)
+        for key in _cat.LEVEL_KEYS:
+            tags = plan.get(key) or []
+            if tags:
+                intro += "\n  [%s] %.1fGB — %s" % (
+                    _cat.level_label(key), _cat.download_gb(tags), ", ".join(tags))
+    except Exception:
+        intro += "\n기본 권장 세트를 체크했습니다."
     tk.Label(head, text=intro, bg=_BG, fg=_DIM, font=("Segoe UI", 9),
              anchor="w", justify="left", wraplength=740).pack(fill="x", pady=(4, 0))
     sum_lbl = tk.Label(head, text="", bg=_BG, fg=_OK,

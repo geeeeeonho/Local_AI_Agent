@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """model_catalog — 설치/관리용 모델 카탈로그 (단일 소스).
 
-MODEL_CATALOG_v5 — Gemma 4 / Qwen3.6 세대. 목표 하드웨어: 여유 RAM ~20GB.
+MODEL_CATALOG_v6 — Gemma 4 / Qwen3.6 세대. 목표 하드웨어: 모델용 메모리 ~20GB.
+
+메모리 예산이 이 파일의 출발점이다. MEMORY_BUDGET_GB 를 넘겨 적재할 수 없는
+모델은 아예 담지 않는다 — 목록에만 있으면 디스크만 먹고 사다리는 매번 그 아래로
+떨어진다. 예산 안에서 역할마다 3단계(상/중/하)를 둔다(LEVELS).
 
 크기를 두 개로 나눈다. 예전에는 하나로 뭉뚱그려서 사다리가 틀린 판단을 했다.
   size_gb : 다운로드(디스크) 크기. 설치 화면의 "몇 GB 받나" 계산용.
   run_gb  : 실제로 상주하는 메모리. 사다리의 적재 가능 판정용.
 대부분 GGUF 는 둘이 같지만 Gemma 4 E 계열(e2b/e4b)은 다르다 —
 e4b 는 9.6GB 를 받아도 실제 활성 파라미터만 올려서 ~5GB 로 돈다.
-KV 캐시·연산 버퍼 여유는 model_roles._SAFETY(0.92) 가 따로 잡는다.
 
 tools 는 함수/도구 호출 지원 여부다. 에이전트·코딩 사다리는 이게 False 인 모델을
 담을 수 없다(tests/test_model_catalog_tiers.py 가 막는다). Open Interpreter 는
 도구 호출로 동작하므로, 못 부르는 모델을 골라 놓으면 그냥 멈춘 것처럼 보인다.
 
-v5 규칙 — 카탈로그와 model_roles.TIERS 는 서로의 거울이어야 한다.
+v6 규칙 — 카탈로그와 model_roles.TIERS 는 서로의 거울이어야 한다.
   * TIERS 가 고를 수 있는 태그는 반드시 여기에 있어야 한다.
     없으면 사다리가 "설치할 방법이 없는 모델"을 1순위로 고르고 조용히 떨어진다.
   * 여기 있는 chat 모델은 반드시 어떤 티어에든 등장해야 한다.
@@ -23,10 +26,42 @@ v5 규칙 — 카탈로그와 model_roles.TIERS 는 서로의 거울이어야 �
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-MARKER = "MODEL_CATALOG_v5"
+MARKER = "MODEL_CATALOG_v6"
+
+# ── 하드웨어 예산 ──────────────────────────────────────────────────
+#  이 PC 가 모델에 내줄 수 있는 최대 상주 메모리(GB).
+#
+#  ★ '지금 여유' 가 아니라 이 값으로 무엇을 받을지 정한다. 브라우저를 켜 둔 채
+#    설치했다는 이유로 좋은 모델을 영영 못 받게 되면 안 된다.
+#    실행 시점의 모델 선택만 실제 여유 메모리를 본다(model_roles.resolve_ladder).
+#
+#  이 값을 넘는 모델은 카탈로그에 두지 않는다. 받아도 절대 못 뜨는데 목록에만
+#  있으면 디스크만 먹고 사다리는 매번 그 아래로 떨어진다.
+MEMORY_BUDGET_GB = float(os.environ.get("LLM_MEMORY_BUDGET_GB", "20"))
+
+#  KV 캐시·연산 버퍼 몫. 여유의 이만큼만 가중치에 쓴다 (model_roles._SAFETY 와 같은 값).
+_SAFETY = 0.92
+
+#  그래서 실제로 올릴 수 있는 가중치 상한은 예산 그대로가 아니라 이 값이다.
+#  20GB 예산 -> 18.4GB. 19~21GB 짜리 모델은 "예산 안" 처럼 보여도 절대 안 뜬다.
+MAX_MODEL_GB = MEMORY_BUDGET_GB * _SAFETY
+
+#  예산 안에서 쓰는 3단계. 여유 메모리는 상황에 따라 오르내리므로(브라우저·Docker)
+#  한 단계만 받아 두면 그 단계가 안 맞는 순간 쓸 게 없어진다.
+#    상 — 다른 걸 거의 안 띄웠을 때. 이 등급이 실질적인 최고 품질이다.
+#    중 — 브라우저·Docker 를 같이 쓰는 평소 상태.
+#    하 — 메모리가 빠듯할 때의 최후 단계.
+#  (min_gb, max_gb] 로 모델을 등급에 배정한다.
+LEVELS: Tuple[Tuple[str, str, float, float], ...] = (
+    ("high", "상", 12.0, MAX_MODEL_GB),
+    ("mid", "중", 6.0, 12.0),
+    ("low", "하", 0.0, 6.0),
+)
+LEVEL_KEYS = tuple(key for key, _label, _lo, _hi in LEVELS)
 
 
 @dataclass(frozen=True)
@@ -48,10 +83,10 @@ class CatalogEntry:
         return self.run_gb if self.run_gb > 0 else self.size_gb
 
 
-# ── 기본 설치 세트 ────────────────────────────────────────────────
-#  메모리 감지가 되면 recommended 대신 recommended_for(free_gb) 가 기본 체크를
-#  정한다. 아래 recommended 플래그는 감지 실패 시의 폴백이다.
-CORE: List[CatalogEntry] = [
+# ── 전체 목록 ─────────────────────────────────────────────────────
+#  기본/선택 구분은 아래 _CORE_TAGS 에서 한 번만 정한다. 예전에는 각 항목의
+#  group·recommended 플래그와 실제 기본 세트가 따로 놀아서, 손으로 맞춰야 했다.
+_ALL: List[CatalogEntry] = [
     CatalogEntry("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
                  "무검열·범용·에이전트 (Gemma ARA)", 15.0,
                  "메인 — Gemma 4 26B-A4B ARA abliterated. 공개 abliteration 중 최저 거부율(7.7%)·"
@@ -71,10 +106,6 @@ CORE: List[CatalogEntry] = [
                  "안전 롤백 — 무검열 경량(젬마 ARA가 안 뜰 때). 코드블록 형식 준수가 약해 "
                  "코드 실행 역할에는 쓰지 않는다.",
                  run_gb=5.0, ctx_k=32),
-]
-
-# ── 선택 설치 ─────────────────────────────────────────────────────
-ADVANCED: List[CatalogEntry] = [
     # ── 에이전트/범용 (Gemma 4) ──
     # QAT = 학습 중 4비트를 시뮬레이션한 체크포인트. 사후 반올림(PTQ)보다 양자화
     # 손상이 훨씬 적어 툴콜·코드블록 형식 준수가 안정적이다. Gemma 4 는 τ2-bench
@@ -87,11 +118,6 @@ ADVANCED: List[CatalogEntry] = [
     CatalogEntry("gemma4:26b", "Gemma 정식 26B (검열)", 18.0,
                  "정식 26B-A4B MoE — 템플릿/툴콜 보장(검열 있음). 범용·맥락 1순위.",
                  run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
-    CatalogEntry("gemma4:31b", "Gemma 최상위 dense (여유 22GB+)", 20.0,
-                 "dense 31B — Gemma 4 중 도구 사용 점수가 가장 높다(τ2-bench 86.4). "
-                 "20GB 상주라 여유 22GB 이상에서만 걸린다.",
-                 run_gb=20.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False),
     CatalogEntry("gemma4:12b-it-qat", "저사양 에이전트/범용 (QAT)", 8.9,
                  "여유 10GB 안팎 구간. 12B QAT — 저압축에서도 형식 준수 유지.",
@@ -122,11 +148,6 @@ ADVANCED: List[CatalogEntry] = [
                  "번역·다국어 작업의 무검열 상단으로 적합. 256K·멀티모달.",
                  run_gb=17.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False),
-    CatalogEntry("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M",
-                 "Gemma ARA 최고품질 (여유 21GB+)", 19.0,
-                 "동일 ARA 모델의 Q5 — 품질 최대. 여유 21GB 이상에서만 걸린다.",
-                 run_gb=19.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
     CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
                  "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
                  "여유 10~15GB 구간의 번역·범용 주력.",
@@ -142,10 +163,6 @@ ADVANCED: List[CatalogEntry] = [
                  "30B-A3B MoE(활성 ~3B) — qwen3.6:27b 보다 품질은 조금 낮지만 훨씬 빠르다. "
                  "긴 에이전트 루프를 자주 돌린다면 이쪽.",
                  run_gb=18.0, ctx_k=256,
-                 group="advanced", recommended=False),
-    CatalogEntry("huihui_ai/qwen3-coder-abliterated:30b", "무검열 코딩", 19.0,
-                 "무검열 코딩 — Qwen3-Coder abliteration. 여유 21GB 이상.",
-                 run_gb=19.0, ctx_k=256,
                  group="advanced", recommended=False),
     CatalogEntry("devstral-small-2:24b", "에이전트 코딩 특화 (16GB급)", 15.0,
                  "다중파일·디버깅 루프·툴콜링(Apache). 384K 컨텍스트. 18GB 급이 안 뜨는 "
@@ -163,10 +180,6 @@ ADVANCED: List[CatalogEntry] = [
                  "Qwen3-VL 8B — 한·중·일 문자 OCR 과 손글씨까지. 스캔 PDF·"
                  "스크린샷에서 표와 텍스트를 뽑을 때. 256K.",
                  run_gb=6.1, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
-    CatalogEntry("qwen3-vl:32b", "문서 OCR 상위 (여유 23GB+)", 21.0,
-                 "같은 계열 32B — 복잡한 표·저품질 스캔까지. 여유가 넉넉할 때만.",
-                 run_gb=21.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False),
     # ── 범용/추론 ──
     CatalogEntry("gpt-oss:20b", "에이전트·추론 (MoE)", 14.0,
@@ -193,6 +206,36 @@ ADVANCED: List[CatalogEntry] = [
                  group="advanced", recommended=False),
 ]
 
+# 3단계(상/중/하) × 역할의 '기본단계' 전부. plan_by_level() 결과와 같아야 하고
+# tests/test_model_catalog_tiers.py 가 그것을 확인한다.
+_CORE_TAGS = frozenset({
+    # 상 — 다른 걸 거의 안 띄웠을 때 (15GB 급)
+    "devstral-small-2:24b",
+    "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+    "gpt-oss:20b",
+    # 중 — 브라우저·Docker 를 같이 쓰는 평소 상태 (9GB 급)
+    "qwen2.5-coder:14b",
+    "huihui_ai/qwen3-abliterated:14b",
+    "gemma4:12b",
+    # 하 — 메모리가 빠듯할 때 (5GB 급)
+    "gemma4:e4b-it-qat",
+    "huihui_ai/qwen3-abliterated:8b",
+    "qwen2.5-coder:7b",
+})
+
+
+def _split(entries: List[CatalogEntry]):
+    core, advanced = [], []
+    for entry in entries:
+        if entry.tag in _CORE_TAGS:
+            core.append(replace(entry, group="core", recommended=True))
+        else:
+            advanced.append(replace(entry, group="advanced", recommended=False))
+    return core, advanced
+
+
+CORE, ADVANCED = _split(_ALL)
+
 # 과거/하위 세트 → 새 세트로 대체되어 삭제 권장
 REPLACED: List[str] = [
     "gemma-agent-fixed:Q3_K_M",
@@ -203,6 +246,12 @@ REPLACED: List[str] = [
     "qwen2.5:14b",            # gemma4:12b / gpt-oss:20b 로 대체
     "qwen3.5:27b",            # Ollama 도구 호출 결함 보고(#14493) — qwen3.6:27b 사용
     "qwen3.8:27b",            # /v1/chat/completions 무응답 보고 — qwen3.6:27b 사용
+    # 아래는 20GB 예산에서 가중치 상한(18.4GB)을 넘어 절대 적재되지 않는다.
+    # 목록에 두면 디스크만 먹고 사다리는 매번 그 아래로 떨어진다.
+    "gemma4:31b",
+    "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M",
+    "huihui_ai/qwen3-coder-abliterated:30b",
+    "qwen3-vl:32b",
 ]
 
 
@@ -252,82 +301,117 @@ def replaced_tags() -> List[str]:
 #  50GB 를 받아 놓고 정작 그 PC 의 사다리가 원하는 저사양 단계는 하나도 받지
 #  않았다. 이제 감지된 여유 메모리로 역할마다 "지금 돌아가는 최상단 + 한 단계
 #  아래 안전망"을 골라 준다.
-_SAFETY = 0.92
+def level_of(tag_or_gb) -> Optional[str]:
+    """모델(또는 GB 수치)이 속한 메모리 등급. 가중치 상한을 넘으면 None."""
+    if isinstance(tag_or_gb, str):
+        gb = memory_gb(tag_or_gb)
+    else:
+        gb = float(tag_or_gb)
+    if gb is None:
+        return None
+    for key, _label, lo, hi in LEVELS:
+        if lo < gb <= hi:
+            return key
+    return None
 
-# 이 프로그램이 실제로 돌리는 두 런타임(Open Interpreter 코드 실행 / 도구 에이전트).
-# 나머지 역할은 CORE 로 덮이면 그대로 두지만, 이 둘만큼은 그 PC 에서 돌아가는
-# '가장 좋은' 단계를 받아 둔다 — 여기서 한 단계 밀리면 체감이 바로 나빠진다.
-PRIORITY_ROLES = ("coding", "agent")
 
-# 나머지 역할은 CORE 로 "덮이면" 두지만, 덮은 모델이 이 PC 에서 돌아가는 최선보다
-# 이 비율 이상 작으면 한 체급 아래가 아니라 '급이 다른' 것으로 보고 최선을 받는다.
-# 예: 여유 12GB 에서 무검열이 14B(9GB) 를 돌릴 수 있는데 CORE 의 8B(5GB) 로
-#     때우던 상황 — 9/5 = 1.8 이라 이제 14B 를 받는다.
-_UPGRADE_RATIO = 1.5
+def level_label(key: str) -> str:
+    for k, label, _lo, _hi in LEVELS:
+        if k == key:
+            return label
+    return key
 
 
-def recommended_for(free_gb: Optional[float],
-                    ladders: Optional[Dict[str, Sequence[Tuple[str, float]]]] = None,
-                    ) -> Set[str]:
-    """여유 메모리에 맞는 기본 설치 세트.
+def by_level() -> Dict[str, List[CatalogEntry]]:
+    """등급 -> 그 등급의 카탈로그 항목(무거운 것부터)."""
+    out: Dict[str, List[CatalogEntry]] = {k: [] for k in LEVEL_KEYS}
+    for entry in chat_entries():
+        key = level_of(entry.tag)
+        if key:
+            out[key].append(entry)
+    for rows in out.values():
+        rows.sort(key=lambda e: -e.memory_gb)
+    return out
 
-    규칙은 세 줄이다.
-      1) CORE 중 이 PC 에서 상주 가능한 것만 남긴다.
-         (예전에는 여유 8GB 짜리도 CORE 50GB 를 통째로 받았다.)
-      2) coding / agent 는 그 PC 에서 가능한 최상단 기본단계를 반드시 넣는다.
-      3) 그러고도 받을 모델이 하나도 없는 역할이 있으면 그 역할의 최상단을 채운다.
-         (예전에는 저사양 PC 가 balanced/context 에서 받을 게 아예 없었다.)
 
-    free_gb 가 None 이면 정적 recommended 플래그로 폴백한다.
-    ladders 를 주지 않으면 model_roles.LADDERS 를 읽는다(순환 import 회피용 지연 참조).
+def plan_by_level(budget_gb: Optional[float] = None,
+                  tiers: Optional[Dict[str, Sequence[dict]]] = None,
+                  ) -> Dict[str, List[str]]:
+    """예산 안에서 역할마다 3단계 기본단계를 뽑아 등급별로 묶는다.
+
+    ★ 여기 들어가는 값은 '지금 여유' 가 아니라 이 PC 의 메모리 예산이다.
+      브라우저를 켜 둔 채 설치했다고 해서 상 등급을 영영 못 받으면 안 된다.
+      실행 시점의 선택만 실제 여유를 본다(model_roles.resolve_ladder).
+
+    대안(alts)은 넣지 않는다 — 같은 등급의 취향 선택이라 기본 설치를 부풀린다.
     """
-    static = {e.tag for e in all_entries() if e.recommended}
-    if free_gb is None:
-        return static
-    if ladders is None:
+    budget = MEMORY_BUDGET_GB if budget_gb is None else float(budget_gb)
+    ceiling = budget * _SAFETY
+    if tiers is None:
         try:
             from . import model_roles as _mr
-            ladders = _mr.LADDERS
+            tiers = _mr.TIERS
         except Exception:
-            return static
-    ladders = ladders or {}
-
-    usable = float(free_gb) * _SAFETY
+            tiers = None
+    out: Dict[str, List[str]] = {k: [] for k in LEVEL_KEYS}
+    if not tiers:
+        return out
     table = by_tag()
+    seen: Set[str] = set()
+    for tier_list in tiers.values():
+        for tier in tier_list:
+            tag = tier.get("primary")
+            entry = table.get(tag)
+            if entry is None or tag in seen or entry.memory_gb > ceiling:
+                continue
+            key = level_of(tag)
+            if key:
+                seen.add(tag)
+                out[key].append(tag)
+    for key in out:
+        out[key].sort(key=lambda t: -table[t].memory_gb)
+    return out
 
-    def fits(tag: str) -> bool:
-        entry = table.get(tag)
-        return entry is not None and entry.memory_gb <= usable
 
-    picked: Set[str] = {t for t in core_tags() if fits(t)}
+def recommended_for(budget_gb: Optional[float],
+                    ladders: Optional[Dict[str, Sequence[Tuple[str, float]]]] = None,
+                    ) -> Set[str]:
+    """예산에 맞는 기본 설치 세트 = 3단계 기본단계 전부.
 
-    for role, rungs in ladders.items():
-        fitting = [tag for tag, _need in rungs if fits(tag)]
-        if not fitting:
-            continue
-        best = fitting[0]
-        covered = [tag for tag in fitting if tag in picked]
-        if role in PRIORITY_ROLES or not covered:
-            picked.add(best)
-            continue
-        # 덮여 있긴 한데 급이 너무 낮으면 올려 준다.
-        biggest_covered = max(table[t].memory_gb for t in covered)
-        if table[best].memory_gb / biggest_covered >= _UPGRADE_RATIO:
-            picked.add(best)
-
-    if not picked:
-        # 무엇도 안 맞는 초저사양 — 그래도 손에 뭔가는 쥐여 준다.
-        lightest = min((e for e in chat_entries()), key=lambda e: e.memory_gb, default=None)
-        if lightest:
-            picked.add(lightest.tag)
-    return picked
+    단계를 하나만 받아 두면 여유 메모리가 오르내릴 때 쓸 게 없어지고,
+    대안까지 다 받으면 디스크만 먹는다. 그 사이가 이 세트다.
+    budget_gb 가 None 이면 정적 recommended 플래그로 폴백한다.
+    """
+    static = {e.tag for e in all_entries() if e.recommended}
+    if budget_gb is None:
+        return static
+    tiers = None
+    if ladders is not None:
+        # 사다리만 주어진 경우(테스트) — 평탄 목록에서 등급별 최상단을 고른다.
+        ceiling = float(budget_gb) * _SAFETY
+        table = by_tag()
+        picked: Set[str] = set()
+        for rungs in ladders.values():
+            per_level: Dict[str, str] = {}
+            for tag, _need in rungs:
+                entry = table.get(tag)
+                if entry is None or entry.memory_gb > ceiling:
+                    continue
+                key = level_of(tag)
+                if key and key not in per_level:
+                    per_level[key] = tag
+            picked.update(per_level.values())
+        return picked or static
+    plan = plan_by_level(budget_gb, tiers)
+    picked = {tag for tags in plan.values() for tag in tags}
+    return picked or static
 
 
 # ── 설치 여부 대조 ────────────────────────────────────────────────
 #  카탈로그에는 대소문자가 섞인 벤더 태그가 있다
 #  (prutser/...:Q4_K_S, huihui_ai/Qwen3.6-abliterated:27b).
 #  Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하면 "미설치" 로 보고
-#  18GB 짜리를 다시 받는다. 대조는 항상 이 함수를 거친다.
+#  15GB 짜리를 다시 받는다. 대조는 항상 아래 함수를 거친다.
 def find_installed(tag: str, installed) -> Optional[str]:
     """installed 안에서 tag 와 같은 모델을 찾아 '설치된 실제 이름'을 돌려준다."""
     if not tag or not installed:
@@ -366,5 +450,7 @@ __all__ = [
     "CatalogEntry", "CORE", "ADVANCED", "REPLACED", "MARKER",
     "all_entries", "chat_entries", "by_tag", "core_tags", "catalog_tags",
     "memory_gb", "install_pairs", "replaced_tags", "recommended_for", "download_gb",
-    "find_installed", "is_installed", "canonicalize_installed", "PRIORITY_ROLES",
+    "find_installed", "is_installed", "canonicalize_installed",
+    "MEMORY_BUDGET_GB", "MAX_MODEL_GB", "LEVELS", "LEVEL_KEYS",
+    "level_of", "level_label", "by_level", "plan_by_level",
 ]

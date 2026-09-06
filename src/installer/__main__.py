@@ -60,12 +60,12 @@ def _model_disk_budget(skip_model: bool):
         return int(_RUNTIME_GB), 0.0
     try:
         from launcher.models import model_catalog as cat
-        from launcher.models import model_roles as mr
     except Exception:
         return _FALLBACK_FLOOR_GB, 0.0
     try:
-        floor = cat.download_gb(cat.recommended_for(6.0))
-        plan = cat.download_gb(cat.recommended_for(mr.detect_free_memory_gb()))
+        # 하한은 '하' 등급만 받았을 때. 그보다 적으면 어떤 조합으로도 못 끝낸다.
+        floor = cat.download_gb(cat.plan_by_level().get("low") or ())
+        plan = cat.download_gb(cat.recommended_for(cat.MEMORY_BUDGET_GB))
     except Exception:
         return _FALLBACK_FLOOR_GB, 0.0
     return int(_RUNTIME_GB + floor) + 1, _RUNTIME_GB + plan

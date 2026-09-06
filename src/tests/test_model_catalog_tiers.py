@@ -62,9 +62,9 @@ class InstallSetTests(unittest.TestCase):
 
     def test_inline_fallback_matches_the_core_set(self):
         # 카탈로그 import 가 실패했을 때 쓰이는 목록. 세트가 다르면 설치 결과가
-        # 조용히 갈린다.
-        self.assertEqual([tag for _label, tag in installer_model._INLINE],
-                         catalog.core_tags())
+        # 조용히 갈린다. (받는 순서는 상관없으므로 집합으로 비교한다.)
+        self.assertEqual({tag for _label, tag in installer_model._INLINE},
+                         set(catalog.core_tags()))
 
 
 class RoleDisplayTests(unittest.TestCase):
@@ -205,80 +205,101 @@ class ToolCallingTests(unittest.TestCase):
                 self.assertNotIn(tag, [m for m, _ in roles.LADDERS[role]])
 
 
-class MemoryAwareInstallTests(unittest.TestCase):
-    """설치 기본 선택이 그 PC 에서 실제로 돌아가는 것이어야 한다.
+class MemoryBudgetTests(unittest.TestCase):
+    """카탈로그는 이 PC 가 실제로 적재할 수 있는 것만 담아야 한다.
 
-    예전에는 정적 recommended 플래그 하나뿐이라, 여유 8GB 짜리 PC 도 50GB 를
-    받아 놓고 정작 자기 사다리가 쓰는 저사양 단계는 하나도 받지 않았다.
+    예산 20GB 에서 가중치 상한은 18.4GB 다(나머지는 KV 캐시 몫). 예전에는
+    19~21GB 짜리가 네 개 들어 있었다 — 받아도 절대 안 뜨는데 목록에는 보여서,
+    디스크만 먹고 사다리는 매번 그 아래로 떨어졌다.
     """
 
-    def _picked(self, free_gb):
-        return catalog.recommended_for(free_gb, roles.LADDERS)
+    def test_nothing_in_the_catalog_exceeds_what_can_be_loaded(self):
+        too_big = [(e.tag, e.memory_gb) for e in catalog.chat_entries()
+                   if e.memory_gb > catalog.MAX_MODEL_GB]
+        self.assertEqual(too_big, [],
+                         "예산 %.0fGB 로는 적재 불가(상한 %.1fGB): %s"
+                         % (catalog.MEMORY_BUDGET_GB, catalog.MAX_MODEL_GB, too_big))
 
-    def test_small_machine_gets_something_it_can_actually_run(self):
-        picked = self._picked(8.0)
-        self.assertTrue(picked)
-        usable = 8.0 * catalog._SAFETY
-        for tag in picked:
-            self.assertLessEqual(catalog.memory_gb(tag), usable, tag)
+    def test_every_model_lands_in_exactly_one_level(self):
+        for entry in catalog.chat_entries():
+            self.assertIn(catalog.level_of(entry.tag), catalog.LEVEL_KEYS, entry.tag)
 
-    def test_small_machine_does_not_download_the_big_models(self):
-        picked = self._picked(8.0)
-        self.assertNotIn("qwen3.6:27b", picked)
-        self.assertNotIn("gemma4:26b-a4b-it-qat", picked)
-        self.assertLess(catalog.download_gb(picked), 25.0)
+    def test_all_three_levels_are_populated(self):
+        for key, rows in catalog.by_level().items():
+            self.assertTrue(rows, "%s 등급에 모델이 없다" % key)
 
-    def test_the_set_never_shrinks_as_memory_grows(self):
-        previous = 0.0
-        for free in (6.0, 8.0, 12.0, 16.0, 20.0, 24.0, 48.0):
-            size = catalog.download_gb(self._picked(free))
-            self.assertGreaterEqual(size, previous, "여유 %.0fGB 에서 세트가 줄었다" % free)
-            previous = size
 
-    def test_a_huge_machine_does_not_pull_the_whole_catalog(self):
-        # 여유가 아무리 커도 '빈 구멍 채우기'만 하므로 카탈로그 전체를 받지 않는다.
-        picked = self._picked(256.0)
-        self.assertLess(len(picked), len(catalog.chat_entries()))
-        self.assertNotIn("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M", picked)
+class ThreeLevelTests(unittest.TestCase):
+    """역할마다 정확히 3단계. 여유 메모리는 하루에도 오르내리므로 한 단계만
+    받아 두면 그 단계가 안 맞는 순간 쓸 게 없어지고, 단계가 너무 많으면 어느
+    것이 실제로 도는지 알 수 없고 디스크만 먹는다."""
 
-    def test_priority_roles_always_get_their_best_fitting_rung(self):
-        for free in (8.0, 12.0, 16.0, 20.0, 24.0):
-            picked = self._picked(free)
-            usable = free * catalog._SAFETY
-            for role in catalog.PRIORITY_ROLES:
-                best = next(tag for tag, need in roles.LADDERS[role] if need <= usable)
-                self.assertIn(best, picked, "여유 %.0fGB / %s" % (free, role))
+    def test_every_role_has_exactly_three_tiers(self):
+        for name, tier_list in roles.TIERS.items():
+            self.assertEqual(len(tier_list), 3,
+                             "%s 는 %d단계 (3단계여야 함)" % (name, len(tier_list)))
 
-    def test_big_machine_gets_the_top_rungs(self):
-        picked = self._picked(24.0)
-        self.assertIn("qwen3.6:27b", picked)
-        self.assertIn("gemma4:26b-a4b-it-qat", picked)
+    def test_the_three_tiers_are_one_per_level(self):
+        for name, tier_list in roles.TIERS.items():
+            levels = [catalog.level_of(t["primary"]) for t in tier_list]
+            self.assertEqual(levels, list(catalog.LEVEL_KEYS),
+                             "%s 의 단계별 등급이 상/중/하 순이 아니다: %s" % (name, levels))
 
-    def test_every_role_is_covered_at_each_memory_level(self):
-        for free in (6.0, 8.0, 12.0, 16.0, 20.0, 24.0, 48.0):
-            picked = self._picked(free)
+    def test_alternatives_stay_inside_their_own_level(self):
+        # 대안은 '같은 등급의 다른 선택' 이다. 등급이 다르면 사다리를 내려간
+        # 것인지 옆으로 간 것인지 알 수 없어진다.
+        for name, tier_list in roles.TIERS.items():
+            for tier in tier_list:
+                want = catalog.level_of(tier["primary"])
+                for alt in tier.get("alts", []):
+                    self.assertEqual(catalog.level_of(alt), want,
+                                     "%s: %s 는 %s 단계의 대안이 아니다"
+                                     % (name, alt, want))
+
+
+class InstallPlanTests(unittest.TestCase):
+    """설치 계획은 '지금 여유' 가 아니라 이 PC 의 메모리 예산에서 나와야 한다.
+
+    브라우저를 켜 둔 채 SETUP 을 돌렸다는 이유로 상 등급을 영영 못 받으면
+    안 된다. 예전에는 detect_free_memory_gb() 를 그대로 넣고 있었다.
+    """
+
+    def test_the_plan_covers_all_three_levels_within_budget(self):
+        plan = catalog.plan_by_level(catalog.MEMORY_BUDGET_GB)
+        for key in catalog.LEVEL_KEYS:
+            self.assertTrue(plan[key], "%s 등급이 계획에 없다" % key)
+
+    def test_core_is_exactly_the_plan(self):
+        self.assertEqual(set(catalog.core_tags()),
+                         catalog.recommended_for(catalog.MEMORY_BUDGET_GB))
+
+    def test_the_plan_holds_only_models_that_can_load(self):
+        for tag in catalog.recommended_for(catalog.MEMORY_BUDGET_GB):
+            self.assertLessEqual(catalog.memory_gb(tag), catalog.MAX_MODEL_GB, tag)
+
+    def test_the_plan_skips_alternatives(self):
+        # 대안까지 받으면 기본 설치가 두 배가 된다.
+        picked = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
+        primaries = {t["primary"] for tl in roles.TIERS.values() for t in tl}
+        self.assertTrue(picked <= primaries)
+
+    def test_a_smaller_budget_drops_the_upper_levels(self):
+        small = catalog.recommended_for(8.0)
+        self.assertTrue(small)
+        for tag in small:
+            self.assertEqual(catalog.level_of(tag), "low", tag)
+        self.assertLess(catalog.download_gb(small),
+                        catalog.download_gb(catalog.recommended_for(20.0)))
+
+    def test_every_role_is_covered_at_each_budget(self):
+        for budget in (8.0, 12.0, 16.0, 20.0):
+            picked = catalog.recommended_for(budget)
             for role, ladder in roles.LADDERS.items():
                 self.assertTrue(picked & {tag for tag, _ in ladder},
-                                "여유 %.0fGB 에서 %s 역할이 받을 모델이 없다" % (free, role))
+                                "예산 %.0fGB 에서 %s 역할이 받을 모델이 없다"
+                                % (budget, role))
 
-    def test_a_covered_role_is_upgraded_when_the_fallback_is_a_class_below(self):
-        """CORE 가 그 역할을 '덮고' 있어도, 덮은 모델이 이 PC 에서 돌아가는
-        최선보다 한참 작으면 최선을 받아야 한다.
-
-        여유 12GB 에서 무검열은 14B(9GB) 를 돌릴 수 있는데, CORE 에 8B(5GB) 가
-        있다는 이유로 그걸로 때우고 있었다. 번역 품질이 체급 하나만큼 깎인다.
-        """
-        picked = self._picked(12.0)
-        self.assertIn("huihui_ai/qwen3-abliterated:14b", picked)
-
-    def test_a_near_equal_fallback_is_not_upgraded(self):
-        # 여유 20GB 의 무검열: 최선 26b-qat(18GB) 과 CORE 의 ARA(15GB) 는
-        # 같은 급이라 18GB 를 더 받지 않는다.
-        picked = self._picked(20.0)
-        self.assertIn("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S", picked)
-        self.assertNotIn("huihui_ai/gemma-4-abliterated:26b-qat", picked)
-
-    def test_undetected_memory_falls_back_to_the_static_flags(self):
+    def test_undetected_budget_falls_back_to_the_static_flags(self):
         self.assertEqual(catalog.recommended_for(None),
                          {e.tag for e in catalog.all_entries() if e.recommended})
 
@@ -295,10 +316,12 @@ class EndToEndCoverageTests(unittest.TestCase):
         self._real = roles.installed_models
         self.addCleanup(setattr, roles, "installed_models", self._real)
 
-    def test_the_default_set_satisfies_every_role(self):
-        for free in (6.0, 8.0, 12.0, 16.0, 20.0, 24.0, 48.0):
-            picked = catalog.recommended_for(free, roles.LADDERS)
-            roles.installed_models = lambda *a, **kw: set(picked)
+    def test_the_budget_install_satisfies_every_role_at_every_free_memory(self):
+        """예산대로 한 번 설치해 두면, 그 뒤 여유가 얼마로 떨어지든 모든 역할이
+        실제로 받아 둔 모델로 해결돼야 한다."""
+        picked = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
+        roles.installed_models = lambda *a, **kw: set(picked)
+        for free in (6.0, 8.0, 12.0, 16.0, 20.0):
             for role in roles.LADDERS:
                 chosen = roles.resolve_ladder(role, free)
                 self.assertIn(chosen, picked,
@@ -306,9 +329,9 @@ class EndToEndCoverageTests(unittest.TestCase):
                               % (free, role, chosen))
 
     def test_the_chosen_model_always_fits_in_memory(self):
-        for free in (6.0, 8.0, 12.0, 16.0, 20.0, 24.0):
-            picked = catalog.recommended_for(free, roles.LADDERS)
-            roles.installed_models = lambda *a, **kw: set(picked)
+        picked = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
+        roles.installed_models = lambda *a, **kw: set(picked)
+        for free in (6.0, 8.0, 12.0, 16.0, 20.0):
             for role in roles.LADDERS:
                 chosen = roles.resolve_ladder(role, free)
                 self.assertLessEqual(catalog.memory_gb(chosen), free * catalog._SAFETY,

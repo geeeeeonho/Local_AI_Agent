@@ -39,10 +39,11 @@ def _installed_tags(svc) -> set:
         return set()
 
 
-def _free_gb():
+def _budget_gb():
+    """모델에 내줄 수 있는 최대 메모리. '지금 여유' 가 아니라 이 PC 의 상한."""
     try:
-        from launcher.models import model_roles as mr
-        return mr.detect_free_memory_gb()
+        from launcher.models import model_catalog as cat
+        return float(cat.MEMORY_BUDGET_GB)
     except Exception:
         return None
 
@@ -72,13 +73,16 @@ def _download_flow(env, p) -> None:
         return
 
     installed = _installed_tags(svc)
-    free_gb = _free_gb()
-    wanted = cat.recommended_for(free_gb)
+    budget_gb = _budget_gb()
+    wanted = cat.recommended_for(budget_gb)
+    plan = cat.plan_by_level(budget_gb)
     opts = []
     for e in cat.all_entries():
         done = e.tag in installed
         tail = "  [설치됨]" if done else ""
-        grp = "" if e.group == "core" else " (선택)"
+        lvl = cat.level_of(e.tag)
+        grp = ("  [%s]" % cat.level_label(lvl)) if lvl else ""
+        grp += "" if e.group == "core" else " (선택)"
         # 다운로드 크기와 상주 메모리는 다르다 (gemma4:e4b 는 9.6GB 받아 ~5GB 로 돈다).
         sizes = "~" + format(e.size_gb, ".1f") + "GB 받기"
         if abs(e.memory_gb - e.size_gb) >= 0.2:
@@ -90,17 +94,20 @@ def _download_flow(env, p) -> None:
             description=e.desc,
             locked=done,
         ))
-    fit_line = ("여유 메모리 %.1fGB 감지 — 지금 실제로 돌아가는 단계를 미리 체크했습니다."
-                % free_gb) if free_gb else "여유 메모리 감지 실패 — 기본 권장 세트를 체크했습니다."
+    lines = ["메모리 예산 %.0fGB 기준 3단계를 미리 체크했습니다 "
+             "(여유는 오르내리므로 세 단계를 모두 둡니다)." % (budget_gb or 0)]
+    for key in cat.LEVEL_KEYS:
+        tags = plan.get(key) or []
+        if tags:
+            lines.append("  [%s] %.1fGB — %s"
+                         % (cat.level_label(key), cat.download_gb(tags), ", ".join(tags)))
+    lines.append("한 번에 하나만 메모리에 적재되므로 RAM 무관, 디스크만 사용합니다.")
+    lines.append("(선택) 표시는 같은 등급의 대안 — 필요할 때만 받으세요.")
     sel = p.show_checkbox(
         title="모델 다운로드 선택",
         subtitle="체크한 모델을 받습니다 · 이미 설치된 모델은 잠금(설치됨)",
         options=opts,
-        extra_lines=[
-            fit_line,
-            "한 번에 하나만 메모리에 적재되므로 RAM 무관, 디스크만 사용합니다.",
-            "(선택) 표시는 상위/특수 모델 — 필요할 때만 받으세요.",
-        ],
+        extra_lines=lines,
     )
     if sel is None:
         return

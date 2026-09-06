@@ -174,80 +174,71 @@ _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이�
 # 역할별 후보 사다리 (모델, 권장 최소 여유 GB) — 아래 TIERS 에서 파생된다.
 LADDERS: dict = {}
 
-# >>> TIERS_v2 — 역할별 선호 순서. 각 티어는 "비슷한 크기의 대안 묶음"이다.
+# >>> TIERS_v3 — 역할마다 정확히 3단계 (상/중/하).
 #
-#  need 는 그 티어 기본 모델의 상주 메모리(model_catalog.run_gb)와 같다.
-#  실제 적재 가능 판정은 _flatten_tiers 가 모델마다 카탈로그 값을 다시 읽어
-#  개별로 한다 — 같은 티어라도 크기가 조금씩 다르기 때문이다.
+#  하드웨어 전제: 모델에 내줄 수 있는 최대 메모리 ~20GB
+#  (model_catalog.MEMORY_BUDGET_GB, LLM_MEMORY_BUDGET_GB 로 조정).
+#  KV 캐시 몫을 빼면 가중치 상한은 18.4GB 다.
+#
+#  왜 3단계인가: 여유 메모리는 하루 종일 오르내린다(브라우저·Docker·샌드박스).
+#  한 단계만 받아 두면 그 단계가 안 맞는 순간 쓸 게 없어진다. 반대로 단계가
+#  너무 많으면 어느 것이 실제로 도는지 알 수 없고 디스크만 먹는다.
+#    상 — 다른 걸 거의 안 띄웠을 때. 15GB 급이 이 예산의 실질적 최고 품질이다.
+#         18GB 급은 여유 19.6GB 를 요구해 사실상 유휴 상태에서만 뜨므로,
+#         기본단계가 아니라 '대안' 으로 둔다(설치해 둔 사람에게만 걸린다).
+#    중 — 브라우저·Docker 를 같이 쓰는 평소 상태. 9GB 급.
+#    하 — 메모리가 빠듯할 때의 최후 단계. 5GB 급.
 #
 #  근거 요약(2026-09 기준):
-#   * 코딩은 Qwen3.6-27B dense 가 SWE-bench Verified 77.2 로 이 체급 최고고,
-#     Ollama OpenAI 호환 엔드포인트에서 도구 호출이 검증됐다. qwen3.5/3.8 계열은
-#     도구 호출 결함이 보고돼 REPLACED 로 뺐다.
-#   * 에이전트는 도구 왕복이 많아 토큰 속도가 곧 체감 속도다. 그래서 dense 최상위
-#     대신 MoE(활성 ~4B) 인 Gemma 4 26B-A4B 를 위에 둔다. Gemma 4 는 τ2-bench
-#     86.4 로 도구 사용 자체는 강하다(Gemma 3 27B 는 6.6).
-#     [TIERS_QAT_v1] 그중에서도 QAT 체크포인트를 먼저 쓴다 — 학습 중 4비트를
-#     시뮬레이션해 양자화 오차에 미리 적응하므로, 사후 반올림(PTQ)보다 툴콜·
-#     코드블록 형식이 덜 깨진다. 실측: 8b abliterated 는 코드블록 펜스를 못 지켜
-#     미니루프가 실행조차 못 했고, qwen2.5-coder:14b 로 바꾸자 정상 동작했다.
-#   * 반대로 맥락/범용은 속도보다 품질이라 dense 31B 를 최상단에 둔다.
+#   * 코딩은 Qwen3.6-27B 가 SWE-bench 77.2 로 이 체급 최고지만 18GB 다.
+#     20GB 예산에서 항상 도는 쪽은 15GB 의 Devstral Small 2 — 다중파일·디버깅
+#     루프에 특화됐고 384K 컨텍스트다. 그래서 상 단계 기본은 Devstral,
+#     Qwen3.6 은 유휴 시 대안.
+#   * 에이전트는 도구 왕복이 많아 속도가 곧 체감이다. ARA(15GB, MoE 활성 ~4B)가
+#     상 단계 기본이고, QAT 26B 는 유휴 시 대안.
+#   * 무검열은 도구 호출을 요구하지 않는다(번역·창작 목적).
+#   * 사무/범용은 gpt-oss(14GB, 추론 강도 조절)가 상 단계, 이미지가 필요하면
+#     Gemma 4 계열이 대안·중단계를 맡는다.
 TIERS = {
     "coding": [
-        {"need": 18.0, "primary": "qwen3.6:27b",
-         "alts": ["qwen3-coder:30b",                       # MoE — 품질 조금 낮고 훨씬 빠름
-                  "huihui_ai/qwen3-coder-abliterated:30b"]},  # 무검열 코딩
         {"need": 15.0, "primary": "devstral-small-2:24b",
-         "alts": ["gpt-oss:20b"]},
+         "alts": ["qwen3.6:27b",        # 유휴 시 — SWE-bench 77.2
+                  "qwen3-coder:30b",    # 유휴 시 — MoE, 훨씬 빠름
+                  "gpt-oss:20b"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b", "alts": []},
         {"need": 4.7, "primary": "qwen2.5-coder:7b", "alts": []},
     ],
     "agent": [
-        {"need": 18.0, "primary": "gemma4:26b-a4b-it-qat",
-         # qwen3.6 은 도구 호출 누락률이 가장 낮은 계열이지만 dense 라 느리다.
-         # 기본단계로 올리지 않고 대안으로 둔다 — 받아 둔 사람에게만 걸린다.
-         "alts": ["gemma4:26b", "qwen3.6:27b"]},
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": ["gpt-oss:20b"]},
+         "alts": ["gemma4:26b-a4b-it-qat",  # 유휴 시 — QAT 라 형식이 덜 깨짐
+                  "gemma4:26b",
+                  "gpt-oss:20b"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
          "alts": ["gemma4:12b-it-qat", "gemma4:12b"]},
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
          "alts": ["gemma4:e4b", "qwen2.5-coder:7b"]},
     ],
-    # 무검열은 번역·창작·자유로운 범용이 목적이라 도구 호출을 요구하지 않는다.
-    # 예전에는 15GB 와 5GB 사이가 통째로 비어서, 여유 8~14GB 인 PC 는 무검열
-    # 작업을 곧바로 8b 로 떨어뜨렸다. 그 사이를 14b -> 12b 로 메운다.
     "uncensored": [
-        {"need": 18.0, "primary": "huihui_ai/gemma-4-abliterated:26b-qat",
-         "alts": ["huihui_ai/Qwen3.6-abliterated:27b",          # 번역·다국어 축
-                  "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M"]},
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": []},
-        {"need": 9.0, "primary": "huihui_ai/qwen3-abliterated:14b", "alts": []},
-        {"need": 7.6, "primary": "huihui_ai/gemma-4-abliterated:12b", "alts": []},
+         "alts": ["huihui_ai/gemma-4-abliterated:26b-qat",
+                  "huihui_ai/Qwen3.6-abliterated:27b"]},   # 번역·다국어 축
+        {"need": 9.0, "primary": "huihui_ai/qwen3-abliterated:14b",
+         "alts": ["huihui_ai/gemma-4-abliterated:12b"]},
         {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
     ],
-    "balanced": [
-        {"need": 18.0, "primary": "gemma4:26b", "alts": ["gemma4:31b"]},
-        {"need": 14.0, "primary": "gpt-oss:20b", "alts": []},
-        {"need": 7.6, "primary": "gemma4:12b", "alts": ["gemma4:12b-it-qat"]},
+    "office": [
+        {"need": 14.0, "primary": "gpt-oss:20b",
+         "alts": ["gemma4:26b"]},                          # 이미지가 필요할 때
+        {"need": 7.6, "primary": "gemma4:12b",
+         "alts": ["gemma4:12b-it-qat", "qwen3-vl:8b"]},    # CJK 스캔본 OCR
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
          "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
     ],
-    # 사무·문서 (구 "context"). 요약·보고서·긴 문서 + 스캔본/스크린샷 읽기.
-    # 속도보다 품질이라 여기서는 dense 31B 를 기본단계로 올린다
-    # (Gemma 4 31B 는 요약 평가 94.6/100). 아래쪽에는 CJK OCR 이 되는
-    # Qwen3-VL 을 둬서 한국어 스캔 문서를 다룰 수 있게 한다.
-    "office": [
-        {"need": 20.0, "primary": "gemma4:31b", "alts": ["qwen3-vl:32b"]},
-        {"need": 18.0, "primary": "gemma4:26b", "alts": []},
-        # 10~16GB 구간이 비어 있으면 이 구간의 PC 가 26B 에서 곧바로 12B 로
-        # 떨어진다. gpt-oss 는 추론 강도를 조절할 수 있어 요약·보고서 작성에
-        # 잘 맞는다(이미지 입력은 안 되므로 그건 아래 단계가 맡는다).
-        {"need": 14.0, "primary": "gpt-oss:20b", "alts": []},
+    "balanced": [
+        {"need": 14.0, "primary": "gpt-oss:20b", "alts": ["gemma4:26b"]},
         {"need": 7.6, "primary": "gemma4:12b", "alts": ["gemma4:12b-it-qat"]},
-        {"need": 6.1, "primary": "qwen3-vl:8b", "alts": ["exaone3.5:7.8b"]},
-        {"need": 5.0, "primary": "gemma4:e4b-it-qat", "alts": ["gemma4:e4b"]},
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
+         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
     ],
 }
 
