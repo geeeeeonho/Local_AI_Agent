@@ -141,7 +141,6 @@ def _runtime_spec_for_case(*, mode: str, workspace: Path, model: str) -> tuple[P
         profile,
         workspace,
         container,
-        4096,
         None,
         None,
         model_tag=model,

@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """model_roles — 모델-역할 레지스트리 + 메모리 적응형 모델 선택.
 
-MODEL_GEMMA_v9 — Gemma 4 26B-A4B ARA abliterated 중심 (다운로드 카탈로그 v3 정합).
-각 역할은 모델/샘플링/컨텍스트/설명을 묶고, 사이즈 다단계 롤백 사다리(LADDERS)와
+MODEL_GEMMA_v10 — Gemma 4 26B-A4B 중심 (다운로드 카탈로그 v4 정합).
+각 역할은 라벨/샘플링/설명을 묶고, 사이즈 다단계 롤백 사다리(LADDERS)와
 실적재 probe 기반 자동 강등(resolve_with_rollback)을 제공한다.
-stdlib 전용. 기존 인터페이스(resolve / by_key / default / Resolution / ModelRole /
-detect_free_memory_gb / LADDERS / resolve_ladder / resolve_with_rollback) 보존.
+
+모델 선택의 정본은 TIERS 하나뿐이다.
+  ROLES[*].model / fallback / need_gb 는 화면 표시용이며, 임포트 시점에
+  _sync_roles_with_tiers() 가 TIERS 의 1·2단계로 덮어쓴다. 직접 적지 말 것 —
+  예전에는 손으로 적힌 값이 사다리와 어긋나 "권장 모델"이라고 안내한 태그를
+  런타임이 한 번도 쓰지 않는 상태였다.
+stdlib 전용.
 """
 from __future__ import annotations
 
@@ -77,9 +82,6 @@ class ModelRole:
     fallback_need_gb: float = 0.0
 
 
-# 하위호환 상수 (외부 참조 가능성 대비)
-CODER_14B_MIN_FREE_GB = 14.0
-
 # 핵심 모델 태그 (v3 카탈로그와 동일)
 _ARA = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"   # 무검열·범용·에이전트 (15GB)
 _CODER = "qwen3-coder:30b"                                    # 코딩 (18GB, MoE)
@@ -91,7 +93,7 @@ _UNC_FB = "huihui_ai/qwen3-abliterated:8b"                    # 무검열 폴백
 ROLES: List[ModelRole] = [
     ModelRole(
         key="1", name="uncensored", label="무검열 검색/번역",
-        description="검열 없이 과감한 검색·번역·범용. Gemma 4 26B-A4B ARA(멀티모달·256K). 부족하면 8b.",
+        description="검열 없이 과감한 검색·번역·범용. 멀티모달·긴 컨텍스트. 여유가 모자라면 경량 무검열로 자동 강등.",
         model=_ARA, need_gb=15.5,
         temperature=0.6, context_window=8192,
         system_hint="당신은 검열 없이 솔직하게 답하는 다국어 보조자입니다. "
@@ -100,29 +102,29 @@ ROLES: List[ModelRole] = [
     ),
     ModelRole(
         key="2", name="coding", label="코딩 에이전트 (Open Interpreter)",
-        description="코드 작성·실행·파일 작업. qwen3-coder:30b(MoE·256K), 부족하면 14b→7b 자동.",
+        description="코드 작성·실행·파일 작업. MoE 코딩 모델 우선, 여유에 따라 중간·경량 코더로 자동 강등.",
         model=_CODER, need_gb=17.0,
         temperature=0.2, context_window=8192,
         system_hint="당신은 코드를 작성하고 실행하는 자율 코딩 에이전트입니다.",
         fallback=_CODER_FB, fallback_need_gb=8.0,
     ),
     ModelRole(
-        key="3", name="context", label="맥락 이해",
-        description="긴 문맥·문서 이해와 추론. Gemma 4 12B(256K, 멀티모달).",
+        key="3", name="office", label="사무·문서 보조",
+        description="요약·보고서·긴 문서, 스캔본과 스크린샷 읽기. 속도보다 품질을 우선한다.",
         model=_GEMMA12, need_gb=10.0,
         temperature=0.3, context_window=16384,
-        system_hint="당신은 긴 맥락과 문서를 정확히 이해하고 근거를 들어 설명하는 보조자입니다.",
+        system_hint="당신은 긴 문서를 정확히 이해하고 근거를 들어 정리·요약하는 사무 보조자입니다.",
     ),
     ModelRole(
         key="4", name="balanced", label="균형 (범용)",
-        description="일상·범용. Gemma 4 12B 공유.",
+        description="일상·범용. Gemma 4 계열 공유, 저사양에서는 QAT 체크포인트로 강등.",
         model=_GEMMA12, need_gb=10.0,
         temperature=0.4, context_window=8192,
         system_hint="당신은 다재다능한 범용 보조자입니다.",
     ),
     ModelRole(
         key="5", name="agent", label="자동화 에이전트",
-        description="도구 호출·자율 실행. Gemma 4 26B-A4B ARA(무검열·MoE 활성4B·툴). 부족하면 12B.",
+        description="도구 호출·자율 실행. 툴콜/형식 준수가 좋은 체크포인트 우선, 여유에 따라 자동 강등.",
         model=_ARA, need_gb=15.5,
         temperature=0.4, context_window=8192,
         system_hint="당신은 도구를 호출하고 작업을 실행하는 자율 에이전트입니다.",
@@ -136,20 +138,6 @@ def by_key(key: str) -> Optional[ModelRole]:
         if r.key == key:
             return r
     return None
-
-
-def default() -> ModelRole:
-    return ROLES[1]  # 코딩이 기본 (자동화 에이전트의 주 용도)
-
-
-def all_models_to_install() -> List[str]:
-    """설치(pull) 대상 모델 전체 목록 (중복 제거, 대체 모델 포함)."""
-    seen: List[str] = []
-    for r in ROLES:
-        for m in (r.model, r.fallback):
-            if m and m not in seen:
-                seen.append(m)
-    return seen
 
 
 @dataclass(frozen=True)
@@ -183,71 +171,169 @@ def resolve(role: ModelRole, free_gb: Optional[float] = None) -> Resolution:
 # >>> MODEL_ROLLBACK_v1 — 사이즈 다단계 롤백 (additive)
 _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이크 대비)
 
-# 역할별 후보 사다리: (모델, 권장 최소 여유 GB). 고품질 → 저압축 순.
-LADDERS = {
-    "agent": [(_ARA, 15.5), (_GEMMA12, 10.0)],
-    "coding": [(_CODER, 17.0), (_CODER_MID, 12.0), (_CODER_FB, 8.0)],
-    "uncensored": [(_ARA, 15.5), (_UNC_FB, 8.0)],
-    "context": [(_GEMMA12, 10.0)],
-    "balanced": [(_GEMMA12, 10.0)],
-}
+# 역할별 후보 사다리 (모델, 권장 최소 여유 GB) — 아래 TIERS 에서 파생된다.
+LADDERS: dict = {}
 
-
-def ladder_for(role_name: str):
-    return list(LADDERS.get(role_name, []))
-
-
-# >>> TIERS_v1 — 폴백 순서를 티어(기본+대안)로 명시. LADDERS 를 이 순서로 재구성.
+# >>> TIERS_v3 — 역할마다 정확히 3단계 (상/중/하).
+#
+#  하드웨어 전제: 모델에 내줄 수 있는 최대 메모리 ~20GB
+#  (model_catalog.MEMORY_BUDGET_GB, LLM_MEMORY_BUDGET_GB 로 조정).
+#  KV 캐시 몫을 빼면 가중치 상한은 18.4GB 다.
+#
+#  왜 3단계인가: 여유 메모리는 하루 종일 오르내린다(브라우저·Docker·샌드박스).
+#  한 단계만 받아 두면 그 단계가 안 맞는 순간 쓸 게 없어진다. 반대로 단계가
+#  너무 많으면 어느 것이 실제로 도는지 알 수 없고 디스크만 먹는다.
+#    상 — 다른 걸 거의 안 띄웠을 때. 15GB 급이 이 예산의 실질적 최고 품질이다.
+#         18GB 급은 여유 19.6GB 를 요구해 사실상 유휴 상태에서만 뜨므로,
+#         기본단계가 아니라 '대안' 으로 둔다(설치해 둔 사람에게만 걸린다).
+#    중 — 브라우저·Docker 를 같이 쓰는 평소 상태. 9GB 급.
+#    하 — 메모리가 빠듯할 때의 최후 단계. 5GB 급.
+#
+#  근거 요약(2026-09 기준):
+#   * 코딩은 Qwen3.6-27B 가 SWE-bench 77.2 로 이 체급 최고지만 18GB 다.
+#     20GB 예산에서 항상 도는 쪽은 15GB 의 Devstral Small 2 — 다중파일·디버깅
+#     루프에 특화됐고 384K 컨텍스트다. 그래서 상 단계 기본은 Devstral,
+#     Qwen3.6 은 유휴 시 대안.
+#   * 에이전트는 도구 왕복이 많아 속도가 곧 체감이다. ARA(15GB, MoE 활성 ~4B)가
+#     상 단계 기본이고, QAT 26B 는 유휴 시 대안.
+#   * 무검열은 도구 호출을 요구하지 않는다(번역·창작 목적).
+#   * 사무/범용은 gpt-oss(14GB, 추론 강도 조절)가 상 단계, 이미지가 필요하면
+#     Gemma 4 계열이 대안·중단계를 맡는다.
 TIERS = {
     "coding": [
-        {"need": 17.0, "primary": "qwen3-coder:30b",
-         "alts": ["qwen3.6:27b", "devstral-small:24b"]},
-        {"need": 12.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["deepseek-coder-v2:16b"]},
-        {"need": 8.0, "primary": "qwen2.5-coder:7b", "alts": []},
+        {"need": 15.0, "primary": "devstral-small-2:24b",
+         "alts": ["qwen3.6:27b",        # 유휴 시 — SWE-bench 77.2
+                  "qwen3-coder:30b",    # 유휴 시 — MoE, 훨씬 빠름
+                  "gpt-oss:20b"]},      # 추론 강도 조절
+        {"need": 9.0, "primary": "qwen2.5-coder:14b",
+         "alts": ["qwen3:14b",          # 코딩+대화 겸용
+                  "gemma4:12b"]},       # 다른 역할과 공유 (추가 디스크 0)
+        {"need": 4.7, "primary": "qwen2.5-coder:7b",
+         "alts": ["qwen3:8b",           # 7/8B 급 HumanEval 최고
+                  "gemma4:e4b-it-qat"]},
+    ],
+    "agent": [
+        {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+         "alts": ["gemma4:26b-a4b-it-qat",  # 유휴 시 — QAT 라 형식이 덜 깨짐
+                  "gemma4:26b",
+                  "gpt-oss:20b"]},
+        {"need": 9.0, "primary": "qwen2.5-coder:14b",
+         "alts": ["gemma4:12b-it-qat", "gemma4:12b", "qwen3:14b"]},
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
+         "alts": ["gemma4:e4b", "qwen2.5-coder:7b", "qwen3:8b"]},
     ],
     "uncensored": [
-        {"need": 15.5, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": []},
-        {"need": 8.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
+        {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
+         "alts": ["huihui_ai/gemma-4-abliterated:26b-qat",
+                  "huihui_ai/Qwen3.6-abliterated:27b"]},   # 번역·다국어 축
+        {"need": 9.0, "primary": "huihui_ai/qwen3-abliterated:14b",
+         "alts": ["huihui_ai/gemma-4-abliterated:12b",
+                  "huihui_ai/qwen3-vl-abliterated:8b"]},   # 이미지 속 글자 번역
+        {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b",
+         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M",        # 다른 계열
+                  "dolphin3:8b"]},                          # 파인튜닝계
     ],
-    # [TIERS_QAT_v1] 에이전트는 도구 호출/형식 준수가 생명이라
-    # 양자화 내성이 좋은 QAT 체크포인트를 우선한다.
-    #   QAT = 학습 중 4비트 연산을 시뮬레이션 -> 양자화 오차에 미리 적응
-    #   PTQ(학습 후 반올림)보다 품질 저하가 훨씬 적다
-    # 실측 근거: 8b abliterated 는 코드블록 펜스를 못 지켜 미니루프가 실행조차
-    #           못 했다. qwen2.5-coder:14b 로 바꾸자 정상 동작했다.
-    "agent": [
-        {"need": 16.5, "primary": "gemma4:26b-a4b-it-qat",
-         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-                  "qwen3-coder:30b"]},
-        {"need": 11.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["gemma4:12b", "gpt-oss:20b"]},
-        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
-        {"need": 6.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["qwen2.5-coder:7b"]},
+    "office": [
+        # 사무 그룹의 본업은 스캔본·스크린샷 읽기다. 그래서 기본단계는 세 등급
+        # 모두 이미지를 볼 수 있어야 한다(테스트가 확인). gpt-oss 는 추론은
+        # 좋지만 이미지를 못 보므로 기본단계가 될 수 없다.
+        # Gemma 4 26B-A4B 는 Arena 1441(오픈 6위)·GPQA Diamond 84.3 으로 이
+        # 예산 안에서 범용 품질이 가장 높고, MoE 활성 ~4B 라 26B 급인데도 빠르다.
+        {"need": 18.0, "primary": "gemma4:26b",
+         # 이 등급 후보는 전부 이미지를 볼 수 있어야 한다. gpt-oss 를 대안으로
+         # 두면 여유 16GB 구간에서 그게 뽑혀(18GB 가 안 뜨니까) 스캔본을 못 읽는
+         # 모델이 사무 역할에 앉는다. 그럴 바엔 이미지가 되는 아래 등급이 낫다.
+         "alts": ["qwen3.6:27b",             # 긴 문서 + 이미지
+                  "gemma4:26b-a4b-it-qat"]}, # QAT — 형식 준수
+        {"need": 7.6, "primary": "gemma4:12b",
+         "alts": ["gemma4:12b-it-qat",
+                  "qwen3-vl:8b"]},      # CJK 스캔본 OCR
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
+         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},        # 한국어
     ],
-    "balanced": [  # [TIERS_QAT_v1] 10GB 미만에서 전멸하던 구간 보강
-        {"need": 10.0, "primary": "gemma4:12b", "alts": ["gpt-oss:20b", "qwen2.5:14b"]},
-        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
-        {"need": 6.0, "primary": "gemma4:e4b-it-qat", "alts": []},
-    ],
-    "context": [  # [TIERS_QAT_v1]
-        {"need": 10.0, "primary": "gemma4:12b", "alts": []},
-        {"need": 8.5, "primary": "gemma4:12b-it-qat", "alts": []},
+    "balanced": [
+        # 범용은 '자주 뜨는 쪽' 을 기본으로 둔다. 18GB 급은 여유 19.6GB 를
+        # 요구해 사실상 유휴 상태에서만 뜨므로, 여기서는 14GB 를 기본단계로
+        # 두고 Gemma 4 26B 를 대안에 남긴다(사무 그룹이 그쪽을 기본으로 받는다).
+        {"need": 14.0, "primary": "gpt-oss:20b",
+         "alts": ["gemma4:26b", "qwen3.6:27b"]},
+        {"need": 7.6, "primary": "gemma4:12b",
+         "alts": ["gemma4:12b-it-qat", "qwen3:14b"]},
+        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
+         "alts": ["gemma4:e4b", "exaone3.5:7.8b", "qwen3:8b"]},
     ],
 }
+
+# 예전 역할 이름 -> 지금 이름. user_data/models/registry.json 에 옛 키를 적어 둔
+# 사용자가 조용히 무시당하지 않도록 받아 준다.
+ROLE_ALIASES = {"context": "office"}
+
+
+def _canonical(installed):
+    """설치 목록을 카탈로그 표기로 맞춘다 (대소문자 차이 흡수)."""
+    try:
+        from . import model_catalog as _cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as _cat
+        except Exception:
+            return set(installed)
+    try:
+        return _cat.canonicalize_installed(installed)
+    except Exception:
+        return set(installed)
+
+
+def _installed_match(tag, installed):
+    """설치 목록에서 tag 를 찾는다(대소문자 무시). 없으면 None.
+
+    벤더 태그는 대소문자가 섞여 있고(prutser/...:Q4_K_S) Ollama 가 그대로
+    돌려준다는 보장이 없다. 문자열을 그대로 비교하면 멀쩡히 깔린 모델을
+    '미설치' 로 보고 사다리를 한참 아래로 떨어뜨린다.
+    """
+    if not tag or not installed:
+        return None
+    try:
+        from . import model_catalog as _cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as _cat
+        except Exception:
+            return tag if tag in installed else None
+    return _cat.find_installed(tag, installed)
+
+
+def _catalog_memory(tag):
+    """카탈로그가 아는 상주 메모리(GB). 모르면 None."""
+    try:
+        from . import model_catalog as _cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as _cat
+        except Exception:
+            return None
+    try:
+        return _cat.memory_gb(tag)
+    except Exception:
+        return None
 
 
 def _flatten_tiers(_tiers):
-    """티어 -> 평탄 사다리 [(model, need), ...]. 같은 티어의 기본+대안은 같은 need 공유."""
+    """티어 -> 평탄 사다리 [(model, need), ...].
+
+    need 는 모델마다 카탈로그의 run_gb 를 쓴다. 예전에는 같은 티어면 대안까지
+    티어 need 를 그대로 물려받아, 다운로드 9.6GB 지만 상주는 5GB 인 gemma4:e4b
+    같은 모델을 실제보다 무겁게 봤고 반대로 18GB 모델을 17GB 로 가볍게 봤다.
+    카탈로그에 없는 태그(레지스트리로 추가한 것)는 티어 need 를 그대로 쓴다.
+    """
     _out = {}
     for _role, _tl in _tiers.items():
         _seq = []
         for _t in _tl:
-            _seq.append((_t["primary"], float(_t["need"])))
-            for _a in _t.get("alts", []):
-                _seq.append((_a, float(_t["need"])))
+            _fallback = float(_t["need"])
+            for _m in [_t["primary"]] + list(_t.get("alts", [])):
+                _known = _catalog_memory(_m)
+                _seq.append((_m, float(_known) if _known else _fallback))
         _out[_role] = _seq
     return _out
 
@@ -299,6 +385,7 @@ def load_registry(path=None):
             sec = {}
         clean = {}
         for role, tiers in sec.items():
+            role = ROLE_ALIASES.get(role, role)
             if not isinstance(tiers, list):
                 errs.append("%s.%s 가 배열이 아닙니다" % (key, role))
                 continue
@@ -336,6 +423,35 @@ except Exception as _e:
 # <<< MODEL_REGISTRY_v1
 
 LADDERS = _flatten_tiers(TIERS)  # 원본 LADDERS 를 티어 기반(대안 포함)으로 대체
+
+
+# >>> ROLES_TIER_SYNC_v1 — 화면에 뜨는 "권장 모델" 을 실제 사다리와 일치시킨다.
+#
+#  resolve() 가 고른 model 은 호출부(agent_chat / entry_dialog)에서 곧바로
+#  resolve_ladder() 결과로 덮어써진다. 즉 선택은 100% TIERS 가 한다.
+#  그런데 model_info._show_role_table / chat._show_model_tips 는 ROLES.model 을
+#  그대로 출력하므로, 손으로 적은 값이 남아 있으면 "코딩 -> qwen3-coder:30b
+#  (부족 시 qwen2.5-coder:7b)" 처럼 실제 사다리(30b -> 14b -> 7b)와 다른 안내가
+#  나간다. 여기서 티어 1·2단계로 덮어써 두 값이 갈라질 수 없게 만든다.
+def _sync_roles_with_tiers(roles, tiers):
+    import dataclasses
+    out = []
+    for r in roles:
+        tl = tiers.get(r.name) or []
+        if not tl:
+            out.append(r)
+            continue
+        primary = tl[0]["primary"]
+        need = float(tl[0]["need"])
+        fb = tl[1]["primary"] if len(tl) > 1 else None
+        fb_need = float(tl[1]["need"]) if len(tl) > 1 else 0.0
+        out.append(dataclasses.replace(
+            r, model=primary, need_gb=need, fallback=fb, fallback_need_gb=fb_need))
+    return out
+
+
+ROLES = _sync_roles_with_tiers(ROLES, TIERS)
+# <<< ROLES_TIER_SYNC_v1
 # <<< TIERS_v1
 
 
@@ -349,7 +465,7 @@ def _lightest(lad, installed=None):
     if not lad:
         return None
     if installed:
-        have = [(need, m) for m, need in lad if m in installed]
+        have = [(need, m) for m, need in lad if _installed_match(m, installed)]
         if have:
             return min(have)[1]
     return min(lad, key=lambda x: x[1])[0]
@@ -376,7 +492,7 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None):
     fits = [(m, need) for m, need in lad if need <= usable]
     if installed:
         for m, _need in fits:
-            if m in installed:
+            if _installed_match(m, installed):
                 return m
     if fits:
         return fits[0][0]
@@ -404,10 +520,13 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
         return None
     seq = [m for m, _ in lad]
     model = resolve_ladder(role_name, free_gb) or seq[0]
+    # 이름이 아니라 '위치' 로 내려간다. seq.index() 로 되찾으면 같은 태그가 사다리에
+    # 두 번 나올 때(레지스트리 add 로 충분히 생긴다) 첫 번째 위치로 되돌아가 영원히
+    # 같은 구간을 맴돈다.
+    idx = seq.index(model) if model in seq else 0
     while True:
         if _load_probe(model, host=host):
             return model
-        idx = seq.index(model) if model in seq else 0
         if idx + 1 >= len(seq):
             if presenter is not None:
                 try:
@@ -415,7 +534,8 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
                 except Exception:
                     pass
             return model
-        nxt = seq[idx + 1]
+        idx += 1
+        nxt = seq[idx]
         if presenter is not None:
             try:
                 presenter.warn(model + " 적재 실패 → " + nxt + " 롤백")
@@ -436,7 +556,7 @@ def installed_models(host="127.0.0.1:11434", timeout=5):
             nm = m.get("name") or m.get("model")
             if nm:
                 out.add(nm)
-        return out
+        return _canonical(out)
     except Exception:
         return None
 
@@ -450,21 +570,26 @@ def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.
     inst = installed_models(host)
     if inst is None:
         return desired_tag, None
-    if desired_tag and desired_tag in inst:
-        return desired_tag, None
+    exact = _installed_match(desired_tag, inst)
+    if exact:
+        return exact, None
     free = free_gb if free_gb is not None else detect_free_memory_gb()
     usable = (free * _SAFETY) if free is not None else None
 
     lad = LADDERS.get(role_name) if role_name else None
     if lad:
         for m, need in lad:
-            if m in inst and (usable is None or need <= usable):
-                return m, "선택 모델 미설치 → 설치된 " + m + " 자동 사용"
+            hit = _installed_match(m, inst)
+            if hit and (usable is None or need <= usable):
+                return hit, "선택 모델 미설치 → 설치된 " + hit + " 자동 사용"
         for m, _n in lad:
-            if m in inst:
-                return m, "선택 모델 미설치 → 설치된 " + m + " 사용(메모리 빠듯)"
+            hit = _installed_match(m, inst)
+            if hit:
+                return hit, "선택 모델 미설치 → 설치된 " + hit + " 사용(메모리 빠듯)"
 
-    allc = [(need, m) for _ln, _l in LADDERS.items() for m, need in _l if m in inst]
+    allc = [(need, _installed_match(m, inst))
+            for _ln, _l in LADDERS.items() for m, need in _l
+            if _installed_match(m, inst)]
     fit = [(n, m) for n, m in allc if usable is None or n <= usable]
     pool = fit if fit else allc
     if pool:
@@ -491,8 +616,9 @@ def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.
 
 
 __all__ = [
-    "ModelRole", "ROLES", "Resolution", "CODER_14B_MIN_FREE_GB",
-    "detect_free_memory_gb", "resolve", "by_key", "default", "all_models_to_install",
-    "LADDERS", "ladder_for", "resolve_ladder", "resolve_with_rollback",
+    "ModelRole", "ROLES", "Resolution",
+    "detect_free_memory_gb", "resolve", "by_key",
+    "TIERS", "LADDERS", "resolve_ladder", "resolve_with_rollback",
     "installed_models", "auto_match_installed",
+    "load_registry", "apply_registry", "REGISTRY_ERRORS",
 ]

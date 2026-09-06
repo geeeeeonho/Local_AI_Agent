@@ -59,13 +59,42 @@ def _texts(ko: bool) -> dict:
     }
 
 
-def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
+def _level_tag(tag) -> str:
+    """'[상] 성격' 라벨. 같은 등급 안에서 무엇이 다른지 한눈에 보이게 한다."""
+    try:
+        from launcher.models import model_catalog as _cat
+        entry = _cat.by_tag().get(tag)
+        key = _cat.level_of(tag)
+        if not entry or not key:
+            return ""
+        label = "[%s]" % _cat.level_label(key)
+        return (label + " " + entry.note) if entry.note else label
+    except Exception:
+        return ""
+
+
+def _default_checked(entries, budget_gb):
+    """기본 체크 집합 = 메모리 예산 안의 3단계 기본단계."""
+    try:
+        from launcher.models import model_catalog as _cat
+        picked = _cat.recommended_for(
+            _cat.MEMORY_BUDGET_GB if budget_gb is None else budget_gb)
+        if picked:
+            return picked
+    except Exception:
+        pass
+    return {e.tag for e in entries if getattr(e, "recommended", False)}
+
+
+def select_models(entries, installed, lang: str = "ko",
+                  budget_gb=None) -> Optional[Set[str]]:
     import tkinter as tk
     from tkinter import messagebox
 
     ko = str(lang).startswith("ko")
     T = _texts(ko)
     installed = set(installed or [])
+    wanted = _default_checked(entries, free_gb)
     cat_tags = {e.tag for e in entries}
     extra_installed = sorted(installed - cat_tags)
     size_of = {e.tag: float(getattr(e, "size_gb", 0.0)) for e in entries}
@@ -86,7 +115,22 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
     head.pack(fill="x", padx=22, pady=(18, 4))
     tk.Label(head, text=T["title"], bg=_BG, fg="#ffffff",
              font=("Segoe UI", 16, "bold"), anchor="w").pack(fill="x")
-    tk.Label(head, text=T["intro"], bg=_BG, fg=_DIM, font=("Segoe UI", 9),
+    intro = T["intro"]
+    try:
+        from launcher.models import model_catalog as _cat
+        budget = float(budget_gb if budget_gb is not None else _cat.MEMORY_BUDGET_GB)
+        plan = _cat.plan_by_level(budget)
+        # 왜 이 조합이 체크돼 있는지, 각 등급이 얼마인지 보이게 한다.
+        intro += ("\n메모리 예산 %.0fGB 기준 3단계를 미리 체크했습니다 "
+                  "(여유 메모리는 오르내리므로 세 단계를 모두 둡니다)." % budget)
+        for key in _cat.LEVEL_KEYS:
+            tags = plan.get(key) or []
+            if tags:
+                intro += "\n  [%s] %.1fGB — %s" % (
+                    _cat.level_label(key), _cat.download_gb(tags), ", ".join(tags))
+    except Exception:
+        intro += "\n기본 권장 세트를 체크했습니다."
+    tk.Label(head, text=intro, bg=_BG, fg=_DIM, font=("Segoe UI", 9),
              anchor="w", justify="left", wraplength=740).pack(fill="x", pady=(4, 0))
     sum_lbl = tk.Label(head, text="", bg=_BG, fg=_OK,
                        font=("Segoe UI", 10, "bold"), anchor="w")
@@ -128,7 +172,11 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
         card.pack(fill="x", pady=4)
         pad = tk.Frame(card, bg=_CARD)
         pad.pack(fill="x", padx=12, pady=8)
-        line = tag + "   ·   " + role + "   ·   ~" + format(size, ".1f") + "GB"
+        line = tag + "   ·   " + role
+        lvl = _level_tag(tag)
+        if lvl:
+            line += "   ·   " + lvl
+        line += "   ·   ~" + format(size, ".1f") + "GB"
         if done:
             line += "   [" + T["installed"] + "]"
         cb = tk.Checkbutton(
@@ -149,13 +197,13 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
         for e in core:
             done = e.tag in installed
             _row(e.tag, getattr(e, "role", ""), getattr(e, "size_gb", 0.0),
-                 getattr(e, "desc", ""), done or bool(getattr(e, "recommended", True)))
+                 getattr(e, "desc", ""), done or e.tag in wanted)
     if adv:
         _group(T["adv"])
         for e in adv:
             done = e.tag in installed
             _row(e.tag, getattr(e, "role", ""), getattr(e, "size_gb", 0.0),
-                 getattr(e, "desc", ""), done or bool(getattr(e, "recommended", False)))
+                 getattr(e, "desc", ""), done or e.tag in wanted)
     if extra_installed:
         _group(T["extra"])
         for tag in extra_installed:
@@ -171,7 +219,7 @@ def select_models(entries, installed, lang: str = "ko") -> Optional[Set[str]]:
 
     def _set_rec():
         for e in entries:
-            vars_[e.tag].set(e.tag in installed or bool(getattr(e, "recommended", True)))
+            vars_[e.tag].set(e.tag in installed or e.tag in wanted)
         for tag in extra_installed:
             vars_[tag].set(True)
         _recompute()

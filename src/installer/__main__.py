@@ -43,6 +43,49 @@ def _dir_has_entries(path: Path) -> bool:
         return False
 
 
+
+# ── 디스크 예산 ────────────────────────────────────────────────────
+_RUNTIME_GB = 5.0        # Ollama / Python 도구 / 샌드박스 이미지 등 모델 외 용량
+_FALLBACK_FLOOR_GB = 20  # 카탈로그를 못 읽을 때의 보수적 하한
+
+
+def _model_disk_budget(skip_model: bool):
+    """(하드 최소 GB, 이 PC 의 권장 세트까지 담는 데 필요한 GB).
+
+    하드 최소는 '최저사양 세트' 기준이다. 그보다 적으면 어떤 조합으로도 설치가
+    끝나지 않으므로 중단한다. 권장 세트가 더 크면 중단 대신 경고만 하고,
+    사용자가 모델 선택 창에서 빼도록 둔다.
+    """
+    if skip_model:
+        return int(_RUNTIME_GB), 0.0
+    try:
+        from launcher.models import model_catalog as cat
+    except Exception:
+        return _FALLBACK_FLOOR_GB, 0.0
+    try:
+        # 하한은 '하' 등급만 받았을 때. 그보다 적으면 어떤 조합으로도 못 끝낸다.
+        floor = cat.download_gb(cat.plan_by_level().get("low") or ())
+        plan = cat.download_gb(cat.recommended_for(cat.MEMORY_BUDGET_GB))
+    except Exception:
+        return _FALLBACK_FLOOR_GB, 0.0
+    return int(_RUNTIME_GB + floor) + 1, _RUNTIME_GB + plan
+
+
+def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
+    if not plan_gb:
+        return
+    import shutil
+    target = MODEL_STORAGE_DIR if MODEL_STORAGE_DIR.exists() else MODEL_STORAGE_DIR.parent
+    try:
+        free = shutil.disk_usage(target).free / (1024 ** 3)
+    except OSError:
+        return
+    if free < plan_gb:
+        utils.warn(
+            "권장 모델 세트는 약 %.0fGB 인데 %s 의 여유는 %.0fGB 입니다. "
+            "모델 선택 창에서 일부를 빼거나, 다 받은 뒤 [모델 관리]에서 정리하세요."
+            % (plan_gb, target, free))
+
 def _needs_model_storage_migration() -> bool:
     """기존/중단된 모델 저장소가 공용 경로로 수렴해야 하는지 확인."""
     legacy = ENV / "llm_models"
@@ -98,7 +141,12 @@ def _run_install(args) -> int:
     utils.preflight_windows()
     utils.preflight_python()
     # 대용량 모델은 프로젝트 위치가 아니라 C:\LLM_Models 에 저장된다.
-    utils.preflight_disk(MODEL_STORAGE_DIR.parent, need_gb=20 if not args.skip_model else 5)
+    # 필요 용량은 고정 20GB 가 아니라 '이 PC 가 실제로 받을 세트' 에서 계산한다.
+    # 예전에는 20GB 만 확인하고 그보다 훨씬 큰 세트를 받다가 도중에 디스크가
+    # 차서 실패했다.
+    _floor_gb, _plan_gb = _model_disk_budget(args.skip_model)
+    utils.preflight_disk(MODEL_STORAGE_DIR.parent, need_gb=_floor_gb)
+    _warn_if_plan_does_not_fit(_plan_gb)
 
     # ─── 시스템 자원 감지 + 안전 프로필 ───
     utils.section(t("install.resources_section"))

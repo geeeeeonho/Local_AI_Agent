@@ -1,7 +1,7 @@
-"""model — 역할별 모델 다운로드 (model_roles 레지스트리 기반, 멱등).
+"""model — 모델 다운로드 (model_catalog 기반, 멱등).
 
-기존 단일 Gemma 모델 대신, 4개 역할(무검열 검색/번역 · 코딩 · 맥락 · 균형)에
-필요한 모델을 순회 설치한다. 코딩 역할은 14b(기본) + 7b(대체)를 모두 받는다.
+설치 세트의 정본은 launcher.models.model_catalog.CORE 다.
+카탈로그를 못 읽을 때만 model_roles → 인라인 목록 순으로 내려간다.
 이미 설치된 모델은 `ollama list` 로 확인해 건너뛴다(멱등 — 재실행 안전).
 
 설치기의 다른 단계와 동일하게 installer.core 콘솔 출력을 쓰고,
@@ -19,13 +19,21 @@ from installer.i18n import get_language
 
 # model_roles 가 없을 때를 대비한 인라인 폴백 (역할 라벨, 모델)
 # MODEL_FINAL_v8 inline 폴백 (model_roles import 실패 시)
+# model_catalog.CORE 와 같은 세트여야 한다 (test_model_catalog_tiers 가 확인).
 _INLINE: List[Tuple[str, str]] = [
-    ("무검열 검색/번역", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
-    ("무검열 검색/번역 (대체)", "huihui_ai/qwen3-abliterated:8b"),
-    ("코딩 (기본)", "qwen3-coder:30b"),  # CATALOG_ALIGN_v9
-    ("코딩 (대체 7b)", "qwen2.5-coder:7b"),
-    ("맥락/균형", "gemma4:12b"),
-    ("자동화 에이전트", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
+    # 상 (14~18GB)
+    ("Gemma 정식 26B (사무·범용)", "gemma4:26b"),
+    ("에이전트 코딩 특화", "devstral-small-2:24b"),
+    ("무검열·범용·에이전트 (Gemma ARA)", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
+    ("에이전트·추론 (MoE)", "gpt-oss:20b"),
+    # 중 (9GB 급)
+    ("코딩 중간", "qwen2.5-coder:14b"),
+    ("무검열 중간 (번역 주력)", "huihui_ai/qwen3-abliterated:14b"),
+    ("맥락/범용 + Gemma 폴백", "gemma4:12b"),
+    # 하 (5GB 급)
+    ("최저사양 폴백 (QAT)", "gemma4:e4b-it-qat"),
+    ("무검열 경량 폴백", "huihui_ai/qwen3-abliterated:8b"),
+    ("코딩 폴백", "qwen2.5-coder:7b"),
 ]
 
 # 자체 ko/en 메시지 (i18n.py 를 건드리지 않기 위해 모듈 로컬)
@@ -42,6 +50,8 @@ _MSG = {
         "all_ok": "모든 역할 모델 준비 완료.",
         "some_fail": "일부 모델을 받지 못했습니다. 네트워크 확인 후 SETUP.bat --install 재실행 시 받지 못한 것만 다시 시도합니다.",
         "no_exe": "ollama.exe 를 찾을 수 없어 모델 단계를 건너뜁니다.",
+        "mem_fit": "메모리 예산 {budget:.0f}GB 기준 3단계(상/중/하) {n}개(~{gb:.1f}GB):",
+        "csv": "파일-모델 대응표: {path}",
     },
     "en": {
         "section": "Download role models (5 roles)",
@@ -55,6 +65,8 @@ _MSG = {
         "all_ok": "All role models are ready.",
         "some_fail": "Some models failed. Re-running SETUP.bat --install will retry only the missing ones.",
         "no_exe": "ollama.exe not found - skipping model step.",
+        "mem_fit": "3 levels, {n} model(s) (~{gb:.1f} GB) for a {budget:.0f} GB memory budget:",
+        "csv": "File-to-model map: {path}",
     },
 }
 
@@ -64,11 +76,41 @@ def _m(key: str, **kw) -> str:
     return d.get(key, _MSG["en"].get(key, key)).format(**kw) if kw else d.get(key, key)
 
 
-def _load_models() -> List[Tuple[str, str]]:
-    """역할 라벨이 붙은 (label, model) 목록. 카탈로그 > model_roles > 인라인."""
-    # MODEL_CATALOG_v1: 카탈로그 설치 세트 우선
+def _budget_gb() -> Optional[float]:
+    """이 PC 가 모델에 내줄 수 있는 최대 메모리.
+
+    ★ '지금 여유' 가 아니다. 브라우저를 켜 둔 채 설치했다는 이유로 상 등급을
+      영영 못 받게 되면 안 된다. 실행 시점의 선택만 실제 여유를 본다.
+    """
     try:
         from launcher.models import model_catalog as _cat  # type: ignore
+        return float(_cat.MEMORY_BUDGET_GB)
+    except Exception:
+        return None
+
+
+def _load_models() -> List[Tuple[str, str]]:
+    """역할 라벨이 붙은 (label, model) 목록. 카탈로그 > model_roles > 인라인.
+
+    카탈로그가 있으면 메모리 예산 안에서 역할마다 3단계(상/중/하) 기본단계를
+    고른다. 예전에는 CORE 를 통째로 받아서, 저사양 PC 도 돌릴 수 없는 모델을
+    내려받고 정작 그 PC 의 사다리가 쓰는 단계는 하나도 받지 않았다.
+    """
+    try:
+        from launcher.models import model_catalog as _cat  # type: ignore
+        _budget = _budget_gb()
+        _plan = _cat.plan_by_level(_budget)
+        _wanted = {t for tags in _plan.values() for t in tags}
+        if _wanted:
+            _role = {e.tag: e.role for e in _cat.all_entries()}
+            utils.info(_m("mem_fit", budget=_budget or 0.0, n=len(_wanted),
+                          gb=_cat.download_gb(_wanted)))
+            for _k in _cat.LEVEL_KEYS:
+                _tags = _plan.get(_k) or []
+                if _tags:
+                    utils.info("    [%s] %.1fGB — %s" % (
+                        _cat.level_label(_k), _cat.download_gb(_tags), ", ".join(_tags)))
+            return [(_role.get(t, t), t) for t in sorted(_wanted)]
         _pairs = _cat.install_pairs()
         if _pairs:
             return _pairs
@@ -102,17 +144,19 @@ def _installed(exe: Path, env: dict) -> set:
             tok = line.split()
             if tok:
                 names.add(tok[0])
-        return names
+        return _canonical(names)
     except Exception:
         return set()
 
 
-def _present(tag: str, installed: set) -> bool:
-    if tag in installed:
-        return True
-    # 태그 없는 베이스가 같고 동일 quant 로 끝나면 동일로 간주 (보수적)
-    base = tag.split(":")[0]
-    return tag in installed  # PRESENT_FIX_v1 (base-match 분기는 비활성 상태였음 — 현행 동작 보존)
+def _canonical(names: set) -> set:
+    """설치 목록을 카탈로그 표기로 맞춘다. 대소문자만 달라도 '미설치'로 보고
+    18GB 짜리를 다시 받는 일을 막는다."""
+    try:
+        from launcher.models import model_catalog as _cat  # type: ignore
+        return _cat.canonicalize_installed(names)
+    except Exception:
+        return set(names)
 
 
 def download(paths: Dict[str, Path]) -> Optional[List[str]]:
@@ -139,7 +183,8 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         try:
             from installer.steps import model_select_gui as _msg_gui
             utils.info("모델 선택 창을 띄웁니다. 창이 안 보이면 작업표시줄/Alt+Tab 에서 '설치할 모델 선택' 창을 확인하세요.")
-            _picked = _msg_gui.select_models(_entries, installed, lang=get_language())
+            _picked = _msg_gui.select_models(_entries, installed, lang=get_language(),
+                                             budget_gb=_budget_gb())
         except Exception as _ge:
             utils.warn("선택 GUI 불가 — 권장 세트 자동 설치 (" + repr(_ge) + ")")
             _picked = "AUTO"
@@ -180,14 +225,18 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
             utils.err(_m("fail", tag=tag, rc=repr(e)))
             failed += 1
 
+    # MODEL_FILES_v1: blobs/sha256-... 가 어느 모델인지 알 수 있게 표를 남긴다.
+    try:
+        from launcher.models import model_files as _mfiles  # type: ignore
+        _csv = _mfiles.refresh(paths["models"])
+        if _csv:
+            utils.info(_m("csv", path=str(_csv)))
+    except Exception:
+        pass
+
     utils.info(_m("summary", pulled=pulled, skipped=skipped, failed=failed))
     if failed == 0:
         utils.ok(_m("all_ok"))
     else:
         utils.warn(_m("some_fail"))
     return ok_tags
-
-
-# 하위호환: 과거 단일 모델 태그를 참조하던 코드가 있을 경우를 위한 표시용 상수
-PRIMARY = "qwen2.5-coder:14b"
-FALLBACK = "qwen2.5-coder:7b"

@@ -11,12 +11,21 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-# 상위->하위 클래스 (요청 순서)
+# 용도별 모델 그룹. model_roles.TIERS 의 키와 1:1 로 맞아야 한다 —
+# 예전에는 "context" 역할이 여기 빠져 있어서, 사다리는 있는데 화면에는 그 그룹이
+# 아예 안 나왔다(사용자는 그 역할의 모델이 왜 깔렸는지 알 수 없었다).
+# tests/test_model_catalog_tiers.py 가 두 목록이 어긋나지 않게 막는다.
 CLASSES = [
-    ("coding", "일반 코딩", "코드 작성·실행·파일 작업"),
-    ("uncensored", "무검열", "검열 없는 검색·번역·범용"),
-    ("agent", "관리 특화 (에이전트·다중폴더)", "도구 호출·자율 실행·폴더 정책"),
-    ("balanced", "범용 / 타협 (특화 없는 올라운더)", "코딩·대화·추론 균형, 안전 학습 유지"),
+    ("coding", "코딩",
+     "코드 작성·실행·파일 작업 (Open Interpreter)"),
+    ("agent", "검색·도구 (에이전트)",
+     "local_search 호출·자율 실행·폴더 정책. 도구 호출 정확도가 최우선"),
+    ("uncensored", "무검열 (번역·창작)",
+     "검열 없는 번역·요약·창작·범용. 도구 호출은 요구하지 않음"),
+    ("office", "사무·문서 보조",
+     "요약·보고서·긴 문서, 스캔본/스크린샷 읽기(OCR)"),
+    ("balanced", "범용 (특화 없는 올라운더)",
+     "일상 대화·잡다한 질문. 뭘 골라야 할지 모를 때의 기본값"),
 ]
 
 
@@ -66,6 +75,35 @@ def _tiers_for(mr, key):
     return out
 
 
+def _catalog():
+    try:
+        from . import model_catalog as cat
+        return cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as cat
+            return cat
+        except Exception:
+            return None
+
+
+def _level_of(tag):
+    cat = _catalog()
+    try:
+        return cat.level_of(tag) if cat else None
+    except Exception:
+        return None
+
+
+def _level_label(tag):
+    cat = _catalog()
+    key = _level_of(tag)
+    try:
+        return cat.level_label(key) if (cat and key) else ""
+    except Exception:
+        return ""
+
+
 def build_view(free_gb: Optional[float] = None, installed=None) -> List[dict]:
     mr = _model_roles()
     cat = _catalog_by_tag()
@@ -94,17 +132,27 @@ def build_view(free_gb: Optional[float] = None, installed=None) -> List[dict]:
         # 추천 티어 = need <= usable 인 첫 티어(없으면 마지막)
         rec_t = None
         for ti, (_p, need, _a) in enumerate(tiers):
-            if usable and need <= usable:
+            _e = cat.get(_p)
+            _n = getattr(_e, "memory_gb", None) if _e else None
+            if usable and float(_n or need) <= usable:
                 rec_t = ti
                 break
         if rec_t is None and tiers:
             rec_t = len(tiers) - 1
 
         # 순서대로 후보 나열 (티어별 [기본]+대안)
+        # 적재 판정은 모델마다 카탈로그의 상주 메모리(run_gb)로 한다. 티어 need 를
+        # 대안까지 그대로 물려주면, 다운로드 9.6GB 지만 상주 5GB 인 gemma4:e4b 를
+        # 실제보다 무겁게 보고 저사양 구간에서 "안 맞는다"고 걸러 버린다.
+        def _need_of(tag, tier_need):
+            e = cat.get(tag)
+            got = getattr(e, "memory_gb", None) if e else None
+            return float(got) if got else float(tier_need)
+
         ordered = []
         for ti, (p, need, alts) in enumerate(tiers):
             for si, tag in enumerate([p] + alts):
-                ordered.append((ti, si, tag, need))
+                ordered.append((ti, si, tag, _need_of(tag, need)))
         # 실제 사용 후보 = 조건 맞으면서 설치된 첫 후보 (없으면 설치된 첫 후보)
         act = None
         if installed_known:
@@ -123,12 +171,16 @@ def build_view(free_gb: Optional[float] = None, installed=None) -> List[dict]:
             for si, tag in enumerate([p] + alts):
                 e = cat.get(tag)
                 label = ("%d" % (ti + 1)) if si == 0 else ("%d-%d" % (ti + 1, si))
+                rung_need = _need_of(tag, need)
                 rungs.append({
                     "label": label, "tier": ti + 1, "sub": si, "is_primary": si == 0,
-                    "tag": tag, "size_gb": getattr(e, "size_gb", None), "need_gb": need,
+                    "tag": tag, "size_gb": getattr(e, "size_gb", None),
+                    "run_gb": getattr(e, "memory_gb", None), "need_gb": rung_need,
+                    "note": getattr(e, "note", "") or "",
+                    "level": _level_of(tag), "level_label": _level_label(tag),
                     "desc": getattr(e, "desc", "") or "",
                     "installed": (tag in inst) if installed_known else None,
-                    "fits": bool(usable and need <= usable),
+                    "fits": bool(usable and rung_need <= usable),
                     "recommended": (ti == rec_t and si == 0),
                     "actual": (act == (ti, si)),
                 })
@@ -140,46 +192,67 @@ def build_view(free_gb: Optional[float] = None, installed=None) -> List[dict]:
 
 
 def format_text(view: Optional[List[dict]] = None, free_gb: Optional[float] = None,
-                width: int = 40) -> str:
+                width: int = 50) -> str:
+    """용도별 후보군 표. 등급(상/중/하)마다 후보를 늘어놓고 추천을 표시한다.
+
+    후보를 여럿 두는 이유: 같은 등급 안에서도 무엇을 중시하느냐가 다르다
+    (속도 / 품질 / 무검열 / 이미지). 추천 하나만 보여 주면 왜 그것인지,
+    바꾸려면 무엇이 있는지 알 수 없다.
+    """
     if view is None:
         view = build_view(free_gb=free_gb)
     lines = []
     fg = view[0]["free_gb"] if view else free_gb
+    cat = _catalog()
+    budget = getattr(cat, "MEMORY_BUDGET_GB", None) if cat else None
+    if budget:
+        lines.append("메모리 예산 %.0fGB · 적재 상한 %.1fGB"
+                     % (budget, getattr(cat, "MAX_MODEL_GB", budget)))
     if fg:
-        lines.append("현재 여유 메모리 %.1fGB 기준 (숫자=티어, 1-1/1-2=같은 티어 대안)" % fg)
+        lines.append("지금 여유 %.1fGB — ★ 가 지금 실제로 뜨는 후보입니다." % fg)
     else:
-        lines.append("여유 메모리 감지 실패 — 아래는 티어 구조만")
+        lines.append("여유 메모리 감지 실패 — 아래는 후보군 구조만.")
+    lines.append("크기는 '받기→적재'. 같은 등급의 후보는 취향/용도 차이입니다.")
+
     for c in view:
         lines.append("")
         lines.append("[%s] %s" % (c["title"], c["desc"]))
         if not c["rungs"]:
-            lines.append("  (사다리 없음)")
+            lines.append("  (후보 없음)")
             continue
+        shown_level = None
         for r in c["rungs"]:
-            size = ("%.1fGB" % r["size_gb"]) if r["size_gb"] else "  ? "
+            if r["level"] != shown_level:
+                shown_level = r["level"]
+                same = [x for x in c["rungs"] if x["level"] == shown_level]
+                needs = [x["need_gb"] for x in same]
+                span = ("%.1f" % needs[0] if len(set(needs)) == 1
+                        else "%.1f~%.1f" % (min(needs), max(needs)))
+                lines.append("  %s  (적재 %sGB · 후보 %d개)"
+                             % (r["level_label"] or "?", span, len(same)))
+            if not r["size_gb"]:
+                size = "   ?  "
+            elif r["run_gb"] and abs(r["run_gb"] - r["size_gb"]) >= 0.2:
+                size = "%.1f→%.1fGB" % (r["size_gb"], r["run_gb"])
+            else:
+                size = "%.1fGB" % r["size_gb"]
             if r["installed"] is None:
                 badge = "설치?"
             else:
                 badge = "설치됨" if r["installed"] else "미설치"
-            mark = ""
-            if not r["is_primary"]:
-                mark += "  · 대안"
-            if r["recommended"]:
-                mark += "  ★추천(현재)"
-            if r["actual"] and not r["recommended"]:
-                mark += "  <=실제 사용"
-            lines.append("  %-4s %-*s %7s  여유>=%.0fGB  [%s]%s"
-                         % (r["label"], width, r["tag"], size, r["need_gb"], badge, mark))
+            mark = "  ★" if r["actual"] else ("  ·" if not r["is_primary"] else "   ")
+            if r["recommended"] and not r["actual"]:
+                mark = "  ☆"
+            lines.append("     %s %-*s %10s  [%s]  %s"
+                         % (mark, width, r["tag"], size, badge, r["note"]))
         if c["installed_known"]:
-            miss = [r["label"] for r in c["rungs"]
+            miss = [r["tag"] for r in c["rungs"]
                     if r["installed"] is False and r["is_primary"]]
             if miss:
-                lines.append("     -> 미설치 기본단계 %s 는 대안/하위로 폴백"
-                             % ",".join(miss))
-            else:
-                lines.append("     -> 메모리 부족 시 티어 1->2->3 순 자동 폴백")
-        else:
-            lines.append("     -> 메모리 부족 시 티어 1->2->3 순 자동 폴백")
+                lines.append("       -> 미설치 기본단계는 같은 등급의 다른 후보나 "
+                             "아래 등급으로 폴백")
+    lines.append("")
+    lines.append("★ 지금 실제 사용 · ☆ 이 여유에서의 추천(미설치) · · 같은 등급 대안")
     return "\n".join(lines)
 
 

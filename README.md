@@ -112,6 +112,242 @@ Open Interpreter 버전은 `src/runtime_versions.py` 한 곳에서만 정의합�
 설치 스크립트, 샌드박스 이미지 라벨, 런처의 이미지 검사가 모두 이 값을 읽습니다.
 세 곳이 어긋나면 샌드박스가 조용히 사용 불가가 되므로 리터럴로 적지 마세요.
 
+같은 이유로 저장소 안의 모듈을 가리키는 `import` 는 `src/tests/test_no_phantom_imports.py`
+가 검사합니다. 선택 기능을 `try: ... except Exception: pass` 로 감싸는 자리가 많아,
+경로가 틀리면 `ImportError` 가 그대로 삼켜지고 기능만 조용히 사라집니다.
+
+## 모델 정책
+
+받을 수 있는 모델(`src/launcher/models/model_catalog.py`)과 런타임이 고를 수 있는
+모델(`src/launcher/models/model_roles.py` 의 `TIERS`)은 **서로의 거울**이어야 합니다.
+
+- `TIERS` 에만 있는 태그 → 사다리가 1순위로 고르지만 `SETUP.bat` 어디에서도 받을 수 없습니다.
+- 카탈로그에만 있는 태그 → 받아서 디스크를 써도 런타임이 한 번도 고르지 않습니다.
+
+둘 다 예외도 경고도 없이 지나가므로 `src/tests/test_model_catalog_tiers.py` 가 양방향을
+강제합니다. 모델을 추가·교체할 때는 두 파일을 함께 고치세요.
+(임베더는 `kind="embed"` 로 표시하며 역할 사다리에서 제외됩니다.)
+
+모델 선택의 정본은 `TIERS` 하나입니다. `ROLES[*].model / fallback` 은 화면 표시용이며
+임포트 시점에 `TIERS` 의 1·2단계로 덮어써집니다(직접 적지 마세요). 사용자별 재정의는
+`user_data/models/registry.json` 의 `replace` / `add` 로 합니다.
+
+### 메모리 예산과 3단계
+
+이 프로그램은 **모델에 내줄 수 있는 메모리 상한**을 먼저 정하고 거기서 목록을 만듭니다.
+
+```text
+MEMORY_BUDGET_GB = 20        # 기본값. LLM_MEMORY_BUDGET_GB 로 조정
+MAX_MODEL_GB     = 18.4      # 예산 × 0.92 (나머지는 KV 캐시·버퍼 몫)
+```
+
+`MAX_MODEL_GB`를 넘는 모델은 **카탈로그에 두지 않습니다.** 받아도 절대 못 뜨는데
+목록에만 있으면 디스크만 먹고 사다리는 매번 그 아래로 떨어집니다.
+
+예산 안에서 역할마다 정확히 **3단계**를 둡니다.
+
+| 등급 | 상주 | 언제 |
+| --- | --- | --- |
+| **상** | 12~18.4GB | 다른 걸 거의 안 띄웠을 때. 실질적인 최고 품질 |
+| **중** | 6~12GB | 브라우저·Docker 를 같이 쓰는 평소 상태 |
+| **하** | ~6GB | 메모리가 빠듯할 때의 최후 단계 |
+
+한 단계만 받아 두면 여유 메모리가 오르내릴 때 쓸 게 없어지고, 단계가 너무 많으면
+어느 것이 실제로 도는지 알 수 없고 디스크만 먹습니다. 그래서 **세 단계 전부**가
+기본 설치 세트입니다. 같은 등급의 다른 선택지는 `alts`(대안)로 두며 기본 설치에는
+들어가지 않습니다 — 받아 둔 사람에게만 걸립니다.
+
+20GB 예산에서 18GB 급(`qwen3.6:27b`, `gemma4:26b-a4b-it-qat`)은 여유 19.6GB 를
+요구해 사실상 유휴 상태에서만 뜹니다. 그래서 기본단계가 아니라 상 등급의
+**대안**입니다.
+
+### 설치는 예산으로, 실행은 지금 여유로
+
+두 판단의 입력이 다릅니다. 섞으면 조용히 망가집니다.
+
+```text
+설치 (무엇을 받을까)  ->  MEMORY_BUDGET_GB          이 PC 의 상한
+실행 (무엇을 띄울까)  ->  detect_free_memory_gb()   지금 이 순간의 여유
+```
+
+예전에는 설치도 `detect_free_memory_gb()` 를 썼습니다. 브라우저를 켜 둔 채
+`SETUP.bat` 을 돌리면 여유가 8GB 로 잡혀 **하 등급만 받고 상·중은 영영 못 받는**
+상태가 됐습니다.
+
+### 크기는 두 가지입니다
+
+```text
+size_gb  받는 크기(디스크)   — 설치 화면의 "몇 GB 받나"
+run_gb   상주 크기(메모리)   — 등급 배정과 적재 가능 판정
+```
+
+대부분 GGUF 는 둘이 같지만 Gemma 4 E 계열은 다릅니다. `gemma4:e4b` 는 9.6GB를
+받아도 활성 파라미터만 올려 **약 5GB로 돕니다**. 하나로 뭉뚱그리면 저사양 PC 에서
+실제로 잘 돌아가는 모델을 "안 맞는다"고 걸러 버립니다.
+
+### 도구 호출
+
+Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사다리에는
+`tools=True` 인 모델만 들어갈 수 있고, 테스트가 이를 막습니다. 도구를 못 부르는
+모델을 고르면 에이전트가 오류 없이 그냥 멈춘 것처럼 보입니다.
+
+### 용도별 모델 그룹
+
+`TIERS` 의 키 = `model_classes.CLASSES` 의 키 = `ROLES` 의 이름. 셋이 같은 집합이어야
+하고 테스트가 이를 강제합니다.
+
+| 그룹 | 목적 | 상 (15GB급) | 중 (9GB급) | 하 (5GB급) |
+| --- | --- | --- | --- | --- |
+| `coding` | 코드 작성·실행 | `devstral-small-2:24b` | `qwen2.5-coder:14b` | `qwen2.5-coder:7b` |
+| `agent` | 검색·도구·자율 실행 | `prutser/…ara-abliterated:Q4_K_S` | `qwen2.5-coder:14b` | `gemma4:e4b-it-qat` |
+| `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `huihui_ai/qwen3-abliterated:14b` | `huihui_ai/qwen3-abliterated:8b` |
+| `office` | 요약·보고서·스캔본 OCR | `gemma4:26b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
+| `balanced` | 일상 대화 | `gpt-oss:20b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
+
+### Gemma 4 를 어디에 두었나
+
+Gemma 4 는 이 예산 안에서 **범용 품질이 가장 높습니다.** 26B-A4B 가 Arena
+오픈 6위(1441 Elo) · MMLU-Pro 82.6 · GPQA Diamond 84.3 으로, GPQA 에서는
+gpt-oss-120B(76.2)마저 앞섭니다. MoE 활성 ~4B 라 26B 급인데도 빠르고,
+전 사이즈가 이미지를 봅니다. 그래서 15개 기본단계 중 **11개가 Gemma 4 계열**입니다.
+
+한 곳만 예외입니다. **코딩은 Gemma 4 를 쓰지 않습니다.** SWE-bench Verified
+(실제 GitHub 이슈 해결)가 Gemma 4 의 약점으로 같은 체급 Qwen 에 크게 뒤지고,
+Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상이 이 프로그램의 코딩
+역할과 정확히 겹칩니다 — 여러 파일에 걸친 장기 과제 분해, 30턴 이상 일관된 도구
+호출, 중간 실패에서의 복구. 반면 도구 사용 자체(τ2-bench 86.4, Gemma 3 27B 는
+6.6)는 강해서 에이전트 역할에는 그대로 씁니다.
+
+`gemma4:31b`(dense, Arena 오픈 3위·1452 Elo)은 **이 예산에 들어오지 않습니다.**
+적재 ~20GB 로 상한 18.4GB 를 넘어, 받아도 뜨지 않습니다.
+
+사무 그룹은 상·중 등급 후보를 **전부 이미지가 되는 모델로만** 채웁니다.
+사다리는 '맞는 것 중 첫 번째' 를 자동으로 고르기 때문에, 이미지를 못 보는 후보를
+위쪽에 끼워 두면 여유가 조금 모자란 순간 그게 뽑혀 스캔본을 못 읽습니다.
+
+`uncensored` 사다리에는 `uncensored=True` 인 모델만 들어갈 수 있고, `office` 는
+저사양 단계에도 이미지를 읽는 후보가 있어야 합니다. 둘 다 테스트가 막습니다.
+(이름으로 판단하지 않습니다 — 가중치를 깎는 abliteration 말고 무검열 데이터로
+재학습한 dolphin 계열도 있어서, 태그에 `abliterated` 가 없다는 이유로 걸러지면
+안 됩니다.)
+
+### 등급마다 후보를 여럿 둡니다
+
+같은 메모리 등급 안에서도 무엇을 중시하느냐가 다릅니다 — 속도 / 품질 / 무검열 /
+이미지. 후보가 하나뿐이면 그게 안 맞을 때 곧바로 한 등급 아래로 떨어집니다.
+메모리는 남는데 품질만 깎이는 낭비입니다. **등급마다 최소 3개**를 두고 테스트가
+이를 확인합니다.
+
+기본단계(primary)가 그 등급의 **추천**이고, 나머지는 같은 등급의 대안입니다.
+대안은 **실제로 설치돼 있을 때만** 선택되므로 기본 설치를 부풀리지 않습니다.
+모든 항목은 `note` 로 성격을 한 줄 답니다("속도 우선", "거부율 최저", "이미지",
+"한국어" …) — 후보가 여럿이면 왜 이걸 고르는지가 보여야 고를 수 있습니다.
+
+```text
+무검열 · 중 (적재 6.1~9.0GB · 후보 3개)
+  ★ huihui_ai/qwen3-abliterated:14b      9.0GB  [설치됨]  다국어
+  · huihui_ai/gemma-4-abliterated:12b    7.6GB  [미설치]  이미지
+  · huihui_ai/qwen3-vl-abliterated:8b    6.1GB  [미설치]  이미지
+
+★ 지금 실제 사용 · ☆ 이 여유에서의 추천(미설치) · · 같은 등급 대안
+```
+
+**후보에서 뺀 것**과 이유:
+
+| 모델 | 왜 안 넣었나 |
+| --- | --- |
+| `codestral:22b` | FIM 자동완성 특화. 네이티브 도구 호출이 없어 Open Interpreter 역할에 못 쓴다 |
+| `deepseek-coder-v2:16b` | 160K 컨텍스트는 매력적이지만 도구 호출이 없다(제3자 파인튜닝판만 있음) |
+| `llama3-groq-tool-use:8b` | BFCL 89.06 으로 자체 호스팅 최고점이지만 컨텍스트가 8K. 도구 결과로 컨텍스트를 쓰는 이 에이전트엔 부족 |
+| `gemma4:31b` · `qwen3-vl:32b` | 적재 상한 18.4GB 초과 — 이 예산에선 절대 안 뜬다 |
+
+역할 이름을 바꾸면 `model_roles.ROLE_ALIASES` 에 옛 이름을 등록하세요.
+`user_data/models/registry.json` 에 옛 키를 적어 둔 설정이 조용히 무시되지 않습니다.
+
+### 기본 설치 세트
+
+`model_catalog.plan_by_level()` 이 역할 × 3단계의 기본단계를 모읍니다(중복 제거).
+20GB 예산에서:
+
+| 등급 | 받기 | 모델 |
+| --- | --- | --- |
+| 상 | 62.0GB | `gemma4:26b`, `devstral-small-2:24b`, `prutser/…ara-abliterated:Q4_K_S`, `gpt-oss:20b` |
+| 중 | 25.6GB | `qwen2.5-coder:14b`, `huihui_ai/qwen3-abliterated:14b`, `gemma4:12b` |
+| 하 | 19.3GB | `gemma4:e4b-it-qat`, `huihui_ai/qwen3-abliterated:8b`, `qwen2.5-coder:7b` |
+|  | **106.9GB** |  |
+
+설치 화면은 이 표를 그대로 보여 주고 각 항목에 `[상]` `[중]` `[하]` 를 붙입니다.
+용량이 부담되면 한 등급을 통째로 빼도 됩니다 — 사다리가 남은 등급으로 안전하게
+내려갑니다. 디스크 사전 검사의 하한은 '하' 등급만 받았을 때 기준이고, 권장 세트가
+안 들어가면 중단이 아니라 경고만 합니다.
+
+### 목록을 직접 찍어 보기
+
+문서에 표를 베껴 두면 카탈로그와 갈라집니다. 목록이 필요하면 항상 이걸 찍으세요.
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+python -m launcher.models            # 지금 여유 메모리 기준 전체 후보군
+python -m launcher.models --plan     # 기본 설치 세트(3단계)만
+python -m launcher.models --free 12  # 여유 12GB 를 가정
+```
+
+### 배선 검증
+
+`src/tests/test_model_pipeline_e2e.py` 가 가짜 `ollama.exe` 로 진짜 저장소
+레이아웃(내용 해시 blob + OCI manifest)을 만들어 놓고 사슬 전체를 한 번에 지납니다.
+
+```text
+3단계 계획 -> installer.steps.model.download() -> OLLAMA_MODELS 경로에 pull
+           -> blobs/ + manifests/ 생성 -> MODEL_FILES.csv 로 파일↔모델 복원
+           -> model_roles 가 '설치된 것' 을 읽어 역할별 결정
+           -> AgentConfig.model -> Open Interpreter 스레드 파라미터
+```
+
+조각마다 단위 테스트가 있어도 서로 **다른 경로**를 보고 있으면 전부 통과하면서
+프로그램은 "모델이 없다" 고 합니다. 그래서 설치기와 런처가 같은 `OLLAMA_MODELS`
+를 쓰는지, 고른 태그가 실제 실행 파라미터까지 실리는지를 함께 확인합니다.
+
+`CORE` 는 손으로 관리하지 않습니다. `_CORE_TAGS` 한 곳에서 정하고
+`CORE`/`ADVANCED` 가 거기서 파생되며, 테스트가 `CORE == plan_by_level()` 을
+확인합니다.
+### 태그 대소문자
+
+카탈로그에는 대소문자가 섞인 벤더 태그가 있습니다
+(`prutser/...:Q4_K_S`, `huihui_ai/Qwen3.6-abliterated:27b`).
+Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하면 멀쩡히 깔린 18GB 짜리를
+"미설치"로 보고 다시 받습니다. 설치 목록은 읽는 즉시
+`model_catalog.canonicalize_installed()` 로 카탈로그 표기에 맞춥니다.
+
+## 모델 파일 ↔ 이름 대응표
+
+Ollama 는 받은 모델을 내용 해시로만 저장합니다. `C:\LLM_Models` 를 열면 이렇게 보입니다.
+
+```text
+C:\LLM_Models\
+  blobs\sha256-3f1c...          <- 15GB 짜리인데 어느 모델인지 알 수 없음
+  manifests\registry.ollama.ai\
+    library\gemma4\12b          <- 이 JSON 이 위 해시를 가리킴
+```
+
+`src/launcher/models/model_files.py` 가 manifest 를 읽어 대응을 복원하고
+**`C:\LLM_Models\MODEL_FILES.csv`** 로 저장합니다(저장소에 쓸 수 없으면
+`user_data/models/` 로). 모델 설치·삭제 후 자동으로 갱신되고, `RUN.bat` →
+**[모델 정보]** 에서도 다시 씁니다.
+
+| 열 | 뜻 |
+| --- | --- |
+| `file_name` | `blobs/` 안의 실제 파일 이름 (`sha256-...`) |
+| `model` | 그 파일을 쓰는 모델 (`gemma4:12b`) |
+| `role` | 카탈로그의 역할 라벨 |
+| `layer` | `weights`(가중치) / `template` / `params` / `license` / `projector` … |
+| `size_bytes`, `size_gb` | 파일 크기 |
+| `shared_with` | 이 파일을 함께 쓰는 모델 수. **2 이상이면 한 모델을 지워도 파일은 남습니다** |
+| `status` | `ok` / `missing`(받다 만 파일 — 다시 pull) / `orphan`(아무도 안 쓰는 잔여물) |
+| `rel_path` | 저장소 루트 기준 경로 |
+
+Excel 에서 한글이 깨지지 않도록 UTF-8 BOM 으로 씁니다.
+
 ## 주요 구성
 
 - **ChatService**: AnythingLLM 기반 로컬 채팅/RAG

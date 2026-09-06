@@ -365,6 +365,15 @@ def _run_gui() -> int:
                                "https://ollama.com/download", "warn")
             except Exception as e:
                 root.after(0, _logln, "  설치 오류: %s (%r)" % (tag, e), "err")
+        # MODEL_FILES_v1: 설치/삭제로 blobs 가 바뀌었으니 대응표를 다시 쓴다.
+        try:
+            from project_paths import MODEL_STORAGE_DIR
+            from launcher.models import model_files as _mf
+            _csv = _mf.refresh(MODEL_STORAGE_DIR)
+            if _csv:
+                root.after(0, _logln, "파일-모델 대응표: " + str(_csv), "ok")
+        except Exception as _e:
+            root.after(0, _logln, "대응표 갱신 생략 (%r)" % _e, "warn")
         root.after(0, done_cb)
 
     def _apply():

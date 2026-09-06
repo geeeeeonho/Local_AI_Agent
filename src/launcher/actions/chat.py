@@ -138,15 +138,6 @@ def run(env: Path, p: Presenter) -> None:
     new_env["DATA_DIR"] = str(_webui_data)
     # <<< WEBUI_DATADIR_v1
 
-    # 런타임 가드 적용 (선택)
-    try:
-        from .. import runtime_guard  # legacy
-        rt = runtime_guard.compute_runtime_params()
-        runtime_guard.apply_to_env(rt, new_env)
-        _log_write(log_path, "INFO", f"runtime params: {rt}")
-    except Exception as e:
-        _log_write(log_path, "WARN", f"runtime_guard skip: {e}")
-
     if search_enabled:
         new_env.update(_search_env_vars())
         p.ok(f"검색 자동 연결: {config.SEARXNG_URL}")
@@ -376,11 +367,9 @@ def _show_model_tips(p) -> None:
     p.info("추천 모델 (용도별) — Open WebUI 좌상단에서 모델을 고르세요")
     roles = getattr(_mr, "ROLES", None) if _mr else None
     if not roles:
-        p.info("  - 자동화 에이전트: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (부족 시 12b)")
-        p.info("  - 코딩: qwen3-coder:30b (메모리 부족 시 7b)")
-        p.info("  - 무검열 검색/번역: prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S (대체 huihui 8b)")
-        p.info("  - 맥락 이해/범용: gemma4:12b")
+        p.info("  모델 레지스트리를 불러오지 못했습니다 — SETUP.bat --manage 에서 확인하세요.")
         return
+    free = None
     try:
         free = _mr.detect_free_memory_gb()
         if free is not None:
@@ -388,8 +377,15 @@ def _show_model_tips(p) -> None:
     except Exception:
         pass
     for r in roles:
+        # 사다리 1단계를 적되, 지금 실제로 뜰 모델이 다르면 그것도 같이 알린다.
         line = "  - " + r.label + " -> " + r.model
-        if getattr(r, "fallback", None):
+        try:
+            actual = _mr.resolve_ladder(r.name, free)
+        except Exception:
+            actual = None
+        if actual and actual != r.model:
+            line += " (현재 실제 사용: " + actual + ")"
+        elif getattr(r, "fallback", None):
             line += " (메모리 부족 시 " + r.fallback + ")"
         p.info(line)
         if getattr(r, "description", ""):
@@ -518,13 +514,8 @@ def run(env, p):
         except Exception as _e_sx:
             p.warn("SearXNG 시작 생략: %r" % _e_sx)
 
-        # 5) 컨텍스트 길이
-        _ctx = 4096
-        try:
-            from .. import runtime_guard as _rg_al
-            _ctx = int(_rg_al.compute_runtime_params().context_window)
-        except Exception:
-            pass
+        # 5) 컨텍스트 길이 (config.TOKEN_LIMITS_v1 정본)
+        _ctx = int(getattr(_cfg_al, "CHAT_CONTEXT_WINDOW", 4096))
 
         # 6) 기동
         p.info("브라우저: " + _al.URL)

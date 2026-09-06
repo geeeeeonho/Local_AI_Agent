@@ -107,8 +107,11 @@ class MainWindow:
         self.statusbar.start_polling(self.root)
 
         # v6_lifelog: GUI 창 X 클릭 시 cleanup hook 호출
+        # src 레이아웃 이전에는 launcher.presenter.lifelog 였다. 지금 정본은
+        # launcher.core.lifelog — 옛 경로는 ImportError 가 나고 아래 except 가
+        # 삼켜서, X 로 닫을 때 정리 훅이 아예 등록되지 않고 있었다.
         try:
-            from .. import lifelog as _ll
+            from launcher.core import lifelog as _ll
 
             def _on_window_close():
                 _ll.log('CLEANUP', 'GUI WM_DELETE_WINDOW 트리거')
@@ -136,8 +139,9 @@ class MainWindow:
             return
         self._quitted = True
         # v4_lifecycle: 활성 에이전트 일괄 종료
+        # 정본은 launcher.agent.agent_lifecycle (옛 경로 launcher.presenter.* 는 없다).
         try:
-            from .. import agent_lifecycle as _lc
+            from launcher.agent import agent_lifecycle as _lc
             _n = _lc.cleanup_all(timeout=3.0)
             if _n > 0:
                 print(f'[v4_lifecycle] 활성 에이전트 {_n}개 정리됨', flush=True)

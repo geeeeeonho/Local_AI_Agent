@@ -33,9 +33,32 @@ def _installed_tags(svc) -> set:
             tok = line.split()
             if tok:
                 out.add(tok[0])
-        return out
+        # 카탈로그 표기로 맞춰 둬야 이후의 `tag in installed` 비교가 전부 맞는다.
+        return _catalog().canonicalize_installed(out)
     except Exception:
         return set()
+
+
+def _budget_gb():
+    """모델에 내줄 수 있는 최대 메모리. '지금 여유' 가 아니라 이 PC 의 상한."""
+    try:
+        from launcher.models import model_catalog as cat
+        return float(cat.MEMORY_BUDGET_GB)
+    except Exception:
+        return None
+
+
+def _refresh_file_map(svc, p) -> None:
+    """MODEL_FILES_v1: blobs/sha256-... 가 어느 모델인지 적은 CSV 를 다시 쓴다."""
+    try:
+        from launcher.models import model_files as mf
+    except Exception:
+        return
+    out = mf.refresh(svc.model_dir)
+    if out:
+        p.info("파일-모델 대응표 갱신: " + str(out))
+    else:
+        p.warn("파일-모델 대응표를 쓰지 못했습니다 (저장소 쓰기 권한 확인).")
 
 
 def _download_flow(env, p) -> None:
@@ -50,26 +73,42 @@ def _download_flow(env, p) -> None:
         return
 
     installed = _installed_tags(svc)
+    budget_gb = _budget_gb()
+    wanted = cat.recommended_for(budget_gb)
+    plan = cat.plan_by_level(budget_gb)
     opts = []
     for e in cat.all_entries():
         done = e.tag in installed
         tail = "  [설치됨]" if done else ""
-        grp = "" if e.group == "core" else " (선택)"
+        lvl = cat.level_of(e.tag)
+        grp = ("  [%s]" % cat.level_label(lvl)) if lvl else ""
+        grp += "" if e.group == "core" else " (선택)"
+        # 다운로드 크기와 상주 메모리는 다르다 (gemma4:e4b 는 9.6GB 받아 ~5GB 로 돈다).
+        sizes = "~" + format(e.size_gb, ".1f") + "GB 받기"
+        if abs(e.memory_gb - e.size_gb) >= 0.2:
+            sizes += " / " + format(e.memory_gb, ".1f") + "GB 적재"
+        note = ("  ·  " + e.note) if e.note else ""
         opts.append(Option(
             id=e.tag,
-            label=e.tag + "  ·  " + e.role + grp + "  ·  ~" + format(e.size_gb, ".1f") + "GB" + tail,
-            default=(done or (e.recommended and not done)),
+            label=e.tag + "  ·  " + e.role + grp + note + "  ·  " + sizes + tail,
+            default=(done or e.tag in wanted),
             description=e.desc,
             locked=done,
         ))
+    lines = ["메모리 예산 %.0fGB 기준 3단계를 미리 체크했습니다 "
+             "(여유는 오르내리므로 세 단계를 모두 둡니다)." % (budget_gb or 0)]
+    for key in cat.LEVEL_KEYS:
+        tags = plan.get(key) or []
+        if tags:
+            lines.append("  [%s] %.1fGB — %s"
+                         % (cat.level_label(key), cat.download_gb(tags), ", ".join(tags)))
+    lines.append("한 번에 하나만 메모리에 적재되므로 RAM 무관, 디스크만 사용합니다.")
+    lines.append("(선택) 표시는 같은 등급의 대안 — 필요할 때만 받으세요.")
     sel = p.show_checkbox(
         title="모델 다운로드 선택",
         subtitle="체크한 모델을 받습니다 · 이미 설치된 모델은 잠금(설치됨)",
         options=opts,
-        extra_lines=[
-            "한 번에 하나만 메모리에 적재되므로 RAM 무관, 디스크만 사용합니다.",
-            "(선택) 표시는 상위/특수 모델 — 필요할 때만 받으세요.",
-        ],
+        extra_lines=lines,
     )
     if sel is None:
         return
@@ -97,6 +136,7 @@ def _download_flow(env, p) -> None:
             p.error("  실패: " + tag + " (rc=" + str(rc) + ")")
             failc += 1
     p.info("요약 — 받음 " + str(okc) + " · 실패 " + str(failc))
+    _refresh_file_map(svc, p)
     p.pause()
 
 
@@ -168,6 +208,7 @@ def _remove_flow(env, p) -> None:
             p.error("  실패: " + tag + " (rc=" + str(rc) + ")")
             failc += 1
     p.info("요약 — 삭제 " + str(okc) + " · 실패 " + str(failc))
+    _refresh_file_map(svc, p)
     p.pause()
 
 
