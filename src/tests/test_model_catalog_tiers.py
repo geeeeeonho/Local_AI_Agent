@@ -375,15 +375,23 @@ class GroupDepthTests(unittest.TestCase):
     무검열 작업을 8b 로밖에 못 했다. 사다리에 큰 구멍이 없는지 본다.
     """
 
-    MAX_STEP_RATIO = 2.2   # 한 칸 내려갈 때 메모리가 이보다 더 급격히 줄면 구멍
+    #  등급이 셋으로 고정돼 있으므로 '단계 간 배율' 은 밴드 구조가 정해 버린다
+    #  (상 12~18.4 / 중 6~12 / 하 ~6 이라 배율 3배까지는 구조적으로 정상).
+    #  대신 각 등급의 기본단계가 그 등급이 허용하는 메모리를 실제로 쓰는지 본다.
+    #  예: 중 등급(상한 12GB)에 6.5GB 짜리를 기본으로 두면 5.5GB 를 놀리는 셈이다.
+    MIN_BAND_USE = 0.6
 
-    def test_no_group_has_a_hole_in_its_size_ladder(self):
+    def test_each_level_uses_the_memory_it_is_allowed(self):
+        ceilings = {key: hi for key, _label, _lo, hi in catalog.LEVELS}
         for name, tier_list in roles.TIERS.items():
-            steps = [catalog.memory_gb(t["primary"]) for t in tier_list]
-            for upper, lower in zip(steps, steps[1:]):
-                self.assertLessEqual(
-                    upper / lower, self.MAX_STEP_RATIO,
-                    "%s 사다리에 %.1fGB -> %.1fGB 구멍이 있다" % (name, upper, lower))
+            for tier in tier_list:
+                tag = tier["primary"]
+                key = catalog.level_of(tag)
+                got = catalog.memory_gb(tag)
+                self.assertGreaterEqual(
+                    got / ceilings[key], self.MIN_BAND_USE,
+                    "%s / %s 등급 기본 %s 가 %.1fGB — 상한 %.1fGB 를 놀린다"
+                    % (name, catalog.level_label(key), tag, got, ceilings[key]))
 
     def test_every_group_reaches_both_ends_of_the_hardware_range(self):
         for name, tier_list in roles.TIERS.items():
@@ -414,9 +422,34 @@ class UncensoredGroupTests(unittest.TestCase):
 
 
 class OfficeGroupTests(unittest.TestCase):
-    def test_it_can_read_scanned_documents(self):
-        # 사무 보조의 핵심은 스캔본·스크린샷 읽기다. 비전이 되는 후보가 각
-        # 메모리 구간에 있어야 한다.
+    def test_every_default_pick_can_read_scanned_documents(self):
+        """사무 보조의 본업이 스캔본·스크린샷 읽기다. 등급마다 기본단계가
+        이미지를 볼 수 있어야 한다 — 예전에는 상 등급 기본이 이미지를 전혀
+        못 보는 모델이었다(추론 점수만 보고 골랐다)."""
+        table = catalog.by_tag()
+        for tier in roles.TIERS["office"]:
+            self.assertTrue(table[tier["primary"]].vision,
+                            "사무 %s 단계 기본 %s 가 이미지를 못 본다"
+                            % (catalog.level_label(catalog.level_of(tier["primary"])),
+                               tier["primary"]))
+
+    def test_no_text_only_candidate_can_be_auto_picked_above_the_bottom_rung(self):
+        """상·중 등급의 후보는 전부 이미지를 볼 수 있어야 한다.
+
+        사다리는 '맞는 것 중 첫 번째' 를 자동으로 고른다. 이미지를 못 보는
+        후보를 위쪽 등급에 끼워 두면, 여유가 조금 모자란 순간 그게 뽑혀서
+        스캔본을 못 읽는 모델이 사무 역할에 앉는다. 맨 아래 등급만 예외를
+        둔다(저사양 한국어용 exaone).
+        """
+        table = catalog.by_tag()
+        for tier in roles.TIERS["office"]:
+            if catalog.level_of(tier["primary"]) == "low":
+                continue
+            for tag in [tier["primary"]] + list(tier.get("alts", [])):
+                self.assertTrue(table[tag].vision,
+                                "사무 사다리 위쪽에 이미지를 못 보는 %s 가 있다" % tag)
+
+    def test_a_vision_candidate_exists_even_on_a_tight_machine(self):
         table = catalog.by_tag()
         seeing = [tag for tag, _need in roles.LADDERS["office"] if table[tag].vision]
         self.assertTrue(seeing)

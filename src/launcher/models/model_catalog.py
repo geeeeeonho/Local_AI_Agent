@@ -257,7 +257,8 @@ _ALL: List[CatalogEntry] = [
 # 3단계(상/중/하) × 역할의 '기본단계' 전부. plan_by_level() 결과와 같아야 하고
 # tests/test_model_catalog_tiers.py 가 그것을 확인한다.
 _CORE_TAGS = frozenset({
-    # 상 — 다른 걸 거의 안 띄웠을 때 (15GB 급)
+    # 상 — 다른 걸 거의 안 띄웠을 때 (14~18GB)
+    "gemma4:26b",           # 사무·문서 1순위 (이 예산 안 범용 품질 최고 + 이미지)
     "devstral-small-2:24b",
     "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
     "gpt-oss:20b",

@@ -201,8 +201,29 @@ Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사�
 | `coding` | 코드 작성·실행 | `devstral-small-2:24b` | `qwen2.5-coder:14b` | `qwen2.5-coder:7b` |
 | `agent` | 검색·도구·자율 실행 | `prutser/…ara-abliterated:Q4_K_S` | `qwen2.5-coder:14b` | `gemma4:e4b-it-qat` |
 | `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `huihui_ai/qwen3-abliterated:14b` | `huihui_ai/qwen3-abliterated:8b` |
-| `office` | 요약·보고서·스캔본 OCR | `gpt-oss:20b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
+| `office` | 요약·보고서·스캔본 OCR | `gemma4:26b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
 | `balanced` | 일상 대화 | `gpt-oss:20b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
+
+### Gemma 4 를 어디에 두었나
+
+Gemma 4 는 이 예산 안에서 **범용 품질이 가장 높습니다.** 26B-A4B 가 Arena
+오픈 6위(1441 Elo) · MMLU-Pro 82.6 · GPQA Diamond 84.3 으로, GPQA 에서는
+gpt-oss-120B(76.2)마저 앞섭니다. MoE 활성 ~4B 라 26B 급인데도 빠르고,
+전 사이즈가 이미지를 봅니다. 그래서 15개 기본단계 중 **11개가 Gemma 4 계열**입니다.
+
+한 곳만 예외입니다. **코딩은 Gemma 4 를 쓰지 않습니다.** SWE-bench Verified
+(실제 GitHub 이슈 해결)가 Gemma 4 의 약점으로 같은 체급 Qwen 에 크게 뒤지고,
+Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상이 이 프로그램의 코딩
+역할과 정확히 겹칩니다 — 여러 파일에 걸친 장기 과제 분해, 30턴 이상 일관된 도구
+호출, 중간 실패에서의 복구. 반면 도구 사용 자체(τ2-bench 86.4, Gemma 3 27B 는
+6.6)는 강해서 에이전트 역할에는 그대로 씁니다.
+
+`gemma4:31b`(dense, Arena 오픈 3위·1452 Elo)은 **이 예산에 들어오지 않습니다.**
+적재 ~20GB 로 상한 18.4GB 를 넘어, 받아도 뜨지 않습니다.
+
+사무 그룹은 상·중 등급 후보를 **전부 이미지가 되는 모델로만** 채웁니다.
+사다리는 '맞는 것 중 첫 번째' 를 자동으로 고르기 때문에, 이미지를 못 보는 후보를
+위쪽에 끼워 두면 여유가 조금 모자란 순간 그게 뽑혀 스캔본을 못 읽습니다.
 
 `uncensored` 사다리에는 `uncensored=True` 인 모델만 들어갈 수 있고, `office` 는
 저사양 단계에도 이미지를 읽는 후보가 있어야 합니다. 둘 다 테스트가 막습니다.
@@ -250,10 +271,10 @@ Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사�
 
 | 등급 | 받기 | 모델 |
 | --- | --- | --- |
-| 상 | 44.0GB | `devstral-small-2:24b`, `prutser/…ara-abliterated:Q4_K_S`, `gpt-oss:20b` |
+| 상 | 62.0GB | `gemma4:26b`, `devstral-small-2:24b`, `prutser/…ara-abliterated:Q4_K_S`, `gpt-oss:20b` |
 | 중 | 25.6GB | `qwen2.5-coder:14b`, `huihui_ai/qwen3-abliterated:14b`, `gemma4:12b` |
 | 하 | 19.3GB | `gemma4:e4b-it-qat`, `huihui_ai/qwen3-abliterated:8b`, `qwen2.5-coder:7b` |
-|  | **88.9GB** |  |
+|  | **106.9GB** |  |
 
 설치 화면은 이 표를 그대로 보여 주고 각 항목에 `[상]` `[중]` `[하]` 를 붙입니다.
 용량이 부담되면 한 등급을 통째로 빼도 됩니다 — 사다리가 남은 등급으로 안전하게

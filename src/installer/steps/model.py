@@ -21,7 +21,8 @@ from installer.i18n import get_language
 # MODEL_FINAL_v8 inline 폴백 (model_roles import 실패 시)
 # model_catalog.CORE 와 같은 세트여야 한다 (test_model_catalog_tiers 가 확인).
 _INLINE: List[Tuple[str, str]] = [
-    # 상 (15GB 급)
+    # 상 (14~18GB)
+    ("Gemma 정식 26B (사무·범용)", "gemma4:26b"),
     ("에이전트 코딩 특화", "devstral-small-2:24b"),
     ("무검열·범용·에이전트 (Gemma ARA)", "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"),
     ("에이전트·추론 (MoE)", "gpt-oss:20b"),

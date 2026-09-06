@@ -234,9 +234,17 @@ TIERS = {
                   "dolphin3:8b"]},                          # 파인튜닝계
     ],
     "office": [
-        {"need": 14.0, "primary": "gpt-oss:20b",
-         "alts": ["gemma4:26b",         # 이미지가 필요할 때
-                  "qwen3.6:27b"]},      # 긴 문서 + 이미지
+        # 사무 그룹의 본업은 스캔본·스크린샷 읽기다. 그래서 기본단계는 세 등급
+        # 모두 이미지를 볼 수 있어야 한다(테스트가 확인). gpt-oss 는 추론은
+        # 좋지만 이미지를 못 보므로 기본단계가 될 수 없다.
+        # Gemma 4 26B-A4B 는 Arena 1441(오픈 6위)·GPQA Diamond 84.3 으로 이
+        # 예산 안에서 범용 품질이 가장 높고, MoE 활성 ~4B 라 26B 급인데도 빠르다.
+        {"need": 18.0, "primary": "gemma4:26b",
+         # 이 등급 후보는 전부 이미지를 볼 수 있어야 한다. gpt-oss 를 대안으로
+         # 두면 여유 16GB 구간에서 그게 뽑혀(18GB 가 안 뜨니까) 스캔본을 못 읽는
+         # 모델이 사무 역할에 앉는다. 그럴 바엔 이미지가 되는 아래 등급이 낫다.
+         "alts": ["qwen3.6:27b",             # 긴 문서 + 이미지
+                  "gemma4:26b-a4b-it-qat"]}, # QAT — 형식 준수
         {"need": 7.6, "primary": "gemma4:12b",
          "alts": ["gemma4:12b-it-qat",
                   "qwen3-vl:8b"]},      # CJK 스캔본 OCR
@@ -244,6 +252,9 @@ TIERS = {
          "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},        # 한국어
     ],
     "balanced": [
+        # 범용은 '자주 뜨는 쪽' 을 기본으로 둔다. 18GB 급은 여유 19.6GB 를
+        # 요구해 사실상 유휴 상태에서만 뜨므로, 여기서는 14GB 를 기본단계로
+        # 두고 Gemma 4 26B 를 대안에 남긴다(사무 그룹이 그쪽을 기본으로 받는다).
         {"need": 14.0, "primary": "gpt-oss:20b",
          "alts": ["gemma4:26b", "qwen3.6:27b"]},
         {"need": 7.6, "primary": "gemma4:12b",
