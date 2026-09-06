@@ -33,7 +33,8 @@ def _installed_tags(svc) -> set:
             tok = line.split()
             if tok:
                 out.add(tok[0])
-        return out
+        # 카탈로그 표기로 맞춰 둬야 이후의 `tag in installed` 비교가 전부 맞는다.
+        return _catalog().canonicalize_installed(out)
     except Exception:
         return set()
 

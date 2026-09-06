@@ -109,11 +109,11 @@ ROLES: List[ModelRole] = [
         fallback=_CODER_FB, fallback_need_gb=8.0,
     ),
     ModelRole(
-        key="3", name="context", label="맥락 이해",
-        description="긴 문맥·문서 이해와 추론. Gemma 4 dense(256K, 멀티모달).",
+        key="3", name="office", label="사무·문서 보조",
+        description="요약·보고서·긴 문서, 스캔본과 스크린샷 읽기. 속도보다 품질을 우선한다.",
         model=_GEMMA12, need_gb=10.0,
         temperature=0.3, context_window=16384,
-        system_hint="당신은 긴 맥락과 문서를 정확히 이해하고 근거를 들어 설명하는 보조자입니다.",
+        system_hint="당신은 긴 문서를 정확히 이해하고 근거를 들어 정리·요약하는 사무 보조자입니다.",
     ),
     ModelRole(
         key="4", name="balanced", label="균형 (범용)",
@@ -204,7 +204,9 @@ TIERS = {
     ],
     "agent": [
         {"need": 18.0, "primary": "gemma4:26b-a4b-it-qat",
-         "alts": ["gemma4:26b"]},
+         # qwen3.6 은 도구 호출 누락률이 가장 낮은 계열이지만 dense 라 느리다.
+         # 기본단계로 올리지 않고 대안으로 둔다 — 받아 둔 사람에게만 걸린다.
+         "alts": ["gemma4:26b", "qwen3.6:27b"]},
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
          "alts": ["gpt-oss:20b"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
@@ -212,11 +214,17 @@ TIERS = {
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
          "alts": ["gemma4:e4b", "qwen2.5-coder:7b"]},
     ],
+    # 무검열은 번역·창작·자유로운 범용이 목적이라 도구 호출을 요구하지 않는다.
+    # 예전에는 15GB 와 5GB 사이가 통째로 비어서, 여유 8~14GB 인 PC 는 무검열
+    # 작업을 곧바로 8b 로 떨어뜨렸다. 그 사이를 14b -> 12b 로 메운다.
     "uncensored": [
-        # Q5 는 같은 모델의 상위 quant(19GB). 티어 기본으로 올리면 기본 설치가
-        # 그만큼 커지므로 대안으로 둔다 — 대안은 실제로 설치돼 있을 때만 뽑힌다.
+        {"need": 18.0, "primary": "huihui_ai/gemma-4-abliterated:26b-qat",
+         "alts": ["huihui_ai/Qwen3.6-abliterated:27b",          # 번역·다국어 축
+                  "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M"]},
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": ["prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M"]},
+         "alts": []},
+        {"need": 9.0, "primary": "huihui_ai/qwen3-abliterated:14b", "alts": []},
+        {"need": 7.6, "primary": "huihui_ai/gemma-4-abliterated:12b", "alts": []},
         {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
     ],
     "balanced": [
@@ -226,12 +234,60 @@ TIERS = {
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
          "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
     ],
-    "context": [
-        {"need": 18.0, "primary": "gemma4:26b", "alts": ["gemma4:31b"]},
+    # 사무·문서 (구 "context"). 요약·보고서·긴 문서 + 스캔본/스크린샷 읽기.
+    # 속도보다 품질이라 여기서는 dense 31B 를 기본단계로 올린다
+    # (Gemma 4 31B 는 요약 평가 94.6/100). 아래쪽에는 CJK OCR 이 되는
+    # Qwen3-VL 을 둬서 한국어 스캔 문서를 다룰 수 있게 한다.
+    "office": [
+        {"need": 20.0, "primary": "gemma4:31b", "alts": ["qwen3-vl:32b"]},
+        {"need": 18.0, "primary": "gemma4:26b", "alts": []},
+        # 10~16GB 구간이 비어 있으면 이 구간의 PC 가 26B 에서 곧바로 12B 로
+        # 떨어진다. gpt-oss 는 추론 강도를 조절할 수 있어 요약·보고서 작성에
+        # 잘 맞는다(이미지 입력은 안 되므로 그건 아래 단계가 맡는다).
+        {"need": 14.0, "primary": "gpt-oss:20b", "alts": []},
         {"need": 7.6, "primary": "gemma4:12b", "alts": ["gemma4:12b-it-qat"]},
+        {"need": 6.1, "primary": "qwen3-vl:8b", "alts": ["exaone3.5:7.8b"]},
         {"need": 5.0, "primary": "gemma4:e4b-it-qat", "alts": ["gemma4:e4b"]},
     ],
 }
+
+# 예전 역할 이름 -> 지금 이름. user_data/models/registry.json 에 옛 키를 적어 둔
+# 사용자가 조용히 무시당하지 않도록 받아 준다.
+ROLE_ALIASES = {"context": "office"}
+
+
+def _canonical(installed):
+    """설치 목록을 카탈로그 표기로 맞춘다 (대소문자 차이 흡수)."""
+    try:
+        from . import model_catalog as _cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as _cat
+        except Exception:
+            return set(installed)
+    try:
+        return _cat.canonicalize_installed(installed)
+    except Exception:
+        return set(installed)
+
+
+def _installed_match(tag, installed):
+    """설치 목록에서 tag 를 찾는다(대소문자 무시). 없으면 None.
+
+    벤더 태그는 대소문자가 섞여 있고(prutser/...:Q4_K_S) Ollama 가 그대로
+    돌려준다는 보장이 없다. 문자열을 그대로 비교하면 멀쩡히 깔린 모델을
+    '미설치' 로 보고 사다리를 한참 아래로 떨어뜨린다.
+    """
+    if not tag or not installed:
+        return None
+    try:
+        from . import model_catalog as _cat
+    except Exception:
+        try:
+            from launcher.models import model_catalog as _cat
+        except Exception:
+            return tag if tag in installed else None
+    return _cat.find_installed(tag, installed)
 
 
 def _catalog_memory(tag):
@@ -316,6 +372,7 @@ def load_registry(path=None):
             sec = {}
         clean = {}
         for role, tiers in sec.items():
+            role = ROLE_ALIASES.get(role, role)
             if not isinstance(tiers, list):
                 errs.append("%s.%s 가 배열이 아닙니다" % (key, role))
                 continue
@@ -395,7 +452,7 @@ def _lightest(lad, installed=None):
     if not lad:
         return None
     if installed:
-        have = [(need, m) for m, need in lad if m in installed]
+        have = [(need, m) for m, need in lad if _installed_match(m, installed)]
         if have:
             return min(have)[1]
     return min(lad, key=lambda x: x[1])[0]
@@ -422,7 +479,7 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None):
     fits = [(m, need) for m, need in lad if need <= usable]
     if installed:
         for m, _need in fits:
-            if m in installed:
+            if _installed_match(m, installed):
                 return m
     if fits:
         return fits[0][0]
@@ -486,7 +543,7 @@ def installed_models(host="127.0.0.1:11434", timeout=5):
             nm = m.get("name") or m.get("model")
             if nm:
                 out.add(nm)
-        return out
+        return _canonical(out)
     except Exception:
         return None
 
@@ -500,21 +557,26 @@ def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.
     inst = installed_models(host)
     if inst is None:
         return desired_tag, None
-    if desired_tag and desired_tag in inst:
-        return desired_tag, None
+    exact = _installed_match(desired_tag, inst)
+    if exact:
+        return exact, None
     free = free_gb if free_gb is not None else detect_free_memory_gb()
     usable = (free * _SAFETY) if free is not None else None
 
     lad = LADDERS.get(role_name) if role_name else None
     if lad:
         for m, need in lad:
-            if m in inst and (usable is None or need <= usable):
-                return m, "선택 모델 미설치 → 설치된 " + m + " 자동 사용"
+            hit = _installed_match(m, inst)
+            if hit and (usable is None or need <= usable):
+                return hit, "선택 모델 미설치 → 설치된 " + hit + " 자동 사용"
         for m, _n in lad:
-            if m in inst:
-                return m, "선택 모델 미설치 → 설치된 " + m + " 사용(메모리 빠듯)"
+            hit = _installed_match(m, inst)
+            if hit:
+                return hit, "선택 모델 미설치 → 설치된 " + hit + " 사용(메모리 빠듯)"
 
-    allc = [(need, m) for _ln, _l in LADDERS.items() for m, need in _l if m in inst]
+    allc = [(need, _installed_match(m, inst))
+            for _ln, _l in LADDERS.items() for m, need in _l
+            if _installed_match(m, inst)]
     fit = [(n, m) for n, m in allc if usable is None or n <= usable]
     pool = fit if fit else allc
     if pool:

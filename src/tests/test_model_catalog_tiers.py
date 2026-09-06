@@ -11,6 +11,7 @@ import unittest
 
 from installer.steps import model as installer_model
 from launcher.models import model_catalog as catalog
+from launcher.models import model_classes as classes
 from launcher.models import model_roles as roles
 
 
@@ -260,6 +261,23 @@ class MemoryAwareInstallTests(unittest.TestCase):
                 self.assertTrue(picked & {tag for tag, _ in ladder},
                                 "여유 %.0fGB 에서 %s 역할이 받을 모델이 없다" % (free, role))
 
+    def test_a_covered_role_is_upgraded_when_the_fallback_is_a_class_below(self):
+        """CORE 가 그 역할을 '덮고' 있어도, 덮은 모델이 이 PC 에서 돌아가는
+        최선보다 한참 작으면 최선을 받아야 한다.
+
+        여유 12GB 에서 무검열은 14B(9GB) 를 돌릴 수 있는데, CORE 에 8B(5GB) 가
+        있다는 이유로 그걸로 때우고 있었다. 번역 품질이 체급 하나만큼 깎인다.
+        """
+        picked = self._picked(12.0)
+        self.assertIn("huihui_ai/qwen3-abliterated:14b", picked)
+
+    def test_a_near_equal_fallback_is_not_upgraded(self):
+        # 여유 20GB 의 무검열: 최선 26b-qat(18GB) 과 CORE 의 ARA(15GB) 는
+        # 같은 급이라 18GB 를 더 받지 않는다.
+        picked = self._picked(20.0)
+        self.assertIn("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S", picked)
+        self.assertNotIn("huihui_ai/gemma-4-abliterated:26b-qat", picked)
+
     def test_undetected_memory_falls_back_to_the_static_flags(self):
         self.assertEqual(catalog.recommended_for(None),
                          {e.tag for e in catalog.all_entries() if e.recommended})
@@ -295,6 +313,115 @@ class EndToEndCoverageTests(unittest.TestCase):
                 chosen = roles.resolve_ladder(role, free)
                 self.assertLessEqual(catalog.memory_gb(chosen), free * catalog._SAFETY,
                                      "여유 %.0fGB / %s -> %s" % (free, role, chosen))
+
+
+class GroupTaxonomyTests(unittest.TestCase):
+    """용도 그룹은 사다리·역할·화면 세 곳에 같은 이름으로 있어야 한다.
+
+    예전에는 "context" 역할이 CLASSES 에 빠져 있어서, 사다리도 있고 모델도
+    깔리는데 화면에는 그 그룹이 아예 안 나왔다. 사용자는 그 모델이 왜 깔렸는지
+    알 수 없었다.
+    """
+
+    def test_ladders_roles_and_screen_groups_are_the_same_set(self):
+        ladder_names = set(roles.TIERS)
+        role_names = {r.name for r in roles.ROLES}
+        screen_names = {key for key, _title, _desc in classes.CLASSES}
+        self.assertEqual(ladder_names, role_names)
+        self.assertEqual(ladder_names, screen_names)
+
+    def test_every_group_is_titled_and_described(self):
+        for key, title, desc in classes.CLASSES:
+            self.assertTrue(title.strip(), key)
+            self.assertTrue(desc.strip(), key)
+
+    def test_the_purpose_groups_the_user_asked_for_all_exist(self):
+        for key in ("uncensored", "coding", "agent", "office"):
+            self.assertIn(key, roles.TIERS)
+
+    def test_a_renamed_group_still_accepts_its_old_registry_key(self):
+        # user_data/models/registry.json 에 "context" 를 적어 둔 사용자가
+        # 조용히 무시당하면 안 된다.
+        self.assertEqual(roles.ROLE_ALIASES.get("context"), "office")
+
+
+class GroupDepthTests(unittest.TestCase):
+    """그룹마다 메모리 구간이 끊기지 않아야 한다.
+
+    무검열 그룹은 15GB 다음이 곧바로 5GB 라, 여유 8~14GB 인 PC 는 번역 같은
+    무검열 작업을 8b 로밖에 못 했다. 사다리에 큰 구멍이 없는지 본다.
+    """
+
+    MAX_STEP_RATIO = 2.2   # 한 칸 내려갈 때 메모리가 이보다 더 급격히 줄면 구멍
+
+    def test_no_group_has_a_hole_in_its_size_ladder(self):
+        for name, tier_list in roles.TIERS.items():
+            steps = [catalog.memory_gb(t["primary"]) for t in tier_list]
+            for upper, lower in zip(steps, steps[1:]):
+                self.assertLessEqual(
+                    upper / lower, self.MAX_STEP_RATIO,
+                    "%s 사다리에 %.1fGB -> %.1fGB 구멍이 있다" % (name, upper, lower))
+
+    def test_every_group_reaches_both_ends_of_the_hardware_range(self):
+        for name, tier_list in roles.TIERS.items():
+            steps = [catalog.memory_gb(t["primary"]) for t in tier_list]
+            self.assertGreaterEqual(max(steps), 14.0, "%s 에 상위 단계가 없다" % name)
+            self.assertLessEqual(min(steps), 7.0, "%s 에 저사양 단계가 없다" % name)
+
+
+class UncensoredGroupTests(unittest.TestCase):
+    def test_the_group_is_actually_uncensored(self):
+        # 이 그룹의 모든 후보는 abliteration/무검열 계열이어야 한다. 검열 모델이
+        # 섞이면 "무검열" 을 골랐는데 거부당하는 일이 생긴다.
+        for tag, _need in roles.LADDERS["uncensored"]:
+            self.assertTrue(
+                "abliterated" in tag.lower(),
+                "무검열 사다리에 검열 모델 %s 가 있다" % tag)
+
+    def test_it_does_not_need_tool_calling(self):
+        # 번역·창작이 목적이라 도구 호출은 요구하지 않는다. 대신 도구 역할에는
+        # 못 들어간다는 것이 ToolCallingTests 로 보장된다.
+        self.assertTrue(roles.LADDERS["uncensored"])
+
+
+class OfficeGroupTests(unittest.TestCase):
+    def test_it_can_read_scanned_documents(self):
+        # 사무 보조의 핵심은 스캔본·스크린샷 읽기다. 비전이 되는 후보가 각
+        # 메모리 구간에 있어야 한다.
+        table = catalog.by_tag()
+        seeing = [tag for tag, _need in roles.LADDERS["office"] if table[tag].vision]
+        self.assertTrue(seeing)
+        self.assertLessEqual(min(table[t].memory_gb for t in seeing), 7.0,
+                             "저사양에서 문서 이미지를 볼 수 있는 모델이 없다")
+
+    def test_it_prefers_long_context(self):
+        table = catalog.by_tag()
+        for tag, _need in roles.LADDERS["office"]:
+            self.assertGreaterEqual(table[tag].ctx_k, 32, tag)
+
+
+class InstalledMatchingTests(unittest.TestCase):
+    """벤더 태그는 대소문자가 섞여 있다. 그대로 비교하면 멀쩡히 깔린 18GB 짜리를
+    '미설치' 로 보고 다시 받는다."""
+
+    MIXED = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"
+
+    def test_case_differences_do_not_hide_an_installed_model(self):
+        self.assertTrue(catalog.is_installed(self.MIXED, {self.MIXED.lower()}))
+        self.assertTrue(catalog.is_installed(self.MIXED, {self.MIXED.upper()}))
+
+    def test_canonicalize_rewrites_to_the_catalog_spelling(self):
+        got = catalog.canonicalize_installed({self.MIXED.lower()})
+        self.assertEqual(got, {self.MIXED})
+
+    def test_models_outside_the_catalog_are_left_alone(self):
+        self.assertEqual(catalog.canonicalize_installed({"MyOwn:Tag"}), {"MyOwn:Tag"})
+
+    def test_the_ladder_finds_a_differently_cased_install(self):
+        real = roles.installed_models
+        self.addCleanup(setattr, roles, "installed_models", real)
+        roles.installed_models = lambda *a, **kw: {self.MIXED.lower()}
+        self.assertEqual(roles.resolve_ladder("uncensored", 64.0), self.MIXED)
 
 
 if __name__ == "__main__":

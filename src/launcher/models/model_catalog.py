@@ -106,11 +106,36 @@ ADVANCED: List[CatalogEntry] = [
                  "e4b 정식 태그(비-QAT). 상주 ~5GB.",
                  run_gb=5.0, ctx_k=128, vision=True,
                  group="advanced", recommended=False),
-    # ── 무검열 상위 ──
+    # ── 무검열 그룹 (번역·창작·검열 없는 범용) ──
+    #  CORE 의 ARA 는 "거부율 최저" 로 뽑힌 특수 abliteration 이고, 아래는 크기별
+    #  사다리를 메우는 축이다. 예전에는 15GB 와 5GB 사이가 통째로 비어 있어서,
+    #  여유 8~14GB 인 PC 는 무검열 작업을 8b 로밖에 못 했다.
+    CatalogEntry("huihui_ai/gemma-4-abliterated:26b-qat",
+                 "무검열 1순위 (Gemma 4 QAT abliterated)", 18.0,
+                 "무검열 + QAT — 검열만 제거하고 양자화 내성은 유지한 26B-A4B. "
+                 "멀티모달·256K·툴콜. 무검열 상단에서 형식이 가장 덜 깨진다.",
+                 run_gb=18.0, ctx_k=256, vision=True,
+                 group="advanced", recommended=False),
+    CatalogEntry("huihui_ai/Qwen3.6-abliterated:27b",
+                 "무검열 번역·다국어 (Qwen3.6)", 17.0,
+                 "무검열 Qwen3.6 27B — Qwen 계열이 한·중·일 토크나이즈가 가장 좋아 "
+                 "번역·다국어 작업의 무검열 상단으로 적합. 256K·멀티모달.",
+                 run_gb=17.0, ctx_k=256, vision=True,
+                 group="advanced", recommended=False),
     CatalogEntry("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q5_K_M",
                  "Gemma ARA 최고품질 (여유 21GB+)", 19.0,
                  "동일 ARA 모델의 Q5 — 품질 최대. 여유 21GB 이상에서만 걸린다.",
                  run_gb=19.0, ctx_k=256, vision=True,
+                 group="advanced", recommended=False),
+    CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
+                 "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
+                 "여유 10~15GB 구간의 번역·범용 주력.",
+                 run_gb=9.0, ctx_k=40,
+                 group="advanced", recommended=False),
+    CatalogEntry("huihui_ai/gemma-4-abliterated:12b", "무검열 경량 (멀티모달)", 7.6,
+                 "무검열 12B — 이미지 입력·256K 를 유지한 채 검열만 뺀다. "
+                 "저사양에서 문서/이미지까지 다뤄야 할 때.",
+                 run_gb=7.6, ctx_k=256, vision=True,
                  group="advanced", recommended=False),
     # ── 코딩 ──
     CatalogEntry("qwen3-coder:30b", "코딩 MoE (속도 우선)", 18.0,
@@ -130,6 +155,18 @@ ADVANCED: List[CatalogEntry] = [
     CatalogEntry("qwen2.5-coder:14b", "코딩 중간", 9.0,
                  "코딩 중간 롤백 — 10GB 급에서 코드블록·도구 호출이 안정적이라고 실측된 단계.",
                  run_gb=9.0, ctx_k=32,
+                 group="advanced", recommended=False),
+    # ── 사무·문서 (스캔 문서·스크린샷 읽기) ──
+    #  한국어 스캔본·표·스크린샷을 읽어야 하는 사무 작업용. Gemma 4 도 이미지를
+    #  보지만, CJK 문자 OCR 은 Qwen3-VL 이 확실히 낫다.
+    CatalogEntry("qwen3-vl:8b", "문서 OCR·이미지 (한국어)", 6.1,
+                 "Qwen3-VL 8B — 한·중·일 문자 OCR 과 손글씨까지. 스캔 PDF·"
+                 "스크린샷에서 표와 텍스트를 뽑을 때. 256K.",
+                 run_gb=6.1, ctx_k=256, vision=True,
+                 group="advanced", recommended=False),
+    CatalogEntry("qwen3-vl:32b", "문서 OCR 상위 (여유 23GB+)", 21.0,
+                 "같은 계열 32B — 복잡한 표·저품질 스캔까지. 여유가 넉넉할 때만.",
+                 run_gb=21.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False),
     # ── 범용/추론 ──
     CatalogEntry("gpt-oss:20b", "에이전트·추론 (MoE)", 14.0,
@@ -222,6 +259,12 @@ _SAFETY = 0.92
 # '가장 좋은' 단계를 받아 둔다 — 여기서 한 단계 밀리면 체감이 바로 나빠진다.
 PRIORITY_ROLES = ("coding", "agent")
 
+# 나머지 역할은 CORE 로 "덮이면" 두지만, 덮은 모델이 이 PC 에서 돌아가는 최선보다
+# 이 비율 이상 작으면 한 체급 아래가 아니라 '급이 다른' 것으로 보고 최선을 받는다.
+# 예: 여유 12GB 에서 무검열이 14B(9GB) 를 돌릴 수 있는데 CORE 의 8B(5GB) 로
+#     때우던 상황 — 9/5 = 1.8 이라 이제 14B 를 받는다.
+_UPGRADE_RATIO = 1.5
+
 
 def recommended_for(free_gb: Optional[float],
                     ladders: Optional[Dict[str, Sequence[Tuple[str, float]]]] = None,
@@ -262,9 +305,15 @@ def recommended_for(free_gb: Optional[float],
         fitting = [tag for tag, _need in rungs if fits(tag)]
         if not fitting:
             continue
-        covered = any(tag in picked for tag in fitting)
+        best = fitting[0]
+        covered = [tag for tag in fitting if tag in picked]
         if role in PRIORITY_ROLES or not covered:
-            picked.add(fitting[0])
+            picked.add(best)
+            continue
+        # 덮여 있긴 한데 급이 너무 낮으면 올려 준다.
+        biggest_covered = max(table[t].memory_gb for t in covered)
+        if table[best].memory_gb / biggest_covered >= _UPGRADE_RATIO:
+            picked.add(best)
 
     if not picked:
         # 무엇도 안 맞는 초저사양 — 그래도 손에 뭔가는 쥐여 준다.
@@ -272,6 +321,39 @@ def recommended_for(free_gb: Optional[float],
         if lightest:
             picked.add(lightest.tag)
     return picked
+
+
+# ── 설치 여부 대조 ────────────────────────────────────────────────
+#  카탈로그에는 대소문자가 섞인 벤더 태그가 있다
+#  (prutser/...:Q4_K_S, huihui_ai/Qwen3.6-abliterated:27b).
+#  Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하면 "미설치" 로 보고
+#  18GB 짜리를 다시 받는다. 대조는 항상 이 함수를 거친다.
+def find_installed(tag: str, installed) -> Optional[str]:
+    """installed 안에서 tag 와 같은 모델을 찾아 '설치된 실제 이름'을 돌려준다."""
+    if not tag or not installed:
+        return None
+    if tag in installed:
+        return tag
+    wanted = tag.lower()
+    for name in installed:
+        if str(name).lower() == wanted:
+            return name
+    return None
+
+
+def is_installed(tag: str, installed) -> bool:
+    return find_installed(tag, installed) is not None
+
+
+def canonicalize_installed(installed) -> Set[str]:
+    """설치 목록을 카탈로그 표기로 정규화한다.
+
+    Ollama 가 돌려준 이름이 카탈로그 태그와 대소문자만 다르면 카탈로그 쪽 철자로
+    바꿔 담는다. 그래야 이후의 평범한 `tag in installed` 비교가 전부 맞는다.
+    카탈로그에 없는 이름은 그대로 둔다(사용자가 직접 받은 모델).
+    """
+    known = {t.lower(): t for t in catalog_tags()}
+    return {known.get(str(name).lower(), str(name)) for name in (installed or ())}
 
 
 def download_gb(tags) -> float:
@@ -284,4 +366,5 @@ __all__ = [
     "CatalogEntry", "CORE", "ADVANCED", "REPLACED", "MARKER",
     "all_entries", "chat_entries", "by_tag", "core_tags", "catalog_tags",
     "memory_gb", "install_pairs", "replaced_tags", "recommended_for", "download_gb",
+    "find_installed", "is_installed", "canonicalize_installed", "PRIORITY_ROLES",
 ]

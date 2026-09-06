@@ -126,9 +126,19 @@ def _installed(exe: Path, env: dict) -> set:
             tok = line.split()
             if tok:
                 names.add(tok[0])
-        return names
+        return _canonical(names)
     except Exception:
         return set()
+
+
+def _canonical(names: set) -> set:
+    """설치 목록을 카탈로그 표기로 맞춘다. 대소문자만 달라도 '미설치'로 보고
+    18GB 짜리를 다시 받는 일을 막는다."""
+    try:
+        from launcher.models import model_catalog as _cat  # type: ignore
+        return _cat.canonicalize_installed(names)
+    except Exception:
+        return set(names)
 
 
 def download(paths: Dict[str, Path]) -> Optional[List[str]]:
