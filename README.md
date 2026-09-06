@@ -281,6 +281,33 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 내려갑니다. 디스크 사전 검사의 하한은 '하' 등급만 받았을 때 기준이고, 권장 세트가
 안 들어가면 중단이 아니라 경고만 합니다.
 
+### 목록을 직접 찍어 보기
+
+문서에 표를 베껴 두면 카탈로그와 갈라집니다. 목록이 필요하면 항상 이걸 찍으세요.
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+python -m launcher.models            # 지금 여유 메모리 기준 전체 후보군
+python -m launcher.models --plan     # 기본 설치 세트(3단계)만
+python -m launcher.models --free 12  # 여유 12GB 를 가정
+```
+
+### 배선 검증
+
+`src/tests/test_model_pipeline_e2e.py` 가 가짜 `ollama.exe` 로 진짜 저장소
+레이아웃(내용 해시 blob + OCI manifest)을 만들어 놓고 사슬 전체를 한 번에 지납니다.
+
+```text
+3단계 계획 -> installer.steps.model.download() -> OLLAMA_MODELS 경로에 pull
+           -> blobs/ + manifests/ 생성 -> MODEL_FILES.csv 로 파일↔모델 복원
+           -> model_roles 가 '설치된 것' 을 읽어 역할별 결정
+           -> AgentConfig.model -> Open Interpreter 스레드 파라미터
+```
+
+조각마다 단위 테스트가 있어도 서로 **다른 경로**를 보고 있으면 전부 통과하면서
+프로그램은 "모델이 없다" 고 합니다. 그래서 설치기와 런처가 같은 `OLLAMA_MODELS`
+를 쓰는지, 고른 태그가 실제 실행 파라미터까지 실리는지를 함께 확인합니다.
+
 `CORE` 는 손으로 관리하지 않습니다. `_CORE_TAGS` 한 곳에서 정하고
 `CORE`/`ADVANCED` 가 거기서 파생되며, 테스트가 `CORE == plan_by_level()` 을
 확인합니다.
