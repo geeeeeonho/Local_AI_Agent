@@ -74,6 +74,8 @@ class CatalogEntry:
     ctx_k: int = 0            # 컨텍스트 창(K 토큰), 0 = 미상
     tools: bool = True        # 함수/도구 호출 지원
     vision: bool = False      # 이미지 입력
+    uncensored: bool = False  # abliteration/무검열 파인튜닝 계열
+    note: str = ""            # 후보군에서 이 모델의 성격 (한 줄)
     kind: str = "chat"        # "chat" | "embed"
     group: str = "core"       # "core"(기본) | "advanced"(선택)
     recommended: bool = True  # 정적 기본 체크(메모리 감지 실패 시 폴백)
@@ -91,21 +93,26 @@ _ALL: List[CatalogEntry] = [
                  "무검열·범용·에이전트 (Gemma ARA)", 15.0,
                  "메인 — Gemma 4 26B-A4B ARA abliterated. 공개 abliteration 중 최저 거부율(7.7%)·"
                  "최고 품질(4.6/5). MoE 활성 ~4B 라 26B 급인데도 빠르다.",
-                 run_gb=15.0, ctx_k=256, vision=True),
+                 run_gb=15.0, ctx_k=256, vision=True,
+                 uncensored=True, note="거부율 최저"),
     CatalogEntry("qwen3.6:27b", "코딩 에이전트 (Open Interpreter)", 18.0,
                  "코딩 1순위 — dense 27B, SWE-bench Verified 77.2. 로컬에서 도구 호출이 가장 "
                  "안정적인 Qwen3 계열이고 Ollama OpenAI 호환 엔드포인트에서 검증됐다.",
-                 run_gb=18.0, ctx_k=256, vision=True),
+                 run_gb=18.0, ctx_k=256, vision=True,
+                 note="품질 최고"),
     CatalogEntry("gemma4:12b", "맥락/범용 + Gemma 폴백", 7.6,
                  "맥락·범용 + 에이전트 안전 폴백. Gemma 4 12B dense, 256K·멀티모달·함수호출.",
-                 run_gb=7.6, ctx_k=256, vision=True),
+                 run_gb=7.6, ctx_k=256, vision=True,
+                 note="역할 공유"),
     CatalogEntry("qwen2.5-coder:7b", "코딩 폴백", 4.7,
                  "안전 롤백 — 메모리 부족 시 코딩. 도구 호출 지원.",
-                 run_gb=4.7, ctx_k=32),
+                 run_gb=4.7, ctx_k=32,
+                 note="가장 가벼움"),
     CatalogEntry("huihui_ai/qwen3-abliterated:8b", "무검열 경량 폴백", 5.0,
                  "안전 롤백 — 무검열 경량(젬마 ARA가 안 뜰 때). 코드블록 형식 준수가 약해 "
                  "코드 실행 역할에는 쓰지 않는다.",
-                 run_gb=5.0, ctx_k=32),
+                 run_gb=5.0, ctx_k=32,
+                 uncensored=True, note="가장 가벼움"),
     # ── 에이전트/범용 (Gemma 4) ──
     # QAT = 학습 중 4비트를 시뮬레이션한 체크포인트. 사후 반올림(PTQ)보다 양자화
     # 손상이 훨씬 적어 툴콜·코드블록 형식 준수가 안정적이다. Gemma 4 는 τ2-bench
@@ -114,24 +121,29 @@ _ALL: List[CatalogEntry] = [
                  "에이전트 최상단 — 26B-A4B QAT. MoE 활성 ~4B 라 도구 왕복이 많은 "
                  "에이전트 루프에서 dense 27B급보다 훨씬 빠르다.",
                  run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="형식 안정"),
     CatalogEntry("gemma4:26b", "Gemma 정식 26B (검열)", 18.0,
                  "정식 26B-A4B MoE — 템플릿/툴콜 보장(검열 있음). 범용·맥락 1순위.",
                  run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="이미지·툴콜"),
     CatalogEntry("gemma4:12b-it-qat", "저사양 에이전트/범용 (QAT)", 8.9,
                  "여유 10GB 안팎 구간. 12B QAT — 저압축에서도 형식 준수 유지.",
                  run_gb=8.9, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="형식 안정"),
     CatalogEntry("gemma4:e4b-it-qat", "최저사양 폴백 (QAT)", 9.6,
                  "최저사양 마지막 단계. 다운로드는 9.6GB 지만 활성 파라미터만 올려 "
                  "상주는 ~5GB 다. 도구 호출·비전 내장.",
                  run_gb=5.0, ctx_k=128, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="이미지·툴콜"),
     CatalogEntry("gemma4:e4b", "Gemma 초경량 폴백", 9.6,
                  "e4b 정식 태그(비-QAT). 상주 ~5GB.",
                  run_gb=5.0, ctx_k=128, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="비-QAT 원본"),
     # ── 무검열 그룹 (번역·창작·검열 없는 범용) ──
     #  CORE 의 ARA 는 "거부율 최저" 로 뽑힌 특수 abliteration 이고, 아래는 크기별
     #  사다리를 메우는 축이다. 예전에는 15GB 와 5GB 사이가 통째로 비어 있어서,
@@ -141,38 +153,69 @@ _ALL: List[CatalogEntry] = [
                  "무검열 + QAT — 검열만 제거하고 양자화 내성은 유지한 26B-A4B. "
                  "멀티모달·256K·툴콜. 무검열 상단에서 형식이 가장 덜 깨진다.",
                  run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 uncensored=True, note="형식 안정"),
     CatalogEntry("huihui_ai/Qwen3.6-abliterated:27b",
                  "무검열 번역·다국어 (Qwen3.6)", 17.0,
                  "무검열 Qwen3.6 27B — Qwen 계열이 한·중·일 토크나이즈가 가장 좋아 "
                  "번역·다국어 작업의 무검열 상단으로 적합. 256K·멀티모달.",
                  run_gb=17.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 uncensored=True, note="번역·다국어"),
     CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
                  "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
                  "여유 10~15GB 구간의 번역·범용 주력.",
                  run_gb=9.0, ctx_k=40,
+                 group="advanced", recommended=False,
+                 uncensored=True, note="다국어"),
+    CatalogEntry("huihui_ai/qwen3-vl-abliterated:8b", "무검열 + 이미지", 6.1,
+                 "무검열 Qwen3-VL 8B — 이미지 속 글자를 검열 없이 읽고 옮긴다. "
+                 "스캔본·스크린샷 번역용. 256K.",
+                 run_gb=6.1, ctx_k=256, vision=True, uncensored=True, note="이미지",
+                 group="advanced", recommended=False),
+    CatalogEntry("dolphin3:8b", "무검열 경량 (파인튜닝)", 5.0,
+                 "Dolphin 3.0 (Llama 3.1 8B) — 가중치를 깎는 abliteration 이 아니라 "
+                 "무검열 데이터로 재학습한 쪽. 함수 호출·수학까지 무난. 128K.",
+                 run_gb=5.0, ctx_k=128, uncensored=True, note="파인튜닝계",
+                 group="advanced", recommended=False),
+    CatalogEntry("mannix/llama3.1-8b-abliterated:q5_K_M", "무검열 경량 (Llama)", 5.7,
+                 "Llama 3.1 8B abliterated — Ollama 에서 가장 많이 받은 abliterated Llama. "
+                 "Qwen 이 안 맞을 때의 다른 계열 선택지.",
+                 run_gb=5.7, ctx_k=128, uncensored=True, note="다른 계열",
                  group="advanced", recommended=False),
     CatalogEntry("huihui_ai/gemma-4-abliterated:12b", "무검열 경량 (멀티모달)", 7.6,
                  "무검열 12B — 이미지 입력·256K 를 유지한 채 검열만 뺀다. "
                  "저사양에서 문서/이미지까지 다뤄야 할 때.",
                  run_gb=7.6, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 uncensored=True, note="이미지"),
     # ── 코딩 ──
     CatalogEntry("qwen3-coder:30b", "코딩 MoE (속도 우선)", 18.0,
                  "30B-A3B MoE(활성 ~3B) — qwen3.6:27b 보다 품질은 조금 낮지만 훨씬 빠르다. "
                  "긴 에이전트 루프를 자주 돌린다면 이쪽.",
                  run_gb=18.0, ctx_k=256,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="속도 우선"),
     CatalogEntry("devstral-small-2:24b", "에이전트 코딩 특화 (16GB급)", 15.0,
                  "다중파일·디버깅 루프·툴콜링(Apache). 384K 컨텍스트. 18GB 급이 안 뜨는 "
                  "구간의 코딩 1순위.",
                  run_gb=15.0, ctx_k=384, vision=True,
+                 group="advanced", recommended=False,
+                 note="에이전트 코딩"),
+    CatalogEntry("qwen3:14b", "범용+코딩 중간", 9.3,
+                 "Qwen3 14B — 대화·코드 도움·리팩터링의 중간 지점. 네이티브 도구 호출.",
+                 run_gb=9.3, ctx_k=40, note="범용 겸용",
+                 group="advanced", recommended=False),
+    CatalogEntry("qwen3:8b", "경량 코딩 (검열본)", 5.2,
+                 "Qwen3 8B — 7/8B 급에서 HumanEval 최고. 같은 체급의 abliterated 판은 "
+                 "코드블록 형식이 깨진다고 실측돼, 코드 실행에는 이 검열본을 쓴다.",
+                 run_gb=5.2, ctx_k=40, note="형식 안정",
                  group="advanced", recommended=False),
     CatalogEntry("qwen2.5-coder:14b", "코딩 중간", 9.0,
                  "코딩 중간 롤백 — 10GB 급에서 코드블록·도구 호출이 안정적이라고 실측된 단계.",
                  run_gb=9.0, ctx_k=32,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="코딩 안정"),
     # ── 사무·문서 (스캔 문서·스크린샷 읽기) ──
     #  한국어 스캔본·표·스크린샷을 읽어야 하는 사무 작업용. Gemma 4 도 이미지를
     #  보지만, CJK 문자 OCR 은 Qwen3-VL 이 확실히 낫다.
@@ -180,18 +223,21 @@ _ALL: List[CatalogEntry] = [
                  "Qwen3-VL 8B — 한·중·일 문자 OCR 과 손글씨까지. 스캔 PDF·"
                  "스크린샷에서 표와 텍스트를 뽑을 때. 256K.",
                  run_gb=6.1, ctx_k=256, vision=True,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="이미지 OCR"),
     # ── 범용/추론 ──
     CatalogEntry("gpt-oss:20b", "에이전트·추론 (MoE)", 14.0,
                  "OpenAI 오픈(Apache) 21B-A3.6B MoE — 에이전트 작업 겨냥 설계라 도구 호출이 "
                  "깔끔하고 안정적. 추론 강도 low/medium/high 조절 가능.",
                  run_gb=14.0, ctx_k=128,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="추론 강도 조절"),
     CatalogEntry("exaone3.5:7.8b", "한국어 특화 경량", 4.8,
                  "LG EXAONE 3.5 — 한·영 이중언어. 저사양에서 한국어 품질이 필요할 때. "
                  "도구 호출은 기대하지 말 것.",
                  run_gb=4.8, ctx_k=32, tools=False,
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="한국어"),
     # ── RAG 임베더 (역할 사다리가 아님) ──
     # AnythingLLM 기본 임베더는 컨테이너 내장(native) 이라 최초 1회 HuggingFace 에서
     # 받는다. 오프라인이거나 한국어 검색 품질이 아쉬우면 아래를 받고
@@ -199,11 +245,13 @@ _ALL: List[CatalogEntry] = [
     CatalogEntry("bge-m3:567m", "RAG 임베더 (한국어·다국어)", 1.2,
                  "100개 이상 언어·8K 컨텍스트 하이브리드 검색. 한국어 문서 RAG 에 권장.",
                  run_gb=1.5, ctx_k=8, tools=False, kind="embed",
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="한국어 RAG"),
     CatalogEntry("nomic-embed-text:v1.5", "RAG 임베더 (경량 기본)", 0.3,
                  "가장 가벼운 로컬 임베더(768차원). 영문 위주면 이걸로 충분하다.",
                  run_gb=0.5, ctx_k=8, tools=False, kind="embed",
-                 group="advanced", recommended=False),
+                 group="advanced", recommended=False,
+                 note="가장 가벼움"),
 ]
 
 # 3단계(상/중/하) × 역할의 '기본단계' 전부. plan_by_level() 결과와 같아야 하고
@@ -240,7 +288,6 @@ CORE, ADVANCED = _split(_ALL)
 REPLACED: List[str] = [
     "gemma-agent-fixed:Q3_K_M",
     "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M",  # Q4_K_S 로 대체
-    "qwen3:8b",
     "devstral-small:24b",     # Ollama 라이브러리에 없던 이름 — devstral-small-2:24b 로 정정
     "deepseek-coder-v2:16b",  # qwen2.5-coder:14b 와 같은 구간, 세대만 더 오래됨
     "qwen2.5:14b",            # gemma4:12b / gpt-oss:20b 로 대체

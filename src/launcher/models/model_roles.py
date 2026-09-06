@@ -204,9 +204,13 @@ TIERS = {
         {"need": 15.0, "primary": "devstral-small-2:24b",
          "alts": ["qwen3.6:27b",        # 유휴 시 — SWE-bench 77.2
                   "qwen3-coder:30b",    # 유휴 시 — MoE, 훨씬 빠름
-                  "gpt-oss:20b"]},
-        {"need": 9.0, "primary": "qwen2.5-coder:14b", "alts": []},
-        {"need": 4.7, "primary": "qwen2.5-coder:7b", "alts": []},
+                  "gpt-oss:20b"]},      # 추론 강도 조절
+        {"need": 9.0, "primary": "qwen2.5-coder:14b",
+         "alts": ["qwen3:14b",          # 코딩+대화 겸용
+                  "gemma4:12b"]},       # 다른 역할과 공유 (추가 디스크 0)
+        {"need": 4.7, "primary": "qwen2.5-coder:7b",
+         "alts": ["qwen3:8b",           # 7/8B 급 HumanEval 최고
+                  "gemma4:e4b-it-qat"]},
     ],
     "agent": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
@@ -214,31 +218,38 @@ TIERS = {
                   "gemma4:26b",
                   "gpt-oss:20b"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["gemma4:12b-it-qat", "gemma4:12b"]},
+         "alts": ["gemma4:12b-it-qat", "gemma4:12b", "qwen3:14b"]},
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["gemma4:e4b", "qwen2.5-coder:7b"]},
+         "alts": ["gemma4:e4b", "qwen2.5-coder:7b", "qwen3:8b"]},
     ],
     "uncensored": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
          "alts": ["huihui_ai/gemma-4-abliterated:26b-qat",
                   "huihui_ai/Qwen3.6-abliterated:27b"]},   # 번역·다국어 축
         {"need": 9.0, "primary": "huihui_ai/qwen3-abliterated:14b",
-         "alts": ["huihui_ai/gemma-4-abliterated:12b"]},
-        {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
+         "alts": ["huihui_ai/gemma-4-abliterated:12b",
+                  "huihui_ai/qwen3-vl-abliterated:8b"]},   # 이미지 속 글자 번역
+        {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b",
+         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M",        # 다른 계열
+                  "dolphin3:8b"]},                          # 파인튜닝계
     ],
     "office": [
         {"need": 14.0, "primary": "gpt-oss:20b",
-         "alts": ["gemma4:26b"]},                          # 이미지가 필요할 때
+         "alts": ["gemma4:26b",         # 이미지가 필요할 때
+                  "qwen3.6:27b"]},      # 긴 문서 + 이미지
         {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["gemma4:12b-it-qat", "qwen3-vl:8b"]},    # CJK 스캔본 OCR
+         "alts": ["gemma4:12b-it-qat",
+                  "qwen3-vl:8b"]},      # CJK 스캔본 OCR
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
+         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},        # 한국어
     ],
     "balanced": [
-        {"need": 14.0, "primary": "gpt-oss:20b", "alts": ["gemma4:26b"]},
-        {"need": 7.6, "primary": "gemma4:12b", "alts": ["gemma4:12b-it-qat"]},
+        {"need": 14.0, "primary": "gpt-oss:20b",
+         "alts": ["gemma4:26b", "qwen3.6:27b"]},
+        {"need": 7.6, "primary": "gemma4:12b",
+         "alts": ["gemma4:12b-it-qat", "qwen3:14b"]},
         {"need": 5.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},
+         "alts": ["gemma4:e4b", "exaone3.5:7.8b", "qwen3:8b"]},
     ],
 }
 

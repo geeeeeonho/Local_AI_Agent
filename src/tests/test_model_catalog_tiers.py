@@ -394,17 +394,23 @@ class GroupDepthTests(unittest.TestCase):
 
 class UncensoredGroupTests(unittest.TestCase):
     def test_the_group_is_actually_uncensored(self):
-        # 이 그룹의 모든 후보는 abliteration/무검열 계열이어야 한다. 검열 모델이
-        # 섞이면 "무검열" 을 골랐는데 거부당하는 일이 생긴다.
+        # 이 그룹의 모든 후보는 무검열 계열이어야 한다. 검열 모델이 섞이면
+        # "무검열" 을 골랐는데 거부당하는 일이 생긴다.
+        # 이름으로 판단하지 않는다 — abliteration(가중치 편집) 말고 무검열
+        # 데이터로 재학습한 dolphin 계열도 있어서, 태그에 "abliterated" 가
+        # 없다는 이유로 걸러지면 안 된다.
+        table = catalog.by_tag()
         for tag, _need in roles.LADDERS["uncensored"]:
-            self.assertTrue(
-                "abliterated" in tag.lower(),
-                "무검열 사다리에 검열 모델 %s 가 있다" % tag)
+            self.assertTrue(table[tag].uncensored,
+                            "무검열 사다리에 검열 모델 %s 가 있다" % tag)
 
-    def test_it_does_not_need_tool_calling(self):
-        # 번역·창작이 목적이라 도구 호출은 요구하지 않는다. 대신 도구 역할에는
-        # 못 들어간다는 것이 ToolCallingTests 로 보장된다.
-        self.assertTrue(roles.LADDERS["uncensored"])
+    def test_uncensored_models_do_not_leak_into_other_groups_by_accident(self):
+        # 무검열 모델을 다른 그룹에 쓰는 것 자체는 가능하지만(ARA 는 에이전트
+        # 상단이기도 하다), 그건 의도된 선택이어야 한다. 여기서는 최소한
+        # 무검열 그룹이 무검열 전용인지만 확인한다.
+        table = catalog.by_tag()
+        uncensored_here = {t for t, _ in roles.LADDERS["uncensored"]}
+        self.assertTrue(all(table[t].uncensored for t in uncensored_here))
 
 
 class OfficeGroupTests(unittest.TestCase):
@@ -445,6 +451,44 @@ class InstalledMatchingTests(unittest.TestCase):
         self.addCleanup(setattr, roles, "installed_models", real)
         roles.installed_models = lambda *a, **kw: {self.MIXED.lower()}
         self.assertEqual(roles.resolve_ladder("uncensored", 64.0), self.MIXED)
+
+
+class CandidatePoolTests(unittest.TestCase):
+    """등급마다 후보가 여럿이어야 한다.
+
+    같은 메모리 등급 안에서도 무엇을 중시하느냐가 다르다(속도 / 품질 / 무검열 /
+    이미지). 후보가 하나뿐이면 그게 안 맞을 때 곧바로 한 등급 아래로 떨어진다 —
+    메모리는 남는데 품질만 깎이는 낭비다.
+    """
+
+    MIN_CANDIDATES = 3
+
+    def test_every_level_offers_several_candidates(self):
+        thin = []
+        for name, tier_list in roles.TIERS.items():
+            for tier in tier_list:
+                n = 1 + len(tier.get("alts", []))
+                if n < self.MIN_CANDIDATES:
+                    thin.append("%s/%s(%d개)" % (name, tier["primary"], n))
+        self.assertEqual(thin, [], "후보가 %d개 미만인 등급: %s"
+                         % (self.MIN_CANDIDATES, thin))
+
+    def test_candidates_in_a_level_are_distinct(self):
+        for name, tier_list in roles.TIERS.items():
+            for tier in tier_list:
+                members = [tier["primary"]] + list(tier.get("alts", []))
+                self.assertEqual(len(members), len(set(members)),
+                                 "%s 등급에 같은 후보가 두 번: %s" % (name, members))
+
+    def test_every_candidate_explains_what_it_is_for(self):
+        # 후보가 여럿이면 "왜 이걸 고르나" 가 보여야 고를 수 있다.
+        for entry in catalog.all_entries():
+            self.assertTrue(entry.note.strip(),
+                            "%s 에 성격 라벨(note)이 없다" % entry.tag)
+
+    def test_notes_are_short_enough_to_sit_in_a_table(self):
+        for entry in catalog.all_entries():
+            self.assertLessEqual(len(entry.note), 12, entry.tag)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,20 @@ def _texts(ko: bool) -> dict:
     }
 
 
+def _level_tag(tag) -> str:
+    """'[상] 성격' 라벨. 같은 등급 안에서 무엇이 다른지 한눈에 보이게 한다."""
+    try:
+        from launcher.models import model_catalog as _cat
+        entry = _cat.by_tag().get(tag)
+        key = _cat.level_of(tag)
+        if not entry or not key:
+            return ""
+        label = "[%s]" % _cat.level_label(key)
+        return (label + " " + entry.note) if entry.note else label
+    except Exception:
+        return ""
+
+
 def _default_checked(entries, budget_gb):
     """기본 체크 집합 = 메모리 예산 안의 3단계 기본단계."""
     try:
@@ -158,7 +172,11 @@ def select_models(entries, installed, lang: str = "ko",
         card.pack(fill="x", pady=4)
         pad = tk.Frame(card, bg=_CARD)
         pad.pack(fill="x", padx=12, pady=8)
-        line = tag + "   ·   " + role + "   ·   ~" + format(size, ".1f") + "GB"
+        line = tag + "   ·   " + role
+        lvl = _level_tag(tag)
+        if lvl:
+            line += "   ·   " + lvl
+        line += "   ·   ~" + format(size, ".1f") + "GB"
         if done:
             line += "   [" + T["installed"] + "]"
         cb = tk.Checkbutton(

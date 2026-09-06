@@ -87,9 +87,10 @@ def _download_flow(env, p) -> None:
         sizes = "~" + format(e.size_gb, ".1f") + "GB 받기"
         if abs(e.memory_gb - e.size_gb) >= 0.2:
             sizes += " / " + format(e.memory_gb, ".1f") + "GB 적재"
+        note = ("  ·  " + e.note) if e.note else ""
         opts.append(Option(
             id=e.tag,
-            label=e.tag + "  ·  " + e.role + grp + "  ·  " + sizes + tail,
+            label=e.tag + "  ·  " + e.role + grp + note + "  ·  " + sizes + tail,
             default=(done or e.tag in wanted),
             description=e.desc,
             locked=done,
