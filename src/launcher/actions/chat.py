@@ -25,35 +25,53 @@ def _select_network_mode(p: Presenter) -> str | None:
             return None
         return network_policy.set_mode(forced).value
 
+    items = [
+        MenuItem("warp", "WARP 경유 (빠름, 권장)"),
+        MenuItem("tor", "Tor 경유 (최고 익명, 느림)"),
+        MenuItem("direct", "직접 연결 (호스트 IP 노출)"),
+        MenuItem("block", "차단 (로컬 채팅/RAG만 사용)"),
+    ]
     choice = p.show_menu(
-        [
-            MenuItem("warp", "WARP 경유 (빠름, 권장)"),
-            MenuItem("tor", "Tor 경유 (최고 익명, 느림)"),
-            MenuItem("direct", "직접 연결 (호스트 IP 노출)"),
-            MenuItem("block", "차단 (로컬 채팅/RAG만 사용)"),
-        ],
-        "AnythingLLM 인터넷 모드",
+        title="AnythingLLM 인터넷 모드",
+        subtitle="공용 웹 트래픽 경로를 선택하세요. Block은 로컬 채팅/RAG만 허용합니다.",
+        items=items,
+        last_choice=network_policy.current_mode().value,
     )
-    if not choice:
+    if choice not in {mode.value for mode in network_policy.NetworkMode}:
         return None
     return network_policy.set_mode(str(choice)).value
 
 
 def _ensure_ollama(env: Path, p: Presenter) -> bool:
-    ollama = OllamaService(env)
-    if ollama.is_running():
-        return True
-    p.info("Ollama 시작 중...")
-    if ollama.start() and ollama.wait_ready(timeout=60):
-        return True
-    p.error("Ollama 시작 실패")
-    return False
+    """Reuse/start only the project-managed Ollama with the shared model store."""
+    return bool(OllamaService(env, logger=p).ensure_running())
+
+
+def _ensure_docker(p: Presenter) -> bool:
+    """Ensure Docker Desktop is usable, preserving the existing auto-start UX."""
+    from ..services.docker import DockerService
+
+    cancel_check = p.is_cancelled if hasattr(p, "is_cancelled") else None
+    return bool(
+        DockerService.ensure_daemon(
+            logger=p,
+            timeout=90,
+            cancel_check=cancel_check,
+        )
+    )
+
+
+def _keep_chat_running() -> bool:
+    """Honor the current setting and the pre-transition AnythingLLM name."""
+    truthy = {"1", "true", "yes", "on"}
+    current = os.environ.get("LOCAL_AI_KEEP_CHAT", "").strip().lower()
+    legacy = os.environ.get("LOCAL_AI_ANYTHINGLLM_KEEP", "").strip().lower()
+    return current in truthy or legacy in truthy
 
 
 def run(env: Path, p: Presenter):
     from .. import anythingllm_runtime as runtime
     from .. import config, network_policy
-    from ..services.docker import DockerService
 
     mode = _select_network_mode(p)
     if not mode:
@@ -62,15 +80,14 @@ def run(env: Path, p: Presenter):
     p.section("AnythingLLM 채팅/RAG")
     p.info("인터넷 모드: " + network_policy.display_label(mode))
 
-    keep = os.environ.get("LOCAL_AI_KEEP_CHAT", "0") == "1"
+    keep = _keep_chat_running()
     started_searxng = False
     try:
         if not _ensure_ollama(env, p):
             return
 
-        docker = DockerService()
-        if not docker.is_running():
-            p.error("Docker Desktop이 실행 중이 아닙니다. Docker를 시작한 뒤 다시 시도하세요.")
+        if not _ensure_docker(p):
+            p.error("Docker Desktop을 준비할 수 없습니다. 상태를 확인한 뒤 다시 시도하세요.")
             return
 
         if not runtime.image_exists():
@@ -121,7 +138,7 @@ def run(env: Path, p: Presenter):
             p.error("AnythingLLM 시작 실패")
             return
 
-        p.success("AnythingLLM 준비 완료: " + runtime.URL)
+        p.ok("AnythingLLM 준비 완료: " + runtime.URL)
         p.info("처음 실행이면 브라우저에서 관리자 계정/워크스페이스를 생성하세요.")
         try:
             webbrowser.open(runtime.URL)
