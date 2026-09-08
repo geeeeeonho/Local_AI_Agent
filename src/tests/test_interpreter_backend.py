@@ -96,7 +96,7 @@ def test_start_uses_managed_app_server_and_exact_thread_policy(tmp_path, monkeyp
     config = _config(tmp_path / "work")
     config.workspace.mkdir()
 
-    assert backend._thread_sandbox_mode(config) == "workspace-write"
+    assert backend._thread_sandbox_mode(config) is None
     assert backend.start(config) is True
     client = made[0]
     assert client.command[-2:] == ["--listen", "stdio://"]
@@ -121,7 +121,7 @@ def test_start_uses_managed_app_server_and_exact_thread_policy(tmp_path, monkeyp
     assert params["cwd"] == str(config.workspace.resolve())
     assert params["approvalPolicy"] == "on-request"
     assert params["approvalsReviewer"] == "user"
-    assert params["sandbox"] == "workspace-write"
+    assert params["sandbox"] is None
     assert params["serviceName"] == "Local_AI_Agent"
     assert params["developerInstructions"].startswith("You are the coding profile.")
     assert "개인정보 보호" in params["developerInstructions"]
