@@ -1,8 +1,8 @@
 """Canonical product network policy for Local_AI_Agent.
 
-This module owns the *meaning* of the four user-visible network modes. Runtime
-modules own mechanics such as starting Docker containers, but they must not
-re-interpret WARP/Tor/Direct/Block on their own.
+This module owns the meaning of the four user-visible network modes. Runtime
+modules own service-specific health checks, while generic Docker CLI mechanics
+are delegated to :class:`launcher.services.docker.DockerService`.
 
 Host and container endpoints are deliberately separate. WARP in particular
 uses a Host-published HTTP bridge on 127.0.0.1:8119 while containers reach the
@@ -11,7 +11,6 @@ same bridge as llm_httpbridge:8118.
 from __future__ import annotations
 
 import os
-import subprocess
 from enum import Enum
 from typing import Callable
 
@@ -97,15 +96,6 @@ def block_network_name() -> str:
     return str(getattr(_config(), "BLOCK_NETWORK", "llm_block_net") or "llm_block_net")
 
 
-def _docker_run(args, timeout=20):
-    return subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-
-
 def ensure_block_network(run=None, log: Callable[[str], None] | None = None) -> bool:
     """Ensure Block mode uses an externally isolated Docker bridge.
 
@@ -113,13 +103,12 @@ def ensure_block_network(run=None, log: Callable[[str], None] | None = None) -> 
     reports both ``Internal=true`` and ``Driver=bridge``. Unsafe properties are
     never mutated in place or silently replaced: startup callers can therefore
     fail closed instead of accidentally joining a routable network.
+
+    ``run`` remains an injection seam for contract tests/diagnostics. Production
+    calls use the canonical :class:`DockerService` network primitives.
     """
-    runner = run or _docker_run
     name = block_network_name()
-    inspect_cmd = [
-        "docker", "network", "inspect", "--format",
-        "{{.Internal}}|{{.Driver}}", name,
-    ]
+    format_string = "{{.Internal}}|{{.Driver}}"
 
     def _say(message: str) -> None:
         if log is None:
@@ -130,16 +119,46 @@ def ensure_block_network(run=None, log: Callable[[str], None] | None = None) -> 
             pass
 
     try:
-        inspected = runner(inspect_cmd, timeout=20)
-        if getattr(inspected, "returncode", 1) != 0:
-            created = runner(
-                ["docker", "network", "create", "--driver", "bridge", "--internal", name],
-                timeout=30,
+        if run is not None:
+            inspect_cmd = [
+                "docker", "network", "inspect", "--format", format_string, name,
+            ]
+            inspected = run(inspect_cmd, timeout=20)
+            if getattr(inspected, "returncode", 1) != 0:
+                created = run(
+                    [
+                        "docker", "network", "create", "--driver", "bridge",
+                        "--internal", name,
+                    ],
+                    timeout=30,
+                )
+                if getattr(created, "returncode", 1) != 0:
+                    _say("Block 네트워크 생성 실패: " + name)
+                    return False
+                inspected = run(inspect_cmd, timeout=20)
+        else:
+            from .services.docker import DockerService
+
+            inspected = DockerService.network_inspect(
+                name,
+                format=format_string,
+                timeout=20,
             )
-            if getattr(created, "returncode", 1) != 0:
-                _say("Block 네트워크 생성 실패: " + name)
-                return False
-            inspected = runner(inspect_cmd, timeout=20)
+            if getattr(inspected, "returncode", 1) != 0:
+                created = DockerService.network_create(
+                    name,
+                    driver="bridge",
+                    internal=True,
+                    timeout=30,
+                )
+                if getattr(created, "returncode", 1) != 0:
+                    _say("Block 네트워크 생성 실패: " + name)
+                    return False
+                inspected = DockerService.network_inspect(
+                    name,
+                    format=format_string,
+                    timeout=20,
+                )
 
         if getattr(inspected, "returncode", 1) != 0:
             _say("Block 네트워크 검사 실패: " + name)
