@@ -168,10 +168,15 @@ def _run_install(args) -> int:
     else:
         utils.warn("Model download skipped (--skip-model)")
 
-    python_tools.install_anythingllm(paths, profile)
-    components.append("anythingllm")
-    python_tools.install_open_interpreter(paths, profile)
-    components.append("open_interpreter")
+    if python_tools.install_anythingllm(paths, profile):
+        components.append("anythingllm")
+    else:
+        utils.warn("AnythingLLM 설치가 완료되지 않았습니다. SETUP.bat에서 다시 시도할 수 있습니다.")
+
+    if python_tools.install_open_interpreter(paths, profile):
+        components.append("open_interpreter")
+    else:
+        utils.warn("Open Interpreter 설치가 완료되지 않았습니다. SETUP.bat에서 다시 시도할 수 있습니다.")
 
     if not args.skip_sandbox:
         try:
