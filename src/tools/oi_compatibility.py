@@ -29,6 +29,7 @@ REQUIRED_CHECKS = (
     "approval_reject",
     "turn_interrupt",
     "mcp_local_search",
+    "fetch_page",
     "warp_environment",
     "tor_environment",
     "direct_mode",

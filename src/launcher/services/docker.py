@@ -1,23 +1,22 @@
-"""services.docker — Docker 데몬 / 이미지 / 컨테이너 헬퍼.
+"""services.docker — Docker CLI 공통 primitive와 데몬/이미지/컨테이너 헬퍼.
 
-이전: launcher/handlers.py 의 _check_docker_image,
-     launcher/searxng_runtime.py 의 image_exists/container_exists
-     installer/sandbox.py 의 _check_docker
-중복을 통합. 단일 진입점.
+일반적인 Docker 명령 실행 방법은 이 모듈이 소유한다. 각 서비스의 의미 있는
+health check(WARP/Tor handshake, AnythingLLM/SearXNG readiness, OI sandbox
+version validation)는 각 runtime이 계속 소유한다.
 
-중요: 모든 subprocess 호출은 Windows 에서 CREATE_NO_WINDOW 플래그 사용.
-      pythonw.exe 로 실행될 때 콘솔 창이 깜빡 뜨는 문제 차단.
+중요: 모든 Docker subprocess 호출은 Windows 에서 CREATE_NO_WINDOW 플래그를
+사용해 pythonw.exe GUI 실행 중 콘솔 창이 깜빡이지 않게 한다.
 """
 from __future__ import annotations
 
 import os
 import subprocess
-from typing import Optional
+from pathlib import Path
+from typing import Iterable, Mapping, Optional
 
 from .. import config
 
 
-# Windows 에서 subprocess 가 콘솔 창을 띄우지 않게 하는 플래그
 _NO_WINDOW_KW: dict = {}
 if os.name == "nt":
     _NO_WINDOW_KW["creationflags"] = config.WIN_CREATE_NO_WINDOW
@@ -28,138 +27,202 @@ class DockerError(Exception):
 
 
 class DockerService:
-    """Docker 명령 wrapper. 모든 메서드는 예외 대신 bool/Optional 반환.
+    """Canonical Docker CLI boundary used by launcher/installer code."""
 
-    pythonw.exe (콘솔 없는 GUI 모드) 에서도 콘솔 깜빡임 없이 동작.
-    """
+    @staticmethod
+    def run(
+        args: Iterable[object],
+        *,
+        timeout: float = 25,
+        capture_output: bool = True,
+        text: bool = True,
+        check: bool = False,
+        **kwargs,
+    ) -> Optional[subprocess.CompletedProcess]:
+        """Run one Docker command and return ``None`` on CLI/timeout failures.
 
-    # ── 데몬 ──
+        ``args`` normally excludes the leading ``docker`` token. Supplying it is
+        also accepted so migration callers can delegate without rebuilding a
+        command list first.
+        """
+        command = [str(part) for part in args]
+        if not command or command[0].lower() != "docker":
+            command.insert(0, "docker")
+
+        options = dict(_NO_WINDOW_KW)
+        options.update(kwargs)
+        options.setdefault("timeout", timeout)
+        options.setdefault("capture_output", capture_output)
+        options.setdefault("text", text)
+        options.setdefault("check", check)
+        try:
+            return subprocess.run(command, **options)
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    # ── generic primitives ──────────────────────────────────────────
+    @staticmethod
+    def inspect(
+        target: str,
+        *,
+        format: str | None = None,
+        timeout: float = 20,
+    ) -> Optional[subprocess.CompletedProcess]:
+        args = ["inspect"]
+        if format:
+            args += ["--format", format]
+        args.append(str(target))
+        return DockerService.run(args, timeout=timeout)
+
+    @staticmethod
+    def build_image(
+        tag: str,
+        context: os.PathLike | str,
+        *,
+        dockerfile: os.PathLike | str | None = None,
+        build_args: Mapping[str, object] | None = None,
+        timeout: float = 1200,
+        capture_output: bool = False,
+    ) -> Optional[subprocess.CompletedProcess]:
+        args = ["build", "-t", str(tag)]
+        if dockerfile is not None:
+            args += ["-f", str(Path(dockerfile))]
+        for key, value in sorted((build_args or {}).items()):
+            args += ["--build-arg", f"{key}={value}"]
+        args.append(str(Path(context)))
+        return DockerService.run(
+            args,
+            timeout=timeout,
+            capture_output=capture_output,
+            text=True,
+        )
+
+    @staticmethod
+    def network_inspect(
+        name: str,
+        *,
+        format: str | None = None,
+        timeout: float = 20,
+    ) -> Optional[subprocess.CompletedProcess]:
+        args = ["network", "inspect"]
+        if format:
+            args += ["--format", format]
+        args.append(str(name))
+        return DockerService.run(args, timeout=timeout)
+
+    @staticmethod
+    def network_create(
+        name: str,
+        *,
+        driver: str = "bridge",
+        internal: bool = False,
+        timeout: float = 30,
+    ) -> Optional[subprocess.CompletedProcess]:
+        args = ["network", "create", "--driver", str(driver)]
+        if internal:
+            args.append("--internal")
+        args.append(str(name))
+        return DockerService.run(args, timeout=timeout)
+
+    @staticmethod
+    def network_connect(
+        network: str,
+        container: str,
+        *,
+        timeout: float = 20,
+    ) -> Optional[subprocess.CompletedProcess]:
+        return DockerService.run(
+            ["network", "connect", str(network), str(container)],
+            timeout=timeout,
+        )
+
+    # ── daemon ─────────────────────────────────────────────────────
     @staticmethod
     def daemon_alive() -> bool:
-        try:
-            subprocess.run(
-                ["docker", "info"],
-                capture_output=True, check=True,
-                timeout=config.DOCKER_PROBE_TIMEOUT,
-                **_NO_WINDOW_KW,
-            )
-            return True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                FileNotFoundError):
-            return False
+        result = DockerService.run(
+            ["info"],
+            timeout=config.DOCKER_PROBE_TIMEOUT,
+            check=True,
+        )
+        return bool(result and result.returncode == 0)
 
-    # ── 이미지 ──
+    # ── image ──────────────────────────────────────────────────────
     @staticmethod
     def image_exists(image: str) -> bool:
-        try:
-            subprocess.run(
-                ["docker", "image", "inspect", image],
-                capture_output=True, check=True,
-                timeout=config.DOCKER_PROBE_TIMEOUT,
-                **_NO_WINDOW_KW,
-            )
-            return True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                FileNotFoundError):
-            return False
+        result = DockerService.run(
+            ["image", "inspect", image],
+            timeout=config.DOCKER_PROBE_TIMEOUT,
+            check=True,
+        )
+        return bool(result and result.returncode == 0)
 
     @staticmethod
     def pull_image(image: str) -> bool:
-        # pull 은 진행률 출력이 필요해 콘솔 차단 X (사용자가 명시적 호출)
-        try:
-            subprocess.run(["docker", "pull", image], check=True)
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
+        result = DockerService.run(
+            ["pull", image],
+            timeout=1200,
+            capture_output=False,
+            text=True,
+            check=True,
+        )
+        return bool(result and result.returncode == 0)
 
-    # ── 컨테이너 ──
+    # ── container ──────────────────────────────────────────────────
     @staticmethod
     def container_exists(name: str) -> bool:
-        try:
-            r = subprocess.run(
-                ["docker", "ps", "-a", "--filter", f"name=^{name}$",
-                 "--format", "{{.Names}}"],
-                capture_output=True, text=True,
-                timeout=config.DOCKER_PROBE_TIMEOUT, check=True,
-                **_NO_WINDOW_KW,
-            )
-            return name in r.stdout.split()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                FileNotFoundError):
-            return False
+        result = DockerService.run(
+            ["ps", "-a", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
+            timeout=config.DOCKER_PROBE_TIMEOUT,
+            check=True,
+        )
+        return bool(result and name in (result.stdout or "").split())
 
     @staticmethod
     def container_running(name: str) -> bool:
-        try:
-            r = subprocess.run(
-                ["docker", "ps", "--filter", f"name=^{name}$",
-                 "--format", "{{.Names}}"],
-                capture_output=True, text=True,
-                timeout=config.DOCKER_PROBE_TIMEOUT, check=True,
-                **_NO_WINDOW_KW,
-            )
-            return name in r.stdout.split()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                FileNotFoundError):
-            return False
+        result = DockerService.run(
+            ["ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
+            timeout=config.DOCKER_PROBE_TIMEOUT,
+            check=True,
+        )
+        return bool(result and name in (result.stdout or "").split())
 
     @staticmethod
     def container_logs(name: str, tail: int = 50) -> str:
-        try:
-            r = subprocess.run(
-                ["docker", "logs", "--tail", str(tail), name],
-                capture_output=True, text=True, timeout=5,
-                **_NO_WINDOW_KW,
-            )
-            return (r.stdout or "") + (r.stderr or "")
-        except Exception as e:
-            return f"<로그 가져오기 실패: {e}>"
+        result = DockerService.run(
+            ["logs", "--tail", str(tail), name],
+            timeout=5,
+        )
+        if result is None:
+            return "<로그 가져오기 실패>"
+        return (result.stdout or "") + (result.stderr or "")
 
     @staticmethod
     def stop_container(name: str, timeout: int = 5) -> bool:
-        try:
-            subprocess.run(
-                ["docker", "stop", "-t", str(timeout), name],
-                capture_output=True, timeout=timeout + 5,
-                **_NO_WINDOW_KW,
-            )
-            return True
-        except Exception:
-            return False
+        result = DockerService.run(
+            ["stop", "-t", str(timeout), name],
+            timeout=timeout + 5,
+        )
+        return bool(result and result.returncode == 0)
 
     @staticmethod
     def remove_container(name: str, force: bool = True) -> bool:
-        cmd = ["docker", "rm"]
+        args = ["rm"]
         if force:
-            cmd.append("-f")
-        cmd.append(name)
-        try:
-            subprocess.run(
-                cmd, capture_output=True, timeout=10,
-                **_NO_WINDOW_KW,
-            )
-            return True
-        except Exception:
-            return False
+            args.append("-f")
+        args.append(name)
+        result = DockerService.run(args, timeout=10)
+        return bool(result and result.returncode == 0)
 
-    # ── Docker Desktop 자동 시작 (Windows 전용) ──
+    # ── Docker Desktop 자동 시작 (Windows 전용) ──────────────────
     @staticmethod
     def find_desktop_executable() -> Optional[str]:
-        """Docker Desktop 실행 파일 경로 탐색 (Windows).
-
-        반환:
-          str: 찾은 경우 절대 경로
-          None: 못 찾음
-        """
         if os.name != "nt":
             return None
 
-        # 표준 설치 경로 우선 탐색
         candidates = [
             r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
             r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
         ]
-        # 사용자별 설치
         user_profile = os.environ.get("USERPROFILE", "")
         if user_profile:
             candidates.append(
@@ -168,7 +231,6 @@ class DockerService:
                     r"AppData\Local\Programs\Docker\Docker\Docker Desktop.exe",
                 )
             )
-        # 환경변수 ProgramFiles
         for env_key in ("ProgramFiles", "ProgramFiles(x86)"):
             pf = os.environ.get(env_key)
             if pf:
@@ -176,7 +238,6 @@ class DockerService:
                     os.path.join(pf, "Docker", "Docker", "Docker Desktop.exe")
                 )
 
-        # 중복 제거하면서 순서 유지
         seen = set()
         for path in candidates:
             if path in seen:
@@ -188,12 +249,6 @@ class DockerService:
 
     @staticmethod
     def start_desktop() -> bool:
-        """Docker Desktop 시작 시도 (Windows).
-
-        반환:
-          True:  실행 명령은 성공 (데몬 응답까지는 별도 대기 필요)
-          False: 실행 파일 없음 또는 실패
-        """
         if os.name != "nt":
             return False
 
@@ -202,7 +257,6 @@ class DockerService:
             return False
 
         try:
-            # Docker Desktop 은 GUI 앱이므로 Popen 으로 띄우고 즉시 리턴
             subprocess.Popen(
                 [exe],
                 creationflags=config.WIN_CREATE_NO_WINDOW,
@@ -218,18 +272,8 @@ class DockerService:
         poll_interval: float = 1.5,
         cancel_check: Optional[callable] = None,
     ) -> bool:
-        """Docker 데몬이 응답할 때까지 폴링.
-
-        Args:
-          timeout: 최대 대기 시간 (초)
-          poll_interval: 폴링 간격 (초)
-          cancel_check: callable() -> bool. True 반환하면 즉시 중단.
-
-        반환:
-          True:  데몬 응답함
-          False: timeout 초과 또는 cancel_check 가 True 반환
-        """
         import time
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             if cancel_check and cancel_check():
@@ -241,21 +285,10 @@ class DockerService:
 
     @staticmethod
     def ensure_daemon(
-        logger=None, timeout: int = 60,
+        logger=None,
+        timeout: int = 60,
         cancel_check: Optional[callable] = None,
     ) -> bool:
-        """Docker 데몬이 응답하지 않으면 Docker Desktop 자동 시작 후 대기.
-
-        Args:
-          logger: Presenter 또는 호환 객체 (info/ok/warn/error 메서드)
-          timeout: 시작 후 응답까지 대기 시간
-          cancel_check: 취소 체크 콜백
-
-        반환:
-          True:  데몬 응답함 (이미 떠있었거나 시작 후 응답)
-          False: 시작 실패 또는 timeout
-        """
-        # 이미 살아있으면 바로 OK
         if DockerService.daemon_alive():
             return True
 
@@ -282,17 +315,18 @@ class DockerService:
             logger.info(f"Docker 데몬 응답 대기 중 (최대 {timeout}초)...")
 
         ok = DockerService.wait_until_alive(
-            timeout=timeout, cancel_check=cancel_check,
+            timeout=timeout,
+            cancel_check=cancel_check,
         )
         if ok:
             if logger:
                 logger.ok("Docker 데몬 응답 확인됨")
             return True
-        else:
-            if logger:
-                if cancel_check and cancel_check():
-                    logger.warn("Docker 시작 대기를 사용자가 취소함")
-                else:
-                    logger.error(f"Docker 응답 시간 초과 ({timeout}초)")
-                    logger.warn("Docker Desktop 이 정상 시작되지 않았을 수 있습니다")
-            return False
+
+        if logger:
+            if cancel_check and cancel_check():
+                logger.warn("Docker 시작 대기를 사용자가 취소함")
+            else:
+                logger.error(f"Docker 응답 시간 초과 ({timeout}초)")
+                logger.warn("Docker Desktop 이 정상 시작되지 않았을 수 있습니다")
+        return False
