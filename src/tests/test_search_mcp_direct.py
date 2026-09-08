@@ -105,3 +105,22 @@ def test_direct_redirect_secret_is_blocked_before_second_connection(monkeypatch)
     assert result["isError"] is True
     assert "secret" in result["content"][0]["text"].lower()
     assert calls == ["https://example.com/start"]
+
+
+def test_percent_encoded_secret_name_is_blocked_before_dns_or_http(monkeypatch):
+    monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "direct")
+    monkeypatch.setattr(
+        web_safety.LocalResolver,
+        "resolve",
+        lambda *args, **kwargs: pytest.fail("privacy preflight must run before DNS"),
+    )
+    monkeypatch.setattr(
+        search_mcp.web_safety,
+        "direct_request",
+        lambda *args, **kwargs: pytest.fail("privacy preflight must run before HTTP"),
+    )
+
+    result = _call("https://example.com/?%61ccess_token=redacted-test-token-value")
+
+    assert result["isError"] is True
+    assert "secret" in result["content"][0]["text"].lower()
