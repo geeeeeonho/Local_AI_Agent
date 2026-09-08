@@ -53,12 +53,17 @@ def test_structured_sandbox_does_not_relax_outer_docker_security():
         assert forbidden not in source
 
 
-def test_danger_full_access_is_confined_to_structured_sandbox_module():
+def test_open_interpreter_execution_policy_is_centralized():
+    policy_source = _source("launcher/agent/execution_policy.py")
     host_source = _source("launcher/agent/interpreter_backend.py")
     sandbox_source = _source("launcher/agent/sandbox_backend.py")
-    assert 'return "workspace-write"' in host_source
-    assert "danger-full-access" not in host_source
-    assert 'return "danger-full-access"' in sandbox_source
+    assert 'sandbox_mode="workspace-write"' in policy_source
+    assert 'sandbox_mode="danger-full-access"' in policy_source
+    assert 'approval_policy="on-request"' in policy_source
+    assert 'approvals_reviewer="user"' in policy_source
+    assert '"workspace-write"' not in host_source
+    assert '"on-request"' not in host_source
+    assert '"danger-full-access"' not in sandbox_source
 
 
 def _source_files():
