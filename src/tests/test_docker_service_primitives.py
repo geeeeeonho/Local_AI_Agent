@@ -78,3 +78,17 @@ def test_network_policy_default_docker_path_uses_docker_service():
     assert "DockerService.network_inspect" in text
     assert "DockerService.network_create" in text
     assert "subprocess.run(" not in text
+
+
+def test_docker_maintenance_uses_common_cli_boundary():
+    source = Path(__file__).resolve().parents[1] / "launcher" / "core" / "docker_maint.py"
+    text = source.read_text(encoding="utf-8")
+    assert "DockerService.run" in text
+    assert "subprocess.run(" not in text
+
+
+def test_console_image_build_uses_common_build_primitive():
+    source = Path(__file__).resolve().parents[1] / "launcher" / "actions" / "docker_image.py"
+    text = source.read_text(encoding="utf-8")
+    assert "DockerService.build_image" in text
+    assert "subprocess.run(cmd" not in text
