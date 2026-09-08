@@ -29,8 +29,7 @@ class SettingsStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (old_agent / "user_config.json").write_text(
-                json.dumps({"logging_enabled": False}),
-                encoding="utf-8",
+                json.dumps({"logging_enabled": False}), encoding="utf-8"
             )
 
             cfg = settings_store.load(root)
@@ -159,7 +158,40 @@ class RepositoryStructureTests(unittest.TestCase):
 
     def test_patch_redefinitions_are_flattened(self):
         self.assertEqual(self._function_count("src/launcher/app.py", "_build_menu_items"), 1)
-        self.assertEqual(self._function_count("src/installer/steps/python_tools.py", "install_open_webui"), 1)
+        self.assertEqual(self._function_count("src/installer/steps/python_tools.py", "install_open_webui"), 0)
+
+    def test_open_webui_has_no_active_installer_entrypoint(self):
+        python_tools = self._text("src/installer/steps/python_tools.py").lower()
+        installer_main = self._text("src/installer/__main__.py").lower()
+        self.assertNotIn("install_open_webui", python_tools)
+        self.assertNotIn("_install_open_webui", python_tools)
+        self.assertNotIn("open-webui.exe", python_tools)
+        self.assertNotIn("install_open_webui", installer_main)
+        self.assertNotIn('components.append("open_webui")', installer_main)
+        self.assertIn("install_anythingllm", installer_main)
+
+    def test_open_webui_has_no_active_launcher_switch(self):
+        chat = self._text("src/launcher/actions/chat.py").lower()
+        app = self._text("src/launcher/app.py").lower()
+        self.assertNotIn("local_ai_chat_engine", chat)
+        self.assertNotIn("openwebui", chat)
+        self.assertNotIn("open webui", chat)
+        self.assertNotIn("openwebui", app)
+        self.assertNotIn("open webui", app)
+
+    def test_installer_copy_describes_anythingllm_as_the_chat_service(self):
+        installer_init = self._text("src/installer/__init__.py")
+        i18n = self._text("src/installer/i18n.py")
+        self.assertNotIn("Open WebUI", installer_init)
+        self.assertNotIn("Open WebUI", i18n)
+        self.assertIn("AnythingLLM", installer_init)
+        self.assertIn("AnythingLLM", i18n)
+
+    def test_open_webui_identifiers_remain_only_as_explicit_legacy_cleanup(self):
+        maint = self._text("src/launcher/core/docker_maint.py")
+        self.assertIn("_LEGACY_OPENWEBUI_NAME_PATTERNS", maint)
+        self.assertIn("_LEGACY_OPENWEBUI_IMAGE_PATTERNS", maint)
+        self.assertNotIn('"llm_openwebui"', maint.split("_LEGACY_OPENWEBUI_NAME_PATTERNS", 1)[0])
 
     def test_agent_package_import_has_no_settings_side_effect(self):
         init_text = self._text("src/launcher/agent/__init__.py")
