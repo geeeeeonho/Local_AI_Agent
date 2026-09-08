@@ -12,18 +12,28 @@ def _source(relative: str) -> str:
 def test_agent_chat_uses_service_boundary_without_unified_agent_private_access():
     action = _source("launcher/actions/agent_chat.py")
     runtime = _source("launcher/agent/runtime_config.py")
+    coordinator = _source("launcher/agent/runtime_coordinator.py")
 
-    assert "AgentService" in action
-    assert "create_backend" in action
     assert "launcher.agent.setup_flow" in action
     assert "launcher.agent.runtime_config" in action
+    assert "launcher.agent.runtime_coordinator" in action
     assert "launcher.agent.chat_session_controller" in action
+    assert "AgentService(" not in action
+    assert "create_backend(" not in action
+    assert "AgentConfig(" not in action
+    assert "ProcessRuntimeSpec(" not in action
+    assert "AgentService(" in coordinator
+    assert "create_backend(" in coordinator
+    assert "AgentConfig(" in coordinator
+    assert "ProcessRuntimeSpec(" in coordinator
     assert "LegacyBackend()" not in action
     assert "UnifiedAgent" not in action
     assert "agent._proc" not in action
     assert "build_sandbox_docker_command" not in action
     assert "build_sandbox_docker_command" in runtime
     assert "build_host_pipe_cmd" not in action
+    assert "local-ai-host" in action
+    assert "workspace-write" not in action
 
 
 def test_structured_host_controls_belong_to_session_controller():

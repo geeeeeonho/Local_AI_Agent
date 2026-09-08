@@ -1,9 +1,9 @@
 """GUI entrypoint for the Open Interpreter automation agent.
 
-The action owns top-level setup and ChatPanel construction. Selection helpers,
-runtime construction and live session control are intentionally delegated to
-``launcher.agent.setup_flow``, ``launcher.agent.runtime_config`` and
-``launcher.agent.chat_session_controller``.
+The action owns setup choices, ChatPanel construction and UI-only callbacks.
+Runtime/service lifecycle belongs to ``launcher.agent.runtime_coordinator``;
+deterministic command construction stays in ``runtime_config`` and live
+slash/event routing stays in ``chat_session_controller``.
 """
 from __future__ import annotations
 
@@ -15,12 +15,10 @@ import threading
 from pathlib import Path
 
 import launcher.agent.runtime_config as runtime_config
+import launcher.agent.runtime_coordinator as runtime_coordinator
 import launcher.agent.setup_flow as setup_flow
 from launcher import config, network_policy
-from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
-from launcher.agent.backend_factory import create_backend
 from launcher.agent.chat_session_controller import ChatSessionController
-from launcher.agent.service import AgentService
 from launcher.presenter.base import Presenter, RISK_HIGH
 
 
@@ -66,7 +64,7 @@ def _confirm_host_mode(p: Presenter) -> bool:
             label="호스트 직접 모드 진입",
             description=(
                 "에이전트가 호스트 PC 의 파일·명령에 직접 접근합니다.\n"
-                "Open Interpreter workspace-write 정책과 사용자 승인이 적용되지만 "
+                "Open Interpreter local-ai-host 권한 프로필과 사용자 승인이 적용되지만 "
                 "컨테이너 격리는 없습니다."
             ),
             risk=RISK_HIGH,
@@ -125,18 +123,6 @@ def _select_setup(env: Path, p: Presenter):
     return profile, Path(workspace), mode, model_selection, selected_network
 
 
-def _ensure_ollama(env: Path, p: Presenter) -> bool:
-    try:
-        from launcher.services.ollama import OllamaService
-        if OllamaService(env, logger=p).ensure_running():
-            return True
-    except Exception as exc:
-        p.error("Ollama 확인 실패: " + str(exc))
-        return False
-    p.error("Ollama 서비스를 시작할 수 없습니다.")
-    return False
-
-
 def _match_installed_model(tag: str, p: Presenter) -> str | None:
     """Keep the existing model ladder, but ensure the selected tag is installed."""
     try:
@@ -164,81 +150,22 @@ def _match_installed_model(tag: str, p: Presenter) -> str | None:
         return tag
 
 
-def _docker_required(mode: str, selected: network_policy.NetworkMode) -> bool:
-    return mode == "sandbox" or selected in (
-        network_policy.NetworkMode.WARP,
-        network_policy.NetworkMode.TOR,
-    )
-
-
-def _prepare_runtime(env: Path, p: Presenter, mode: str, selected: network_policy.NetworkMode) -> bool:
-    if not _ensure_ollama(env, p):
-        return False
-
-    docker_ready = False
-    if _docker_required(mode, selected):
-        try:
-            from launcher.services.docker import DockerService
-            docker_ready = DockerService.ensure_daemon(logger=p, timeout=90)
-        except Exception:
-            docker_ready = False
-        if not docker_ready:
-            p.error("Docker Desktop을 준비할 수 없어 에이전트 시작을 중단합니다.")
-            return False
-    else:
-        try:
-            from launcher.services.docker import DockerService
-            docker_ready = DockerService.daemon_alive()
-        except Exception:
-            docker_ready = False
-
-    if selected is network_policy.NetworkMode.BLOCK:
-        if mode != "sandbox":
-            return False
-        if not network_policy.ensure_block_network(log=p.info):
-            p.error("Block internal network를 안전하게 준비하지 못했습니다.")
-            return False
-    elif selected in (network_policy.NetworkMode.WARP, network_policy.NetworkMode.TOR):
-        if not network_policy.prepare_runtime(selected, env_path=env, log=p.info):
-            p.error(network_policy.display_label(selected) + " 준비 실패 — 직접 연결로 우회하지 않습니다.")
-            return False
-
-    if selected is not network_policy.NetworkMode.BLOCK and docker_ready:
-        try:
-            from launcher import searxng_runtime
-            if not searxng_runtime.is_running():
-                p.info("로컬 검색엔진(SearXNG) 준비 중...")
-                if not searxng_runtime.start(env):
-                    p.warn("SearXNG를 시작하지 못했습니다. 검색 기능은 사용할 수 없을 수 있습니다.")
-        except Exception as exc:
-            p.warn("SearXNG 준비 생략: " + str(exc))
-    elif selected is not network_policy.NetworkMode.BLOCK:
-        p.warn("Docker가 실행 중이 아니어서 SearXNG 검색은 비활성 상태입니다.")
-
-    return True
-
-
 def _approval_description(event, workspace: Path) -> str:
     data = dict(event.data or {})
     reason = data.get("reason") or event.content or "승인이 필요합니다."
     if data.get("kind") == "command":
         command = data.get("command") or "(명령 정보 없음)"
         cwd = data.get("cwd") or str(workspace)
-        return "명령 실행 승인 요청\n\n명령: %s\n작업 폴더: %s\n사유: %s" % (command, cwd, reason)
-    changes = data.get("changes") or data.get("item") or "파일 변경"
-    return "파일 변경 승인 요청\n\n변경: %s\n사유: %s" % (str(changes)[:1200], reason)
-
-
-def _mount_signature():
-    try:
-        from launcher.agent import folder_policy
-        return (
-            tuple(folder_policy.mounts_for()),
-            tuple(folder_policy.tmpfs_masks_for()),
-            tuple(folder_policy.list_denied()),
+        return "명령 실행 승인 요청\n\n명령: %s\n작업 폴더: %s\n사유: %s" % (
+            command,
+            cwd,
+            reason,
         )
-    except Exception:
-        return ()
+    changes = data.get("changes") or data.get("item") or "파일 변경"
+    return "파일 변경 승인 요청\n\n변경: %s\n사유: %s" % (
+        str(changes)[:1200],
+        reason,
+    )
 
 
 def _launch_panel(
@@ -261,10 +188,18 @@ def _launch_panel(
         p.error("GUI 환경이 아닙니다.")
         return
 
-    service = AgentService(create_backend(mode, env))
-    model_holder = [str(model_tag)]
-    command_holder = [list(command)]
-    signature_holder = [_mount_signature()]
+    coordinator = runtime_coordinator.RuntimeCoordinator(
+        env=env,
+        profile=profile,
+        workspace=workspace,
+        mode=mode,
+        selected_network=selected_network,
+        model_tag=model_tag,
+        run_mem=run_mem,
+        run_cpus=run_cpus,
+        command=list(command),
+    )
+    service = coordinator.service
     panel_holder = {"panel": None}
     service_lock = threading.Lock()
 
@@ -292,90 +227,30 @@ def _launch_panel(
                 post("error", "%s 실패: %s" % (name, exc))
         threading.Thread(target=worker, daemon=True, name="agent-" + name).start()
 
-    def config_for_current() -> AgentConfig:
-        runtime_env = None
-        if mode == "host":
-            runtime_env = network_policy.host_proxy_env(selected_network)
-        return AgentConfig(
-            workspace=workspace,
-            mode=mode,
-            model=model_holder[0],
-            network_mode=selected_network.value,
-            profile_name=str(getattr(profile, "name", "agent")),
-            runtime_spec=ProcessRuntimeSpec(
-                command=tuple(str(part) for part in command_holder[0]),
-                env=runtime_env,
-                cwd=workspace if mode == "host" else None,
-            ),
-            instructions=str(getattr(profile, "system_message", "")),
-        )
-
-    def rebuild_sandbox_command() -> bool:
-        if mode != "sandbox":
-            return True
-        new_container = config.SANDBOX_CONTAINER_PREFIX + "chat_" + secrets.token_hex(4)
-        rebuilt, is_host = runtime_config.build_cmd_for_mode(
-            "sandbox",
-            env,
-            profile,
-            workspace,
-            new_container,
-            run_mem,
-            run_cpus,
-            model_tag=model_holder[0],
-        )
-        if rebuilt is None or is_host:
-            return False
-        command_holder[0] = list(rebuilt)
-        return True
-
-    def start_current() -> bool:
-        return bool(service.start(config_for_current()))
-
     def restart_model(tag: str) -> bool:
-        previous = model_holder[0]
-        service.stop(timeout=2.0)
-        model_holder[0] = str(tag)
-        if rebuild_sandbox_command() and start_current():
-            panel = panel_holder.get("panel")
-            if panel is not None and hasattr(panel, "set_current_model"):
-                ui(lambda: panel.set_current_model(model_holder[0]))
-            return True
-        model_holder[0] = previous
-        rebuild_sandbox_command()
-        start_current()
-        return False
+        if not coordinator.restart_model(tag):
+            return False
+        panel = panel_holder.get("panel")
+        if panel is not None and hasattr(panel, "set_current_model"):
+            ui(lambda: panel.set_current_model(coordinator.model_tag))
+        return True
 
     def reload_policy():
-        current = _mount_signature()
-        if current == signature_holder[0]:
-            return False
-        service.stop(timeout=2.0)
-        if not rebuild_sandbox_command() or not start_current():
-            return None
-        signature_holder[0] = current
-        panel = panel_holder.get("panel")
-        if panel is not None:
-            ui(lambda: panel.refresh_files(workspace))
-        return True
-
-    def restart_service() -> bool:
-        service.stop(timeout=2.0)
-        return bool(rebuild_sandbox_command() and start_current())
-
-    def new_session() -> bool:
-        service.stop(timeout=2.0)
-        return bool(rebuild_sandbox_command() and start_current())
+        result = coordinator.reload_policy()
+        if result is True:
+            panel = panel_holder.get("panel")
+            if panel is not None:
+                ui(lambda: panel.refresh_files(workspace))
+        return result
 
     def stop_service() -> None:
-        if mode == "host" and service.cancel():
+        result = coordinator.stop_service()
+        panel = panel_holder.get("panel")
+        if result == "cancelled":
             post("system", "현재 Host turn 중단 요청 완료")
-            panel = panel_holder.get("panel")
             if panel is not None:
                 ui(panel.enable_send)
             return
-        service.stop(timeout=2.0)
-        panel = panel_holder.get("panel")
         if panel is not None:
             ui(panel.disable_send)
 
@@ -402,8 +277,8 @@ def _launch_panel(
         dispatch=dispatch,
         restart_model=restart_model,
         reload_policy=reload_policy,
-        restart_service=restart_service,
-        new_session=new_session,
+        restart_service=coordinator.restart_service,
+        new_session=coordinator.new_session,
         stop_service=stop_service,
         approval_decider=approve,
         on_terminated=on_terminated,
@@ -437,7 +312,7 @@ def _launch_panel(
         )
         panel.refresh_files(workspace)
         if hasattr(panel, "set_current_model"):
-            panel.set_current_model(model_holder[0])
+            panel.set_current_model(coordinator.model_tag)
         panel.disable_send()
 
         def close_service() -> None:
@@ -480,12 +355,15 @@ def _launch_panel(
 
     post("system", "에이전트를 시작합니다... (프로필: " + str(profile_label) + ")")
     post("system", "[인터넷] " + net_label)
-    post("system", "명령: /session · /resume <thread-id> · /new · /model <태그> · /folders · /reload")
+    post(
+        "system",
+        "명령: /session · /resume <thread-id> · /new · /model <태그> · /folders · /reload",
+    )
     if mode == "host":
-        post("warn", "호스트 직접 모드 — Open Interpreter workspace-write + 사용자 승인 정책")
+        post("warn", "호스트 직접 모드 — Open Interpreter local-ai-host 권한 프로필 + 사용자 승인")
 
     def initial_start() -> None:
-        if start_current():
+        if coordinator.start_current():
             post("system", "Open Interpreter 세션 준비 완료")
             ui(panel.enable_send)
         else:
@@ -528,9 +406,12 @@ def run(env, p):
     profile, workspace, mode, model_selection, selected_network = selected
 
     model_tag = str(model_selection.get("tag") or config.MODEL_TAG)
-    p.info("에이전트 모델: " + model_tag + "  (" + str(model_selection.get("reason") or "선택") + ")")
+    p.info(
+        "에이전트 모델: " + model_tag
+        + "  (" + str(model_selection.get("reason") or "선택") + ")"
+    )
 
-    if not _prepare_runtime(env, p, mode, selected_network):
+    if not runtime_coordinator.prepare_runtime(env, p, mode, selected_network):
         p.pause()
         return
 
