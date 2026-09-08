@@ -105,6 +105,26 @@ def test_host_proxy_env_uses_selected_tor_endpoint(monkeypatch):
     assert env["ALL_PROXY"] == "socks5h://127.0.0.1:9050"
 
 
+def test_host_runtime_environment_prepares_selected_proxy(monkeypatch):
+    from launcher import network_policy
+
+    monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "warp")
+    monkeypatch.setenv("NET_MODE", "warp")
+    monkeypatch.setattr(config, "NET_MODE", "warp", raising=False)
+    prepared = []
+    monkeypatch.setattr(
+        network_policy,
+        "prepare_runtime",
+        lambda mode, **kwargs: prepared.append(network_policy.normalize_mode(mode).value) or False,
+    )
+
+    env = build_tor_env()
+    assert prepared == ["warp"]
+    # Failure never downgrades to Direct: the selected dead proxy remains set.
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:8119"
+    assert env["ALL_PROXY"] == "socks5h://127.0.0.1:1080"
+
+
 def test_host_proxy_env_does_not_mutate_the_base_mapping(monkeypatch):
     monkeypatch.setattr(config, "NET_MODE", "warp", raising=False)
     base = {"HTTP_PROXY": "original"}
