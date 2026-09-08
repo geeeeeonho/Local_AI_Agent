@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import socket
 import sys
 import urllib.parse
 import urllib.request
