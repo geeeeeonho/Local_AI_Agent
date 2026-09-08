@@ -70,6 +70,20 @@ def test_folder_policy_denied_read_failure_is_fail_closed(monkeypatch, tmp_path)
         host_permissions.build_host_permission_spec(workspace)
 
 
+def test_corrupt_persisted_folder_policy_is_fail_closed(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy_path = tmp_path / "folder_policy.json"
+    policy_path.write_text("{not-json", encoding="utf-8")
+
+    monkeypatch.setattr(host_permissions.folder_policy, "_store_path", lambda: policy_path)
+    monkeypatch.setattr(host_permissions.folder_policy, "list_allowed", lambda: [])
+    monkeypatch.setattr(host_permissions.folder_policy, "list_denied", lambda: [])
+
+    with pytest.raises(host_permissions.HostPermissionPolicyError):
+        host_permissions.build_host_permission_spec(workspace)
+
+
 def test_policy_fingerprint_is_stable_across_allowed_and_denied_order(monkeypatch, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
