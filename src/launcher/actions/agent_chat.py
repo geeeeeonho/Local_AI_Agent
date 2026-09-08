@@ -449,9 +449,33 @@ def _launch_panel(
         panel.set_close_callback(close_service)
         return panel
 
-    main_window.host.replace(build_panel)
+    panel_ready = threading.Event()
+    build_error = [None]
+
+    def build_on_main() -> None:
+        try:
+            main_window.host.replace(build_panel)
+        except Exception as exc:
+            build_error[0] = exc
+        finally:
+            panel_ready.set()
+
+    try:
+        main_window.root.after(0, build_on_main)
+    except Exception as exc:
+        p.error("대화 패널 예약 실패: " + str(exc))
+        return
+
+    if not panel_ready.wait(timeout=10.0):
+        p.error("대화 패널 생성이 10초 안에 완료되지 않았습니다.")
+        return
+    if build_error[0] is not None:
+        p.error("대화 패널 생성 실패: " + str(build_error[0]))
+        return
+
     panel = panel_holder.get("panel")
     if panel is None:
+        p.error("대화 패널을 생성하지 못했습니다.")
         return
 
     post("system", "에이전트를 시작합니다... (프로필: " + str(profile_label) + ")")
@@ -486,7 +510,7 @@ def _launch_panel(
         except Exception:
             pass
 
-    main_window.root.after(80, poll)
+    ui(lambda: main_window.root.after(80, poll))
 
 
 def run(env, p):
