@@ -21,6 +21,7 @@ def _command(**overrides):
         cpu_limit="2.5",
         block_internet=True,
         tor_proxy=False,
+        network_mode="block",
     )
     kwargs.update(overrides)
     return build_sandbox_docker_command(**kwargs)
@@ -66,7 +67,7 @@ def test_outer_security_flags_are_present():
 
 
 def test_blocked_mode_cuts_external_dns_and_adds_no_proxy():
-    cmd = _command(block_internet=True, tor_proxy=False)
+    cmd = _command(network_mode="block")
     assert "--dns=0.0.0.0" in cmd
     assert not any("HTTP_PROXY=" in str(token) for token in cmd)
 
@@ -87,7 +88,7 @@ def test_direct_mode_does_not_inherit_the_block_dns_or_network():
 
     cmd = _command(
         network_mode="direct",
-        block_internet=False,
+        block_internet=True,
         tor_proxy=False,
     )
     assert "LOCAL_AI_NETWORK_MODE=direct" in cmd
@@ -97,10 +98,19 @@ def test_direct_mode_does_not_inherit_the_block_dns_or_network():
 
 
 def test_proxy_mode_replaces_dns_block_with_proxy_env():
-    cmd = _command(block_internet=False, tor_proxy=True, network_mode="warp")
+    cmd = _command(block_internet=True, tor_proxy=False, network_mode="warp")
     assert "--dns=0.0.0.0" not in cmd
     assert "LOCAL_AI_NETWORK_MODE=warp" in cmd
     assert any("PROXY=" in str(token) or "proxy=" in str(token) for token in cmd)
+
+
+def test_implicit_mode_uses_canonical_current_mode_not_legacy_booleans(monkeypatch):
+    from launcher import network_policy
+
+    monkeypatch.setattr(network_policy, "current_mode", lambda: network_policy.NetworkMode.DIRECT)
+    cmd = _command(network_mode=None, block_internet=True, tor_proxy=False)
+    assert "LOCAL_AI_NETWORK_MODE=direct" in cmd
+    assert "--dns=0.0.0.0" not in cmd
 
 
 def test_sandbox_block_start_fails_before_runtime_when_internal_network_is_unavailable(monkeypatch, tmp_path):
