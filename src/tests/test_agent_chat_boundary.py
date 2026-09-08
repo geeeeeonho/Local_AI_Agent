@@ -10,25 +10,33 @@ def _source(relative: str) -> str:
 
 
 def test_agent_chat_uses_service_boundary_without_unified_agent_private_access():
-    source = _source("launcher/actions/agent_chat.py")
+    action = _source("launcher/actions/agent_chat.py")
+    runtime = _source("launcher/agent/runtime_config.py")
 
-    assert "AgentService" in source
-    assert "create_backend" in source
-    assert "LegacyBackend()" not in source
-    assert "UnifiedAgent" not in source
-    assert "agent._proc" not in source
-    assert "build_sandbox_docker_command" in source
-    assert "build_host_pipe_cmd" not in source
+    assert "AgentService" in action
+    assert "create_backend" in action
+    assert "launcher.agent.setup_flow" in action
+    assert "launcher.agent.runtime_config" in action
+    assert "launcher.agent.chat_session_controller" in action
+    assert "LegacyBackend()" not in action
+    assert "UnifiedAgent" not in action
+    assert "agent._proc" not in action
+    assert "build_sandbox_docker_command" not in action
+    assert "build_sandbox_docker_command" in runtime
+    assert "build_host_pipe_cmd" not in action
 
 
-def test_agent_chat_handles_structured_host_controls():
-    source = _source("launcher/actions/agent_chat.py")
-    assert "AgentEventType.APPROVAL_REQUIRED" in source
-    assert "service.approve" in source
-    assert "service.cancel" in source
-    assert "service.resume" in source
-    assert '"/session"' in source
-    assert '"/resume"' in source
+def test_structured_host_controls_belong_to_session_controller():
+    action = _source("launcher/actions/agent_chat.py")
+    controller = _source("launcher/agent/chat_session_controller.py")
+
+    assert "AgentEventType.APPROVAL_REQUIRED" not in action
+    assert "AgentEventType.APPROVAL_REQUIRED" in controller
+    assert "service.approve" in controller
+    assert "service.cancel" in controller
+    assert "service.resume" in controller
+    assert '"/session"' in controller
+    assert '"/resume"' in controller
 
 
 def test_entry_dialog_commits_network_mode_for_host_and_sandbox():
@@ -112,12 +120,9 @@ def test_pretool_subsystem_is_fully_removed_from_the_agent_path():
     assert "PreTool" not in source
 
 
-def test_host_network_label_reflects_the_actual_proxy_decision():
-    from launcher.actions.agent_chat import _net_mode_label
+def test_network_labels_come_from_canonical_runtime_config():
+    from launcher import network_policy
+    from launcher.agent import runtime_config
 
-    marker = ["managed-open-interpreter", "--model", "ollama/qwen3:8b"]
-    assert _net_mode_label(marker, is_host=True, tor_proxy=False) == "개방 (직접 연결)"
-    assert _net_mode_label(marker, is_host=True, tor_proxy=True) != "개방 (직접 연결)"
-
-    blocked = ["docker", "run", "--dns=0.0.0.0", "image"]
-    assert _net_mode_label(blocked) == "차단 (인터넷 없음)"
+    for mode in ("direct", "warp", "tor", "block"):
+        assert runtime_config.network_label(mode) == network_policy.display_label(mode)
