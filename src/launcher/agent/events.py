@@ -29,23 +29,3 @@ class AgentEvent:
     source_level: str | None = None
     request_id: int | str | None = None
     data: Mapping[str, Any] | None = None
-
-
-_LEGACY_TYPES = {
-    "stdout": AgentEventType.TEXT,
-    "stderr": AgentEventType.ERROR,
-    "info": AgentEventType.STATUS,
-    "warn": AgentEventType.WARNING,
-    "error": AgentEventType.ERROR,
-    "terminated": AgentEventType.TERMINATED,
-}
-
-
-def from_legacy_message(message: Any) -> AgentEvent:
-    level = str(getattr(message, "level", ""))
-    text = str(getattr(message, "text", ""))
-    return AgentEvent(
-        type=_LEGACY_TYPES.get(level, AgentEventType.STATUS),
-        content=text,
-        source_level=level,
-    )
