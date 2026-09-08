@@ -28,18 +28,17 @@ def build_sandbox_docker_command(
     """Assemble the ``docker run`` command for one sandboxed agent session.
 
     ``network_mode`` is the canonical policy input. The older booleans remain
-    source-compatible for callers/tests that have not migrated yet. When no
-    explicit mode is supplied, ``block_internet=True`` still means Block and
-    ``tor_proxy=True`` resolves WARP versus Tor from the canonical policy.
+    source-compatible, but they no longer override a canonical mode already
+    chosen by the launcher. This is important for Direct: the historic
+    ``block_internet`` boolean must not turn a Direct session into Block.
     """
     try:
         from launcher import network_policy
-        if network_mode is not None:
-            selected = network_policy.normalize_mode(network_mode)
-        elif block_internet and not tor_proxy:
-            selected = network_policy.NetworkMode.BLOCK
-        else:
-            selected = network_policy.current_mode()
+        selected = (
+            network_policy.normalize_mode(network_mode)
+            if network_mode is not None
+            else network_policy.current_mode()
+        )
     except Exception:
         selected = None
 
