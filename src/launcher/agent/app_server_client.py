@@ -213,11 +213,12 @@ class AppServerClient:
                 break
         return out
 
-    def stop(self, timeout: float = 3.0) -> None:
+    def stop(self, timeout: float = 3.0) -> bool:
+        """Stop the child and report success only after it is observably gone."""
         self._stopping.set()
         proc = self._proc
         if proc is None or proc.poll() is not None:
-            return
+            return True
         try:
             if proc.stdin is not None and not getattr(proc.stdin, "closed", False):
                 proc.stdin.close()
@@ -233,7 +234,14 @@ class AppServerClient:
             try:
                 proc.kill()
             except Exception:
-                pass
+                return False
+            try:
+                proc.wait(timeout=timeout)
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                return False
+        except (OSError, ValueError):
+            return False
+        return proc.poll() is not None
 
     def is_running(self) -> bool:
         proc = self._proc
