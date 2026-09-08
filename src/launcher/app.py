@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable, Dict
 
@@ -14,18 +13,12 @@ from . import actions
 
 
 def _chat_menu_text() -> tuple[str, str]:
-    """선택된 채팅 엔진과 현재 언어에 맞는 메뉴 문구."""
-    engine = os.environ.get("LOCAL_AI_CHAT_ENGINE", "").lower()
+    """현재 언어에 맞는 AnythingLLM ChatService 메뉴 문구."""
     try:
         from installer.i18n import get_language
         ko = str(get_language()).lower().startswith("ko")
     except Exception:
         ko = True
-
-    if engine in ("openwebui", "webui"):
-        if ko:
-            return "채팅 UI (Open WebUI)", "브라우저 기반 채팅 + 자동 웹 검색"
-        return "Chat UI (Open WebUI)", "Browser chat + automatic web search"
 
     if ko:
         return "채팅 UI (AnythingLLM)", "브라우저 채팅 + 문서 RAG + @agent 웹 검색"
