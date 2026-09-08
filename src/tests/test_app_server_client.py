@@ -1,5 +1,6 @@
 import json
 import queue
+import subprocess
 from pathlib import Path
 
 from launcher.agent.app_server_client import AppServerClient
@@ -28,14 +29,18 @@ class FakeProc:
         self.stderr = None
         self.returncode = None
         self.pid = 1234
+        self.terminated = 0
+        self.killed = 0
 
     def poll(self):
         return self.returncode
 
     def terminate(self):
+        self.terminated += 1
         self.returncode = 0
 
     def kill(self):
+        self.killed += 1
         self.returncode = -9
 
     def wait(self, timeout=None):
@@ -44,9 +49,33 @@ class FakeProc:
         return self.returncode
 
 
-def _client():
+class KillRequiredProc(FakeProc):
+    def __init__(self):
+        super().__init__()
+        self.wait_calls = 0
+
+    def terminate(self):
+        self.terminated += 1
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        if self.returncode is None and self.killed == 0:
+            raise subprocess.TimeoutExpired("interpreter", timeout)
+        return self.returncode
+
+
+class StubbornProc(KillRequiredProc):
+    def kill(self):
+        self.killed += 1
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        raise subprocess.TimeoutExpired("interpreter", timeout)
+
+
+def _client(proc=None):
     client = AppServerClient(["interpreter", "app-server"], {}, Path("."))
-    client._proc = FakeProc()
+    client._proc = proc or FakeProc()
     return client
 
 
@@ -101,3 +130,35 @@ def test_pid_and_running_follow_process_state():
     assert client.is_running() is True
     client._proc.returncode = 5
     assert client.is_running() is False
+
+
+def test_stop_returns_true_only_after_process_is_gone():
+    proc = FakeProc()
+    client = _client(proc)
+
+    assert client.stop(timeout=0.1) is True
+    assert proc.terminated == 1
+    assert proc.killed == 0
+    assert proc.poll() is not None
+
+
+def test_stop_kills_then_waits_again_when_terminate_times_out():
+    proc = KillRequiredProc()
+    client = _client(proc)
+
+    assert client.stop(timeout=0.1) is True
+    assert proc.terminated == 1
+    assert proc.killed == 1
+    assert proc.wait_calls == 2
+    assert proc.poll() == -9
+
+
+def test_stop_returns_false_if_process_survives_kill():
+    proc = StubbornProc()
+    client = _client(proc)
+
+    assert client.stop(timeout=0.1) is False
+    assert proc.terminated == 1
+    assert proc.killed == 1
+    assert proc.wait_calls == 2
+    assert proc.poll() is None
