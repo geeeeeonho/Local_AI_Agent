@@ -97,11 +97,12 @@ def test_direct_mode_does_not_inherit_the_block_dns_or_network():
         assert cmd[cmd.index("--network") + 1] != network_policy.block_network_name()
 
 
-def test_proxy_mode_replaces_dns_block_with_proxy_env():
+def test_proxy_mode_replaces_dns_block_with_proxy_env_and_joins_shared_network():
     cmd = _command(block_internet=True, tor_proxy=False, network_mode="warp")
     assert "--dns=0.0.0.0" not in cmd
     assert "LOCAL_AI_NETWORK_MODE=warp" in cmd
     assert any("PROXY=" in str(token) or "proxy=" in str(token) for token in cmd)
+    assert cmd[cmd.index("--network") + 1] == config.LLM_NETWORK
 
 
 def test_implicit_mode_uses_canonical_current_mode_not_legacy_booleans(monkeypatch):
