@@ -17,7 +17,7 @@ def test_required_matrix_covers_transition_contract():
         "initialize", "thread_start", "thread_resume", "turn_start",
         "text_streaming", "reasoning_streaming", "ollama_provider",
         "command_execution", "file_write", "approval_accept",
-        "approval_reject", "turn_interrupt", "mcp_local_search",
+        "approval_reject", "turn_interrupt", "mcp_local_search", "fetch_page",
         "warp_environment", "tor_environment", "direct_mode", "block_mode",
         "host_permission_profile", "sandbox_docker", "session_persistence",
     }
