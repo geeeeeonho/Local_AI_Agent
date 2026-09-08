@@ -1,68 +1,34 @@
-"""chat_panel — GUI 통합 대화창 패널.
+"""Single-window GUI panel for the Open Interpreter automation agent.
 
-지시사항 [2단계] 단일 윈도우 데스크탑 대화 UI.
-3단 구조:
-  ┌──────────────────────────────────────┐
-  │   [Title]                            │
-  ├──────────────────────────┬───────────┤
-  │ 대화창 (출력+컬러)        │ 작업 폴더 │
-  │                          │ 파일 리스트│
-  │                          │           │
-  │                          │ ─────────  │
-  │                          │ 시스템상태│
-  │                          │           │
-  ├──────────────────────────┴───────────┤
-  │ [입력창........................][전송]│
-  │  [중단] [재시작] [폴더열기]            │
-  └──────────────────────────────────────┘
-
-설계
-────
-- ChatPanel.append_message(level, text) — Queue 폴링한 GUI 가 호출
-- ChatPanel.set_input_callback(fn) — 사용자가 [전송] 누르면 fn(text)
-- ChatPanel.set_stop_callback(fn) — [중단] 콜백
-- 폴링 주기는 호출자가 결정 (보통 100ms)
+The panel is deliberately runtime-agnostic. It emits user commands through the
+registered input callback; Open Interpreter thread/session ownership stays in
+the agent service/controller layer.
 """
 from __future__ import annotations
 
-import os
 import tkinter as tk
 from pathlib import Path
-from tkinter import scrolledtext
+from tkinter import scrolledtext, simpledialog
 from typing import Callable, Optional
 
 from .theme import Theme
 from .widgets import make_button
 
 
-# ─────────────────────────────────────────────
-#  레벨별 색상 (Theme 보강)
-# ─────────────────────────────────────────────
 _LEVEL_COLORS = {
     "stdout": Theme.FG,
-    "stderr": "#e1bda5",          # 옅은 주황 (오류 가독성)
-    "info":   Theme.ACCENT,
-    "warn":   "#d7ba7d",          # 약한 노랑이 아닌 모카톤
-    "error":  Theme.DANGER,
-    "user":   Theme.OK,           # 사용자 입력 — 초록
-    "system": Theme.FG_DIM,       # 시스템 메시지
+    "stderr": "#e1bda5",
+    "info": Theme.ACCENT,
+    "warn": "#d7ba7d",
+    "error": Theme.DANGER,
+    "user": Theme.OK,
+    "system": Theme.FG_DIM,
     "terminated": Theme.DANGER,
 }
 
 
 class ChatPanel:
-    """GUI 통합 대화창.
-
-    Public API:
-        append_message(level, text) — 로그에 한 줄 추가
-        clear() — 로그 비우기
-        set_input_callback(fn) — 사용자가 입력 후 [전송] 누름
-        set_stop_callback(fn) — [중단] 콜백
-        set_restart_callback(fn) — [재시작] 콜백
-        set_open_folder_callback(fn) — [폴더열기] 콜백
-        refresh_files(folder) — 우측 파일 리스트 갱신
-        set_status(text) — 우측 하단 시스템 상태 텍스트
-    """
+    """Integrated agent conversation panel."""
 
     def __init__(
         self,
@@ -73,35 +39,34 @@ class ChatPanel:
     ):
         self.frame = tk.Frame(parent, bg=Theme.BG)
         self._workspace = workspace
-
-        # 콜백 슬롯
         self._on_input: Optional[Callable[[str], None]] = None
         self._on_stop: Optional[Callable[[], None]] = None
         self._on_restart: Optional[Callable[[], None]] = None
         self._on_open_folder: Optional[Callable[[], None]] = None
-        # v4_lifecycle: panel 이 destroy 될 때 한 번만 호출되는 cleanup hook
         self._on_close: Optional[Callable[[], None]] = None
         self._close_fired = False
+        self._current_model: str | None = None
 
         self._build_header(title, subtitle)
         self._build_body()
         self._build_input_bar()
 
-    # ── 빌드 ──
     def _build_header(self, title: str, subtitle: str) -> None:
         head = tk.Frame(self.frame, bg=Theme.BG)
         head.pack(fill="x", padx=20, pady=(16, 8))
-
         tk.Label(
-            head, text=title,
-            bg=Theme.BG, fg=Theme.FG_BRIGHT,
+            head,
+            text=title,
+            bg=Theme.BG,
+            fg=Theme.FG_BRIGHT,
             font=Theme.F_TITLE,
         ).pack(side="left")
-
         if subtitle:
             tk.Label(
-                head, text="  " + subtitle,
-                bg=Theme.BG, fg=Theme.FG_DIM,
+                head,
+                text="  " + subtitle,
+                bg=Theme.BG,
+                fg=Theme.FG_DIM,
                 font=Theme.F_SUB,
             ).pack(side="left")
 
@@ -109,47 +74,49 @@ class ChatPanel:
         body = tk.Frame(self.frame, bg=Theme.BG)
         body.pack(fill="both", expand=True, padx=20, pady=4)
 
-        # 왼쪽: 채팅 로그 (대부분의 공간)
         left = tk.Frame(body, bg=Theme.PANEL)
         left.pack(side="left", fill="both", expand=True)
-
         self._log = scrolledtext.ScrolledText(
             left,
-            bg=Theme.PANEL, fg=Theme.FG,
+            bg=Theme.PANEL,
+            fg=Theme.FG,
             insertbackground=Theme.FG,
             selectbackground=Theme.ACCENT,
             font=Theme.F_MONO if hasattr(Theme, "F_MONO") else ("Consolas", 10),
             wrap="word",
             relief="flat",
             borderwidth=0,
-            padx=10, pady=8,
+            padx=10,
+            pady=8,
             state="disabled",
         )
         self._log.pack(fill="both", expand=True)
-
-        # 컬러 태그 등록
         for level, color in _LEVEL_COLORS.items():
             self._log.tag_configure(level, foreground=color)
-        self._log.tag_configure("bold", font=Theme.F_BOLD if hasattr(Theme, "F_BOLD") else ("Consolas", 10, "bold"))
+        self._log.tag_configure(
+            "bold",
+            font=Theme.F_BOLD if hasattr(Theme, "F_BOLD") else ("Consolas", 10, "bold"),
+        )
 
-        # 오른쪽: 사이드 패널 (파일 + 상태)
         right = tk.Frame(body, bg=Theme.BG, width=260)
         right.pack(side="right", fill="y", padx=(8, 0))
-        right.pack_propagate(False)  # 너비 고정
+        right.pack_propagate(False)
 
-        # 파일 리스트
         tk.Label(
-            right, text="작업 폴더 파일",
-            bg=Theme.BG, fg=Theme.FG_DIM,
-            font=Theme.F_SUB, anchor="w",
+            right,
+            text="작업 폴더 파일",
+            bg=Theme.BG,
+            fg=Theme.FG_DIM,
+            font=Theme.F_SUB,
+            anchor="w",
         ).pack(fill="x", pady=(0, 4))
 
         list_wrap = tk.Frame(right, bg=Theme.PANEL)
         list_wrap.pack(fill="both", expand=True)
-
         self._file_list = tk.Listbox(
             list_wrap,
-            bg=Theme.PANEL, fg=Theme.FG,
+            bg=Theme.PANEL,
+            fg=Theme.FG,
             selectbackground=Theme.ACCENT,
             font=("Consolas", 9),
             relief="flat",
@@ -159,19 +126,24 @@ class ChatPanel:
         )
         self._file_list.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # 시스템 상태
         tk.Label(
-            right, text="시스템",
-            bg=Theme.BG, fg=Theme.FG_DIM,
-            font=Theme.F_SUB, anchor="w",
+            right,
+            text="시스템",
+            bg=Theme.BG,
+            fg=Theme.FG_DIM,
+            font=Theme.F_SUB,
+            anchor="w",
         ).pack(fill="x", pady=(12, 4))
-
         self._status_label = tk.Label(
-            right, text="대기 중…",
-            bg=Theme.PANEL, fg=Theme.FG,
+            right,
+            text="대기 중…",
+            bg=Theme.PANEL,
+            fg=Theme.FG,
             font=("Consolas", 9),
-            anchor="w", justify="left",
-            padx=8, pady=6,
+            anchor="w",
+            justify="left",
+            padx=8,
+            pady=6,
             wraplength=240,
         )
         self._status_label.pack(fill="x")
@@ -180,141 +152,167 @@ class ChatPanel:
         bar = tk.Frame(self.frame, bg=Theme.BG)
         bar.pack(fill="x", padx=20, pady=(8, 16))
 
-        # 입력창
         self._input = tk.Text(
             bar,
             height=3,
-            bg=Theme.PANEL, fg=Theme.FG,
+            bg=Theme.PANEL,
+            fg=Theme.FG,
             insertbackground=Theme.FG,
             font=("Consolas", 10),
             wrap="word",
             relief="flat",
             borderwidth=0,
-            padx=8, pady=6,
+            padx=8,
+            pady=6,
         )
         self._input.pack(side="left", fill="both", expand=True)
-        # Enter = 전송, Shift+Enter = 줄바꿈
         self._input.bind("<Return>", self._on_enter)
-        self._input.bind("<Shift-Return>", lambda e: None)
+        self._input.bind("<Shift-Return>", lambda event: None)
 
-        # 우측 버튼들 (세로)
         btn_col = tk.Frame(bar, bg=Theme.BG)
         btn_col.pack(side="right", fill="y", padx=(8, 0))
 
         self._send_btn = make_button(
-            btn_col, text="전송",
+            btn_col,
+            text="전송",
             command=self._fire_input,
             kind="accent",
         )
         self._send_btn.pack(fill="x", pady=(0, 4))
-        # CHATPANEL_UI_v2 CHATPANEL_UI_v3: 새 대화 / 이전 대화 / 모델 변경 (버튼·리스트)
-        try:
-            self._newchat_btn = tk.Button(btn_col, text="새 대화", command=self._new_chat,
-                                          bg=Theme.PANEL, fg=Theme.FG, relief="flat", bd=0,
-                                          activebackground=Theme.ACCENT, font=("Segoe UI", 8))
-            self._newchat_btn.pack(fill="x", pady=(0, 4))
-            self._sessions_btn = tk.Button(btn_col, text="이전 대화", command=self._open_sessions,
-                                           bg=Theme.PANEL, fg=Theme.FG, relief="flat", bd=0,
-                                           activebackground=Theme.ACCENT, font=("Segoe UI", 8))
-            self._sessions_btn.pack(fill="x", pady=(0, 4))
-            self._current_model = None  # CHATPANEL_UI_v3
-            self._model_var = tk.StringVar(value="모델 ▾")
-            _mopts = self._model_options() or ["(목록 없음)"]
-            self._model_menu = tk.OptionMenu(btn_col, self._model_var, *_mopts, command=self._on_model_pick)
-            self._model_menu.configure(bg=Theme.PANEL, fg=Theme.FG, relief="flat", activebackground=Theme.ACCENT,
-                                       highlightthickness=0, font=("Segoe UI", 8), anchor="w")
-            self._model_menu.pack(fill="x", pady=(0, 4))
-        except Exception:
-            pass
+
+        self._newchat_btn = tk.Button(
+            btn_col,
+            text="새 대화",
+            command=self._new_chat,
+            bg=Theme.PANEL,
+            fg=Theme.FG,
+            relief="flat",
+            bd=0,
+            activebackground=Theme.ACCENT,
+            font=("Segoe UI", 8),
+        )
+        self._newchat_btn.pack(fill="x", pady=(0, 4))
+
+        self._sessions_btn = tk.Button(
+            btn_col,
+            text="세션 이어가기",
+            command=self._open_sessions,
+            bg=Theme.PANEL,
+            fg=Theme.FG,
+            relief="flat",
+            bd=0,
+            activebackground=Theme.ACCENT,
+            font=("Segoe UI", 8),
+        )
+        self._sessions_btn.pack(fill="x", pady=(0, 4))
+
+        self._model_var = tk.StringVar(value="모델 ▾")
+        model_options = self._model_options() or ["(목록 없음)"]
+        self._model_menu = tk.OptionMenu(
+            btn_col,
+            self._model_var,
+            *model_options,
+            command=self._on_model_pick,
+        )
+        self._model_menu.configure(
+            bg=Theme.PANEL,
+            fg=Theme.FG,
+            relief="flat",
+            activebackground=Theme.ACCENT,
+            highlightthickness=0,
+            font=("Segoe UI", 8),
+            anchor="w",
+        )
+        self._model_menu.pack(fill="x", pady=(0, 4))
 
         row2 = tk.Frame(btn_col, bg=Theme.BG)
         row2.pack(fill="x")
         self._stop_btn = make_button(
-            row2, text="중단",
+            row2,
+            text="중단",
             command=self._fire_stop,
             kind="danger",
         )
         self._stop_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
-
         self._restart_btn = make_button(
-            row2, text="재시작",
+            row2,
+            text="재시작",
             command=self._fire_restart,
             kind="default",
         )
         self._restart_btn.pack(side="left", fill="x", expand=True, padx=(2, 0))
 
         self._open_btn = make_button(
-            btn_col, text="📁 폴더",
+            btn_col,
+            text="📁 폴더",
             command=self._fire_open_folder,
             kind="default",
         )
         self._open_btn.pack(fill="x", pady=(4, 0))
 
-    # ── 이벤트 핸들러 ──
     def _on_enter(self, event):
-        """Enter: 전송. Shift+Enter: 줄바꿈."""
-        if event.state & 0x0001:  # Shift
-            return  # 기본 동작 (줄바꿈)
+        if event.state & 0x0001:
+            return None
         self._fire_input()
-        return "break"  # 기본 Enter 동작 차단
+        return "break"
 
     def _fire_input(self) -> None:
         text = self._input.get("1.0", "end").rstrip()
         if not text:
             return
-        # 사용자 입력은 즉시 로그에 표시
-        self.append_message("user", f"> {text}")
+        self.append_message("user", "> " + text)
         self._input.delete("1.0", "end")
         if self._on_input is not None:
             try:
                 self._on_input(text)
-            except Exception as e:
-                self.append_message("error", f"입력 처리 오류: {e}")
+            except Exception as exc:
+                self.append_message("error", "입력 처리 오류: " + str(exc))
 
     def _fire_stop(self) -> None:
         if self._on_stop is not None:
             try:
                 self._on_stop()
-            except Exception as e:
-                self.append_message("error", f"중단 실패: {e}")
+            except Exception as exc:
+                self.append_message("error", "중단 실패: " + str(exc))
 
     def _fire_restart(self) -> None:
         if self._on_restart is not None:
             try:
                 self._on_restart()
-            except Exception as e:
-                self.append_message("error", f"재시작 실패: {e}")
+            except Exception as exc:
+                self.append_message("error", "재시작 실패: " + str(exc))
 
     def _fire_open_folder(self) -> None:
         if self._on_open_folder is not None:
             try:
                 self._on_open_folder()
-            except Exception as e:
-                self.append_message("error", f"폴더 열기 실패: {e}")
+            except Exception as exc:
+                self.append_message("error", "폴더 열기 실패: " + str(exc))
 
-    # ── public API ──
     def append_message(self, level: str, text: str) -> None:
-        try:  # IO_LOG_v1: 대화(입력/출력/코드/결과)를 런처 로그로 캡처
-            _llio = None
-            for _imp in ("launcher.core.lifelog", "launcher.lifelog"):
+        try:
+            lifelog = None
+            for module_name in ("launcher.core.lifelog", "launcher.lifelog"):
                 try:
-                    _llio = __import__(_imp, fromlist=["log"]); break
+                    lifelog = __import__(module_name, fromlist=["log"])
+                    break
                 except Exception:
-                    _llio = None
-            if _llio is not None:
-                _t = text if len(text) <= 4000 else (text[:4000] + " ...(생략)")
-                _llio.log("CHAT", "[%s] %s" % (level, _t))
+                    lifelog = None
+            if lifelog is not None:
+                clipped = text if len(text) <= 4000 else text[:4000] + " ...(생략)"
+                lifelog.log("CHAT", "[%s] %s" % (level, clipped))
         except Exception:
             pass
-        try:  # CHATPANEL_UI_v3: 자동 강등 메시지에서 현재 모델 추출
+
+        try:
             if "[모델 자동 강등]" in text and "->" in text:
-                _aft = text.split("->", 1)[1].strip()
-                _tg = _aft.split(" (", 1)[0].strip().split()[0].strip()
-                if _tg:
-                    self.set_current_model(_tg)
+                tail = text.split("->", 1)[1].strip()
+                tag = tail.split(" (", 1)[0].strip().split()[0].strip()
+                if tag:
+                    self.set_current_model(tag)
         except Exception:
             pass
-        """로그에 한 줄 추가 (Tk 스레드에서만 호출)."""
+
         if level not in _LEVEL_COLORS:
             level = "stdout"
         self._log.configure(state="normal")
@@ -330,123 +328,75 @@ class ChatPanel:
     def set_input_callback(self, fn: Callable[[str], None]) -> None:
         self._on_input = fn
 
-    def _send_command(self, text):  # CHATPANEL_UI_v2
-        try:
-            self.append_message("user", "> " + text)
-        except Exception:
-            pass
-        if getattr(self, "_on_input", None) is not None:
+    def _send_command(self, text: str) -> None:
+        self.append_message("user", "> " + text)
+        if self._on_input is not None:
             try:
                 self._on_input(text)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.append_message("error", "명령 처리 오류: " + str(exc))
 
-    def _new_chat(self):  # CHATPANEL_UI_v2
-        try:
-            self.clear()
-        except Exception:
-            pass
+    def _new_chat(self) -> None:
+        self.clear()
         self._send_command("/new")
 
-    def _model_options(self):  # CHATPANEL_UI_v2
+    def _model_options(self) -> list[str]:
         try:
-            from launcher.models import model_roles as mr
-            tags = []
-            for _lad in getattr(mr, "LADDERS", {}).values():
-                for _m, _n in _lad:
-                    if _m not in tags:
-                        tags.append(_m)
+            from launcher.models import model_roles
+            tags: list[str] = []
+            for ladder in getattr(model_roles, "LADDERS", {}).values():
+                for model, _need in ladder:
+                    if model not in tags:
+                        tags.append(model)
             return tags[:20]
         except Exception:
             return []
 
-    def _on_model_pick(self, tag):  # CHATPANEL_UI_v2
-        _t = str(tag)
-        if _t and not _t.startswith("모델") and not _t.startswith("("):
-            self._send_command("/model " + _t)
-            self.set_current_model(_t)
+    def _on_model_pick(self, tag) -> None:
+        value = str(tag)
+        if value and not value.startswith("모델") and not value.startswith("("):
+            self._send_command("/model " + value)
+            self.set_current_model(value)
         else:
             self._refresh_model_label()
 
-    def set_current_model(self, tag):  # CHATPANEL_UI_v3
+    def set_current_model(self, tag) -> None:
         try:
             self._current_model = str(tag)
         except Exception:
             self._current_model = None
         self._refresh_model_label()
 
-    def _refresh_model_label(self):  # CHATPANEL_UI_v3
+    def _refresh_model_label(self) -> None:
         try:
-            cur = getattr(self, "_current_model", None)
-            if cur:
-                _disp = cur if len(cur) <= 20 else (cur[:19] + "…")
-                self._model_var.set("모델: " + _disp + " ▾")
+            if self._current_model:
+                display = (
+                    self._current_model
+                    if len(self._current_model) <= 20
+                    else self._current_model[:19] + "…"
+                )
+                self._model_var.set("모델: " + display + " ▾")
             else:
                 self._model_var.set("모델 ▾")
         except Exception:
             pass
 
-    def _session_files(self):  # CHATPANEL_UI_v2
+    def _open_sessions(self) -> None:
+        """Resume an Open Interpreter thread by its native thread ID."""
         try:
-            from launcher.core import user_data as _ud
-            import glob
-            _dir = str(_ud.interpreter_dir("sandbox"))
-            files = glob.glob(os.path.join(_dir, "session_*.json"))
-            files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-            return files
+            parent = self.frame.winfo_toplevel()
         except Exception:
-            return []
-
-    def _open_sessions(self):  # CHATPANEL_UI_v2
-        import os as _os
-        import json as _json
-        files = self._session_files()
-        if not files:
-            try:
-                self.append_message("system", "저장된 이전 대화가 없습니다.")
-            except Exception:
-                pass
+            parent = None
+        thread_id = simpledialog.askstring(
+            "세션 이어가기",
+            "Open Interpreter thread ID를 입력하세요.\n현재 ID는 대화창에서 /session 으로 확인할 수 있습니다.",
+            parent=parent,
+        )
+        thread_id = str(thread_id or "").strip()
+        if not thread_id:
             return
-        top = tk.Toplevel(self)
-        top.title("이전 대화")
-        top.configure(bg=Theme.BG)
-        tk.Label(top, text="이어할 대화를 선택 (더블클릭)", bg=Theme.BG, fg=Theme.FG,
-                 font=("Segoe UI", 11, "bold")).pack(padx=16, pady=(12, 8))
-        lb = tk.Listbox(top, width=56, height=min(14, len(files)), bg=Theme.PANEL, fg=Theme.FG,
-                        selectbackground=Theme.ACCENT, highlightthickness=0, relief="flat", activestyle="none")
-        _map = []
-        for _i, _f in enumerate(files[:30], 1):
-            _label = _os.path.basename(_f)
-            try:
-                with open(_f, encoding="utf-8") as _fh:
-                    _d = _json.load(_fh)
-                _label = _d.get("title") or ""
-                if not _label:
-                    for _m in (_d.get("messages") or []):
-                        if _m.get("role") == "user":
-                            _label = (_m.get("content", "") or "")[:46]
-                            break
-                _label = _label or _os.path.basename(_f)
-            except Exception:
-                pass
-            _map.append(_i)
-            lb.insert("end", "%d. %s" % (_i, _label))
-        lb.pack(padx=16, pady=8, fill="both", expand=True)
-        def _go():
-            sel = lb.curselection()
-            if sel:
-                try:
-                    self.clear()
-                except Exception:
-                    pass
-                self._send_command("/resume " + str(_map[sel[0]]))
-            try:
-                top.destroy()
-            except Exception:
-                pass
-        lb.bind("<Double-Button-1>", lambda e: _go())
-        tk.Button(top, text="이어하기", command=_go, bg=Theme.ACCENT, fg=Theme.FG_BRIGHT,
-                  relief="flat", bd=0, font=("Segoe UI", 10, "bold"), padx=16, pady=6).pack(pady=(0, 12))
+        self.clear()
+        self._send_command("/resume " + thread_id)
 
     def set_stop_callback(self, fn: Callable[[], None]) -> None:
         self._on_stop = fn
@@ -458,22 +408,19 @@ class ChatPanel:
         self._on_open_folder = fn
 
     def refresh_files(self, folder: Optional[Path] = None) -> None:
-        """우측 파일 리스트를 갱신."""
         folder = folder or self._workspace
         if folder is None:
             return
         try:
-            entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            entries = sorted(folder.iterdir(), key=lambda path: (not path.is_dir(), path.name.lower()))
         except (OSError, PermissionError):
             return
-
         self._file_list.delete(0, "end")
-        for p in entries[:200]:  # 최대 200개
-            icon = "📁 " if p.is_dir() else "📄 "
-            self._file_list.insert("end", icon + p.name)
+        for path in entries[:200]:
+            icon = "📁 " if path.is_dir() else "📄 "
+            self._file_list.insert("end", icon + path.name)
 
     def set_status(self, text: str) -> None:
-        """시스템 상태 텍스트 갱신."""
         try:
             self._status_label.configure(text=text)
         except tk.TclError:
@@ -485,34 +432,29 @@ class ChatPanel:
     def enable_send(self) -> None:
         self._send_btn.configure(state="normal")
 
-    # ── 패널 라이프사이클 ──
     def pack(self, **kwargs):
         return self.frame.pack(**kwargs)
 
-    def destroy(self):
-        # v4_lifecycle: cleanup hook 한 번만 호출
-        if not self._close_fired and self._on_close is not None:
-            self._close_fired = True
-            try:
-                self._on_close()
-            except Exception:
-                pass
+    def _fire_close_once(self) -> None:
+        if self._close_fired or self._on_close is None:
+            return
+        self._close_fired = True
+        try:
+            self._on_close()
+        except Exception:
+            pass
+
+    def destroy(self) -> None:
+        self._fire_close_once()
         try:
             self.frame.destroy()
         except tk.TclError:
             pass
 
-    # v4_lifecycle: PanelHost.replace() 가 호출하는 hook (destroy 보다 먼저)
-    def on_destroy(self):
-        if not self._close_fired and self._on_close is not None:
-            self._close_fired = True
-            try:
-                self._on_close()
-            except Exception:
-                pass
+    def on_destroy(self) -> None:
+        self._fire_close_once()
 
     def set_close_callback(self, fn: Optional[Callable[[], None]]) -> None:
-        """패널 종료(사이드바 이동/창 닫기) 시 호출될 cleanup 콜백."""
         self._on_close = fn
 
 
