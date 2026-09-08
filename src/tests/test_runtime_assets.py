@@ -6,30 +6,39 @@ from launcher.agent import runtime_assets
 def test_host_runtime_assets_write_local_search_mcp_config(tmp_path):
     source = tmp_path / "source_search_mcp.py"
     source.write_text("print('mcp')\n", encoding="utf-8")
+    privacy = tmp_path / "privacy_policy.py"
+    privacy.write_text("def blocked_outbound_reason(text): return None\n", encoding="utf-8")
     home = tmp_path / "open_interpreter"
 
     result = runtime_assets.prepare_runtime_assets(
         interpreter_home=home,
         source_script=source,
+        privacy_source=privacy,
         runtime_script_path=home / "tools" / "local_search_mcp.py",
         command="python",
         command_args=[str(home / "tools" / "local_search_mcp.py")],
         searxng_url="http://127.0.0.1:8888",
+        network_mode="warp",
     )
 
     copied = home / "tools" / "local_search_mcp.py"
+    copied_privacy = home / "tools" / "privacy_policy.py"
     assert copied.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+    assert copied_privacy.read_text(encoding="utf-8") == privacy.read_text(encoding="utf-8")
     config = (home / "config.toml").read_text(encoding="utf-8")
     assert "[mcp_servers.local_search]" in config
     assert 'command = "python"' in config
     assert 'enabled_tools = ["search", "fetch_page"]' in config
     assert 'SEARXNG_URL = "http://127.0.0.1:8888"' in config
+    assert 'LOCAL_AI_NETWORK_MODE = "warp"' in config
     assert result == home / "config.toml"
 
 
 def test_runtime_assets_preserve_unmanaged_existing_config(tmp_path):
     source = tmp_path / "source_search_mcp.py"
     source.write_text("print('mcp')\n", encoding="utf-8")
+    privacy = tmp_path / "privacy_policy.py"
+    privacy.write_text("def blocked_outbound_reason(text): return None\n", encoding="utf-8")
     home = tmp_path / "open_interpreter"
     home.mkdir()
     config_path = home / "config.toml"
@@ -38,12 +47,15 @@ def test_runtime_assets_preserve_unmanaged_existing_config(tmp_path):
     runtime_assets.prepare_runtime_assets(
         interpreter_home=home,
         source_script=source,
+        privacy_source=privacy,
         runtime_script_path=home / "tools" / "local_search_mcp.py",
         command="python",
         command_args=[str(home / "tools" / "local_search_mcp.py")],
         searxng_url="http://127.0.0.1:8888",
+        network_mode="tor",
     )
 
     config = config_path.read_text(encoding="utf-8")
     assert 'model = "keep-me"' in config
     assert config.count("[mcp_servers.local_search]") == 1
+    assert 'LOCAL_AI_NETWORK_MODE = "tor"' in config
