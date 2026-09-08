@@ -78,3 +78,14 @@ def test_agent_chat_is_thin_orchestration_after_controller_extraction():
     assert "def _select_agent_model" not in source
     assert "def _build_cmd_for_mode" not in source
     assert 'c0 == "/resume"' not in source
+
+
+def test_chat_panel_resumes_native_thread_ids_instead_of_legacy_session_files():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "launcher" / "presenter" / "gui" / "chat_panel.py").read_text(encoding="utf-8")
+
+    assert "session_*.json" not in source
+    assert "interpreter_dir(" not in source
+    assert "_session_files" not in source
+    assert "askstring" in source
+    assert '"/resume " + thread_id' in source
