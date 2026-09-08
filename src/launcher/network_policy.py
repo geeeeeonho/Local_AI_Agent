@@ -83,7 +83,6 @@ def display_label(value) -> str:
         NetworkMode.WARP: "WARP 경유 (빠름)",
         NetworkMode.TOR: "Tor 경유 (최고 익명)",
         NetworkMode.DIRECT: "직접 연결 (IP 노출)",
-        # The current Docker implementation is DNS-level suppression only.
         NetworkMode.BLOCK: "차단 (관리형 웹 접근 비활성)",
     }[mode]
 
@@ -166,10 +165,11 @@ def container_proxy_env(value) -> dict[str, str]:
 def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None = None) -> bool:
     """Ensure the selected protected proxy runtime is ready.
 
-    There is deliberately no fallback to Direct: a protected-mode preparation
-    failure is returned to the caller as ``False``.
+    The selected product mode is persisted separately through :func:`set_mode`.
+    Runtime preparation itself is side-effect free with respect to global mode,
+    which prevents one readiness probe from changing later policy decisions.
     """
-    mode = set_mode(value)
+    mode = normalize_mode(value)
     if mode in (NetworkMode.DIRECT, NetworkMode.BLOCK):
         return True
     try:
