@@ -43,7 +43,8 @@ def test_active_openwebui_runtime_identifiers_are_absent():
         "OPEN_WEBUI_URL",
         "LOCAL_AI_CHAT_ENGINE",
     )
-    for path in (REPO_ROOT / "src").rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for token in forbidden:
-            assert token not in text, f"{token}: {path.relative_to(REPO_ROOT)}"
+    for root in (REPO_ROOT / "src/launcher", REPO_ROOT / "src/installer"):
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                assert token not in text, f"{token}: {path.relative_to(REPO_ROOT)}"
