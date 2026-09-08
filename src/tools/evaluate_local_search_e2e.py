@@ -20,6 +20,7 @@ from launcher.agent.backend_factory import create_backend
 from launcher.agent.events import AgentEvent
 from launcher.agent.local_search_eval import analyze_trace, assess_case, collect_turn
 from launcher.agent.profiles import default as default_profile
+from launcher.agent.runtime_config import build_cmd_for_mode
 from launcher.agent.service import AgentService
 
 
@@ -131,11 +132,9 @@ def _runtime_spec_for_case(*, mode: str, workspace: Path, model: str) -> tuple[P
     if mode == "host":
         return None, True
 
-    from launcher.actions.agent_chat import _build_cmd_for_mode
-
     profile = default_profile()
     container = launcher_config.SANDBOX_CONTAINER_PREFIX + "eval_" + secrets.token_hex(4)
-    command, is_host = _build_cmd_for_mode(
+    command, is_host = build_cmd_for_mode(
         "sandbox",
         ROOT / "llm_environment",
         profile,
