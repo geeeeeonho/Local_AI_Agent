@@ -39,11 +39,27 @@ def install_anythingllm(
     ))
     try:
         from launcher import anythingllm_runtime as runtime
+        from launcher.services.docker import DockerService
     except Exception as exc:
         utils.warn(_anyllm_msg(
-            "anythingllm_runtime 을 불러오지 못했습니다: ",
-            "Could not import anythingllm_runtime: ",
+            "AnythingLLM 설치 구성요소를 불러오지 못했습니다: ",
+            "Could not import AnythingLLM installer dependencies: ",
         ) + repr(exc))
+        return False
+
+    try:
+        docker_ready = DockerService.ensure_daemon(timeout=90)
+    except Exception as exc:
+        utils.err(_anyllm_msg(
+            "Docker Desktop 준비 중 오류: ",
+            "Docker Desktop preparation failed: ",
+        ) + repr(exc))
+        return False
+    if not docker_ready:
+        utils.err(_anyllm_msg(
+            "Docker Desktop을 준비할 수 없어 AnythingLLM 설치를 건너뜁니다.",
+            "Docker Desktop is not ready; skipping AnythingLLM installation.",
+        ))
         return False
 
     if runtime.image_exists():
