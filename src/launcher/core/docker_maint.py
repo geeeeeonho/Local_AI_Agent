@@ -13,23 +13,17 @@
 """
 from __future__ import annotations
 
-import os
-import subprocess
 from pathlib import Path
 from typing import List, Tuple
+
+from launcher.services.docker import DockerService
 
 MARKER = "DOCKER_MAINT_v1"
 FLAG_NAME = "docker_autoclean.flag"
 
-_NO_WINDOW = {}
-if os.name == "nt":
-    _NO_WINDOW["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
-
-# 현재 Local_AI_Agent 자원 식별 패턴.
 _ACTIVE_NAME_PATTERNS = ("llm_agent_", "ai_box_", "llm_ollama", "llm_searxng", "searxng")
 _ACTIVE_IMAGE_PATTERNS = ("llm-agent-sandbox", "llm_agent_sandbox", "ai_box_sandbox", "searxng")
 
-# 이전 버전에서 생성한 채팅 UI 자원을 삭제할 때만 쓰는 레거시 패턴.
 _LEGACY_OPENWEBUI_NAME_PATTERNS = ("llm_openwebui", "open_webui")
 _LEGACY_OPENWEBUI_IMAGE_PATTERNS = ("open_webui", "openwebui")
 
@@ -56,8 +50,13 @@ def _patterns() -> Tuple[tuple, tuple]:
 
 
 def _run(cmd: List[str], timeout: int = 60):
-    return subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=timeout, **_NO_WINDOW)
+    args = list(cmd)
+    if args and args[0].lower() == "docker":
+        args = args[1:]
+    result = DockerService.run(args, timeout=timeout, capture_output=True, text=True)
+    if result is None:
+        raise RuntimeError("docker command failed")
+    return result
 
 
 def docker_available() -> bool:
@@ -167,7 +166,6 @@ def safe_auto_prune() -> dict:
     return {"containers": cnt, "images": img}
 
 
-# ── 종료 시 자동정리 (플래그 게이트) ──
 def _flag_path(env) -> Path:
     return Path(env) / FLAG_NAME
 
@@ -222,8 +220,6 @@ __all__ = [
 
 
 # >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
-# [10] 도커 정리 / 종료 자동정리가 AnythingLLM 컨테이너를 '우리 것' 으로 인식하게 한다.
-# (없으면 '외부 컨테이너' 로 분류되어 exited 상태로 계속 쌓인다)
 try:
     from launcher import config as _cfg_al
     _al_name = getattr(_cfg_al, "ANYTHINGLLM_CONTAINER", "llm_anythingllm")
