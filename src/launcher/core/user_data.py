@@ -1,26 +1,17 @@
 # -*- coding: utf-8 -*-
-"""user_data — 영속 데이터 루트 관리 (USER_DATA_v1).
+"""user_data — persistent data root management (USER_DATA_v1).
 
-프로젝트 루트 아래 `user_data/` 폴더를 단일 진실 공급원으로 두고,
-설정 / 로그 / 일반챗 / 인터프리터(샌드박스·호스트) 세션 데이터를 보관한다.
-
-구조::
-
-    user_data/
-      settings/
-      logs/
-      chat/
-      interpreter/
-        sandbox/
-        host/
+The repository-root ``user_data/`` directory remains the single product-owned
+location for settings, logs, chat data, and interpreter runtime state. Open
+Interpreter thread IDs are the Agent session source of truth; this module does
+not create or scan product-owned ``session_*.json`` files.
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from project_paths import PROJECT_ROOT
 
@@ -29,8 +20,6 @@ __all__ = [
     "settings_dir", "logs_dir", "chat_dir", "interpreter_dir",
     "ensure_all",
     "save_json", "load_json",
-    "new_session_id", "session_path", "list_sessions", "latest_session",
-    "session_meta",
 ]
 
 INTERPRETER_KINDS = ("sandbox", "host")
@@ -45,7 +34,7 @@ _LAYOUT = (
 
 
 def project_root() -> Path:
-    """프로젝트 루트. 테스트/이식용 LLM_PROJECT_ROOT override를 유지한다."""
+    """Project root; keep LLM_PROJECT_ROOT override for tests/portable runs."""
     ov = os.environ.get("LLM_PROJECT_ROOT")
     if ov:
         return Path(ov).resolve()
@@ -53,12 +42,12 @@ def project_root() -> Path:
 
 
 def root() -> Path:
-    """user_data 루트 경로 (생성하지는 않음)."""
+    """Return the user_data root without creating it."""
     return project_root() / "user_data"
 
 
 def _sub(*parts: str) -> Path:
-    """하위 폴더 경로 반환 + 지연 생성."""
+    """Return a child directory and create it lazily."""
     d = root().joinpath(*parts)
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -80,27 +69,28 @@ def chat_dir() -> Path:
 
 
 def interpreter_dir(kind: str = "sandbox") -> Path:
-    """인터프리터 세션 폴더. kind ∈ {'sandbox','host'} (그 외엔 sandbox 로 폴백)."""
+    """Runtime state directory for sandbox/host interpreter assets."""
     k = kind if kind in INTERPRETER_KINDS else "sandbox"
     return _sub("interpreter", k)
 
 
 _README = (
-    "이 폴더(user_data)는 프로그램이 종료돼도 보존되는 사용자 데이터 저장소입니다.\n"
+    "This user_data directory is preserved when the program exits.\n"
     "\n"
-    "  settings/            설정값\n"
-    "  logs/                실행/세션 로그\n"
-    "  chat/                일반챗 대화별 저장소 (예약)\n"
-    "  interpreter/sandbox/ [2] 샌드박스 에이전트 세션 (대화/작업 기억 JSON)\n"
-    "  interpreter/host/    [3] 호스트직접 에이전트 세션\n"
+    "  settings/            product settings\n"
+    "  logs/                execution/session logs\n"
+    "  chat/                chat-related persistent data\n"
+    "  interpreter/sandbox/ Open Interpreter sandbox runtime state/assets\n"
+    "  interpreter/host/    Open Interpreter host runtime state/assets\n"
     "\n"
-    "인터프리터 세션 JSON 은 매 턴 자동 저장되며, 다음 실행 시 '이어하기' 로\n"
-    "복원할 수 있습니다. 이 폴더를 지우면 모든 작업 기억이 사라집니다.\n"
+    "Agent session identity and resume are owned by Open Interpreter thread IDs.\n"
+    "Legacy session_*.json files, if present from older versions, are not\n"
+    "treated as active sessions and are not deleted automatically.\n"
 )
 
 
 def ensure_all() -> Path:
-    """user_data 전체 스켈레톤을 생성하고 루트 경로를 반환. (멱등)"""
+    """Create the user_data skeleton idempotently and return its root."""
     r = root()
     r.mkdir(parents=True, exist_ok=True)
     for rel in _LAYOUT:
@@ -115,7 +105,7 @@ def ensure_all() -> Path:
 
 
 def save_json(path: Any, obj: Any) -> bool:
-    """obj 를 JSON 으로 원자적 저장(tmp + os.replace). 성공 시 True."""
+    """Atomically store JSON using a temporary file and os.replace."""
     p = Path(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -136,60 +126,8 @@ def save_json(path: Any, obj: Any) -> bool:
 
 
 def load_json(path: Any, default: Any = None) -> Any:
-    """JSON 로드. 실패하면 default 반환."""
+    """Load JSON and return default on failure."""
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception:
         return default
-
-
-def new_session_id() -> str:
-    """타임스탬프 기반 세션 ID (정렬하면 시간순)."""
-    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-def session_path(kind: str, session_id: str) -> Path:
-    """특정 세션 JSON 파일 경로."""
-    return interpreter_dir(kind) / ("session_" + session_id + ".json")
-
-
-def list_sessions(kind: str) -> List[Path]:
-    """해당 종류의 세션 파일을 최신순으로 반환."""
-    d = interpreter_dir(kind)
-    try:
-        files = list(d.glob("session_*.json"))
-    except OSError:
-        return []
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return files
-
-
-def latest_session(kind: str) -> Optional[Path]:
-    """가장 최근 세션 파일 (없으면 None)."""
-    files = list_sessions(kind)
-    return files[0] if files else None
-
-
-def session_meta(path: Any) -> dict:
-    """세션 JSON 에서 사람이 읽을 요약 메타를 추출."""
-    p = Path(path)
-    data = load_json(p, default={}) or {}
-    msgs = data.get("messages") or []
-    preview = ""
-    for m in msgs:
-        if isinstance(m, dict) and m.get("role") == "user":
-            lines = str(m.get("content", "")).strip().splitlines()
-            if lines:
-                preview = lines[0]
-                break
-    turns = sum(1 for m in msgs if isinstance(m, dict) and m.get("role") == "user")
-    return {
-        "id": data.get("id") or p.stem.replace("session_", ""),
-        "kind": data.get("kind", ""),
-        "model": data.get("model", ""),
-        "workspace": data.get("workspace", ""),
-        "turns": turns,
-        "created": data.get("created", ""),
-        "updated": data.get("updated", ""),
-        "preview": preview or "",
-    }
