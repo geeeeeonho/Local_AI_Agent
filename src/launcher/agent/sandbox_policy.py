@@ -106,13 +106,23 @@ def build_tor_env(base=None) -> dict:
     """Compatibility Host proxy-env builder using the canonical selected mode.
 
     The historic function name remains because ``agent_chat`` still imports it,
-    but it no longer means "always Tor". This closes the Host-WARP mismatch
-    without coupling WARP/Tor semantics to a boolean.
+    but it no longer means "always Tor". On a real Host launch (``base`` is
+    omitted), the selected WARP/Tor runtime is prepared before the environment
+    is returned. If preparation fails, the selected proxy environment is still
+    returned rather than silently downgrading to Direct; network clients that
+    honor the managed environment therefore fail closed.
     """
     env = dict(base) if base is not None else dict(os.environ)
     try:
         from launcher import network_policy
         selected = network_policy.current_mode()
+        if base is None and selected in (
+            network_policy.NetworkMode.WARP,
+            network_policy.NetworkMode.TOR,
+        ):
+            # Readiness failure deliberately does not change the selected mode.
+            # The dead proxy route remains installed, avoiding silent Direct.
+            network_policy.prepare_runtime(selected)
         managed = network_policy.host_proxy_env(selected)
     except Exception:
         managed = {
