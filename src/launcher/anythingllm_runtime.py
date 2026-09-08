@@ -127,9 +127,6 @@ def _run(args, timeout=60):
         return _R()
 
 
-# ─────────────────────────────────────────────
-#  자원 (auto 지원)
-# ─────────────────────────────────────────────
 def resolve_memory():
     """'auto' 면 여유 RAM 을 보고 정한다. 26B 모델과 경합하지 않도록 보수적으로."""
     v = str(_envc("LOCAL_AI_ANYTHINGLLM_MEM", "ANYTHINGLLM_MEM", "auto"))
@@ -161,9 +158,6 @@ def resolve_cpus():
     return str(max(1, min(4, n // 2)))
 
 
-# ─────────────────────────────────────────────
-#  경로
-# ─────────────────────────────────────────────
 def storage_dir():
     """호스트측 영속 저장 폴더. user_data/anythingllm.
 
@@ -194,9 +188,6 @@ def _vol(p):
     return str(p).replace("\\", "/")
 
 
-# ─────────────────────────────────────────────
-#  .env seed
-# ─────────────────────────────────────────────
 def env_file():
     return storage_dir() / ".env"
 
@@ -575,8 +566,15 @@ def chromium_args(mode=None):
 def ensure_proxy_stack(log=None, env_path=None):
     """Prepare WARP/Tor through the canonical network policy."""
     m = net_mode()
-    if m not in ("warp", "tor") or not NET_AWARE:
+    if m not in ("warp", "tor"):
         return True
+    if not NET_AWARE:
+        if log:
+            try:
+                log("보호 네트워크 모드에서는 AnythingLLM 네트워크 연동을 끌 수 없습니다.")
+            except Exception:
+                pass
+        return False
     return bool(_network_policy().prepare_runtime(m, env_path=env_path, log=log))
 
 
