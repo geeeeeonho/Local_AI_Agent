@@ -1,18 +1,9 @@
-"""warp_runtime — Cloudflare WARP SOCKS5 프록시 컨테이너 런타임 (CONFIG_WARP_v1).
+"""Cloudflare WARP SOCKS5 + HTTP bridge runtime.
 
-Tor(llm_tor) 를 대체하는 기본 네트워크 계층. WARP 클라이언트를 SOCKS5 프록시
-모드로 Docker 컨테이너(llm_warp)에 띄운다. 나가는 IP 는 Cloudflare 엣지 IP 로
-바뀌어(warp=on) 실제 ISP IP 를 숨기고, Tor 출구노드 차단·저속 문제를 회피한다.
-
-정본(single source of truth) = launcher/config.py
-  주소/포트/이미지/타임아웃은 config.WARP_* 에서만 정의한다. 이 모듈은 그 값을
-  '읽기만' 한다. (config 를 못 불러오는 예외 상황에서만 리터럴 기본값으로 폴백)
-
-배치
-  - llm_net 위에서 다른 컨테이너는 config.warp_socks_proxy() (llm_warp:1080) 로 접근.
-  - 호스트(호스트-인터프리터 모드)는 게시포트 127.0.0.1:1080 으로 접근.
-
-주의: dperson/torproxy 와 달리 커스텀 설정 마운트가 필요 없다(기본값으로 뜬다).
+A successful ``start()`` means the complete product proxy path is ready:
+WARP SOCKS5 responds on the Host-published port *and* the managed HTTP-to-SOCKS
+bridge is running. Callers can therefore fail closed without re-implementing
+WARP health semantics.
 """
 from __future__ import annotations
 
@@ -22,15 +13,13 @@ import socket
 import subprocess
 import time
 
-# ── 정본 참조 (config 우선, 없으면 리터럴 폴백) ─────────────────────────────
 try:
-    from . import config as _cfg  # launcher.config
-except Exception:
+    from . import config as _cfg
+except Exception:  # pragma: no cover
     _cfg = None
 
 
 def _c(name, default):
-    """config 에 name 이 있으면 그 값, 없으면 default."""
     if _cfg is not None and hasattr(_cfg, name):
         return getattr(_cfg, name)
     return default
@@ -42,41 +31,35 @@ PROXY_PORT = int(_c("WARP_PORT", int(os.environ.get("WARP_PORT", "1080"))))
 IMAGE = _c("WARP_IMAGE", os.environ.get("WARP_IMAGE", "dublok/cloudflare-warp:latest"))
 LICENSE = str(_c("WARP_LICENSE", os.environ.get("WARP_LICENSE", ""))).strip()
 BOOT_TIMEOUT = int(_c("WARP_BOOT_TIMEOUT", int(os.environ.get("WARP_BOOT_TIMEOUT", "45"))))
+_CREATE_NO_WINDOW = 0x08000000
 
 
 def _docker() -> str:
     return shutil.which("docker") or "docker"
 
 
-_CREATE_NO_WINDOW = 0x08000000  # [WARP_NOWINDOW_v1] Windows: 콘솔 창 안 띄움
-
-
 def _run(args, timeout=60):
-    """docker 호출.
-
-    [WARP_NOWINDOW_v1]
-      - creationflags: 런처는 pythonw.exe(콘솔 없음)로 돌기 때문에 플래그가 없으면
-        윈도우가 docker 자식마다 콘솔 창을 새로 만든다 -> 기동 초반 깜빡임.
-        tor_runtime / searxng_runtime / http_bridge 에는 이미 있는데 여기만 빠져 있었다.
-      - encoding/errors: text=True 만 주면 윈도우 기본 코덱(cp949)으로 디코드하다
-        UnicodeDecodeError 로 죽을 수 있다(http_bridge 와 동일한 대응).
-    """
-    kw = {"capture_output": True, "text": True, "encoding": "utf-8",
-          "errors": "replace", "timeout": timeout}
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": timeout,
+    }
     if os.name == "nt":
-        kw["creationflags"] = _CREATE_NO_WINDOW
+        kwargs["creationflags"] = _CREATE_NO_WINDOW
     try:
-        return subprocess.run([_docker(), *args], **kw)
+        return subprocess.run([_docker(), *args], **kwargs)
     except Exception:
         return None
 
 
-def _log(log_path, level, msg):
-    line = "[%s] %s %s" % (time.strftime("%H:%M:%S"), level, msg)
+def _log(log_path, level, message):
+    line = "[%s] %s %s" % (time.strftime("%H:%M:%S"), level, message)
     try:
         if log_path:
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
     except Exception:
         pass
     try:
@@ -86,11 +69,6 @@ def _log(log_path, level, msg):
 
 
 def proxy_url(inside_net: bool = True) -> str:
-    """SearXNG/에이전트가 쓸 WARP SOCKS5 프록시 URL.
-
-    inside_net=True  -> config.warp_socks_proxy()  (컨테이너→컨테이너, llm_net)
-    inside_net=False -> socks5h://127.0.0.1:PORT   (호스트 프로세스용)
-    """
     if inside_net:
         if _cfg is not None and hasattr(_cfg, "warp_socks_proxy"):
             return _cfg.warp_socks_proxy()
@@ -99,76 +77,63 @@ def proxy_url(inside_net: bool = True) -> str:
 
 
 def image_exists() -> bool:
-    r = _run(["image", "inspect", IMAGE])
-    return bool(r and r.returncode == 0)
+    result = _run(["image", "inspect", IMAGE])
+    return bool(result and result.returncode == 0)
 
 
 def container_exists() -> bool:
-    r = _run(["ps", "-a", "--filter", "name=^/%s$" % CONTAINER, "--format", "{{.Names}}"])
-    return bool(r and r.returncode == 0 and CONTAINER in (r.stdout or ""))
+    result = _run([
+        "ps", "-a", "--filter", "name=^/%s$" % CONTAINER,
+        "--format", "{{.Names}}",
+    ])
+    return bool(result and result.returncode == 0 and CONTAINER in (result.stdout or ""))
 
 
 def is_running() -> bool:
-    r = _run(["ps", "--filter", "name=^/%s$" % CONTAINER, "--format", "{{.Names}}"])
-    return bool(r and r.returncode == 0 and CONTAINER in (r.stdout or ""))
+    result = _run([
+        "ps", "--filter", "name=^/%s$" % CONTAINER,
+        "--format", "{{.Names}}",
+    ])
+    return bool(result and result.returncode == 0 and CONTAINER in (result.stdout or ""))
 
 
 def _ensure_net() -> None:
-    """llm_net 공유 브리지 네트워크 보장(없으면 생성)."""
-    r = _run(["network", "inspect", NET])
-    if r and r.returncode == 0:
+    result = _run(["network", "inspect", NET])
+    if result and result.returncode == 0:
         return
     _run(["network", "create", NET])
 
 
 def _remove_stale() -> None:
-    """'marked for removal' 등 상태 잔재 제거(존재하나 미실행 컨테이너 정리)."""
     if container_exists() and not is_running():
         _run(["rm", "-f", CONTAINER], timeout=30)
 
 
 def _socks5_alive(host, port, timeout=3) -> bool:
-    """[WARP_READY_v1] 실제 SOCKS5 인사를 주고받아 '진짜' 준비 여부를 본다.
-
-    왜 TCP connect 만으로는 안 되나
-      도커의 유저랜드 프록시(docker-proxy)는 컨테이너 안에서 아무도 듣지 않아도
-      호스트의 게시 포트 연결을 먼저 accept 한다. 그래서 create_connection 은
-      항상 즉시 성공한다(위양성).
-      실측: 컨테이너 내부 1080 리스닝이 NONE 이고 warp-cli 가
-      'Registration Missing' 인데도 기존 검사는 1초 만에 True 를 냈다.
-
-    SOCKS5 는 첫 바이트가 0x05 인 응답을 반드시 돌려준다. 그것까지 확인한다.
-    """
     try:
-        c = socket.create_connection((host, port), timeout=timeout)
+        client = socket.create_connection((host, port), timeout=timeout)
     except Exception:
         return False
     try:
-        c.settimeout(timeout)
-        c.sendall(b"\x05\x01\x00")
-        buf = b""
-        while len(buf) < 2:
-            chunk = c.recv(2 - len(buf))
+        client.settimeout(timeout)
+        client.sendall(b"\x05\x01\x00")
+        data = b""
+        while len(data) < 2:
+            chunk = client.recv(2 - len(data))
             if not chunk:
                 return False
-            buf += chunk
-        return buf[0:1] == b"\x05"
+            data += chunk
+        return data[0:1] == b"\x05"
     except Exception:
         return False
     finally:
         try:
-            c.close()
+            client.close()
         except Exception:
             pass
 
 
 def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None) -> bool:
-    """[WARP_READY_v1] SOCKS5 가 실제로 응답할 때까지 기다린다.
-
-    WARP 는 Cloudflare 등록에 보통 10~40초가 걸린다. 그동안 프록시 포트는
-    열려 있지 않다. 조급하게 True 를 내면 브리지/SearXNG/에이전트가 전부
-    죽은 프록시 위에서 기동한다.
-    """
     end = time.time() + timeout
     waited = 0
     while time.time() < end:
@@ -179,170 +144,116 @@ def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None) -> bool:
         time.sleep(1)
         waited += 1
         if waited % 10 == 0:
-            _log(log_path, "INFO",
-                 "WARP 등록 대기 중... %d/%d초 (Cloudflare 등록에 시간이 걸립니다)"
-                 % (waited, timeout))
-    _log(log_path, "WARN",
-         "WARP SOCKS5 가 %d초 안에 응답하지 않았습니다. "
-         "docker exec %s warp-cli --accept-tos status 로 확인하세요." % (timeout, CONTAINER))
+            _log(log_path, "INFO", "WARP 등록 대기 중... %d/%d초" % (waited, timeout))
+    _log(log_path, "WARN", "WARP SOCKS5 가 %d초 안에 응답하지 않았습니다." % timeout)
     return False
 
 
-_CLEANUP_REGISTERED = False  # NET_CLEANUP_v1
+_CLEANUP_REGISTERED = False
 
 
 def _register_exit_cleanup():
-    """NET_CLEANUP_v1: 프로그램 종료 시 WARP/브리지 컨테이너를 자동 정리.
-
-    Tor 는 이미 같은 방식으로 정리되는데 WARP 는 빠져 있어서,
-    런처를 닫아도 도커에 계속 띄 있었다.
-    """
     global _CLEANUP_REGISTERED
     if _CLEANUP_REGISTERED:
         return
     try:
         try:
-            from .core import lifelog as _ll
+            from .core import lifelog as lifelog
         except Exception:
-            from launcher.core import lifelog as _ll
+            from launcher.core import lifelog as lifelog
 
-        def _do():
+        def _cleanup():
             try:
-                _ll.log("CLEANUP", "WARP 컨테이너 정리: %s" % CONTAINER)
+                from . import http_bridge
+                http_bridge.stop()
             except Exception:
                 pass
-            try:
-                from . import http_bridge as _hb
-            except Exception:
-                try:
-                    from launcher import http_bridge as _hb  # type: ignore
-                except Exception:
-                    _hb = None
-            if _hb is not None:
-                try:
-                    _hb.stop()
-                except Exception:
-                    pass
             try:
                 _run(["rm", "-f", CONTAINER], timeout=30)
             except Exception:
                 pass
-            try:
-                _ll.log("OK", "WARP/브리지 정리 완료")
-            except Exception:
-                pass
 
-        _ll.register_cleanup(_do)
+        lifelog.register_cleanup(_cleanup)
         _CLEANUP_REGISTERED = True
-        try:
-            _ll.log("INFO", "WARP 종료 정리 cleanup 등록됨 (%s)" % CONTAINER)
-        except Exception:
-            pass
     except Exception:
         pass
 
 
 def _ensure_bridge(log_path=None) -> bool:
-    """BRIDGE_ENSURE_v1: urllib 용 HTTP 프록시 브리지를 보장(멱등).
-
-    WARP 는 SOCKS5 만 제공하고 urllib 은 SOCKS 를 못 쓴다. 브리지가 없으면
-    컨테이너가 llm_httpbridge 이름을 못 찾아 gaierror(-2) 가 난다.
-    """
     try:
-        from . import http_bridge as _hb
-    except Exception:
         try:
-            from launcher import http_bridge as _hb  # type: ignore
-        except Exception:
-            return False
+            from . import http_bridge
+        except Exception:  # pragma: no cover
+            from launcher import http_bridge
+    except Exception:
+        return False
     try:
-        if _hb.is_running():
+        if http_bridge.is_running():
             return True
-        ok = _hb.start(log=lambda m: _log(log_path, "INFO", str(m)))
+        ok = bool(http_bridge.start(log=lambda message: _log(log_path, "INFO", str(message))))
         if not ok:
-            _log(log_path, "WARN",
-                 "HTTP 브리지 미기동 — 검색은 되지만 본문 수집이 실패할 수 있습니다.")
+            _log(log_path, "WARN", "HTTP 브리지 미기동 — 보호 모드를 시작하지 않습니다.")
         return ok
-    except Exception as _e:
-        _log(log_path, "WARN", "HTTP 브리지 예외: %r" % _e)
+    except Exception as exc:
+        _log(log_path, "WARN", "HTTP 브리지 예외: %s" % type(exc).__name__)
         return False
 
 
 def start(env=None, log_path=None) -> bool:
-    """WARP 프록시 기동. 이미 떠 있으면 True. 이미지 없으면 False.
+    """Start the complete WARP path and fail closed on bridge failure."""
+    del env  # kept for the historic runtime API
+    _register_exit_cleanup()
 
-    BRIDGE_ENSURE_v1: 이미 실행 중이라도 브리지는 매번 확인한다.
-    """
-    _register_exit_cleanup()  # NET_CLEANUP_v1
     if is_running():
-        _ensure_bridge(log_path)
-        return True
+        return _ensure_bridge(log_path)
 
     if not image_exists():
-        _log(log_path, "WARN",
-             "WARP 이미지 없음(%s) - install 재실행 또는 'docker pull %s'" % (IMAGE, IMAGE))
+        _log(log_path, "WARN", "WARP 이미지 없음(%s)" % IMAGE)
         return False
 
     _ensure_net()
     _remove_stale()
-
     args = [
         "run", "-d",
         "--name", CONTAINER,
         "--network", NET,
-        # NET_CLEANUP_v1: 종료 시 정리하므로 자동 재시작 정책을 쓰지 않는다
         "-p", "127.0.0.1:%d:%d" % (PROXY_PORT, PROXY_PORT),
         "--sysctl", "net.ipv6.conf.all.disable_ipv6=1",
     ]
     if LICENSE:
         args += ["-e", "WARP_LICENSE=%s" % LICENSE]
-    args += [IMAGE]
+    args.append(IMAGE)
 
-    r = _run(args, timeout=90)
-    if not (r and r.returncode == 0):
+    result = _run(args, timeout=90)
+    if not (result and result.returncode == 0):
         _run(["rm", "-f", CONTAINER], timeout=30)
-        r = _run(args, timeout=90)
-        if not (r and r.returncode == 0):
-            _log(log_path, "WARN",
-                 "WARP 기동 실패: %s" % ((r.stderr if r else "docker 없음") or "").strip()[:200])
+        result = _run(args, timeout=90)
+        if not (result and result.returncode == 0):
+            _log(log_path, "WARN", "WARP 기동 실패")
             return False
 
-    if _wait_ready(log_path=log_path):  # [WARP_READY_v1]
-        _log(log_path, "INFO", "WARP 준비됨 (%s, socks5h :%d)" % (CONTAINER, PROXY_PORT))
-        # HTTP_BRIDGE_v1: urllib 용 HTTP 프록시 브리지도 함께 기동
-        try:
-            from . import http_bridge as _hb
-        except Exception:
-            try:
-                from launcher import http_bridge as _hb  # type: ignore
-            except Exception:
-                _hb = None
-        if _hb is not None:
-            try:
-                if not _hb.start(log=lambda m: _log(log_path, "INFO", str(m))):
-                    _log(log_path, "WARN",
-                         "HTTP 브리지 미기동 — 검색은 되지만 본문 수집이 실패할 수 있습니다.")
-            except Exception as _e:
-                _log(log_path, "WARN", "HTTP 브리지 예외: %r" % _e)
-        return True
+    if not _wait_ready(log_path=log_path):
+        _log(log_path, "WARN", "WARP SOCKS5 준비 실패 — 보호 모드를 시작하지 않습니다.")
+        return False
 
-    _log(log_path, "WARN", "WARP 컨테이너는 떴으나 포트 응답 없음(부팅 지연 가능)")
-    return is_running()
+    _log(log_path, "INFO", "WARP SOCKS5 준비됨 (%s:%d)" % (CONTAINER, PROXY_PORT))
+    if not _ensure_bridge(log_path):
+        return False
+    return True
 
 
 def stop() -> None:
-    """WARP 컨테이너 정지(존재 시)."""
     if container_exists():
         _run(["stop", CONTAINER], timeout=30)
 
 
 def selftest() -> str:
-    """진단용: 컨테이너 내부에서 cdn-cgi/trace 로 warp=on 확인."""
     if not is_running():
         return "WARP 미기동"
-    r = _run([
+    result = _run([
         "exec", CONTAINER, "sh", "-c",
-        "curl -s -x socks5h://127.0.0.1:%d https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -E 'ip=|warp='" % PROXY_PORT,
+        "curl -s -x socks5h://127.0.0.1:%d https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -E 'ip=|warp='"
+        % PROXY_PORT,
     ], timeout=30)
-    out = (r.stdout if r else "") or ""
-    return out.strip() or "trace 실패(이미지 curl 미포함 가능)"
+    output = (result.stdout if result else "") or ""
+    return output.strip() or "trace 실패(이미지 curl 미포함 가능)"

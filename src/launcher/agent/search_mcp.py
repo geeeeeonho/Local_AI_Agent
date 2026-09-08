@@ -13,6 +13,16 @@ import urllib.request
 from html.parser import HTMLParser
 from typing import Any
 
+try:
+    from ..privacy_policy import blocked_outbound_reason
+except Exception:  # copied MCP runtime: privacy_policy.py is installed beside this file
+    try:
+        from privacy_policy import blocked_outbound_reason  # type: ignore
+    except Exception:
+        def blocked_outbound_reason(text: str) -> str | None:
+            # Missing policy assets must not silently weaken the boundary.
+            return "blocked outbound privacy policy unavailable"
+
 SERVER_NAME = "local_search"
 SERVER_VERSION = "1"
 PROTOCOL_VERSION = "2025-06-18"
@@ -52,6 +62,15 @@ class _TextExtractor(HTMLParser):
             text = " ".join(data.split())
             if text:
                 self.parts.append(text)
+
+
+def _network_blocked() -> bool:
+    mode = (
+        os.environ.get("LOCAL_AI_NETWORK_MODE")
+        or os.environ.get("NET_MODE")
+        or "warp"
+    ).strip().lower()
+    return mode == "block"
 
 
 def _read_json_url(url: str, *, timeout: float) -> dict[str, Any]:
@@ -112,9 +131,16 @@ def _rpc_error(message_id: Any, code: int, message: str) -> dict[str, Any]:
 
 
 def _search(arguments: dict[str, Any]) -> dict[str, Any]:
+    if _network_blocked():
+        return _text_result("network mode block: public web search is disabled", is_error=True)
+
     query = str(arguments.get("query") or "").strip()
     if not query:
         return _text_result("query is required", is_error=True)
+    reason = blocked_outbound_reason(query)
+    if reason:
+        return _text_result(reason, is_error=True)
+
     try:
         limit = max(1, min(int(arguments.get("limit", 5)), 10))
     except (TypeError, ValueError):
@@ -184,6 +210,9 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
+    if _network_blocked():
+        return _text_result("network mode block: public page fetch is disabled", is_error=True)
+
     url = str(arguments.get("url") or "").strip()
     allowed, reason = _is_public_http_url(url)
     if not allowed:

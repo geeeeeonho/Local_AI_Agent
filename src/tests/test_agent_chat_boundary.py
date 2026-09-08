@@ -18,7 +18,6 @@ def test_agent_chat_uses_service_boundary_without_unified_agent_private_access()
     assert "UnifiedAgent" not in source
     assert "agent._proc" not in source
     assert "build_sandbox_docker_command" in source
-    # Host mode runs the managed runtime only; there is no venv-interpreter path.
     assert "build_host_pipe_cmd" not in source
 
 
@@ -30,6 +29,22 @@ def test_agent_chat_handles_structured_host_controls():
     assert "service.resume" in source
     assert '"/session"' in source
     assert '"/resume"' in source
+
+
+def test_entry_dialog_commits_network_mode_for_host_and_sandbox():
+    source = _source("launcher/agent/entry_dialog.py")
+    assert "network_policy.set_mode(_nm)" in source
+    assert 'selected["tor"] = _nm in ("warp", "tor")' in source
+    tor_assignment = source.index('selected["tor"]')
+    result_assignment = source.index('result["value"]', tor_assignment)
+    assert 'mode_var.get() == "sandbox"' not in source[tor_assignment:result_assignment]
+    assert '_radio(\n                sec3,\n                net_var,\n                "direct"' in source
+
+
+def test_entry_dialog_refuses_unenforceable_host_block_mode():
+    source = _source("launcher/agent/entry_dialog.py")
+    assert 'mode_var.get() == "host" and _nm == "block"' in source
+    assert "Host 차단 모드" in source
 
 
 def test_structured_sandbox_does_not_relax_outer_docker_security():
@@ -54,14 +69,6 @@ def _source_files():
 
 
 def test_no_module_ships_an_embedded_agent_payload():
-    """No module may carry a whole program as an encoded string literal.
-
-    The retired custom agent loop lived here as a 30KB base64 blob shipped into
-    the container through an environment variable. It carried its own system
-    prompt instructing the model to call undefined global helpers (web_search,
-    report_write, ...), which directly contradicts the current tool guidance and
-    is exactly the behaviour that produces fabricated tool calls.
-    """
     for path in _source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -72,13 +79,6 @@ def test_no_module_ships_an_embedded_agent_payload():
 
 
 def test_agent_runtime_never_executes_a_decoded_source_payload():
-    """The agent path must not assemble and execute source at runtime.
-
-    Scoped to the agent runtime rather than the whole tree: http_bridge legitimately
-    ships a small, plainly readable stdlib script into a container this way, and
-    that script carries no model instructions. An encoded payload on the agent
-    path is what let a second, contradictory system prompt reach the model.
-    """
     paths = list((SRC_ROOT / "launcher" / "agent").rglob("*.py"))
     paths.append(SRC_ROOT / "launcher" / "actions" / "agent_chat.py")
     for path in paths:
@@ -90,18 +90,12 @@ def test_agent_runtime_never_executes_a_decoded_source_payload():
 
 
 def test_sandbox_still_filters_retired_runtime_env_keys():
-    """Defence in depth: a stale command must not smuggle the old payload in."""
     from launcher.agent.sandbox_backend import _LEGACY_ENV_KEYS
 
     assert "AGENT_REPL_SRC" in _LEGACY_ENV_KEYS
 
 
 def test_start_failure_diagnostics_never_run_the_agent_command():
-    """A failed start must not be "diagnosed" by launching a second container.
-
-    The previous diagnostic re-ran the full docker command with the user's
-    workspace and allowed folders mounted.
-    """
     source = _source("launcher/actions/agent_chat.py")
     assert "START_DIAG2_v1" not in source
     assert "_spC.run(cmd" not in source
