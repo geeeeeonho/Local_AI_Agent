@@ -62,13 +62,6 @@ def run(env: Path, p: Presenter):
     p.section("AnythingLLM 채팅/RAG")
     p.info("인터넷 모드: " + network_policy.display_label(mode))
 
-    try:
-        from .. import entrypoint
-        entrypoint.reserve("chat", p=p, note="AnythingLLM ChatService")
-    except Exception as exc:
-        p.error("채팅 시작점 예약에 실패했습니다: " + str(exc))
-        return
-
     keep = os.environ.get("LOCAL_AI_KEEP_CHAT", "0") == "1"
     started_searxng = False
     try:
@@ -128,12 +121,6 @@ def run(env: Path, p: Presenter):
             p.error("AnythingLLM 시작 실패")
             return
 
-        try:
-            from .. import entrypoint
-            entrypoint.enable("chat", p=p, note="AnythingLLM ready")
-        except Exception:
-            pass
-
         p.success("AnythingLLM 준비 완료: " + runtime.URL)
         p.info("처음 실행이면 브라우저에서 관리자 계정/워크스페이스를 생성하세요.")
         try:
@@ -153,11 +140,6 @@ def run(env: Path, p: Presenter):
                     searxng_runtime.stop()
                 except Exception:
                     pass
-        try:
-            from .. import entrypoint
-            entrypoint.release("chat", p=p)
-        except Exception:
-            pass
 
 
 __all__ = ["run"]
