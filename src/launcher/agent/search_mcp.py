@@ -203,6 +203,9 @@ def _is_public_http_url(url: str) -> tuple[bool, str]:
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        privacy_reason = blocked_outbound_reason(newurl)
+        if privacy_reason:
+            raise urllib.error.URLError(f"redirect blocked: {privacy_reason}")
         allowed, reason = _is_public_http_url(newurl)
         if not allowed:
             raise urllib.error.URLError(f"redirect blocked: {reason}")
@@ -214,6 +217,9 @@ def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
         return _text_result("network mode block: public page fetch is disabled", is_error=True)
 
     url = str(arguments.get("url") or "").strip()
+    privacy_reason = blocked_outbound_reason(url)
+    if privacy_reason:
+        return _text_result(privacy_reason, is_error=True)
     allowed, reason = _is_public_http_url(url)
     if not allowed:
         return _text_result(reason, is_error=True)
