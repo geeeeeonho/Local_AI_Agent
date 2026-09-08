@@ -32,6 +32,8 @@ def test_agent_chat_uses_service_boundary_without_unified_agent_private_access()
     assert "build_sandbox_docker_command" not in action
     assert "build_sandbox_docker_command" in runtime
     assert "build_host_pipe_cmd" not in action
+    assert "local-ai-host" in action
+    assert "workspace-write" not in action
 
 
 def test_structured_host_controls_belong_to_session_controller():
