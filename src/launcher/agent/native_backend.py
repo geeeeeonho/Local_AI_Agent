@@ -23,6 +23,7 @@ class NativeOpenInterpreterBackend(OpenInterpreterBackend):
             super().__init__(client_factory=client_factory)
         self._host_process_policy_fingerprint: str | None = None
         self._launch_policy_fingerprint: str | None = None
+        self._host_policy_quarantined = False
 
     def _searxng_url(self) -> str:
         try:
@@ -63,12 +64,12 @@ class NativeOpenInterpreterBackend(OpenInterpreterBackend):
     def start(self, config: AgentConfig) -> bool:
         self._launch_policy_fingerprint = None
         self._host_process_policy_fingerprint = None
+        self._host_policy_quarantined = False
         ok = super().start(config)
         if ok:
             fingerprint = self._launch_policy_fingerprint
             if fingerprint is None:
-                # The App Server must never be treated as policy-bound when the
-                # exact permission identity loaded at launch is unknown.
+                self._host_policy_quarantined = True
                 super().stop(timeout=2.0)
                 return False
             self._host_process_policy_fingerprint = fingerprint
@@ -105,6 +106,7 @@ class NativeOpenInterpreterBackend(OpenInterpreterBackend):
             )
             return False
 
+        self._host_policy_quarantined = True
         self._trace_record(
             "host_permission_process_restart",
             {
@@ -152,7 +154,9 @@ class NativeOpenInterpreterBackend(OpenInterpreterBackend):
 
         self._client = new_client
         self._host_process_policy_fingerprint = fingerprint
+        self._host_policy_quarantined = False
         if not super().resume(session_id):
+            self._host_policy_quarantined = True
             new_client.stop(timeout=2.0)
             self._client = None
             self._thread_id = None
@@ -163,6 +167,8 @@ class NativeOpenInterpreterBackend(OpenInterpreterBackend):
         return True
 
     def resume(self, session_id: str) -> bool:
+        if self._host_policy_quarantined:
+            return False
         config = self._config
         client = self._client
         if (
@@ -183,12 +189,31 @@ class NativeOpenInterpreterBackend(OpenInterpreterBackend):
 
         return self._restart_for_resume(session_id, current_fingerprint)
 
+    def is_running(self) -> bool:
+        return not self._host_policy_quarantined and super().is_running()
+
+    def send(self, message: str) -> bool:
+        if self._host_policy_quarantined:
+            return False
+        return super().send(message)
+
+    def approve(self, request_id: int | str, decision: str) -> bool:
+        if self._host_policy_quarantined:
+            return False
+        return super().approve(request_id, decision)
+
+    def cancel(self) -> bool:
+        if self._host_policy_quarantined:
+            return False
+        return super().cancel()
+
     def stop(self, timeout: float = 3.0) -> None:
         try:
             super().stop(timeout=timeout)
         finally:
             self._host_process_policy_fingerprint = None
             self._launch_policy_fingerprint = None
+            self._host_policy_quarantined = False
 
 
 class NativeSandboxOpenInterpreterBackend(SandboxOpenInterpreterBackend):
