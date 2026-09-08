@@ -7,6 +7,9 @@
 안전 정책:
   - 자동(종료 시): 우리 exited 컨테이너 + dangling 이미지만 (빠르고 안전)
   - 수동([10]):   위 + 빌드 캐시 + (위험)미사용 이미지/볼륨 선택
+
+과거 채팅 UI 컨테이너 식별자는 실행 기능이 아니라 업그레이드 후 남은 자원을
+정리하기 위한 migration-only 패턴으로만 유지한다.
 """
 from __future__ import annotations
 
@@ -22,11 +25,16 @@ _NO_WINDOW = {}
 if os.name == "nt":
     _NO_WINDOW["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
 
-# 우리 자원 식별 패턴 (config 감지 + 안전망)
-_NAME_PATTERNS = ("llm_agent_", "ai_box_", "llm_ollama", "llm_openwebui",
-                  "llm_searxng", "open_webui", "searxng")
-_IMAGE_PATTERNS = ("llm-agent-sandbox", "llm_agent_sandbox", "ai_box_sandbox",
-                   "open_webui", "openwebui", "searxng")
+# 현재 Local_AI_Agent 자원 식별 패턴.
+_ACTIVE_NAME_PATTERNS = ("llm_agent_", "ai_box_", "llm_ollama", "llm_searxng", "searxng")
+_ACTIVE_IMAGE_PATTERNS = ("llm-agent-sandbox", "llm_agent_sandbox", "ai_box_sandbox", "searxng")
+
+# 이전 버전에서 생성한 채팅 UI 자원을 삭제할 때만 쓰는 레거시 패턴.
+_LEGACY_OPENWEBUI_NAME_PATTERNS = ("llm_openwebui", "open_webui")
+_LEGACY_OPENWEBUI_IMAGE_PATTERNS = ("open_webui", "openwebui")
+
+_NAME_PATTERNS = _ACTIVE_NAME_PATTERNS + _LEGACY_OPENWEBUI_NAME_PATTERNS
+_IMAGE_PATTERNS = _ACTIVE_IMAGE_PATTERNS + _LEGACY_OPENWEBUI_IMAGE_PATTERNS
 
 
 def _patterns() -> Tuple[tuple, tuple]:

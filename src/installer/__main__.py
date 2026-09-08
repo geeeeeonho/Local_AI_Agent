@@ -43,7 +43,6 @@ def _dir_has_entries(path: Path) -> bool:
         return False
 
 
-
 # ── 디스크 예산 ────────────────────────────────────────────────────
 _RUNTIME_GB = 5.0        # Ollama / Python 도구 / 샌드박스 이미지 등 모델 외 용량
 _FALLBACK_FLOOR_GB = 20  # 카탈로그를 못 읽을 때의 보수적 하한
@@ -63,7 +62,6 @@ def _model_disk_budget(skip_model: bool):
     except Exception:
         return _FALLBACK_FLOOR_GB, 0.0
     try:
-        # 하한은 '하' 등급만 받았을 때. 그보다 적으면 어떤 조합으로도 못 끝낸다.
         floor = cat.download_gb(cat.plan_by_level().get("low") or ())
         plan = cat.download_gb(cat.recommended_for(cat.MEMORY_BUDGET_GB))
     except Exception:
@@ -86,26 +84,20 @@ def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
             "모델 선택 창에서 일부를 빼거나, 다 받은 뒤 [모델 관리]에서 정리하세요."
             % (plan_gb, target, free))
 
+
 def _needs_model_storage_migration() -> bool:
     """기존/중단된 모델 저장소가 공용 경로로 수렴해야 하는지 확인."""
     legacy = ENV / "llm_models"
     shared = Path(MODEL_STORAGE_DIR)
     staging = shared.with_name(shared.name + ".migrating")
 
-    # 이미 사용 중인 공용 저장소가 있으면 자동 병합하지 않는다. 설치/관리 화면에서
-    # 사용자가 충돌을 확인하도록 두 데이터 세트를 그대로 보존한다.
     if _dir_has_entries(shared):
         return False
     return _dir_has_entries(legacy) or staging.exists()
 
 
 def _should_manage(args) -> bool:
-    """기본(auto) 모드에서 관리 화면으로 갈지 결정한다.
-
-    기존 내부 호출인 ``python -m installer --skip-*`` 는 설치 작업으로 유지한다.
-    또한 이전 버전 모델이나 중단된 staging이 남아 있으면 일반 ``SETUP.bat``도
-    설치 흐름으로 보내 공용 ``C:\\LLM_Models`` 마이그레이션을 먼저 완료한다.
-    """
+    """기본(auto) 모드에서 관리 화면으로 갈지 결정한다."""
     if args.manage:
         return True
     if args.install:
@@ -130,25 +122,18 @@ def _run_manage(args) -> int:
 
 
 def _run_install(args) -> int:
-    # ─── 언어 설정 (저장된 값 → CLI 인자 → 사용자 선택 순) ───
     lang_setup.initialize_language(HERE, override=args.lang)
 
     utils.section(t("install.title"))
     utils.info(t("install.location", path=ENV))
     utils.info(t("install.python_ver", ver=sys.version.split()[0]))
 
-    # ─── 사전 검사 ───
     utils.preflight_windows()
     utils.preflight_python()
-    # 대용량 모델은 프로젝트 위치가 아니라 C:\LLM_Models 에 저장된다.
-    # 필요 용량은 고정 20GB 가 아니라 '이 PC 가 실제로 받을 세트' 에서 계산한다.
-    # 예전에는 20GB 만 확인하고 그보다 훨씬 큰 세트를 받다가 도중에 디스크가
-    # 차서 실패했다.
     _floor_gb, _plan_gb = _model_disk_budget(args.skip_model)
     utils.preflight_disk(MODEL_STORAGE_DIR.parent, need_gb=_floor_gb)
     _warn_if_plan_does_not_fit(_plan_gb)
 
-    # ─── 시스템 자원 감지 + 안전 프로필 ───
     utils.section(t("install.resources_section"))
     spec = resources.detect(ENV)
     utils.info(f"  {spec}")
@@ -167,18 +152,12 @@ def _run_install(args) -> int:
         import time
         time.sleep(5)
 
-    # ─── Ollama 소유권/파일 잠금 확인 ───
-    # 레거시 llm_models 를 옮기기 전에 기존 관리형 Ollama를 종료해야 Windows의
-    # 파일 잠금에 걸리지 않는다. 외부 Ollama가 같은 포트를 쓰면 강제 종료하지
-    # 않고 설치를 중단한다.
     ollama.prepare_install(ENV, MODEL_STORAGE_DIR)
 
-    # ─── 환경 폴더 + 설치 식별 정보 ───
     paths = utils.create_environment(ENV)
     components = []
     utils.write_install_manifest(paths, HERE, "installing", components)
 
-    # ─── 핵심 ───
     ollama.install_portable(paths)
     ollama.start_service(paths)
     components.append("ollama")
@@ -189,12 +168,16 @@ def _run_install(args) -> int:
     else:
         utils.warn("Model download skipped (--skip-model)")
 
-    python_tools.install_open_webui(paths, profile)
-    components.append("open_webui")
-    python_tools.install_open_interpreter(paths, profile)
-    components.append("open_interpreter")
+    if python_tools.install_anythingllm(paths, profile):
+        components.append("anythingllm")
+    else:
+        utils.warn("AnythingLLM 설치가 완료되지 않았습니다. SETUP.bat에서 다시 시도할 수 있습니다.")
 
-    # ─── 샌드박스 ───
+    if python_tools.install_open_interpreter(paths, profile):
+        components.append("open_interpreter")
+    else:
+        utils.warn("Open Interpreter 설치가 완료되지 않았습니다. SETUP.bat에서 다시 시도할 수 있습니다.")
+
     if not args.skip_sandbox:
         try:
             sandbox.install(paths, profile=profile, build_image=not args.skip_build)
@@ -205,7 +188,6 @@ def _run_install(args) -> int:
     else:
         utils.warn(t("install.sandbox_skip", reason="--skip-sandbox"))
 
-    # ─── SearXNG ───
     if not args.skip_search:
         try:
             sandbox._check_docker()
@@ -216,7 +198,6 @@ def _run_install(args) -> int:
     else:
         utils.warn(t("install.searxng_skip_optional"))
 
-    # ─── 마무리 ───
     utils.write_install_manifest(paths, HERE, "installed", components)
     utils.finalize_summary(paths, HERE)
 

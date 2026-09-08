@@ -40,6 +40,40 @@ def test_block_container_environment_has_mode_marker_without_proxy_routes(monkey
         assert not env.get(key)
 
 
+def test_block_run_command_uses_internal_network_and_loopback_port(monkeypatch):
+    policy = runtime._network_policy()
+    monkeypatch.setattr(runtime, "net_mode", lambda: "block")
+    monkeypatch.setattr(policy, "block_network_name", lambda: "llm_block_net")
+
+    cmd = runtime.build_run_cmd(memory="2g", cpus="1")
+
+    assert cmd[cmd.index("--network") + 1] == "llm_block_net"
+    assert "127.0.0.1:%d:%d" % (runtime.HOST_PORT, runtime.CONTAINER_PORT) in cmd
+    assert "LOCAL_AI_NETWORK_MODE=block" in cmd
+
+
+def test_warp_run_command_keeps_shared_proxy_network(monkeypatch):
+    monkeypatch.setattr(runtime, "net_mode", lambda: "warp")
+
+    cmd = runtime.build_run_cmd(memory="2g", cpus="1")
+
+    assert cmd[cmd.index("--network") + 1] == runtime.NETWORK
+
+
+def test_block_start_fails_before_container_when_internal_network_is_unavailable(monkeypatch):
+    policy = runtime._network_policy()
+    monkeypatch.setattr(runtime, "register_exit_cleanup", lambda: None)
+    monkeypatch.setattr(runtime, "net_mode", lambda: "block")
+    monkeypatch.setattr(policy, "ensure_block_network", lambda **kwargs: False)
+    monkeypatch.setattr(
+        runtime,
+        "is_running",
+        lambda: pytest.fail("Block startup must fail before inspecting/reusing the container"),
+    )
+
+    assert runtime.start() is False
+
+
 def test_protected_node_bootstrap_has_no_direct_fetch_fallback():
     source = runtime._NODE_BOOTSTRAP_JS
 

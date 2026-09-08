@@ -9,7 +9,7 @@
     installer.resources  — 시스템 사양 감지 + 안전 프로필
     installer.ollama     — 포터블 Ollama 설치 + serve
     installer.model      — 역할별 모델 다운로드 (model_roles 기반, 멱등)
-    installer.python_tools — Open WebUI / Open Interpreter venv (멱등)
+    installer.python_tools — AnythingLLM 이미지 + Open Interpreter 런타임
     installer.sandbox    — Docker 에이전트 이미지 빌드 (멱등)
     installer.searxng    — SearXNG 설정 + 이미지 (멱등)
 """

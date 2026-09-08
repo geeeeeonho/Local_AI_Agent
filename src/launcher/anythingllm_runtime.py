@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py 가 생성)  ANYTHINGLLM_REV=8
+# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py 가 생성)  ANYTHINGLLM_REV=9
 """anythingllm_runtime — AnythingLLM 컨테이너 수명주기.
 
 searxng_runtime / warp_runtime 과 같은 모양이며, 같은 규약을 따른다.
@@ -354,16 +354,6 @@ def exists():
     return _run(["docker", "inspect", CONTAINER], timeout=20).returncode == 0
 
 
-def ensure_network():
-    if _run(["docker", "network", "inspect", NETWORK], timeout=20).returncode != 0:
-        _run(["docker", "network", "create", NETWORK], timeout=30)
-
-
-def _remove_stale():
-    if exists() and not is_running():
-        _run(["docker", "rm", "-f", CONTAINER], timeout=40)
-
-
 def _network_policy():
     try:
         from . import network_policy
@@ -375,6 +365,29 @@ def _network_policy():
 def net_mode():
     """Return the canonical product network mode."""
     return _network_policy().current_mode().value
+
+
+def network_for_mode(mode=None):
+    """Return the Docker network matching the canonical AnythingLLM mode."""
+    selected = _network_policy().normalize_mode(mode or net_mode())
+    if selected is _network_policy().NetworkMode.BLOCK:
+        return _network_policy().block_network_name()
+    return NETWORK
+
+
+def ensure_network(mode=None):
+    selected = _network_policy().normalize_mode(mode or net_mode())
+    if selected is _network_policy().NetworkMode.BLOCK:
+        return bool(_network_policy().ensure_block_network())
+    if _run(["docker", "network", "inspect", NETWORK], timeout=20).returncode != 0:
+        created = _run(["docker", "network", "create", NETWORK], timeout=30)
+        return created.returncode == 0
+    return True
+
+
+def _remove_stale():
+    if exists() and not is_running():
+        _run(["docker", "rm", "-f", CONTAINER], timeout=40)
 
 
 def net_mode_label(mode=None):
@@ -543,7 +556,7 @@ def config_signature(mode=None):
     px = proxy_env_for_container(m)
     parts = [
         IMAGE, str(HOST_PORT), str(CONTAINER_PORT),
-        STORAGE_MOUNT, SERVER_ENV_MOUNT, NETWORK,
+        STORAGE_MOUNT, SERVER_ENV_MOUNT, network_for_mode(m),
         ",".join(CAP_ADD),
         "|".join("%s=%s" % (k, px[k]) for k in sorted(px)),
         chromium_args(m),
@@ -599,11 +612,12 @@ def running_cfgsig():
 
 def build_run_cmd(memory=None, cpus=None):
     d = _vol(storage_dir())
+    _mode = net_mode()
     cmd = [
         "docker", "run", "-d",
         "--name", CONTAINER,
-        "--network", NETWORK,
-        "-p", "%d:%d" % (HOST_PORT, CONTAINER_PORT),
+        "--network", network_for_mode(_mode),
+        "-p", "127.0.0.1:%d:%d" % (HOST_PORT, CONTAINER_PORT),
     ]
     for cap in CAP_ADD:
         cmd += ["--cap-add", str(cap)]
@@ -612,7 +626,6 @@ def build_run_cmd(memory=None, cpus=None):
         "-v", d + "/.env:" + SERVER_ENV_MOUNT,
         "-e", "STORAGE_DIR=" + STORAGE_MOUNT,
     ]
-    _mode = net_mode()
     write_node_proxy_bootstrap(_mode)
     cmd += ["--label", NETMODE_LABEL + "=" + _mode]
     cmd += ["--label", CFGSIG_LABEL + "=" + config_signature(_mode)]
@@ -710,6 +723,9 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
     if _mode in ("warp", "tor") and not ensure_proxy_stack(log=log, env_path=env_path):
         _say("보호 네트워크 준비에 실패하여 AnythingLLM 시작을 중단합니다.", "FAIL")
         return False
+    if _mode == "block" and not _network_policy().ensure_block_network(log=log):
+        _say("Block 네트워크 준비에 실패하여 AnythingLLM 시작을 중단합니다.", "FAIL")
+        return False
 
     if is_running():
         _prev = running_netmode()
@@ -729,7 +745,9 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
             _say("AnythingLLM 이 이미 실행 중입니다 (설정 동일 %s)." % _sig)
             return wait_ready(cancel_check=cancel_check, log=log)
 
-    ensure_network()
+    if not ensure_network(_mode):
+        _say("Docker 네트워크를 준비할 수 없어 AnythingLLM 시작을 중단합니다.", "FAIL")
+        return False
     _remove_stale()
     seeded = ensure_env_file(model_tag=model_tag, token_limit=token_limit)
     _say("설정 파일 %s: %s" % ("생성" if seeded else "기존 유지", env_file()))
@@ -776,7 +794,7 @@ def describe():
         "image=" + IMAGE,
         "container=" + CONTAINER,
         "url=" + URL,
-        "network=" + NETWORK,
+        "network=" + network_for_mode(),
         "storage=" + str(storage_dir()),
         "memory=" + str(resolve_memory()),
         "cpus=" + str(resolve_cpus()),
@@ -796,7 +814,7 @@ __all__ = [
     "IMAGE", "CONTAINER", "HOST_PORT", "URL", "NETWORK",
     "storage_dir", "env_file", "ensure_env_file", "reseed_env",
     "searxng_url_for_container", "image_exists", "pull",
-    "is_running", "exists", "ensure_network", "build_run_cmd",
+    "is_running", "exists", "ensure_network", "network_for_mode", "build_run_cmd",
     "wait_ready", "start", "stop", "logs", "describe",
     "register_exit_cleanup", "resolve_memory", "resolve_cpus",
     "net_mode", "net_mode_label", "proxy_env_for_container", "no_proxy_hosts",

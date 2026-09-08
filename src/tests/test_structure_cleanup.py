@@ -29,8 +29,7 @@ class SettingsStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (old_agent / "user_config.json").write_text(
-                json.dumps({"logging_enabled": False}),
-                encoding="utf-8",
+                json.dumps({"logging_enabled": False}), encoding="utf-8"
             )
 
             cfg = settings_store.load(root)
@@ -159,7 +158,40 @@ class RepositoryStructureTests(unittest.TestCase):
 
     def test_patch_redefinitions_are_flattened(self):
         self.assertEqual(self._function_count("src/launcher/app.py", "_build_menu_items"), 1)
-        self.assertEqual(self._function_count("src/installer/steps/python_tools.py", "install_open_webui"), 1)
+        self.assertEqual(self._function_count("src/installer/steps/python_tools.py", "install_open_webui"), 0)
+
+    def test_open_webui_has_no_active_installer_entrypoint(self):
+        python_tools = self._text("src/installer/steps/python_tools.py").lower()
+        installer_main = self._text("src/installer/__main__.py").lower()
+        self.assertNotIn("install_open_webui", python_tools)
+        self.assertNotIn("_install_open_webui", python_tools)
+        self.assertNotIn("open-webui.exe", python_tools)
+        self.assertNotIn("install_open_webui", installer_main)
+        self.assertNotIn('components.append("open_webui")', installer_main)
+        self.assertIn("install_anythingllm", installer_main)
+
+    def test_open_webui_has_no_active_launcher_switch(self):
+        chat = self._text("src/launcher/actions/chat.py").lower()
+        app = self._text("src/launcher/app.py").lower()
+        self.assertNotIn("local_ai_chat_engine", chat)
+        self.assertNotIn("openwebui", chat)
+        self.assertNotIn("open webui", chat)
+        self.assertNotIn("openwebui", app)
+        self.assertNotIn("open webui", app)
+
+    def test_installer_copy_describes_anythingllm_as_the_chat_service(self):
+        installer_init = self._text("src/installer/__init__.py")
+        i18n = self._text("src/installer/i18n.py")
+        self.assertNotIn("Open WebUI", installer_init)
+        self.assertNotIn("Open WebUI", i18n)
+        self.assertIn("AnythingLLM", installer_init)
+        self.assertIn("AnythingLLM", i18n)
+
+    def test_open_webui_identifiers_remain_only_as_explicit_legacy_cleanup(self):
+        maint = self._text("src/launcher/core/docker_maint.py")
+        self.assertIn("_LEGACY_OPENWEBUI_NAME_PATTERNS", maint)
+        self.assertIn("_LEGACY_OPENWEBUI_IMAGE_PATTERNS", maint)
+        self.assertNotIn('"llm_openwebui"', maint.split("_LEGACY_OPENWEBUI_NAME_PATTERNS", 1)[0])
 
     def test_agent_package_import_has_no_settings_side_effect(self):
         init_text = self._text("src/launcher/agent/__init__.py")
@@ -178,11 +210,6 @@ class RepositoryStructureTests(unittest.TestCase):
         )
 
     def test_retired_runtime_and_compat_shims_are_gone(self):
-        """These were unreachable from the menu but still shipped.
-
-        agent_direct in particular launched the interpreter with no system
-        message at all: no privacy clause, no tool guidance, no folder policy.
-        """
         for relative in (
             "src/launcher/agent/agent_runner.py",
             "src/launcher/agent/legacy_backend.py",
@@ -202,7 +229,6 @@ class RepositoryStructureTests(unittest.TestCase):
         reachable = set()
         for run in _build_action_map().values():
             reachable.add(run.__module__.rsplit(".", 1)[-1])
-        # Every exported action module must be wired into the menu.
         for name in exported:
             module = getattr(actions, name)
             self.assertIn(module.__name__.rsplit(".", 1)[-1], reachable, name)
@@ -217,6 +243,61 @@ class RepositoryStructureTests(unittest.TestCase):
         workflow = self._text(".github/workflows/tests.yml")
         self.assertIn("compileall", workflow)
         self.assertNotIn("legacy_backend.py", workflow)
+
+    def test_open_interpreter_transition_modules_are_explicit(self):
+        for relative in (
+            "src/launcher/agent/execution_policy.py",
+            "src/launcher/agent/app_server_protocol.py",
+            "src/launcher/agent/setup_flow.py",
+            "src/launcher/agent/runtime_config.py",
+            "src/launcher/agent/chat_session_controller.py",
+        ):
+            self.assertTrue((REPO_ROOT / relative).is_file(), relative)
+
+    def test_there_is_one_active_docker_service_class(self):
+        definitions = []
+        for path in (REPO_ROOT / "src").rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef) and node.name == "DockerService":
+                    definitions.append(path.relative_to(REPO_ROOT).as_posix())
+        self.assertEqual(definitions, ["src/launcher/services/docker.py"])
+
+    def test_open_interpreter_version_has_one_assignment_source(self):
+        assignments = []
+        for path in (REPO_ROOT / "src").rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    if any(isinstance(target, ast.Name) and target.id == "OPEN_INTERPRETER_VERSION" for target in targets):
+                        assignments.append(path.relative_to(REPO_ROOT).as_posix())
+        self.assertEqual(assignments, ["src/runtime_versions.py"])
+        self.assertIn('OPEN_INTERPRETER_VERSION = "0.0.38"', self._text("src/runtime_versions.py"))
+
+    def test_active_chat_panel_does_not_own_legacy_session_files(self):
+        panel = self._text("src/launcher/presenter/gui/chat_panel.py")
+        self.assertNotIn("session_*.json", panel)
+        self.assertNotIn("interpreter_dir(", panel)
+        self.assertIn("/resume ", panel)
+
+    def test_readme_documents_final_runtime_and_hard_block_contract(self):
+        readme = self._text("README.md")
+        self.assertIn("AnythingLLM", readme)
+        self.assertIn("Open Interpreter App Server", readme)
+        self.assertIn("llm_block_net", readme)
+        self.assertIn("verify_block_egress", readme)
+        self.assertIn("Host Block", readme)
+        self.assertIn("JSONL", readme)
+
+    def test_native_tools_doc_matches_the_current_module_ownership(self):
+        doc = self._text("src/docs/open-interpreter-native-tools.md")
+        self.assertIn("execution_policy.py", doc)
+        self.assertIn("app_server_protocol.py", doc)
+        self.assertIn("chat_session_controller.py", doc)
+        self.assertIn("llm_block_net", doc)
+        self.assertIn("verify_block_egress", doc)
+        self.assertNotIn("agent_runner.py", doc)
 
 
 if __name__ == "__main__":

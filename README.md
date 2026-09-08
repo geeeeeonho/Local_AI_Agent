@@ -116,6 +116,61 @@ Open Interpreter 버전은 `src/runtime_versions.py` 한 곳에서만 정의합�
 가 검사합니다. 선택 기능을 `try: ... except Exception: pass` 로 감싸는 자리가 많아,
 경로가 틀리면 `ImportError` 가 그대로 삼켜지고 기능만 조용히 사라집니다.
 
+## 전환 완료 아키텍처
+
+현재 서비스 경계는 다음처럼 고정합니다.
+
+```text
+Chat / RAG
+  AnythingLLM -> Ollama
+
+Automation Agent
+  Local_AI_Agent GUI
+    -> AgentService
+    -> Open Interpreter App Server 0.0.38
+    -> Ollama
+    -> native command/file execution + approvals + thread sessions
+
+Web search
+  Open Interpreter
+    -> local_search MCP
+    -> SearXNG
+    -> Direct / WARP / Tor
+```
+
+Open Interpreter App Server와의 전송은 **JSONL over stdio**를 유지합니다. 현재 경계가 이미 프로세스 수명주기와 승인·세션 이벤트를 안정적으로 전달하므로, 단순히 계층을 바꾸기 위해 별도 SDK 전송으로 재작성하지 않습니다. App Server 메서드명과 초기화 payload는 `src/launcher/agent/app_server_protocol.py`, Host/Sandbox 승인 정책은 `src/launcher/agent/execution_policy.py`가 각각 정본입니다.
+
+Agent UI의 역할도 분리했습니다.
+
+- `setup_flow.py` — 프로필·모델·워크스페이스·실행 모드 선택
+- `runtime_config.py` — Host/Sandbox 런타임 명령과 네트워크 표시
+- `chat_session_controller.py` — `/session`, `/resume <thread-id>`, `/model`, `/reload`, 승인, 중단·재시작과 이벤트 라우팅
+- `agent_chat.py` — 상위 진입과 패널 조립
+
+이전의 로컬 `session_*.json` 목록을 세션 ID처럼 사용하는 방식은 제거했습니다. 세션 이어가기는 Open Interpreter가 제공하는 실제 thread ID를 사용합니다.
+
+### 네트워크 모드와 fail-closed
+
+네트워크 의미는 `src/launcher/network_policy.py` 한 곳에서 결정합니다.
+
+- **Direct** — 프록시 없이 직접 연결. Sandbox는 로컬 `llm_searxng` 같은 보조 서비스를 찾기 위해 공유 Docker 네트워크에는 참여합니다.
+- **WARP** — WARP 프록시 경유. 보호 경로 준비가 실패하면 Direct로 폴백하지 않고 시작을 중단합니다.
+- **Tor** — Tor 경유. 보호 경로 준비가 실패하면 Direct로 폴백하지 않고 시작을 중단합니다.
+- **Block** — Sandbox와 AnythingLLM을 Docker internal network인 `llm_block_net`에 배치해 공용 egress 경계를 만듭니다. Block에서는 공용 검색도 비활성화됩니다.
+
+AnythingLLM Block 모드는 UI 포트도 loopback에만 바인딩합니다. Sandbox Block은 `llm_block_net`과 DNS 차단 가드를 함께 사용합니다.
+
+**Host Block은 지원하지 않습니다.** Host 프로세스의 프록시 환경변수는 제어할 수 있어도 임의의 자식 프로세스까지 포함한 OS 수준 hard-egress를 보장하지 못하기 때문입니다. 외부 통신을 강제로 막아야 하는 작업은 Sandbox Block을 사용하세요.
+
+실제 Windows + Docker Desktop의 raw-IP/DNS 차단은 다음 진단으로 확인할 수 있습니다.
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+python -m tools.verify_block_egress
+```
+
+`verify_block_egress`는 raw-IP 외부 접근, DNS 외부 접근, `host.docker.internal`을 통한 로컬 Ollama 접근을 분리해 확인합니다. GitHub Actions는 명령 생성과 판정 로직을 검증하지만, 호스티드 러너에서 실제 사용자의 Docker Desktop 방화벽 경로까지 검증했다고 간주하지 않습니다.
+
 ## 모델 정책
 
 받을 수 있는 모델(`src/launcher/models/model_catalog.py`)과 런타임이 고를 수 있는

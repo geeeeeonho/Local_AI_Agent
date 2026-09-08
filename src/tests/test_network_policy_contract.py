@@ -103,6 +103,73 @@ def test_prepare_runtime_does_not_require_proxy_for_direct_or_block(monkeypatch)
     assert policy.prepare_runtime("block") is True
 
 
+def test_block_network_name_defaults_to_managed_internal_network(monkeypatch):
+    policy = _policy()
+    import launcher.config as config
+
+    monkeypatch.delattr(config, "BLOCK_NETWORK", raising=False)
+    assert policy.block_network_name() == "llm_block_net"
+
+
+def test_block_network_is_created_as_internal_bridge():
+    policy = _policy()
+    calls = []
+
+    class Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    inspections = iter([
+        Result(returncode=1, stderr="not found"),
+        Result(returncode=0, stdout="true|bridge\n"),
+    ])
+
+    def fake_run(args, timeout=20):
+        calls.append(list(args))
+        if args[:3] == ["docker", "network", "inspect"]:
+            return next(inspections)
+        if args[:3] == ["docker", "network", "create"]:
+            return Result(returncode=0, stdout="network-id\n")
+        raise AssertionError("unexpected command: %r" % (args,))
+
+    assert policy.ensure_block_network(run=fake_run) is True
+    assert [
+        "docker", "network", "create", "--driver", "bridge", "--internal",
+        policy.block_network_name(),
+    ] in calls
+
+
+def test_existing_non_internal_block_network_fails_closed():
+    policy = _policy()
+
+    class Result:
+        returncode = 0
+        stdout = "false|bridge\n"
+        stderr = ""
+
+    calls = []
+
+    def fake_run(args, timeout=20):
+        calls.append(list(args))
+        return Result()
+
+    assert policy.ensure_block_network(run=fake_run) is False
+    assert not any(args[:3] == ["docker", "network", "create"] for args in calls)
+
+
+def test_existing_non_bridge_block_network_fails_closed():
+    policy = _policy()
+
+    class Result:
+        returncode = 0
+        stdout = "true|overlay\n"
+        stderr = ""
+
+    assert policy.ensure_block_network(run=lambda args, timeout=20: Result()) is False
+
+
 def test_running_warp_is_not_ready_when_http_bridge_cannot_be_prepared(monkeypatch):
     from launcher import warp_runtime
 

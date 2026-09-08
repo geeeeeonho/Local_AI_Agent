@@ -12,6 +12,7 @@ from runtime_versions import (
 )
 
 from .backend import AgentConfig
+from .events import AgentEvent, AgentEventType
 from .interpreter_backend import OI_VERSION, OpenInterpreterBackend
 
 #: Used only when launcher.config cannot be imported at all.
@@ -173,6 +174,31 @@ class SandboxOpenInterpreterBackend(OpenInterpreterBackend):
             super().__init__(client_factory=client_factory)
         self._container_name: str | None = None
 
+    def start(self, config: AgentConfig) -> bool:
+        """Start only after the hard Block network has been proven safe."""
+        try:
+            from launcher import network_policy
+            selected = network_policy.normalize_mode(config.network_mode)
+            if selected is network_policy.NetworkMode.BLOCK:
+                if not network_policy.ensure_block_network():
+                    self._emit(AgentEvent(
+                        AgentEventType.ERROR,
+                        "Block 네트워크를 안전하게 준비할 수 없어 샌드박스 시작을 중단했습니다.",
+                        "error",
+                    ))
+                    return False
+        except Exception as exc:
+            # A Block request must never continue when policy resolution itself
+            # fails. Non-Block modes retain the existing generic start path.
+            if str(config.network_mode).strip().lower() == "block":
+                self._emit(AgentEvent(
+                    AgentEventType.ERROR,
+                    f"Block 네트워크 정책 확인 실패: {type(exc).__name__}",
+                    "error",
+                ))
+                return False
+        return super().start(config)
+
     def _runtime_available(self, config: AgentConfig) -> bool:
         return config.runtime_spec is not None and sandbox_image_supports_app_server()
 
@@ -183,11 +209,6 @@ class SandboxOpenInterpreterBackend(OpenInterpreterBackend):
         command = normalize_sandbox_command(runtime.command)
         self._container_name = _container_name(command)
         return command, dict(os.environ), config.workspace.resolve()
-
-    def _thread_sandbox_mode(self, config: AgentConfig) -> str:
-        # Docker is the mandatory outer sandbox. Do not weaken Docker to nest
-        # Open Interpreter's Linux sandbox inside it.
-        return "danger-full-access"
 
     def _thread_cwd(self, config: AgentConfig) -> str:
         return "/home/agent/workspace"
