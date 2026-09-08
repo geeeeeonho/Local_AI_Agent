@@ -1,8 +1,8 @@
 """Outbound URL validation and protected DNS/connection primitives.
 
-Direct mode may resolve targets with the local resolver. WARP/Tor must resolve
-public targets through a protected resolver and then connect to the exact IP
-that was validated. This keeps SSRF checks while avoiding target DNS leakage.
+Direct mode may resolve targets with the local resolver. Direct/WARP/Tor all
+connect to the exact public IP that was validated. Protected modes additionally
+resolve public target names through the selected privacy route.
 """
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from typing import Protocol
 _PROTECTED_MODES = {"warp", "tor"}
 _DOH_HOST = "cloudflare-dns.com"
 _DOH_PATH = "/dns-query"
+_PATH_SAFE = "/:@!$&'()*+,;=-._~%"
+_QUERY_SAFE = "=&?/:@!$'()*+,;%-._~"
 
 
 class Resolver(Protocol):
@@ -72,6 +74,60 @@ def _literal_address(host: str) -> str | None:
         return None
 
 
+def _ascii_hostname(host: str) -> str:
+    literal = _literal_address(host)
+    if literal is not None:
+        return literal
+    try:
+        encoded = host.encode("idna").decode("ascii").rstrip(".")
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError("invalid internationalized hostname") from exc
+    if not encoded:
+        raise ValueError("invalid hostname")
+    return encoded
+
+
+def _normalized_http_url(parsed: urllib.parse.SplitResult, hostname: str, port: int) -> str:
+    scheme = parsed.scheme.lower()
+    default_port = 443 if scheme == "https" else 80
+    host_for_netloc = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = host_for_netloc if port == default_port else f"{host_for_netloc}:{port}"
+    path = urllib.parse.quote(parsed.path or "", safe=_PATH_SAFE)
+    query = urllib.parse.quote(parsed.query or "", safe=_QUERY_SAFE)
+    return urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
+
+
+def normalize_outbound_url(url: str) -> ValidationResult:
+    """Parse/canonicalize an outbound URL without DNS or network I/O."""
+    raw_url = str(url or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+    except ValueError:
+        return ValidationResult(False, "invalid URL")
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        return ValidationResult(False, "only http/https URLs are allowed")
+    if parsed.username or parsed.password:
+        return ValidationResult(False, "URLs with embedded credentials are not allowed")
+
+    raw_host = parsed.hostname.rstrip(".")
+    if raw_host.lower() == "localhost" or raw_host.lower().endswith(".localhost"):
+        return ValidationResult(False, "private/local network URLs are not allowed")
+    try:
+        port = parsed.port or (443 if scheme == "https" else 80)
+        host = _ascii_hostname(raw_host)
+        normalized_url = _normalized_http_url(parsed, host, int(port))
+    except (UnicodeError, ValueError):
+        return ValidationResult(False, "invalid URL")
+    return ValidationResult(
+        True,
+        url=normalized_url,
+        scheme=scheme,
+        hostname=host,
+        port=int(port),
+    )
+
+
 class LocalResolver:
     def resolve(self, host: str, port: int) -> set[str]:
         return {
@@ -107,23 +163,35 @@ def _proxy_endpoint(proxy_url: str) -> tuple[str, int]:
 
 
 def _connect_proxy_host(host: str, port: int, timeout: float) -> socket.socket:
-    """Connect to the managed proxy itself without using getaddrinfo.
-
-    Target-host DNS privacy is the security property. Managed container names
-    may use Docker's local resolver; numeric Host endpoints bypass DNS entirely.
-    """
+    """Connect to the managed proxy itself without using target-host DNS."""
     literal = _literal_address(host)
     if literal:
         family = socket.AF_INET6 if ":" in literal else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
         sock.settimeout(timeout)
-        sock.connect((literal, port))
+        target = (literal, port, 0, 0) if family == socket.AF_INET6 else (literal, port)
+        sock.connect(target)
         return sock
     proxy_ip = socket.gethostbyname(host)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     sock.connect((proxy_ip, port))
     return sock
+
+
+def open_direct_connection(target_ip: str, target_port: int, *, timeout: float) -> socket.socket:
+    """Connect directly to a previously validated literal IP without DNS."""
+    address = ipaddress.ip_address(str(target_ip).split("%", 1)[0])
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        target = (str(address), int(target_port), 0, 0) if family == socket.AF_INET6 else (str(address), int(target_port))
+        sock.connect(target)
+        return sock
+    except Exception:
+        sock.close()
+        raise
 
 
 def open_socks5_connection(
@@ -256,20 +324,11 @@ def validate_outbound_url(
     network_mode: str,
     resolver: Resolver | None = None,
 ) -> ValidationResult:
-    raw_url = str(url or "").strip()
-    try:
-        parsed = urllib.parse.urlsplit(raw_url)
-    except ValueError:
-        return ValidationResult(False, "invalid URL")
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        return ValidationResult(False, "only http/https URLs are allowed")
-    if parsed.username or parsed.password:
-        return ValidationResult(False, "URLs with embedded credentials are not allowed")
-
-    host = parsed.hostname.rstrip(".")
-    if host.lower() == "localhost" or host.lower().endswith(".localhost"):
-        return ValidationResult(False, "private/local network URLs are not allowed")
-    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    normalized = normalize_outbound_url(url)
+    if not normalized.ok:
+        return normalized
+    host = normalized.hostname
+    port = normalized.port
 
     literal = _literal_address(host)
     if literal is not None:
@@ -298,12 +357,75 @@ def validate_outbound_url(
 
     return ValidationResult(
         True,
-        url=raw_url,
-        scheme=parsed.scheme.lower(),
+        url=normalized.url,
+        scheme=normalized.scheme,
         hostname=host,
-        port=int(port),
+        port=port,
         addresses=tuple(sorted(addresses)),
     )
+
+
+def _request_target(validated: ValidationResult) -> str:
+    parsed = urllib.parse.urlsplit(validated.url)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    return path
+
+
+def _host_header(validated: ValidationResult) -> str:
+    default_port = 443 if validated.scheme == "https" else 80
+    host = f"[{validated.hostname}]" if ":" in validated.hostname else validated.hostname
+    if validated.port != default_port:
+        host += f":{validated.port}"
+    return host
+
+
+def _http_get_over_stream(
+    validated: ValidationResult,
+    stream,
+    *,
+    max_bytes: int,
+) -> ProtectedResponse:
+    request = (
+        f"GET {_request_target(validated)} HTTP/1.1\r\n"
+        f"Host: {_host_header(validated)}\r\n"
+        "User-Agent: Local_AI_Agent/1 local-search-mcp\r\n"
+        "Accept: text/html,text/plain,application/xhtml+xml,*/*;q=0.5\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii", "strict")
+    stream.sendall(request)
+    response = http.client.HTTPResponse(stream)
+    response.begin()
+    headers = {str(k).lower(): str(v) for k, v in response.getheaders()}
+    body = response.read(max(1, int(max_bytes)))
+    return ProtectedResponse(int(response.status), headers, body)
+
+
+def direct_request(
+    validated: ValidationResult,
+    *,
+    timeout: float = 25.0,
+    max_bytes: int = 48000,
+) -> ProtectedResponse:
+    """Fetch a validated Direct target through its exact validated literal IP."""
+    if not validated.ok or not validated.addresses:
+        raise OSError("validated public target required")
+    target_ip = validated.addresses[0]
+    sock = open_direct_connection(target_ip, validated.port, timeout=timeout)
+    stream = sock
+    try:
+        if validated.scheme == "https":
+            stream = ssl.create_default_context().wrap_socket(
+                sock,
+                server_hostname=validated.hostname,
+            )
+        return _http_get_over_stream(validated, stream, max_bytes=max_bytes)
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
 def protected_request(
@@ -334,27 +456,7 @@ def protected_request(
                 sock,
                 server_hostname=validated.hostname,
             )
-        parsed = urllib.parse.urlsplit(validated.url)
-        path = parsed.path or "/"
-        if parsed.query:
-            path += "?" + parsed.query
-        default_port = 443 if validated.scheme == "https" else 80
-        host_header = validated.hostname
-        if validated.port != default_port:
-            host_header += f":{validated.port}"
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host_header}\r\n"
-            "User-Agent: Local_AI_Agent/1 local-search-mcp\r\n"
-            "Accept: text/html,text/plain,application/xhtml+xml,*/*;q=0.5\r\n"
-            "Connection: close\r\n\r\n"
-        ).encode("ascii", "strict")
-        stream.sendall(request)
-        response = http.client.HTTPResponse(stream)
-        response.begin()
-        headers = {str(k).lower(): str(v) for k, v in response.getheaders()}
-        body = response.read(max(1, int(max_bytes)))
-        return ProtectedResponse(int(response.status), headers, body)
+        return _http_get_over_stream(validated, stream, max_bytes=max_bytes)
     finally:
         try:
             stream.close()
@@ -369,7 +471,10 @@ __all__ = [
     "LocalResolver",
     "ProtectedDoHResolver",
     "is_public_address",
+    "normalize_outbound_url",
     "validate_outbound_url",
+    "open_direct_connection",
     "open_socks5_connection",
+    "direct_request",
     "protected_request",
 ]

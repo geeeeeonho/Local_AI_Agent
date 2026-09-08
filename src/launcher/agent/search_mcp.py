@@ -6,7 +6,6 @@ import os
 import re
 import socket
 import sys
-import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -14,7 +13,7 @@ from typing import Any
 
 try:
     from ..privacy_policy import blocked_outbound_reason
-except Exception:  # copied MCP runtime: privacy_policy.py is installed beside this file
+except Exception:
     try:
         from privacy_policy import blocked_outbound_reason  # type: ignore
     except Exception:
@@ -23,7 +22,7 @@ except Exception:  # copied MCP runtime: privacy_policy.py is installed beside t
 
 try:
     from . import web_safety
-except Exception:  # copied MCP runtime: web_safety.py is installed beside this file
+except Exception:
     import web_safety  # type: ignore
 
 SERVER_NAME = "local_search"
@@ -33,17 +32,7 @@ DEFAULT_SEARXNG_URL = "http://127.0.0.1:8888"
 DEFAULT_TIMEOUT = 25.0
 DEFAULT_PAGE_LIMIT = 12000
 _CHARSET_RE = re.compile(rb"(?i)charset\s*=\s*[\"']?\s*([a-z0-9._-]+)")
-_CHARSET_ALIASES = {
-    "euc-kr": "cp949",
-    "euckr": "cp949",
-    "ks_c_5601-1987": "cp949",
-    "ks_c_5601-1989": "cp949",
-    "ms949": "cp949",
-    "x-windows-949": "cp949",
-    "shift_jis": "cp932",
-    "sjis": "cp932",
-    "gb2312": "gbk",
-}
+_CHARSET_ALIASES = {"euc-kr": "cp949", "euckr": "cp949", "ks_c_5601-1987": "cp949", "ks_c_5601-1989": "cp949", "ms949": "cp949", "x-windows-949": "cp949", "shift_jis": "cp932", "sjis": "cp932", "gb2312": "gbk"}
 _REDIRECT_STATUS = {301, 302, 303, 307, 308}
 
 
@@ -69,11 +58,7 @@ class _TextExtractor(HTMLParser):
 
 
 def _network_mode() -> str:
-    mode = (
-        os.environ.get("LOCAL_AI_NETWORK_MODE")
-        or os.environ.get("NET_MODE")
-        or "warp"
-    ).strip().lower()
+    mode = (os.environ.get("LOCAL_AI_NETWORK_MODE") or os.environ.get("NET_MODE") or "warp").strip().lower()
     return mode if mode in {"warp", "tor", "direct", "block"} else "warp"
 
 
@@ -82,10 +67,7 @@ def _network_blocked() -> bool:
 
 
 def _read_json_url(url: str, *, timeout: float) -> dict[str, Any]:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Local_AI_Agent/1 local-search-mcp"},
-    )
+    request = urllib.request.Request(url, headers={"User-Agent": "Local_AI_Agent/1 local-search-mcp"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8", "replace"))
 
@@ -155,11 +137,7 @@ def _search(arguments: dict[str, Any]) -> dict[str, Any]:
         url = str(item.get("url") or "").strip()
         if not url:
             continue
-        rows.append({
-            "title": str(item.get("title") or "").strip(),
-            "url": url,
-            "snippet": str(item.get("content") or item.get("snippet") or "").strip(),
-        })
+        rows.append({"title": str(item.get("title") or "").strip(), "url": url, "snippet": str(item.get("content") or item.get("snippet") or "").strip()})
         if len(rows) >= limit:
             break
     return _text_result(json.dumps(rows, ensure_ascii=False))
@@ -167,9 +145,7 @@ def _search(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def _resolver_for_mode(mode: str):
     if mode in {"warp", "tor"}:
-        return web_safety.ProtectedDoHResolver.from_environment(
-            timeout=float(os.environ.get("LOCAL_SEARCH_TIMEOUT", DEFAULT_TIMEOUT))
-        )
+        return web_safety.ProtectedDoHResolver.from_environment(timeout=float(os.environ.get("LOCAL_SEARCH_TIMEOUT", DEFAULT_TIMEOUT)))
     return None
 
 
@@ -177,44 +153,60 @@ def _validation(url: str, mode: str, resolver=None):
     return web_safety.validate_outbound_url(url, network_mode=mode, resolver=resolver)
 
 
+def _privacy_preflight(url: str) -> tuple[str | None, str | None]:
+    raw = str(url or "").strip()
+    reason = blocked_outbound_reason(raw)
+    if reason:
+        return reason, None
+    normalized = web_safety.normalize_outbound_url(raw)
+    if not normalized.ok:
+        return normalized.reason, None
+    for view in (normalized.url, urllib.parse.unquote(normalized.url)):
+        reason = blocked_outbound_reason(view)
+        if reason:
+            return reason, None
+    return None, normalized.url
+
+
 def _is_public_http_url(url: str) -> tuple[bool, str]:
     mode = _network_mode()
+    reason, normalized_url = _privacy_preflight(url)
+    if reason:
+        return False, reason
     try:
         resolver = _resolver_for_mode(mode)
     except Exception:
         resolver = None
-    result = _validation(url, mode, resolver=resolver)
+    result = _validation(normalized_url or url, mode, resolver=resolver)
     return result.ok, result.reason
 
 
-class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        privacy_reason = blocked_outbound_reason(newurl)
+def _fetch_with_request(url: str, *, mode: str, timeout: float, limit: int, resolver=None) -> tuple[str, bytes, str] | str:
+    current = url
+    for _ in range(6):
+        privacy_reason, normalized_url = _privacy_preflight(current)
         if privacy_reason:
-            raise urllib.error.URLError(f"redirect blocked: {privacy_reason}")
-        result = _validation(newurl, "direct")
-        if not result.ok:
-            raise urllib.error.URLError(f"redirect blocked: {result.reason}")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+            return privacy_reason
+        validated = _validation(normalized_url or current, mode, resolver=resolver)
+        if not validated.ok:
+            return validated.reason
+        try:
+            request_fn = web_safety.protected_request if mode in {"warp", "tor"} else web_safety.direct_request
+            response = request_fn(validated, timeout=timeout, max_bytes=max(limit * 4, limit))
+        except Exception as exc:
+            return f"page fetch failed: {type(exc).__name__}: {exc}"
+        if response.status in _REDIRECT_STATUS:
+            location = response.headers.get("location", "").strip()
+            if not location:
+                return "page fetch failed: redirect without location"
+            current = urllib.parse.urljoin(validated.url, location)
+            continue
+        return validated.url, response.body, response.headers.get("content-type", "")
+    return "page fetch failed: too many redirects"
 
 
 def _fetch_direct(url: str, *, timeout: float, limit: int) -> tuple[str, bytes, str] | str:
-    result = _validation(url, "direct")
-    if not result.ok:
-        return result.reason
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Local_AI_Agent/1 local-search-mcp"},
-    )
-    opener = urllib.request.build_opener(_SafeRedirectHandler())
-    try:
-        with opener.open(request, timeout=timeout) as response:
-            content_type = str(response.headers.get("Content-Type") or "")
-            raw = response.read(max(limit * 4, limit))
-            final_url = str(getattr(response, "url", url) or url)
-    except Exception as exc:
-        return f"page fetch failed: {type(exc).__name__}: {exc}"
-    return final_url, raw, content_type
+    return _fetch_with_request(url, mode="direct", timeout=timeout, limit=limit)
 
 
 def _fetch_protected(url: str, *, mode: str, timeout: float, limit: int) -> tuple[str, bytes, str] | str:
@@ -222,31 +214,7 @@ def _fetch_protected(url: str, *, mode: str, timeout: float, limit: int) -> tupl
         resolver = _resolver_for_mode(mode)
     except Exception:
         return "protected resolver unavailable"
-    current = url
-    for _ in range(6):
-        privacy_reason = blocked_outbound_reason(current)
-        if privacy_reason:
-            return privacy_reason
-        validated = _validation(current, mode, resolver=resolver)
-        if not validated.ok:
-            return validated.reason
-        try:
-            response = web_safety.protected_request(
-                validated,
-                timeout=timeout,
-                max_bytes=max(limit * 4, limit),
-            )
-        except Exception as exc:
-            return f"page fetch failed: {type(exc).__name__}: {exc}"
-        if response.status in _REDIRECT_STATUS:
-            location = response.headers.get("location", "").strip()
-            if not location:
-                return "page fetch failed: redirect without location"
-            current = urllib.parse.urljoin(current, location)
-            continue
-        content_type = response.headers.get("content-type", "")
-        return current, response.body, content_type
-    return "page fetch failed: too many redirects"
+    return _fetch_with_request(url, mode=mode, timeout=timeout, limit=limit, resolver=resolver)
 
 
 def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -259,11 +227,7 @@ def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
         return _text_result(privacy_reason, is_error=True)
     timeout = float(os.environ.get("LOCAL_SEARCH_TIMEOUT", DEFAULT_TIMEOUT))
     limit = int(os.environ.get("LOCAL_SEARCH_PAGE_LIMIT", DEFAULT_PAGE_LIMIT))
-    fetched = (
-        _fetch_protected(url, mode=mode, timeout=timeout, limit=limit)
-        if mode in {"warp", "tor"}
-        else _fetch_direct(url, timeout=timeout, limit=limit)
-    )
+    fetched = _fetch_protected(url, mode=mode, timeout=timeout, limit=limit) if mode in {"warp", "tor"} else _fetch_direct(url, timeout=timeout, limit=limit)
     if isinstance(fetched, str):
         return _text_result(fetched, is_error=True)
     final_url, raw, content_type = fetched
@@ -281,29 +245,8 @@ def _fetch_page(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def _tools() -> list[dict[str, Any]]:
     return [
-        {
-            "name": "search",
-            "description": "Search the current web through Local_AI_Agent's local SearXNG service. Never put private local content, credentials, file contents, or identifying local paths in the query.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Public web search query"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-        {
-            "name": "fetch_page",
-            "description": "Fetch readable text from one public http/https page returned by search. Local/private network addresses are rejected.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"url": {"type": "string"}},
-                "required": ["url"],
-                "additionalProperties": False,
-            },
-        },
+        {"name": "search", "description": "Search the current web through Local_AI_Agent's local SearXNG service. Never put private local content, credentials, file contents, or identifying local paths in the query.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "Public web search query"}, "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}}, "required": ["query"], "additionalProperties": False}},
+        {"name": "fetch_page", "description": "Fetch readable text from one public http/https page returned by search. Local/private network addresses are rejected.", "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"], "additionalProperties": False}},
     ]
 
 
@@ -315,11 +258,7 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
     if method == "initialize":
         requested = (message.get("params") or {}).get("protocolVersion")
         protocol = str(requested or PROTOCOL_VERSION)
-        return _rpc_result(message_id, {
-            "protocolVersion": protocol,
-            "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-        })
+        return _rpc_result(message_id, {"protocolVersion": protocol, "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}})
     if method == "ping":
         return _rpc_result(message_id, {})
     if method == "tools/list":
