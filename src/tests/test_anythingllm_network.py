@@ -23,6 +23,13 @@ def test_protected_start_stops_before_container_when_proxy_stack_fails(monkeypat
     assert runtime.start() is False
 
 
+def test_protected_mode_fails_closed_when_network_awareness_is_disabled(monkeypatch):
+    monkeypatch.setattr(runtime, "NET_AWARE", False)
+    monkeypatch.setattr(runtime, "net_mode", lambda: "tor")
+
+    assert runtime.ensure_proxy_stack() is False
+
+
 def test_block_container_environment_has_mode_marker_without_proxy_routes(monkeypatch):
     monkeypatch.setattr(runtime, "net_mode", lambda: "block")
 
