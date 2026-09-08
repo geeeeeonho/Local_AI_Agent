@@ -83,7 +83,7 @@ def test_blocked_mode_uses_managed_internal_network_and_marker():
         assert not any(str(token).startswith(key) for token in cmd)
 
 
-def test_direct_mode_does_not_inherit_the_block_dns_or_network():
+def test_direct_mode_joins_shared_service_network_without_block_policy():
     from launcher import network_policy
 
     cmd = _command(
@@ -93,8 +93,8 @@ def test_direct_mode_does_not_inherit_the_block_dns_or_network():
     )
     assert "LOCAL_AI_NETWORK_MODE=direct" in cmd
     assert "--dns=0.0.0.0" not in cmd
-    if "--network" in cmd:
-        assert cmd[cmd.index("--network") + 1] != network_policy.block_network_name()
+    assert cmd[cmd.index("--network") + 1] == config.LLM_NETWORK
+    assert cmd[cmd.index("--network") + 1] != network_policy.block_network_name()
 
 
 def test_proxy_mode_replaces_dns_block_with_proxy_env_and_joins_shared_network():
