@@ -74,7 +74,7 @@ def build_sandbox_docker_command(
         pass
 
     try:
-        from launcher import network_policy
+        from launcher import config, network_policy
         if selected is network_policy.NetworkMode.BLOCK:
             cmd += [
                 "--network", network_policy.block_network_name(),
@@ -82,10 +82,12 @@ def build_sandbox_docker_command(
                 "--dns=0.0.0.0",
             ]
         elif selected in (network_policy.NetworkMode.WARP, network_policy.NetworkMode.TOR):
+            cmd += ["--network", str(getattr(config, "LLM_NETWORK", "llm_net"))]
             cmd += _proxy_args(selected)
         elif selected is network_policy.NetworkMode.DIRECT:
             cmd += ["-e", "LOCAL_AI_NETWORK_MODE=direct"]
         elif tor_proxy:
+            cmd += ["--network", str(getattr(config, "LLM_NETWORK", "llm_net"))]
             cmd += _proxy_args()
         elif block_internet:
             cmd += ["-e", "LOCAL_AI_NETWORK_MODE=block", "--dns=0.0.0.0"]
@@ -135,7 +137,7 @@ def _proxy_args(mode=None) -> List[str]:
 def build_tor_env(base=None) -> dict:
     """Compatibility Host proxy-env builder using the canonical selected mode.
 
-    The historic function name remains because ``agent_chat`` still imports it,
+    The historic function name remains because older callers still import it,
     but it no longer means "always Tor". On a real Host launch (``base`` is
     omitted), the selected WARP/Tor runtime is prepared before the environment
     is returned. If preparation fails, the selected proxy environment is still
@@ -150,8 +152,6 @@ def build_tor_env(base=None) -> dict:
             network_policy.NetworkMode.WARP,
             network_policy.NetworkMode.TOR,
         ):
-            # Readiness failure deliberately does not change the selected mode.
-            # The dead proxy route remains installed, avoiding silent Direct.
             network_policy.prepare_runtime(selected)
         managed = network_policy.host_proxy_env(selected)
     except Exception:
