@@ -46,6 +46,27 @@ def _dedupe(values: list[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _validate_persisted_policy_store() -> None:
+    """Reject a present-but-unreadable/corrupt policy before permissive legacy load()."""
+    try:
+        policy_path = Path(folder_policy._store_path())
+        exists = policy_path.exists()
+    except Exception as exc:
+        raise HostPermissionPolicyError("folder policy store could not be inspected") from exc
+    if not exists:
+        return
+    try:
+        data = json.loads(policy_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HostPermissionPolicyError("folder policy store could not be read") from exc
+    if not isinstance(data, dict):
+        raise HostPermissionPolicyError("folder policy store must contain an object")
+    for key in ("allowed", "denied"):
+        values = data.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+            raise HostPermissionPolicyError(f"folder policy {key} must be a list of paths")
+
+
 def _read_policy_values(name: str) -> list[str]:
     reader = getattr(folder_policy, name)
     try:
@@ -61,6 +82,7 @@ def _read_policy_values(name: str) -> list[str]:
 
 
 def build_host_permission_spec(workspace: Path) -> HostPermissionSpec:
+    _validate_persisted_policy_store()
     try:
         workspace_root = _canonical(workspace)
     except (OSError, RuntimeError, ValueError) as exc:
