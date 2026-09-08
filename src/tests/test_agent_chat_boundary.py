@@ -65,7 +65,8 @@ def test_open_interpreter_execution_policy_is_centralized():
     policy_source = _source("launcher/agent/execution_policy.py")
     host_source = _source("launcher/agent/interpreter_backend.py")
     sandbox_source = _source("launcher/agent/sandbox_backend.py")
-    assert 'sandbox_mode="workspace-write"' in policy_source
+    assert "sandbox_mode=None" in policy_source
+    assert 'permission_profile="local-ai-host"' in policy_source
     assert 'sandbox_mode="danger-full-access"' in policy_source
     assert 'approval_policy="on-request"' in policy_source
     assert 'approvals_reviewer="user"' in policy_source
