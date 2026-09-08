@@ -244,8 +244,6 @@ def _env_lines(model_tag=None, token_limit=4096):
         "# ── @agent 웹 검색: 자체 호스팅 SearXNG ──",
         'AGENT_SEARXNG_API_URL="%s"' % searxng_url_for_container(),
     ]
-    # ANYTHINGLLM_CHROMIUM_ARGS 는 여기 넣지 않는다. 네트워크 모드에 따라 값이
-    # 달라지는데 .env 는 1회만 심으므로 stale 이 된다 -> 항상 -e 로 준다.
     if EXTRA_ENV:
         out.append("")
         out.append("# ── config.ANYTHINGLLM_EXTRA_ENV ──")
@@ -269,26 +267,17 @@ def reseed_env(model_tag=None, token_limit=4096):
     """강제로 다시 심는다 (UI 설정이 날아감)."""
     body = "\n".join(_env_lines(model_tag, token_limit)) + "\n"
     try:
-        # UTF-8, BOM 없음 — BOM 이 들어가면 dotenv 가 첫 키를 못 읽는다
-        env_file().write_bytes(body.encode("utf-8"))
+        f = env_file()
+        f.write_bytes(body.encode("utf-8"))
         return True
     except OSError:
         return False
 
 
-# ─────────────────────────────────────────────
-#  종료 정리 등록 (warp_runtime._register_exit_cleanup 과 같은 방식)
-# ─────────────────────────────────────────────
 _CLEANUP_REGISTERED = False
 
 
 def register_exit_cleanup():
-    """런처 종료 시 컨테이너를 정리하도록 lifelog 에 등록(멱등).
-
-    lifelog 의 고아 컨테이너 패턴(_detect_container_patterns + 폴백)에는
-    llm_anythingllm / mintplexlabs 가 없다. 등록하지 않으면 런처를 닫아도
-    컨테이너가 계속 떠 있는다.
-    """
     global _CLEANUP_REGISTERED
     if _CLEANUP_REGISTERED:
         return True
@@ -319,9 +308,6 @@ def register_exit_cleanup():
         return False
 
 
-# ─────────────────────────────────────────────
-#  컨테이너
-# ─────────────────────────────────────────────
 def image_exists():
     return _run(["docker", "image", "inspect", IMAGE], timeout=30).returncode == 0
 
@@ -387,52 +373,31 @@ def _remove_stale():
         _run(["docker", "rm", "-f", CONTAINER], timeout=40)
 
 
-# ─────────────────────────────────────────────
-#  네트워크 모드 (WARP / Tor / 직접)  — NET_MODE 정본을 따른다
-# ─────────────────────────────────────────────
-def net_mode():
-    """현재 모드. config.NET_MODE 우선, 없으면 환경변수."""
-    m = None
+def _network_policy():
     try:
-        m = getattr(_cfg, "NET_MODE", None)
+        from . import network_policy
     except Exception:
-        m = None
-    m = (m or os.environ.get("NET_MODE", "warp") or "warp").strip().lower()
-    return m if m in ("warp", "tor", "direct", "none") else "warp"
+        from launcher import network_policy
+    return network_policy
+
+
+def net_mode():
+    """Return the canonical product network mode."""
+    return _network_policy().current_mode().value
 
 
 def net_mode_label(mode=None):
-    m = mode or net_mode()
-    return {"warp": "WARP 경유 (빠름)",
-            "tor": "Tor 경유 (최고 익명)"}.get(m, "직접 연결 (프록시 없음)")
+    return _network_policy().display_label(mode or net_mode())
 
 
 def _http_proxy_for(mode):
-    """이 모드에서 Node 가 쓸 수 있는 'http://' 프록시. 없으면 None.
-
-    WARP 는 SOCKS5 전용이라 반드시 HTTP 브리지(llm_httpbridge:8118)를 거친다.
-    Tor 는 Privoxy(llm_tor:8118)가 HTTP 프록시를 직접 준다.
-    """
-    if mode == "tor":
-        try:
-            u = _cfg.tor_http_proxy()
-        except Exception:
-            u = "http://%s:%d" % (_c("TOR_CONTAINER", "llm_tor"),
-                                  int(_c("TOR_HTTP_PORT", 8118)))
-    elif mode == "warp":
-        try:
-            u = _cfg.http_bridge_proxy()
-        except Exception:
-            u = "http://%s:%d" % (_c("HTTP_BRIDGE_CONTAINER", "llm_httpbridge"),
-                                  int(_c("HTTP_BRIDGE_PORT", 8118)))
-    else:
-        return None
-    # Node 는 socks 를 못 쓴다. http:// 가 아니면 프록시를 걸지 않는다.
-    return u if str(u).startswith("http://") else None
+    m = _network_policy().normalize_mode(mode).value
+    env = _network_policy().container_proxy_env(m)
+    value = env.get("HTTP_PROXY") or ""
+    return value if value.startswith("http://") else None
 
 
 def no_proxy_hosts():
-    """프록시를 타면 안 되는 대상. Ollama(host.docker.internal) + SearXNG 필수."""
     base = str(_c("NO_PROXY_HOSTS",
                   "host.docker.internal,localhost,127.0.0.1,::1"))
     parts = [x.strip() for x in base.split(",") if x.strip()]
@@ -451,42 +416,28 @@ def no_proxy_hosts():
 
 
 def proxy_env_for_container(mode=None):
-    """컨테이너에 넣을 프록시 환경변수. 직접 연결이면 빈 dict.
+    """AnythingLLM Node proxy env, always carrying the canonical mode marker.
 
-    주의 — ALL_PROXY/all_proxy 는 일부러 넣지 않는다.
-      config.net_proxy_env() 는 ALL_PROXY=socks5h://... 를 함께 준다(파이썬 쪽 용도).
-      그런데 Node 에는 SOCKS 클라이언트가 없고, axios 가 쓰는 proxy-from-env 는
-      ALL_PROXY 를 읽어 'socks5h://' 를 HTTP 프록시로 취급한다 -> 전 요청 실패.
+    ALL_PROXY is intentionally omitted because Node/axios may misinterpret
+    socks5h URLs as HTTP proxy URLs. HTTP(S)_PROXY remains sufficient here.
     """
-    m = mode or net_mode()
+    m = _network_policy().normalize_mode(mode or net_mode()).value
     if not NET_AWARE:
-        return {}
-    hp = _http_proxy_for(m)
-    if not hp:
-        return {}
-    env = {}
-    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-        env[k] = hp
-    npx = no_proxy_hosts()
-    env["NO_PROXY"] = npx
-    env["no_proxy"] = npx
-    if NODE_ENV_PROXY:
-        # Node 내장 fetch 는 기본적으로 HTTP_PROXY 를 무시한다.
-        # v22.21+/v24+ 는 이 플래그가 있어야 env 프록시를 따른다.
-        # 구버전에서는 그냥 무시되는 값이라 해가 없다.
-        env["NODE_USE_ENV_PROXY"] = "1"
+        return {"LOCAL_AI_NETWORK_MODE": m}
+    env = dict(_network_policy().container_proxy_env(m))
+    env.pop("ALL_PROXY", None)
+    env.pop("all_proxy", None)
+    if m in ("warp", "tor"):
+        npx = no_proxy_hosts()
+        env["NO_PROXY"] = npx
+        env["no_proxy"] = npx
+        if NODE_ENV_PROXY:
+            env["NODE_USE_ENV_PROXY"] = "1"
     return env
 
 
 _NODE_BOOTSTRAP_JS = """// proxy-bootstrap.js  (PATCH_ANYTHINGLLM 이 생성 — 직접 수정하지 마세요)
-//
-// Node 18/20 의 내장 fetch 는 HTTP_PROXY 환경변수를 무시한다.
-// (NODE_USE_ENV_PROXY 는 v22.21+/v24+ 전용)
-// 설치된 undici 의 ProxyAgent 를 전역 디스패처로 꽂아 강제로 프록시를 태운다.
-//
-// 중요: NO_PROXY 를 반드시 존중해야 한다. AnythingLLM 의 Ollama 호출도 fetch 를
-// 쓰기 때문에, 전부 프록시로 몰면 host.docker.internal 이 프록시 너머에서
-// 해석되지 않아 모델 호출이 통째로 죽는다.
+// Protected-mode bootstrap: if routing cannot be installed, terminate Node.
 (function () {
   try {
     var proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY ||
@@ -506,8 +457,8 @@ _NODE_BOOTSTRAP_JS = """// proxy-bootstrap.js  (PATCH_ANYTHINGLLM 이 생성 —
       catch (e) { undici = null; }
     }
     if (!undici || !undici.ProxyAgent || !undici.Agent) {
-      console.error('[proxy-bootstrap] undici 를 찾지 못했습니다 - fetch 는 직접 나갑니다');
-      return;
+      console.error('[proxy-bootstrap] undici ProxyAgent unavailable; protected startup aborted');
+      process.exit(78);
     }
 
     var viaProxy = new undici.ProxyAgent(proxy);
@@ -532,9 +483,6 @@ _NODE_BOOTSTRAP_JS = """// proxy-bootstrap.js  (PATCH_ANYTHINGLLM 이 생성 —
       return isBypass(origin) ? direct : viaProxy;
     }
 
-    // Dispatcher 를 상속하지 않는다. undici 의 Dispatcher 는 ES class 라
-    // ES5 방식으로 상속하면 "cannot be invoked without 'new'" 로 죽는다.
-    // Node 내장 fetch 도 undici.setGlobalDispatcher 도 dispatch 함수만 확인한다.
     var router = {
       dispatch: function (opts, handler) {
         return pick(opts).dispatch(opts, handler);
@@ -546,15 +494,15 @@ _NODE_BOOTSTRAP_JS = """// proxy-bootstrap.js  (PATCH_ANYTHINGLLM 이 생성 —
         return Promise.all([viaProxy.destroy(err), direct.destroy(err)]);
       }
     };
-    // Node 내장 fetch 가 읽는 well-known 심볼. setGlobalDispatcher 도 이걸 세운다.
     globalThis[Symbol.for('undici.globalDispatcher.1')] = router;
     try { if (undici.setGlobalDispatcher) { undici.setGlobalDispatcher(router); } }
-    catch (e) { /* 심볼 직접 설정으로 충분 */ }
+    catch (e) { /* direct symbol assignment is sufficient */ }
 
     console.error('[proxy-bootstrap] fetch -> ' + proxy +
                   '  (bypass: ' + bypass.join(',') + ')');
   } catch (e) {
-    try { console.error('[proxy-bootstrap] 실패: ' + (e && e.message)); } catch (e2) {}
+    try { console.error('[proxy-bootstrap] protected setup failed: ' + (e && e.message)); } catch (e2) {}
+    process.exit(78);
   }
 })();
 """
@@ -565,11 +513,6 @@ def node_bootstrap_host_path():
 
 
 def write_node_proxy_bootstrap(mode=None):
-    """프록시 모드면 부트스트랩을 심고 컨테이너 내부 경로를 돌려준다.
-
-    storage 는 이미 STORAGE_MOUNT 로 마운트돼 있으므로 추가 마운트가 필요 없다.
-    직접 연결 모드면 파일을 지우고 None 을 돌려준다.
-    """
     f = node_bootstrap_host_path()
     if not NODE_BOOTSTRAP or not NET_AWARE or not _http_proxy_for(mode or net_mode()):
         try:
@@ -586,7 +529,6 @@ def write_node_proxy_bootstrap(mode=None):
 
 
 def node_bootstrap_container_path(mode=None):
-    """부트스트랩이 붙을 컨테이너 내부 경로 (부수효과 없음)."""
     if not NODE_BOOTSTRAP or not NET_AWARE:
         return None
     if not _http_proxy_for(mode or net_mode()):
@@ -595,7 +537,6 @@ def node_bootstrap_container_path(mode=None):
 
 
 def node_options(mode=None):
-    """컨테이너에 줄 NODE_OPTIONS. 부수효과 없음(파일은 별도로 쓴다)."""
     parts = []
     if NODE_OPTIONS_EXTRA.strip():
         parts.append(NODE_OPTIONS_EXTRA.strip())
@@ -606,12 +547,6 @@ def node_options(mode=None):
 
 
 def config_signature(mode=None):
-    """이 설정으로 만들면 어떤 컨테이너가 되는지를 요약한 서명.
-
-    라벨로 박아두고 다음 기동 때 비교한다. 값이 달라지면 컨테이너를 다시 만든다.
-    패치를 올렸는데 낡은 컨테이너가 그대로 재사용되는 사고를 막는 장치다.
-    메모리/CPU 는 'auto' 로 매번 달라질 수 있으므로 서명에 넣지 않는다.
-    """
     import hashlib
     m = mode or net_mode()
     px = proxy_env_for_container(m)
@@ -627,7 +562,6 @@ def config_signature(mode=None):
 
 
 def chromium_args(mode=None):
-    """내장 Chromium(문서 스크래핑)용 인자. ANYTHINGLLM_CHROMIUM_ARGS 값."""
     args = []
     if not CAP_ADD:
         args += ["--no-sandbox", "--disable-setuid-sandbox"]
@@ -639,51 +573,14 @@ def chromium_args(mode=None):
 
 
 def ensure_proxy_stack(log=None, env_path=None):
-    """선택한 모드의 프록시 컨테이너를 먼저 띄운다.
-
-    warp: warp_runtime.start() 가 WARP + HTTP 브리지를 함께 보장한다.
-    tor : tor_runtime.start(). (NET_MODE!=tor 이면 TOR_GUARD 가 기동을 막는다)
-    """
-    def _say(m):
-        if log:
-            try:
-                log(m)
-            except Exception:
-                pass
-
+    """Prepare WARP/Tor through the canonical network policy."""
     m = net_mode()
     if m not in ("warp", "tor") or not NET_AWARE:
         return True
-    try:
-        if m == "warp":
-            try:
-                from . import warp_runtime as _rt
-            except Exception:
-                from launcher import warp_runtime as _rt
-        else:
-            try:
-                from . import tor_runtime as _rt
-            except Exception:
-                from launcher import tor_runtime as _rt
-    except Exception as e:
-        _say("프록시 런타임을 불러오지 못했습니다: %r" % e)
-        return False
-    try:
-        try:
-            ok = _rt.start(env_path, log_path=None)
-        except TypeError:
-            ok = _rt.start(env_path, log=lambda x: _say(str(x)))
-    except Exception as e:
-        _say("프록시 기동 예외: %r" % e)
-        return False
-    if not ok:
-        _say("%s 미기동 — 이 모드에서는 외부 연결이 실패할 수 있습니다." % m.upper())
-    return bool(ok)
+    return bool(_network_policy().prepare_runtime(m, env_path=env_path, log=log))
 
 
 def container_labels():
-    """컨테이너 라벨 전체를 dict 로. Go 템플릿에 따옴표를 넣지 않아
-    이스케이프 사고를 원천 차단한다."""
     r = _run(["docker", "inspect", "-f", "{{json .Config.Labels}}", CONTAINER],
              timeout=20)
     if r.returncode != 0:
@@ -695,17 +592,14 @@ def container_labels():
 
 
 def running_netmode():
-    """실행 중인 컨테이너에 박아둔 모드 라벨. 없으면 None."""
     return container_labels().get(NETMODE_LABEL) or None
 
 
 def running_cfgsig():
-    """실행 중인 컨테이너에 박힌 설정 서명. 없으면 None."""
     return container_labels().get(CFGSIG_LABEL) or None
 
 
 def build_run_cmd(memory=None, cpus=None):
-    """docker run 명령 조립 (진단/테스트에서 그대로 검사할 수 있게 분리)."""
     d = _vol(storage_dir())
     cmd = [
         "docker", "run", "-d",
@@ -721,7 +615,7 @@ def build_run_cmd(memory=None, cpus=None):
         "-e", "STORAGE_DIR=" + STORAGE_MOUNT,
     ]
     _mode = net_mode()
-    write_node_proxy_bootstrap(_mode)          # 실제 파일 기록은 여기서만
+    write_node_proxy_bootstrap(_mode)
     cmd += ["--label", NETMODE_LABEL + "=" + _mode]
     cmd += ["--label", CFGSIG_LABEL + "=" + config_signature(_mode)]
     for _k, _v in sorted(proxy_env_for_container(_mode).items()):
@@ -738,12 +632,11 @@ def build_run_cmd(memory=None, cpus=None):
         cmd.append("--memory=" + str(m))
     if c:
         cmd.append("--cpus=" + str(c))
-    cmd.append(IMAGE)          # 이미지는 반드시 마지막
+    cmd.append(IMAGE)
     return cmd
 
 
 def health_status():
-    """컨테이너 HEALTHCHECK 상태. 없으면 빈 문자열."""
     r = _run(["docker", "inspect", "-f",
               "{{if .State.Health}}{{.State.Health.Status}}{{end}}", CONTAINER],
              timeout=20)
@@ -753,8 +646,6 @@ def health_status():
 
 
 def probe_urls():
-    """기동 확인용 주소. 윈도우에서 localhost 가 ::1 로 먼저 풀리는 경우가 있어
-    127.0.0.1 을 먼저 시도한다."""
     out = []
     for h in PROBE_HOSTS.split(","):
         h = h.strip()
@@ -764,12 +655,6 @@ def probe_urls():
 
 
 def wait_ready(timeout=None, cancel_check=None, log=None):
-    """서버가 HTTP 응답을 낼 때까지 대기. 프록시는 우회한다.
-
-    최초 기동은 1~3분 걸린다(마이그레이션 + 벡터DB 초기화). 그동안 아무 출력이
-    없으면 멈춘 것으로 보이므로, PROGRESS_EVERY 초마다 경과/health/컨테이너
-    로그 꼬리를 함께 내보낸다.
-    """
     total = int(timeout or BOOT_TIMEOUT)
     started = time.time()
     deadline = started + total
@@ -791,7 +676,6 @@ def wait_ready(timeout=None, cancel_check=None, log=None):
                 _emit(log, "응답 확인: %s (%d초 소요)" % (u, int(time.time() - started)), "OK")
                 return True
             except urllib.error.HTTPError:
-                # 4xx/5xx 도 '서버가 살아 있음' 의 증거
                 _emit(log, "응답 확인: %s (%d초 소요)" % (u, int(time.time() - started)), "OK")
                 return True
             except Exception:
@@ -825,7 +709,9 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
 
     _mode = net_mode()
     _say("인터넷 모드: " + net_mode_label(_mode))
-    ensure_proxy_stack(log=log, env_path=env_path)
+    if _mode in ("warp", "tor") and not ensure_proxy_stack(log=log, env_path=env_path):
+        _say("보호 네트워크 준비에 실패하여 AnythingLLM 시작을 중단합니다.", "FAIL")
+        return False
 
     if is_running():
         _prev = running_netmode()
@@ -873,11 +759,6 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
 
 
 def stop(remove=True, grace=None):
-    """컨테이너 정지/제거.
-
-    -t 를 주지 않으면 docker 가 기본 10초를 기다린다. 런처를 닫을 때마다
-    10초가 그대로 체감되므로 짧게 준다(lifelog 도 -t 2 를 쓴다).
-    """
     if not exists():
         return True
     g = STOP_GRACE if grace is None else int(grace)
@@ -893,7 +774,6 @@ def logs(tail=80):
 
 
 def describe():
-    """현재 해석된 설정을 한 줄씩. 진단용."""
     return [
         "image=" + IMAGE,
         "container=" + CONTAINER,
