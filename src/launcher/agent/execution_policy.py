@@ -8,19 +8,22 @@ from dataclasses import dataclass
 class ExecutionPolicy:
     approval_policy: str
     approvals_reviewer: str
-    sandbox_mode: str
+    sandbox_mode: str | None
+    permission_profile: str | None
 
 
 _POLICIES = {
     "host": ExecutionPolicy(
         approval_policy="on-request",
         approvals_reviewer="user",
-        sandbox_mode="workspace-write",
+        sandbox_mode=None,
+        permission_profile="local-ai-host",
     ),
     "sandbox": ExecutionPolicy(
         approval_policy="on-request",
         approvals_reviewer="user",
         sandbox_mode="danger-full-access",
+        permission_profile=None,
     ),
 }
 

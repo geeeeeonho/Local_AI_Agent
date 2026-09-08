@@ -10,8 +10,10 @@ try:
 except Exception:  # pragma: no cover
     from launcher import network_policy
 
-_MANAGED_BEGIN = "# >>> LOCAL_AI_AGENT_LOCAL_SEARCH_MCP >>>"
-_MANAGED_END = "# <<< LOCAL_AI_AGENT_LOCAL_SEARCH_MCP <<<"
+_MCP_MANAGED_BEGIN = "# >>> LOCAL_AI_AGENT_LOCAL_SEARCH_MCP >>>"
+_MCP_MANAGED_END = "# <<< LOCAL_AI_AGENT_LOCAL_SEARCH_MCP <<<"
+_HOST_PERMISSIONS_BEGIN = "# >>> LOCAL_AI_AGENT_HOST_PERMISSIONS >>>"
+_HOST_PERMISSIONS_END = "# <<< LOCAL_AI_AGENT_HOST_PERMISSIONS <<<"
 
 
 def _toml_string(value: str) -> str:
@@ -31,7 +33,7 @@ def _managed_block(
 ) -> str:
     return "\n".join(
         [
-            _MANAGED_BEGIN,
+            _MCP_MANAGED_BEGIN,
             "[mcp_servers.local_search]",
             f"command = {_toml_string(command)}",
             f"args = {_toml_array(command_args)}",
@@ -44,16 +46,16 @@ def _managed_block(
             "[mcp_servers.local_search.env]",
             f"SEARXNG_URL = {_toml_string(searxng_url)}",
             f"LOCAL_AI_NETWORK_MODE = {_toml_string(network_mode)}",
-            _MANAGED_END,
+            _MCP_MANAGED_END,
         ]
     )
 
 
-def _replace_managed_block(existing: str, block: str) -> str:
-    start = existing.find(_MANAGED_BEGIN)
-    end = existing.find(_MANAGED_END)
+def _replace_block(existing: str, begin: str, end_marker: str, block: str) -> str:
+    start = existing.find(begin)
+    end = existing.find(end_marker)
     if start >= 0 and end >= start:
-        end += len(_MANAGED_END)
+        end += len(end_marker)
         prefix = existing[:start].rstrip()
         suffix = existing[end:].lstrip()
         pieces = [part for part in (prefix, block, suffix) if part]
@@ -62,11 +64,42 @@ def _replace_managed_block(existing: str, block: str) -> str:
     return ((prefix + "\n\n") if prefix else "") + block.rstrip() + "\n"
 
 
+def _replace_managed_block(existing: str, block: str) -> str:
+    return _replace_block(existing, _MCP_MANAGED_BEGIN, _MCP_MANAGED_END, block)
+
+
+def _host_permissions_block(permission_toml: str) -> str:
+    return "\n".join(
+        [
+            _HOST_PERMISSIONS_BEGIN,
+            permission_toml.rstrip(),
+            _HOST_PERMISSIONS_END,
+        ]
+    )
+
+
+def _write_host_permissions(config_path: Path, workspace: Path) -> None:
+    from .host_permissions import build_host_permission_spec, render_host_permission_toml
+
+    spec = build_host_permission_spec(workspace)
+    permission_toml = render_host_permission_toml(spec)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    block = _host_permissions_block(permission_toml)
+    updated = _replace_block(
+        existing,
+        _HOST_PERMISSIONS_BEGIN,
+        _HOST_PERMISSIONS_END,
+        block,
+    )
+    config_path.write_text(updated, encoding="utf-8")
+
+
 def prepare_runtime_assets(
     *,
     interpreter_home: Path,
     source_script: Path,
     privacy_source: Path | None = None,
+    web_safety_source: Path | None = None,
     runtime_script_path: Path,
     command: str,
     command_args: list[str],
@@ -82,6 +115,8 @@ def prepare_runtime_assets(
 
     privacy = Path(privacy_source) if privacy_source is not None else source_privacy_policy()
     shutil.copy2(privacy, target.parent / "privacy_policy.py")
+    safety = Path(web_safety_source) if web_safety_source is not None else source_web_safety()
+    shutil.copy2(safety, target.parent / "web_safety.py")
 
     canonical_mode = network_policy.normalize_mode(network_mode).value
     config_path = home / "config.toml"
@@ -100,6 +135,10 @@ def source_search_mcp() -> Path:
     return Path(__file__).resolve().with_name("search_mcp.py")
 
 
+def source_web_safety() -> Path:
+    return Path(__file__).resolve().with_name("web_safety.py")
+
+
 def source_privacy_policy() -> Path:
     return Path(__file__).resolve().parents[1] / "privacy_policy.py"
 
@@ -109,19 +148,24 @@ def prepare_host_runtime_assets(
     *,
     searxng_url: str,
     network_mode: str | None = None,
+    workspace: Path | None = None,
 ) -> Path:
     home = Path(interpreter_home).resolve()
     target = home / "tools" / "local_search_mcp.py"
-    return prepare_runtime_assets(
+    config_path = prepare_runtime_assets(
         interpreter_home=home,
         source_script=source_search_mcp(),
         privacy_source=source_privacy_policy(),
+        web_safety_source=source_web_safety(),
         runtime_script_path=target,
         command=sys.executable,
         command_args=[str(target)],
         searxng_url=searxng_url,
         network_mode=network_mode,
     )
+    if workspace is not None:
+        _write_host_permissions(config_path, Path(workspace))
+    return config_path
 
 
 def prepare_sandbox_runtime_assets(
@@ -137,6 +181,7 @@ def prepare_sandbox_runtime_assets(
         interpreter_home=home,
         source_script=source_search_mcp(),
         privacy_source=source_privacy_policy(),
+        web_safety_source=source_web_safety(),
         runtime_script_path=target,
         command="python",
         command_args=["/home/agent/.agent_state/local_search_mcp.py"],

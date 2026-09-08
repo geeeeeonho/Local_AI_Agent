@@ -118,15 +118,15 @@ def test_addendums_are_empty_without_a_policy(monkeypatch):
     assert profiles.build_host_session_addendum() == ""
 
 
-def test_host_backend_applies_the_host_addendum(tmp_path, monkeypatch):
+def test_host_backend_applies_addendum_and_permission_profile(tmp_path, monkeypatch):
     from launcher.agent import folder_policy
     from launcher.agent.backend import AgentConfig
-    from launcher.agent.interpreter_backend import OpenInterpreterBackend
+    from launcher.agent.native_backend import NativeOpenInterpreterBackend
 
     monkeypatch.setattr(folder_policy, "list_allowed", lambda: [])
     monkeypatch.setattr(folder_policy, "list_denied", lambda: ["C:/private"])
 
-    backend = OpenInterpreterBackend(client_factory=lambda *args: None)
+    backend = NativeOpenInterpreterBackend(client_factory=lambda *args: None)
     config = AgentConfig(
         workspace=tmp_path,
         mode="host",
@@ -141,4 +141,5 @@ def test_host_backend_applies_the_host_addendum(tmp_path, monkeypatch):
     assert "profile text" in instructions
     assert "C:/private" in instructions
     assert str(tmp_path) in instructions
-    assert params["sandbox"] == "workspace-write"
+    assert "sandbox" not in params
+    assert params["config"]["default_permissions"] == "local-ai-host"
