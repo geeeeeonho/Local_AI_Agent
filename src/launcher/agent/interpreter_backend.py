@@ -9,6 +9,15 @@ from project_paths import PROJECT_ROOT, SRC_ROOT
 from runtime_versions import OPEN_INTERPRETER_VERSION as OI_VERSION
 from .agent_trace import AgentTrace
 from .app_server_client import AppServerClient
+from .app_server_protocol import (
+    INITIALIZE,
+    INITIALIZED,
+    THREAD_RESUME,
+    THREAD_START,
+    TURN_INTERRUPT,
+    TURN_START,
+    initialize_params,
+)
 from .backend import AgentConfig
 from .events import AgentEvent, AgentEventType
 from .execution_policy import policy_for_mode
@@ -230,23 +239,12 @@ class OpenInterpreterBackend:
         self._thread_id = None
         self._turn_id = None
         try:
-            client.request(
-                "initialize",
-                {
-                    "clientInfo": {
-                        "name": "local_ai_agent",
-                        "title": "Local_AI_Agent",
-                        "version": "1",
-                    },
-                    "capabilities": {"experimentalApi": False},
-                },
-                timeout=10.0,
-            )
-            if not client.notify("initialized", {}):
+            client.request(INITIALIZE, initialize_params(), timeout=10.0)
+            if not client.notify(INITIALIZED, {}):
                 raise RuntimeError("failed to send initialized notification")
             thread_params = self._thread_params(config)
             self._trace_record("thread_starting", thread_params, detailed=True)
-            result = client.request("thread/start", thread_params, timeout=20.0)
+            result = client.request(THREAD_START, thread_params, timeout=20.0)
             thread = result.get("thread") or {}
             thread_id = thread.get("id")
             if not thread_id:
@@ -294,7 +292,7 @@ class OpenInterpreterBackend:
         try:
             self._trace_record("turn_starting", {"input": message}, detailed=True)
             result = client.request(
-                "turn/start",
+                TURN_START,
                 {
                     "threadId": self._thread_id,
                     "input": [{"type": "text", "text": message}],
@@ -334,7 +332,7 @@ class OpenInterpreterBackend:
         turn_id = self._turn_id
         try:
             client.request(
-                "turn/interrupt",
+                TURN_INTERRUPT,
                 {"threadId": self._thread_id, "turnId": turn_id},
                 timeout=10.0,
             )
@@ -359,7 +357,7 @@ class OpenInterpreterBackend:
         params["threadId"] = session_id
         try:
             self._trace_record("session_resuming", {"session_id": session_id})
-            result = client.request("thread/resume", params, timeout=20.0)
+            result = client.request(THREAD_RESUME, params, timeout=20.0)
             thread = result.get("thread") or {}
             thread_id = thread.get("id") or session_id
             self._thread_id = str(thread_id)
