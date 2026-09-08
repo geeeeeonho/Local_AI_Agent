@@ -97,6 +97,37 @@ def _normalized_http_url(parsed: urllib.parse.SplitResult, hostname: str, port: 
     return urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
 
 
+def normalize_outbound_url(url: str) -> ValidationResult:
+    """Parse/canonicalize an outbound URL without DNS or network I/O."""
+    raw_url = str(url or "").strip()
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+    except ValueError:
+        return ValidationResult(False, "invalid URL")
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        return ValidationResult(False, "only http/https URLs are allowed")
+    if parsed.username or parsed.password:
+        return ValidationResult(False, "URLs with embedded credentials are not allowed")
+
+    raw_host = parsed.hostname.rstrip(".")
+    if raw_host.lower() == "localhost" or raw_host.lower().endswith(".localhost"):
+        return ValidationResult(False, "private/local network URLs are not allowed")
+    try:
+        port = parsed.port or (443 if scheme == "https" else 80)
+        host = _ascii_hostname(raw_host)
+        normalized_url = _normalized_http_url(parsed, host, int(port))
+    except (UnicodeError, ValueError):
+        return ValidationResult(False, "invalid URL")
+    return ValidationResult(
+        True,
+        url=normalized_url,
+        scheme=scheme,
+        hostname=host,
+        port=int(port),
+    )
+
+
 class LocalResolver:
     def resolve(self, host: str, port: int) -> set[str]:
         return {
@@ -293,26 +324,11 @@ def validate_outbound_url(
     network_mode: str,
     resolver: Resolver | None = None,
 ) -> ValidationResult:
-    raw_url = str(url or "").strip()
-    try:
-        parsed = urllib.parse.urlsplit(raw_url)
-    except ValueError:
-        return ValidationResult(False, "invalid URL")
-    scheme = parsed.scheme.lower()
-    if scheme not in {"http", "https"} or not parsed.hostname:
-        return ValidationResult(False, "only http/https URLs are allowed")
-    if parsed.username or parsed.password:
-        return ValidationResult(False, "URLs with embedded credentials are not allowed")
-
-    raw_host = parsed.hostname.rstrip(".")
-    if raw_host.lower() == "localhost" or raw_host.lower().endswith(".localhost"):
-        return ValidationResult(False, "private/local network URLs are not allowed")
-    try:
-        port = parsed.port or (443 if scheme == "https" else 80)
-        host = _ascii_hostname(raw_host)
-        normalized_url = _normalized_http_url(parsed, host, int(port))
-    except (UnicodeError, ValueError):
-        return ValidationResult(False, "invalid URL")
+    normalized = normalize_outbound_url(url)
+    if not normalized.ok:
+        return normalized
+    host = normalized.hostname
+    port = normalized.port
 
     literal = _literal_address(host)
     if literal is not None:
@@ -330,7 +346,7 @@ def validate_outbound_url(
             else:
                 return ValidationResult(False, "public egress is blocked")
         try:
-            addresses = {str(value).split("%", 1)[0] for value in resolver.resolve(host, int(port))}
+            addresses = {str(value).split("%", 1)[0] for value in resolver.resolve(host, port)}
         except Exception:
             return ValidationResult(False, "host resolution failed")
 
@@ -341,10 +357,10 @@ def validate_outbound_url(
 
     return ValidationResult(
         True,
-        url=normalized_url,
-        scheme=scheme,
+        url=normalized.url,
+        scheme=normalized.scheme,
         hostname=host,
-        port=int(port),
+        port=port,
         addresses=tuple(sorted(addresses)),
     )
 
@@ -455,6 +471,7 @@ __all__ = [
     "LocalResolver",
     "ProtectedDoHResolver",
     "is_public_address",
+    "normalize_outbound_url",
     "validate_outbound_url",
     "open_direct_connection",
     "open_socks5_connection",
