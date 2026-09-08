@@ -75,6 +75,7 @@ def build_sandbox_docker_command(
 
     try:
         from launcher import config, network_policy
+        shared_network = str(getattr(config, "LLM_NETWORK", "llm_net"))
         if selected is network_policy.NetworkMode.BLOCK:
             cmd += [
                 "--network", network_policy.block_network_name(),
@@ -82,12 +83,15 @@ def build_sandbox_docker_command(
                 "--dns=0.0.0.0",
             ]
         elif selected in (network_policy.NetworkMode.WARP, network_policy.NetworkMode.TOR):
-            cmd += ["--network", str(getattr(config, "LLM_NETWORK", "llm_net"))]
+            cmd += ["--network", shared_network]
             cmd += _proxy_args(selected)
         elif selected is network_policy.NetworkMode.DIRECT:
-            cmd += ["-e", "LOCAL_AI_NETWORK_MODE=direct"]
+            # Direct still needs the product shared network to reach local
+            # services such as llm_searxng. It receives no proxy variables and
+            # therefore keeps normal public egress semantics.
+            cmd += ["--network", shared_network, "-e", "LOCAL_AI_NETWORK_MODE=direct"]
         elif tor_proxy:
-            cmd += ["--network", str(getattr(config, "LLM_NETWORK", "llm_net"))]
+            cmd += ["--network", shared_network]
             cmd += _proxy_args()
         elif block_internet:
             cmd += ["-e", "LOCAL_AI_NETWORK_MODE=block", "--dns=0.0.0.0"]
