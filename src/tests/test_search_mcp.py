@@ -117,9 +117,9 @@ def test_block_mode_rejects_search_without_network_io(monkeypatch):
 def test_block_mode_rejects_fetch_without_network_io(monkeypatch):
     monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "block")
     monkeypatch.setattr(
-        search_mcp,
-        "_open_public_url",
-        lambda *args, **kwargs: pytest.fail("block mode must not fetch public pages"),
+        search_mcp.urllib.request,
+        "build_opener",
+        lambda *args, **kwargs: pytest.fail("block mode must not build a public opener"),
     )
 
     text = _error_text(_tool_call("fetch_page", {"url": "https://example.com"}))
