@@ -210,11 +210,6 @@ class SandboxOpenInterpreterBackend(OpenInterpreterBackend):
         self._container_name = _container_name(command)
         return command, dict(os.environ), config.workspace.resolve()
 
-    def _thread_sandbox_mode(self, config: AgentConfig) -> str:
-        # Docker is the mandatory outer sandbox. Do not weaken Docker to nest
-        # Open Interpreter's Linux sandbox inside it.
-        return "danger-full-access"
-
     def _thread_cwd(self, config: AgentConfig) -> str:
         return "/home/agent/workspace"
 
