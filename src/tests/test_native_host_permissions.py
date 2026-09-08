@@ -116,6 +116,7 @@ def test_host_resume_changed_fingerprint_restarts_before_resume(tmp_path, monkey
     assert resume_params["threadId"] == "thread-old"
     assert resume_params["config"] == {"default_permissions": "local-ai-host"}
     assert backend._host_process_policy_fingerprint == "fp-new"
+    assert backend._host_policy_quarantined is False
 
 
 def test_host_resume_unknown_process_fingerprint_forces_restart(tmp_path, monkeypatch):
@@ -161,6 +162,12 @@ def test_host_resume_fails_closed_if_old_process_will_not_stop(tmp_path, monkeyp
     assert old_client.stop_calls == 1
     assert created == []
     assert old_client.requests == []
+    assert backend._host_policy_quarantined is True
+    assert backend.is_running() is False
+    assert backend.send("must not run") is False
+    assert backend.approve(99, "accept") is False
+    assert backend.cancel() is False
+    assert old_client.requests == []
 
 
 def test_host_resume_fails_closed_if_new_process_cannot_start(tmp_path, monkeypatch):
@@ -180,6 +187,7 @@ def test_host_resume_fails_closed_if_new_process_cannot_start(tmp_path, monkeypa
     assert new_client.start_calls == 1
     assert not any(method == "thread/resume" for method, _params, _timeout in new_client.requests)
     assert backend._client is None
+    assert backend._host_policy_quarantined is True
 
 
 def test_host_resume_fails_closed_if_new_process_initialize_fails(tmp_path, monkeypatch):
@@ -199,6 +207,7 @@ def test_host_resume_fails_closed_if_new_process_initialize_fails(tmp_path, monk
     assert new_client.stop_calls == 1
     assert not any(method == "thread/resume" for method, _params, _timeout in new_client.requests)
     assert backend._client is None
+    assert backend._host_policy_quarantined is True
 
 
 def test_host_start_records_fingerprint_loaded_by_started_process(tmp_path, monkeypatch):
@@ -219,3 +228,4 @@ def test_host_start_records_fingerprint_loaded_by_started_process(tmp_path, monk
 
     assert backend.start(config) is True
     assert backend._host_process_policy_fingerprint == "fp-start"
+    assert backend._host_policy_quarantined is False
