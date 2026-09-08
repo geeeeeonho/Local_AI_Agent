@@ -101,3 +101,32 @@ def test_prepare_runtime_does_not_require_proxy_for_direct_or_block(monkeypatch)
     policy = _policy()
     assert policy.prepare_runtime("direct") is True
     assert policy.prepare_runtime("block") is True
+
+
+def test_running_warp_is_not_ready_when_http_bridge_cannot_be_prepared(monkeypatch):
+    from launcher import warp_runtime
+
+    monkeypatch.setattr(warp_runtime, "is_running", lambda: True)
+    monkeypatch.setattr(warp_runtime, "_ensure_bridge", lambda log_path=None: False)
+
+    assert warp_runtime.start() is False
+
+
+def test_fresh_warp_is_not_ready_when_http_bridge_start_fails(monkeypatch):
+    from launcher import http_bridge, warp_runtime
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(warp_runtime, "is_running", lambda: False)
+    monkeypatch.setattr(warp_runtime, "image_exists", lambda: True)
+    monkeypatch.setattr(warp_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(warp_runtime, "_remove_stale", lambda: None)
+    monkeypatch.setattr(warp_runtime, "_run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(warp_runtime, "_wait_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(warp_runtime, "_register_exit_cleanup", lambda: None)
+    monkeypatch.setattr(http_bridge, "start", lambda log=None: False)
+
+    assert warp_runtime.start() is False
