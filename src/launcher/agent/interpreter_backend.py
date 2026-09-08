@@ -11,6 +11,7 @@ from .agent_trace import AgentTrace
 from .app_server_client import AppServerClient
 from .backend import AgentConfig
 from .events import AgentEvent, AgentEventType
+from .execution_policy import policy_for_mode
 from .instructions import build_structured_instructions
 
 _SIMPLE_APPROVAL_DECISIONS = {"accept", "acceptForSession", "decline", "cancel"}
@@ -141,7 +142,7 @@ class OpenInterpreterBackend:
         return self._command(), self._runtime_env(config), config.workspace.resolve()
 
     def _thread_sandbox_mode(self, config: AgentConfig) -> str:
-        return "workspace-write"
+        return policy_for_mode(config.mode).sandbox_mode
 
     def _thread_cwd(self, config: AgentConfig) -> str:
         return str(config.workspace.resolve())
@@ -157,6 +158,7 @@ class OpenInterpreterBackend:
         return False
 
     def _thread_params(self, config: AgentConfig) -> dict[str, Any]:
+        policy = policy_for_mode(config.mode)
         instructions = build_structured_instructions(
             self._instruction_profile(config),
             sandbox=self._instruction_is_sandbox(config),
@@ -165,9 +167,9 @@ class OpenInterpreterBackend:
             "model": config.model,
             "modelProvider": "ollama",
             "cwd": self._thread_cwd(config),
-            "approvalPolicy": "on-request",
-            "approvalsReviewer": "user",
-            "sandbox": self._thread_sandbox_mode(config),
+            "approvalPolicy": policy.approval_policy,
+            "approvalsReviewer": policy.approvals_reviewer,
+            "sandbox": policy.sandbox_mode,
             "serviceName": "Local_AI_Agent",
             "developerInstructions": instructions,
         }
