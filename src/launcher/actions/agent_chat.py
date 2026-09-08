@@ -64,7 +64,7 @@ def _confirm_host_mode(p: Presenter) -> bool:
             label="호스트 직접 모드 진입",
             description=(
                 "에이전트가 호스트 PC 의 파일·명령에 직접 접근합니다.\n"
-                "Open Interpreter workspace-write 정책과 사용자 승인이 적용되지만 "
+                "Open Interpreter local-ai-host 권한 프로필과 사용자 승인이 적용되지만 "
                 "컨테이너 격리는 없습니다."
             ),
             risk=RISK_HIGH,
@@ -360,7 +360,7 @@ def _launch_panel(
         "명령: /session · /resume <thread-id> · /new · /model <태그> · /folders · /reload",
     )
     if mode == "host":
-        post("warn", "호스트 직접 모드 — Open Interpreter workspace-write + 사용자 승인 정책")
+        post("warn", "호스트 직접 모드 — Open Interpreter local-ai-host 권한 프로필 + 사용자 승인")
 
     def initial_start() -> None:
         if coordinator.start_current():
