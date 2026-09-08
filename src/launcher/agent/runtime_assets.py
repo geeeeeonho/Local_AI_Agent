@@ -78,11 +78,16 @@ def _host_permissions_block(permission_toml: str) -> str:
     )
 
 
-def _write_host_permissions(config_path: Path, workspace: Path) -> None:
-    from .host_permissions import build_host_permission_spec, render_host_permission_toml
+def _write_host_permissions(config_path: Path, workspace: Path) -> str:
+    from .host_permissions import (
+        build_host_permission_spec,
+        host_permission_fingerprint,
+        render_host_permission_toml,
+    )
 
     spec = build_host_permission_spec(workspace)
     permission_toml = render_host_permission_toml(spec)
+    fingerprint = host_permission_fingerprint(spec)
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     block = _host_permissions_block(permission_toml)
     updated = _replace_block(
@@ -92,6 +97,7 @@ def _write_host_permissions(config_path: Path, workspace: Path) -> None:
         block,
     )
     config_path.write_text(updated, encoding="utf-8")
+    return fingerprint
 
 
 def prepare_runtime_assets(
@@ -143,13 +149,14 @@ def source_privacy_policy() -> Path:
     return Path(__file__).resolve().parents[1] / "privacy_policy.py"
 
 
-def prepare_host_runtime_assets(
+def prepare_host_runtime_assets_with_fingerprint(
     interpreter_home: Path,
     *,
     searxng_url: str,
     network_mode: str | None = None,
-    workspace: Path | None = None,
-) -> Path:
+    workspace: Path,
+) -> tuple[Path, str]:
+    """Prepare Host MCP/permission assets and return the exact policy identity written."""
     home = Path(interpreter_home).resolve()
     target = home / "tools" / "local_search_mcp.py"
     config_path = prepare_runtime_assets(
@@ -163,9 +170,39 @@ def prepare_host_runtime_assets(
         searxng_url=searxng_url,
         network_mode=network_mode,
     )
+    fingerprint = _write_host_permissions(config_path, Path(workspace))
+    return config_path, fingerprint
+
+
+def prepare_host_runtime_assets(
+    interpreter_home: Path,
+    *,
+    searxng_url: str,
+    network_mode: str | None = None,
+    workspace: Path | None = None,
+) -> Path:
+    home = Path(interpreter_home).resolve()
     if workspace is not None:
-        _write_host_permissions(config_path, Path(workspace))
-    return config_path
+        config_path, _fingerprint = prepare_host_runtime_assets_with_fingerprint(
+            home,
+            searxng_url=searxng_url,
+            network_mode=network_mode,
+            workspace=Path(workspace),
+        )
+        return config_path
+
+    target = home / "tools" / "local_search_mcp.py"
+    return prepare_runtime_assets(
+        interpreter_home=home,
+        source_script=source_search_mcp(),
+        privacy_source=source_privacy_policy(),
+        web_safety_source=source_web_safety(),
+        runtime_script_path=target,
+        command=sys.executable,
+        command_args=[str(target)],
+        searxng_url=searxng_url,
+        network_mode=network_mode,
+    )
 
 
 def prepare_sandbox_runtime_assets(
