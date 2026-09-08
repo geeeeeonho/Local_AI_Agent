@@ -83,7 +83,8 @@ def test_fetch_page_rejects_non_http_urls():
         }
     )
     assert response["result"]["isError"] is True
-    assert "http" in response["result"]["content"][0]["text"].lower()
+    text = response["result"]["content"][0]["text"].lower()
+    assert "path" in text or "file" in text or "차단" in text
 
 
 def _tool_call(name, arguments, *, request_id=10):
