@@ -34,9 +34,11 @@ def test_agent_chat_handles_structured_host_controls():
 def test_entry_dialog_commits_network_mode_for_host_and_sandbox():
     source = _source("launcher/agent/entry_dialog.py")
     assert "network_policy.set_mode(_nm)" in source
-    assert 'sel["tor"] = _nm in ("warp", "tor")' in source
-    assert 'mode_var.get() == "sandbox"' not in source[source.index('sel["tor"]'):source.index('result["value"]')]
-    assert '_radio(sec3, net_var, "direct"' in source
+    assert 'selected["tor"] = _nm in ("warp", "tor")' in source
+    tor_assignment = source.index('selected["tor"]')
+    result_assignment = source.index('result["value"]', tor_assignment)
+    assert 'mode_var.get() == "sandbox"' not in source[tor_assignment:result_assignment]
+    assert '_radio(\n                sec3,\n                net_var,\n                "direct"' in source
 
 
 def test_entry_dialog_refuses_unenforceable_host_block_mode():
