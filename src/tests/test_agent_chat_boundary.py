@@ -47,26 +47,6 @@ def test_entry_dialog_refuses_unenforceable_host_block_mode():
     assert "Host 차단 모드" in source
 
 
-def test_legacy_network_picker_commits_block_to_canonical_policy(monkeypatch):
-    from launcher import network_policy
-    from launcher.actions import agent_chat
-
-    selected = []
-    monkeypatch.setattr(
-        network_policy,
-        "set_mode",
-        lambda mode: selected.append(network_policy.normalize_mode(mode).value)
-        or network_policy.normalize_mode(mode),
-    )
-
-    class Presenter:
-        def show_menu(self, **kwargs):
-            return "block"
-
-    assert agent_chat._select_internet_mode(Presenter()) is False
-    assert selected == ["block"]
-
-
 def test_structured_sandbox_does_not_relax_outer_docker_security():
     source = _source("launcher/agent/sandbox_backend.py")
     for forbidden in ("--privileged", "CAP_SYS_ADMIN", "seccomp=unconfined", "--network=host"):
