@@ -172,6 +172,63 @@ def test_search_does_not_blanket_block_normal_or_ambiguous_public_queries(monkey
     assert response["result"]["isError"] is False
 
 
+@pytest.mark.parametrize(
+    "url,category_hint,secret_fragment",
+    [
+        (
+            "https://example.com/?api_key=sk-abcdefghijklmnopqrstuvwxyz123456",
+            "secret",
+            "sk-abcdefghijklmnopqrstuvwxyz123456",
+        ),
+        (
+            "https://example.com/?access_token=token-value-abcdefghijklmnopqrstuvwxyz",
+            "secret",
+            "token-value-abcdefghijklmnopqrstuvwxyz",
+        ),
+    ],
+)
+def test_fetch_page_rejects_sensitive_url_before_any_network_io(
+    monkeypatch, url, category_hint, secret_fragment
+):
+    monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "warp")
+    monkeypatch.setattr(
+        search_mcp.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: pytest.fail("sensitive URL must be rejected before DNS"),
+    )
+    monkeypatch.setattr(
+        search_mcp.urllib.request,
+        "build_opener",
+        lambda *args, **kwargs: pytest.fail("sensitive URL must be rejected before HTTP"),
+    )
+
+    text = _error_text(_tool_call("fetch_page", {"url": url}))
+    assert category_hint in text.lower() or "차단" in text
+    assert secret_fragment not in text
+    assert url not in text
+
+
+@pytest.mark.parametrize(
+    "url,category_hint",
+    [
+        ("https://user:password@example.com/", "credential"),
+        ("file:///C:/Users/Alice/private.txt", "path"),
+        ("http://127.0.0.1:8000/", "private"),
+    ],
+)
+def test_fetch_page_rejects_unsafe_url_without_http(monkeypatch, url, category_hint):
+    monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "warp")
+    monkeypatch.setattr(
+        search_mcp.urllib.request,
+        "build_opener",
+        lambda *args, **kwargs: pytest.fail("unsafe URL must be rejected before HTTP"),
+    )
+
+    text = _error_text(_tool_call("fetch_page", {"url": url}))
+    assert category_hint in text.lower() or "차단" in text or "http" in text.lower()
+    assert url not in text
+
+
 def test_notification_returns_no_response():
     assert search_mcp.handle_request(
         {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
