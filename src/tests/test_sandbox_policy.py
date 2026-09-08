@@ -44,7 +44,6 @@ def test_command_runs_the_app_server_directly():
 
 
 def test_transform_is_a_no_op_on_a_freshly_built_command():
-    """The builder and the defensive transform must agree exactly."""
     cmd = _command()
     assert normalize_sandbox_command(cmd) == normalize_sandbox_command(
         normalize_sandbox_command(cmd)
@@ -56,8 +55,6 @@ def test_outer_security_flags_are_present():
     joined = " ".join(cmd)
     assert cmd[:2] == ["docker", "run"]
     assert "--rm" in cmd and "-i" in cmd
-    # Path('/tmp/ws') is intentionally rendered using the host platform because
-    # Docker Desktop accepts Windows host paths on Windows and POSIX paths on Linux.
     assert f"{Path('/tmp/ws')}:/home/agent/workspace" in cmd
     assert "--cpus=2.5" in cmd
     assert "--memory=6g" in cmd
@@ -83,19 +80,33 @@ def test_ollama_endpoint_follows_configuration(monkeypatch):
     monkeypatch.setattr(config, "OLLAMA_PORT", 21434, raising=False)
     transformed = normalize_sandbox_command(_command())
     assert "CODEX_OSS_BASE_URL=http://host.docker.internal:21434/v1" in transformed
-    assert module  # module imported for clarity about what is under test
+    assert module
 
 
-def test_tor_env_keeps_local_ollama_direct_and_uses_remote_dns():
+def test_host_proxy_env_uses_selected_warp_endpoint(monkeypatch):
+    monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "warp")
+    monkeypatch.setenv("NET_MODE", "warp")
+    monkeypatch.setattr(config, "NET_MODE", "warp", raising=False)
     env = build_tor_env({"EXISTING": "kept"})
     assert env["EXISTING"] == "kept"
-    assert env["ALL_PROXY"].startswith("socks5h://")
-    assert env["HTTP_PROXY"].startswith("http://")
+    assert env["LOCAL_AI_NETWORK_MODE"] == "warp"
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:8119"
+    assert env["ALL_PROXY"] == "socks5h://127.0.0.1:1080"
     assert "127.0.0.1" in env["NO_PROXY"]
-    assert "localhost" in env["NO_PROXY"]
 
 
-def test_tor_env_does_not_mutate_the_base_mapping():
+def test_host_proxy_env_uses_selected_tor_endpoint(monkeypatch):
+    monkeypatch.setenv("LOCAL_AI_NETWORK_MODE", "tor")
+    monkeypatch.setenv("NET_MODE", "tor")
+    monkeypatch.setattr(config, "NET_MODE", "tor", raising=False)
+    env = build_tor_env({})
+    assert env["LOCAL_AI_NETWORK_MODE"] == "tor"
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:8118"
+    assert env["ALL_PROXY"] == "socks5h://127.0.0.1:9050"
+
+
+def test_host_proxy_env_does_not_mutate_the_base_mapping(monkeypatch):
+    monkeypatch.setattr(config, "NET_MODE", "warp", raising=False)
     base = {"HTTP_PROXY": "original"}
     build_tor_env(base)
     assert base == {"HTTP_PROXY": "original"}
