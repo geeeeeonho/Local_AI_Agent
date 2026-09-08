@@ -67,6 +67,7 @@ def prepare_runtime_assets(
     interpreter_home: Path,
     source_script: Path,
     privacy_source: Path | None = None,
+    web_safety_source: Path | None = None,
     runtime_script_path: Path,
     command: str,
     command_args: list[str],
@@ -82,6 +83,8 @@ def prepare_runtime_assets(
 
     privacy = Path(privacy_source) if privacy_source is not None else source_privacy_policy()
     shutil.copy2(privacy, target.parent / "privacy_policy.py")
+    safety = Path(web_safety_source) if web_safety_source is not None else source_web_safety()
+    shutil.copy2(safety, target.parent / "web_safety.py")
 
     canonical_mode = network_policy.normalize_mode(network_mode).value
     config_path = home / "config.toml"
@@ -100,6 +103,10 @@ def source_search_mcp() -> Path:
     return Path(__file__).resolve().with_name("search_mcp.py")
 
 
+def source_web_safety() -> Path:
+    return Path(__file__).resolve().with_name("web_safety.py")
+
+
 def source_privacy_policy() -> Path:
     return Path(__file__).resolve().parents[1] / "privacy_policy.py"
 
@@ -116,6 +123,7 @@ def prepare_host_runtime_assets(
         interpreter_home=home,
         source_script=source_search_mcp(),
         privacy_source=source_privacy_policy(),
+        web_safety_source=source_web_safety(),
         runtime_script_path=target,
         command=sys.executable,
         command_args=[str(target)],
@@ -137,6 +145,7 @@ def prepare_sandbox_runtime_assets(
         interpreter_home=home,
         source_script=source_search_mcp(),
         privacy_source=source_privacy_policy(),
+        web_safety_source=source_web_safety(),
         runtime_script_path=target,
         command="python",
         command_args=["/home/agent/.agent_state/local_search_mcp.py"],
