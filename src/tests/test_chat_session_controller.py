@@ -80,6 +80,17 @@ def test_agent_chat_is_thin_orchestration_after_controller_extraction():
     assert 'c0 == "/resume"' not in source
 
 
+def test_agent_chat_marshals_panel_construction_to_tk_main_thread():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "launcher" / "actions" / "agent_chat.py").read_text(encoding="utf-8")
+
+    assert "panel_ready = threading.Event()" in source
+    assert "def build_on_main" in source
+    assert "main_window.root.after(0, build_on_main)" in source
+    assert "panel_ready.wait" in source
+    assert "main_window.host.replace(build_panel)" in source
+
+
 def test_chat_panel_resumes_native_thread_ids_instead_of_legacy_session_files():
     root = Path(__file__).resolve().parents[1]
     source = (root / "launcher" / "presenter" / "gui" / "chat_panel.py").read_text(encoding="utf-8")
