@@ -5,6 +5,11 @@ import shutil
 import sys
 from pathlib import Path
 
+try:
+    from .. import network_policy
+except Exception:  # pragma: no cover
+    from launcher import network_policy
+
 _MANAGED_BEGIN = "# >>> LOCAL_AI_AGENT_LOCAL_SEARCH_MCP >>>"
 _MANAGED_END = "# <<< LOCAL_AI_AGENT_LOCAL_SEARCH_MCP <<<"
 
@@ -17,7 +22,13 @@ def _toml_array(values: list[str]) -> str:
     return "[" + ", ".join(_toml_string(value) for value in values) + "]"
 
 
-def _managed_block(*, command: str, command_args: list[str], searxng_url: str) -> str:
+def _managed_block(
+    *,
+    command: str,
+    command_args: list[str],
+    searxng_url: str,
+    network_mode: str,
+) -> str:
     return "\n".join(
         [
             _MANAGED_BEGIN,
@@ -32,6 +43,7 @@ def _managed_block(*, command: str, command_args: list[str], searxng_url: str) -
             "",
             "[mcp_servers.local_search.env]",
             f"SEARXNG_URL = {_toml_string(searxng_url)}",
+            f"LOCAL_AI_NETWORK_MODE = {_toml_string(network_mode)}",
             _MANAGED_END,
         ]
     )
@@ -54,10 +66,12 @@ def prepare_runtime_assets(
     *,
     interpreter_home: Path,
     source_script: Path,
+    privacy_source: Path | None = None,
     runtime_script_path: Path,
     command: str,
     command_args: list[str],
     searxng_url: str,
+    network_mode: str | None = None,
 ) -> Path:
     home = Path(interpreter_home)
     source = Path(source_script)
@@ -66,12 +80,17 @@ def prepare_runtime_assets(
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
 
+    privacy = Path(privacy_source) if privacy_source is not None else source_privacy_policy()
+    shutil.copy2(privacy, target.parent / "privacy_policy.py")
+
+    canonical_mode = network_policy.normalize_mode(network_mode).value
     config_path = home / "config.toml"
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     block = _managed_block(
         command=command,
         command_args=[str(value) for value in command_args],
         searxng_url=searxng_url,
+        network_mode=canonical_mode,
     )
     config_path.write_text(_replace_managed_block(existing, block), encoding="utf-8")
     return config_path
@@ -81,28 +100,46 @@ def source_search_mcp() -> Path:
     return Path(__file__).resolve().with_name("search_mcp.py")
 
 
-def prepare_host_runtime_assets(interpreter_home: Path, *, searxng_url: str) -> Path:
+def source_privacy_policy() -> Path:
+    return Path(__file__).resolve().parents[1] / "privacy_policy.py"
+
+
+def prepare_host_runtime_assets(
+    interpreter_home: Path,
+    *,
+    searxng_url: str,
+    network_mode: str | None = None,
+) -> Path:
     home = Path(interpreter_home).resolve()
     target = home / "tools" / "local_search_mcp.py"
     return prepare_runtime_assets(
         interpreter_home=home,
         source_script=source_search_mcp(),
+        privacy_source=source_privacy_policy(),
         runtime_script_path=target,
         command=sys.executable,
         command_args=[str(target)],
         searxng_url=searxng_url,
+        network_mode=network_mode,
     )
 
 
-def prepare_sandbox_runtime_assets(state_dir: Path, *, searxng_url: str) -> Path:
+def prepare_sandbox_runtime_assets(
+    state_dir: Path,
+    *,
+    searxng_url: str,
+    network_mode: str | None = None,
+) -> Path:
     state = Path(state_dir).resolve()
     home = state / "open_interpreter"
     target = state / "local_search_mcp.py"
     return prepare_runtime_assets(
         interpreter_home=home,
         source_script=source_search_mcp(),
+        privacy_source=source_privacy_policy(),
         runtime_script_path=target,
         command="python",
         command_args=["/home/agent/.agent_state/local_search_mcp.py"],
         searxng_url=searxng_url,
+        network_mode=network_mode,
     )
