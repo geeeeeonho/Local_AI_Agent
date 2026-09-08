@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 import launcher.config as config
-from launcher.agent.sandbox_backend import normalize_sandbox_command
+from launcher.agent.backend import AgentConfig, ProcessRuntimeSpec
+from launcher.agent.sandbox_backend import SandboxOpenInterpreterBackend, normalize_sandbox_command
 from launcher.agent.sandbox_policy import (
     build_sandbox_docker_command,
     build_tor_env,
@@ -68,10 +71,63 @@ def test_blocked_mode_cuts_external_dns_and_adds_no_proxy():
     assert not any("HTTP_PROXY=" in str(token) for token in cmd)
 
 
-def test_proxy_mode_replaces_dns_block_with_proxy_env():
-    cmd = _command(block_internet=False, tor_proxy=True)
+def test_blocked_mode_uses_managed_internal_network_and_marker():
+    from launcher import network_policy
+
+    cmd = _command(network_mode="block")
+    assert cmd[cmd.index("--network") + 1] == network_policy.block_network_name()
+    assert "LOCAL_AI_NETWORK_MODE=block" in cmd
+    assert "--dns=0.0.0.0" in cmd
+    for key in ("HTTP_PROXY=", "HTTPS_PROXY=", "ALL_PROXY=", "http_proxy=", "https_proxy=", "all_proxy="):
+        assert not any(str(token).startswith(key) for token in cmd)
+
+
+def test_direct_mode_does_not_inherit_the_block_dns_or_network():
+    from launcher import network_policy
+
+    cmd = _command(
+        network_mode="direct",
+        block_internet=False,
+        tor_proxy=False,
+    )
+    assert "LOCAL_AI_NETWORK_MODE=direct" in cmd
     assert "--dns=0.0.0.0" not in cmd
+    if "--network" in cmd:
+        assert cmd[cmd.index("--network") + 1] != network_policy.block_network_name()
+
+
+def test_proxy_mode_replaces_dns_block_with_proxy_env():
+    cmd = _command(block_internet=False, tor_proxy=True, network_mode="warp")
+    assert "--dns=0.0.0.0" not in cmd
+    assert "LOCAL_AI_NETWORK_MODE=warp" in cmd
     assert any("PROXY=" in str(token) or "proxy=" in str(token) for token in cmd)
+
+
+def test_sandbox_block_start_fails_before_runtime_when_internal_network_is_unavailable(monkeypatch, tmp_path):
+    from launcher import network_policy
+
+    backend = SandboxOpenInterpreterBackend(
+        client_factory=lambda *args, **kwargs: pytest.fail(
+            "Block startup must fail before constructing the App Server client"
+        )
+    )
+    monkeypatch.setattr(
+        backend,
+        "is_running",
+        lambda: pytest.fail("Block startup must fail before entering the generic backend start flow"),
+    )
+    monkeypatch.setattr(network_policy, "ensure_block_network", lambda **kwargs: False)
+
+    config_obj = AgentConfig(
+        workspace=tmp_path / "workspace",
+        mode="sandbox",
+        model="ollama/qwen3:8b",
+        network_mode="block",
+        profile_name="default",
+        runtime_spec=ProcessRuntimeSpec(command=("docker", "run", "image")),
+    )
+
+    assert backend.start(config_obj) is False
 
 
 def test_ollama_endpoint_follows_configuration(monkeypatch):
