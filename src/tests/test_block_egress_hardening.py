@@ -1,0 +1,174 @@
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+
+def _result(returncode=0, stdout="", stderr=""):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_block_quiesce_stops_all_managed_egress_relays(monkeypatch):
+    from launcher import config, network_policy
+    from launcher.services import docker as docker_module
+
+    running = {
+        str(config.SEARXNG_CONTAINER),
+        str(config.HTTP_BRIDGE_CONTAINER),
+        str(config.WARP_CONTAINER),
+        str(config.TOR_CONTAINER),
+    }
+    stopped = []
+
+    class Docker:
+        @staticmethod
+        def run(args, **kwargs):
+            assert args[0:2] == ["ps", "--filter"]
+            token = args[2]
+            name = token[len("name=^"):-1]
+            return _result(stdout=(name + "\n") if name in running else "")
+
+        @staticmethod
+        def stop_container(name, timeout=5):
+            stopped.append(name)
+            running.discard(name)
+            return True
+
+    monkeypatch.setattr(docker_module, "DockerService", Docker)
+
+    assert network_policy.quiesce_block_relays() is True
+    assert set(stopped) == {
+        str(config.SEARXNG_CONTAINER),
+        str(config.HTTP_BRIDGE_CONTAINER),
+        str(config.WARP_CONTAINER),
+        str(config.TOR_CONTAINER),
+    }
+    assert running == set()
+
+
+def test_block_quiesce_fails_closed_when_relay_state_cannot_be_proven(monkeypatch):
+    from launcher import network_policy
+    from launcher.services import docker as docker_module
+
+    class Docker:
+        @staticmethod
+        def run(args, **kwargs):
+            return None
+
+        @staticmethod
+        def stop_container(name, timeout=5):
+            pytest.fail("stop must not run when relay state inspection itself failed")
+
+    monkeypatch.setattr(docker_module, "DockerService", Docker)
+
+    assert network_policy.quiesce_block_relays() is False
+
+
+def test_production_block_network_preparation_aborts_when_relay_quiesce_fails(monkeypatch):
+    from launcher import network_policy
+    from launcher.services import docker as docker_module
+
+    monkeypatch.setattr(network_policy, "quiesce_block_relays", lambda **kwargs: False)
+
+    class Docker:
+        @staticmethod
+        def network_inspect(*args, **kwargs):
+            pytest.fail("Block network inspection must not run after relay cleanup failure")
+
+    monkeypatch.setattr(docker_module, "DockerService", Docker)
+
+    assert network_policy.ensure_block_network() is False
+
+
+def test_block_probe_rejects_reachable_managed_host_relay():
+    from tools import verify_block_egress as diagnostic
+
+    verdict = diagnostic.evaluate_probe_result({
+        "host_service": True,
+        "public_ip_tcp": False,
+        "public_dns": False,
+        "managed_host_relays": {
+            "tor_socks_9050": True,
+            "tor_http_8118": False,
+            "warp_socks_1080": False,
+            "warp_http_8119": False,
+            "searxng_8888": False,
+        },
+    })
+
+    assert verdict.public_egress_blocked is True
+    assert verdict.managed_relays_blocked is False
+    assert verdict.ok is False
+    assert "tor_socks_9050" in verdict.relay_message
+
+
+def test_block_probe_command_matches_runtime_dns_guard_and_relay_probes(monkeypatch):
+    from tools import verify_block_egress as diagnostic
+
+    monkeypatch.setattr(diagnostic.network_policy, "block_network_name", lambda: "llm_block_net")
+    cmd = diagnostic.build_probe_command(image="llm-agent-sandbox")
+
+    assert "--dns=0.0.0.0" in cmd
+    script = cmd[-1]
+    for marker in (
+        "tor_socks_9050",
+        "tor_http_8118",
+        "warp_socks_1080",
+        "warp_http_8119",
+        "searxng_8888",
+    ):
+        assert marker in script
+
+
+def test_tor_published_proxy_ports_bind_only_to_loopback(monkeypatch):
+    from launcher import tor_runtime
+
+    calls = []
+    monkeypatch.setattr(tor_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(
+        tor_runtime,
+        "_run",
+        lambda args, timeout=25, capture=True: calls.append(list(args)) or _result(),
+    )
+
+    tor_runtime._run_container()
+    command = calls[-1]
+
+    assert "127.0.0.1:%d:%d" % (
+        tor_runtime.TOR_HOST_PORT,
+        tor_runtime.TOR_CONTAINER_PORT,
+    ) in command
+    assert "127.0.0.1:%d:%d" % (
+        tor_runtime.TOR_HTTP_PORT,
+        tor_runtime.TOR_HTTP_PORT,
+    ) in command
+
+
+def test_searxng_published_port_binds_only_to_loopback(monkeypatch, tmp_path: Path):
+    from launcher import searxng_runtime, warp_runtime
+
+    cfg = tmp_path / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.yml").write_text("search:\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setenv("NET_MODE", "block")
+    monkeypatch.setattr(searxng_runtime, "is_running", lambda: False)
+    monkeypatch.setattr(searxng_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(searxng_runtime, "image_exists", lambda: True)
+    monkeypatch.setattr(searxng_runtime, "container_exists", lambda: False)
+    monkeypatch.setattr(searxng_runtime, "_wait_ready", lambda timeout=60: True)
+    monkeypatch.setattr(searxng_runtime, "_cfg_dir", lambda env: cfg)
+    monkeypatch.setattr(warp_runtime, "start", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        searxng_runtime,
+        "_run",
+        lambda args, timeout=25, capture=True: calls.append(list(args)) or _result(),
+    )
+
+    assert searxng_runtime.start(tmp_path) is True
+    command = next(args for args in calls if args[:3] == ["run", "-d", "--rm"])
+    assert "127.0.0.1:%d:%d" % (
+        int(searxng_runtime.HOST_PORT),
+        searxng_runtime.CONTAINER_PORT,
+    ) in command
