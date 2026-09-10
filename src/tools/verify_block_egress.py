@@ -22,14 +22,23 @@ from launcher import network_policy
 PUBLIC_IP = "1.1.1.1"
 PUBLIC_PORT = 443
 PUBLIC_DNS_NAME = "example.com"
+MANAGED_HOST_RELAYS = {
+    "tor_socks_9050": 9050,
+    "tor_http_8118": 8118,
+    "warp_socks_1080": 1080,
+    "warp_http_8119": 8119,
+    "searxng_8888": 8888,
+}
 
 
 @dataclass(frozen=True)
 class ProbeVerdict:
     public_egress_blocked: bool
     host_service_reachable: bool | None
+    managed_relays_blocked: bool
     ok: bool
     host_message: str
+    relay_message: str
 
 
 def build_network_inspect_command(network_name: str | None = None) -> list[str]:
@@ -46,7 +55,17 @@ def _probe_script(ollama_port: int, skip_host_probe: bool) -> str:
         "can_connect('host.docker.internal', %d)" % int(ollama_port)
     )
     return "\n".join([
-        "import json, socket",
+        "import ipaddress, json, socket",
+        "PUBLIC_IP = %r" % PUBLIC_IP,
+        "PUBLIC_PORT = %d" % PUBLIC_PORT,
+        "HOST = 'host.docker.internal'",
+        "def recvn(sock, n):",
+        "    data = b''",
+        "    while len(data) < n:",
+        "        chunk = sock.recv(n - len(data))",
+        "        if not chunk: raise OSError('short read')",
+        "        data += chunk",
+        "    return data",
         "def can_connect(host, port, timeout=2.0):",
         "    try:",
         "        s = socket.create_connection((host, port), timeout=timeout)",
@@ -60,10 +79,50 @@ def _probe_script(ollama_port: int, skip_host_probe: bool) -> str:
         "        return True",
         "    except Exception:",
         "        return False",
+        "def socks5_connect_public(port, timeout=3.0):",
+        "    s = None",
+        "    try:",
+        "        s = socket.create_connection((HOST, port), timeout=timeout)",
+        "        s.settimeout(timeout)",
+        "        s.sendall(b'\\x05\\x01\\x00')",
+        "        if recvn(s, 2) != b'\\x05\\x00': return False",
+        "        addr = ipaddress.ip_address(PUBLIC_IP).packed",
+        "        s.sendall(b'\\x05\\x01\\x00\\x01' + addr + PUBLIC_PORT.to_bytes(2, 'big'))",
+        "        reply = recvn(s, 4)",
+        "        return reply[0] == 5 and reply[1] == 0",
+        "    except Exception:",
+        "        return False",
+        "    finally:",
+        "        try:",
+        "            if s: s.close()",
+        "        except Exception: pass",
+        "def http_connect_public(port, timeout=3.0):",
+        "    s = None",
+        "    try:",
+        "        s = socket.create_connection((HOST, port), timeout=timeout)",
+        "        s.settimeout(timeout)",
+        "        target = PUBLIC_IP + ':' + str(PUBLIC_PORT)",
+        "        req = ('CONNECT ' + target + ' HTTP/1.1\\r\\nHost: ' + target + '\\r\\n\\r\\n').encode('ascii')",
+        "        s.sendall(req)",
+        "        head = s.recv(256).split(b'\\r\\n', 1)[0]",
+        "        return b' 200 ' in head or head.endswith(b' 200')",
+        "    except Exception:",
+        "        return False",
+        "    finally:",
+        "        try:",
+        "            if s: s.close()",
+        "        except Exception: pass",
         "result = {",
         "    'host_service': %s," % host_expr,
-        "    'public_ip_tcp': can_connect('%s', %d)," % (PUBLIC_IP, PUBLIC_PORT),
-        "    'public_dns': can_resolve('%s')," % PUBLIC_DNS_NAME,
+        "    'public_ip_tcp': can_connect(PUBLIC_IP, PUBLIC_PORT),",
+        "    'public_dns': can_resolve(%r)," % PUBLIC_DNS_NAME,
+        "    'managed_host_relays': {",
+        "        'tor_socks_9050': socks5_connect_public(9050),",
+        "        'tor_http_8118': http_connect_public(8118),",
+        "        'warp_socks_1080': socks5_connect_public(1080),",
+        "        'warp_http_8119': http_connect_public(8119),",
+        "        'searxng_8888': can_connect(HOST, 8888),",
+        "    },",
         "}",
         "print(json.dumps(result, sort_keys=True))",
     ])
@@ -81,6 +140,7 @@ def build_probe_command(
         "docker", "run", "--rm",
         "--network", name,
         "--add-host", "host.docker.internal:host-gateway",
+        "--dns=0.0.0.0",
         "--entrypoint", "python",
         image,
         "-c", _probe_script(ollama_port, skip_host_probe),
@@ -110,11 +170,23 @@ def evaluate_probe_result(result: Mapping[str, object]) -> ProbeVerdict:
         )
         host_ok = host_reachable
 
+    raw_relays = result.get("managed_host_relays")
+    relays = raw_relays if isinstance(raw_relays, Mapping) else {}
+    reachable_relays = sorted(str(name) for name, value in relays.items() if bool(value))
+    relays_blocked = not reachable_relays
+    relay_message = (
+        "Managed Host relay endpoints cannot provide public egress from Block."
+        if relays_blocked
+        else "Reachable managed Host relay paths: " + ", ".join(reachable_relays)
+    )
+
     return ProbeVerdict(
         public_egress_blocked=blocked,
         host_service_reachable=host_reachable,
-        ok=blocked and host_ok,
+        managed_relays_blocked=relays_blocked,
+        ok=blocked and host_ok and relays_blocked,
         host_message=host_message,
+        relay_message=relay_message,
     )
 
 
@@ -170,7 +242,7 @@ def run_diagnostic(
         network_name=name,
     )
     try:
-        probed = _run(cmd, timeout=25)
+        probed = _run(cmd, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print("[FAIL] probe container failed:", type(exc).__name__)
         return False
@@ -192,6 +264,10 @@ def run_diagnostic(
         "[OK]" if verdict.public_egress_blocked else "[FAIL]",
         "public raw-IP TCP and public DNS blocked:",
         verdict.public_egress_blocked,
+    )
+    print(
+        "[OK]" if verdict.managed_relays_blocked else "[FAIL]",
+        verdict.relay_message,
     )
     host_prefix = "[WARN]" if verdict.host_service_reachable is None else (
         "[OK]" if verdict.host_service_reachable else "[FAIL]"

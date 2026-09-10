@@ -9,10 +9,8 @@ settings.yml 은 socks5://host.docker.internal:9050 (Tor) 를 통해 검색하�
 Tor 컨테이너(tor_runtime)를 먼저 best-effort 로 띄운다. Tor 이미지가 없으면 SearXNG 는
 기동되지만(브라우징 가능) 검색은 실패할 수 있으니 경고만 남긴다.
 
-주의: 실제 Docker 미검증(가상검증). 컨테이너 구성:
-  docker run -d --rm --name llm_searxng -p {HOST_PORT}:8080
-    -v "{env}/searxng/config:/etc/searxng"
-    --add-host=host.docker.internal:host-gateway  searxng/searxng:latest
+호스트 UI 포트는 127.0.0.1 에만 게시한다. 컨테이너 간 검색 호출은 llm_net 내부의
+llm_searxng 이름을 사용하므로 LAN 전체 인터페이스 공개는 필요하지 않다.
 
 stdlib 만 사용. Windows/Docker Desktop 가정.
 """
@@ -23,7 +21,7 @@ import time
 from pathlib import Path
 
 try:
-    from . import config as _config  # 패키지 컨텍스트
+    from . import config as _config
 except Exception:  # pragma: no cover
     try:
         import config as _config  # type: ignore
@@ -39,8 +37,8 @@ IMAGE = _c("SEARXNG_IMAGE", "searxng/searxng:latest")
 CONTAINER = _c("SEARXNG_CONTAINER", "llm_searxng")
 HOST_PORT = _c("SEARXNG_HOST_PORT", 8888)
 BOOT_TIMEOUT = _c("SEARXNG_BOOT_TIMEOUT", 60)
-CONTAINER_PORT = _c("SEARXNG_CONTAINER_PORT", 8080)  # NET_CONFIG_v1: config 정본
-NETWORK = _c("LLM_NETWORK", "llm_net")  # SEARXNG_NET_v1: 공유 네트워크
+CONTAINER_PORT = _c("SEARXNG_CONTAINER_PORT", 8080)
+NETWORK = _c("LLM_NETWORK", "llm_net")
 
 
 def _ensure_net():
@@ -50,6 +48,7 @@ def _ensure_net():
             _run(["network", "create", NETWORK], timeout=15)
     except Exception:
         pass
+
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -86,11 +85,7 @@ def _cfg_dir(env) -> Path:
 
 
 def _harden_settings(cfg, log_path=None):
-    """SEARXNG_HARDEN_v2: 프라이버시 하드닝 (모든 start 마다 멱등 적용).
-       ① socks5:// -> socks5h:// (원격 DNS, DNS 유출 방지)
-       ② search.method: POST (검색어가 URL/referrer 에 안 남음)
-       ③ general.enable_metrics: false (내부 메트릭 수집 off)
-       ④ ui.query_in_title: false (검색어가 페이지 제목에 안 남음)"""
+    """SEARXNG_HARDEN_v2: 프라이버시 하드닝 (모든 start 마다 멱등 적용)."""
     try:
         _lt = Path(cfg) / "limiter.toml"
         if _lt.exists():
@@ -106,10 +101,7 @@ def _harden_settings(cfg, log_path=None):
     orig = txt
     txt = txt.replace("socks5://host.docker.internal:9050",
                       "socks5h://host.docker.internal:9050")
-    # SEARXNG_TOR_HOST_v1: 컨테이너→컨테이너는 게시포트 대신 llm_net 컨테이너명으로
     txt = txt.replace("socks5h://host.docker.internal:9050", "socks5h://llm_tor:9050")
-    # NETMODE_PROXY_SYNC_v1: outgoing 프록시를 현재 NET_MODE 에 맞춘다.
-    #   warp -> socks5h://llm_warp:1080,  tor -> socks5h://llm_tor:9050 (양방향)
     try:
         _ap = _c("active_socks_proxy", None)
         _proxy = _ap() if callable(_ap) else None
@@ -119,10 +111,9 @@ def _harden_settings(cfg, log_path=None):
         for _old in ("socks5h://llm_tor:9050", "socks5h://llm_warp:1080"):
             if _old != _proxy:
                 txt = txt.replace(_old, _proxy)
-    # NETMODE_WARP_v1: 기본 네트워크는 WARP. NET_MODE=tor 일 때만 Tor 를 유지한다.
     if __import__("os").environ.get("NET_MODE", "warp").strip().lower() != "tor":
         txt = txt.replace("socks5h://llm_tor:9050", "socks5h://llm_warp:1080")
-    if "method:" not in txt and (nl := "\n") and "\nsearch:\n" in txt:
+    if "method:" not in txt and "\nsearch:\n" in txt:
         txt = txt.replace("\nsearch:\n", "\nsearch:\n  method: \"POST\"\n", 1)
     if "enable_metrics:" not in txt and "\ngeneral:\n" in txt:
         txt = txt.replace("\ngeneral:\n", "\ngeneral:\n  enable_metrics: false\n", 1)
@@ -167,9 +158,8 @@ def start(env, log_path=None, with_tor=True) -> bool:
     """SearXNG 기동. 이미 떠 있으면 True. 이미지/설정 없으면 False."""
     if is_running():
         return True
-    _ensure_net()  # SEARXNG_NET_v1
+    _ensure_net()
 
-    # NETMODE_WARP_v1: 기본은 WARP 프록시를 먼저 기동. NET_MODE=tor 이면 Tor 사용.
     _net_mode = __import__("os").environ.get("NET_MODE", "warp").strip().lower()
     if _net_mode != "tor":
         try:
@@ -185,7 +175,6 @@ def start(env, log_path=None, with_tor=True) -> bool:
             except Exception as _e:
                 _log(log_path, "WARN", "WARP 기동 예외: " + str(_e)[:120])
 
-    # settings.yml 이 Tor(9050) 를 요구하므로 Tor 를 먼저 best-effort 로 기동
     if with_tor and _net_mode == "tor":
         try:
             from . import tor_runtime  # type: ignore
@@ -209,7 +198,7 @@ def start(env, log_path=None, with_tor=True) -> bool:
         _log(log_path, "WARN", "settings.yml 없음: %s (INSTALL 필요)" % str(cfg / "settings.yml"))
         return False
 
-    _harden_settings(cfg, log_path)  # SEARXNG_HARDEN_v1
+    _harden_settings(cfg, log_path)
 
     if container_exists():
         remove()
@@ -218,7 +207,7 @@ def start(env, log_path=None, with_tor=True) -> bool:
         "run", "-d", "--rm",
         "--name", CONTAINER,
         "--network", NETWORK,
-        "-p", "%d:%d" % (int(HOST_PORT), CONTAINER_PORT),
+        "-p", "127.0.0.1:%d:%d" % (int(HOST_PORT), CONTAINER_PORT),
         "-v", "%s:/etc/searxng" % str(cfg),
         "--add-host=host.docker.internal:host-gateway",
         IMAGE,
