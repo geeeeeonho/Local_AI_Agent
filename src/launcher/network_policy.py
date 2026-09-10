@@ -96,6 +96,79 @@ def block_network_name() -> str:
     return str(getattr(_config(), "BLOCK_NETWORK", "llm_block_net") or "llm_block_net")
 
 
+def quiesce_block_relays(log: Callable[[str], None] | None = None) -> bool:
+    """Stop product-managed Host relays before entering Block mode.
+
+    ``--internal`` intentionally keeps the Docker Host gateway reachable so the
+    sandbox can use Host Ollama. A previously running WARP/Tor/SearXNG relay
+    could otherwise turn that same Host gateway into an indirect public-egress
+    path. Block preparation therefore stops every product-managed relay and
+    strictly re-checks Docker state before the internal network is accepted.
+
+    Docker state inspection failure is treated as unsafe: Block startup must
+    fail closed rather than assume a relay is absent.
+    """
+    cfg = _config()
+    relays = [
+        ("SearXNG", str(getattr(cfg, "SEARXNG_CONTAINER", "llm_searxng"))),
+        ("HTTP bridge", str(getattr(cfg, "HTTP_BRIDGE_CONTAINER", "llm_httpbridge"))),
+        ("WARP", str(getattr(cfg, "WARP_CONTAINER", "llm_warp"))),
+        ("Tor", str(getattr(cfg, "TOR_CONTAINER", "llm_tor"))),
+    ]
+
+    def _say(message: str) -> None:
+        if log is None:
+            return
+        try:
+            log(message)
+        except Exception:
+            pass
+
+    try:
+        from .services.docker import DockerService
+    except Exception as exc:
+        _say("Block relay 정리 준비 실패: " + type(exc).__name__)
+        return False
+
+    def _running(name: str) -> bool | None:
+        try:
+            result = DockerService.run(
+                ["ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"],
+                timeout=10,
+            )
+        except Exception:
+            return None
+        if result is None or getattr(result, "returncode", 1) != 0:
+            return None
+        return name in str(getattr(result, "stdout", "") or "").split()
+
+    for label, name in relays:
+        state = _running(name)
+        if state is None:
+            _say("Block relay 상태를 확인할 수 없습니다: " + label)
+            return False
+        if not state:
+            continue
+        _say("Block 진입 전 관리형 relay 종료: " + label)
+        try:
+            stopped = DockerService.stop_container(name, timeout=5)
+        except Exception:
+            stopped = False
+        if not stopped:
+            _say("Block relay 종료 실패: " + label)
+            return False
+
+    for label, name in relays:
+        state = _running(name)
+        if state is None:
+            _say("Block relay 종료 상태를 검증할 수 없습니다: " + label)
+            return False
+        if state:
+            _say("Block relay가 아직 실행 중입니다: " + label)
+            return False
+    return True
+
+
 def ensure_block_network(run=None, log: Callable[[str], None] | None = None) -> bool:
     """Ensure Block mode uses an externally isolated Docker bridge.
 
@@ -104,8 +177,11 @@ def ensure_block_network(run=None, log: Callable[[str], None] | None = None) -> 
     never mutated in place or silently replaced: startup callers can therefore
     fail closed instead of accidentally joining a routable network.
 
-    ``run`` remains an injection seam for contract tests/diagnostics. Production
-    calls use the canonical :class:`DockerService` network primitives.
+    Production calls also quiesce all product-managed Host egress relays before
+    accepting the network. ``run`` remains an injection seam for pure topology
+    contract tests/diagnostics and deliberately skips that live-service side
+    effect. Production calls use the canonical :class:`DockerService` network
+    primitives.
     """
     name = block_network_name()
     format_string = "{{.Internal}}|{{.Driver}}"
@@ -117,6 +193,10 @@ def ensure_block_network(run=None, log: Callable[[str], None] | None = None) -> 
             log(message)
         except Exception:
             pass
+
+    if run is None and not quiesce_block_relays(log=log):
+        _say("Block 진입 전 관리형 relay를 안전하게 종료하지 못했습니다.")
+        return False
 
     try:
         if run is not None:
@@ -286,6 +366,7 @@ __all__ = [
     "display_label",
     "allows_public_egress",
     "block_network_name",
+    "quiesce_block_relays",
     "ensure_block_network",
     "host_proxy_env",
     "container_proxy_env",
