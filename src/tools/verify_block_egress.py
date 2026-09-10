@@ -54,12 +54,18 @@ def _probe_script(ollama_port: int, skip_host_probe: bool) -> str:
     host_expr = "None" if skip_host_probe else (
         "can_connect('host.docker.internal', %d)" % int(ollama_port)
     )
-    relay_expr = ", ".join(
-        repr(name) + ": can_connect('host.docker.internal', %d)" % port
-        for name, port in MANAGED_HOST_RELAYS.items()
-    )
     return "\n".join([
-        "import json, socket",
+        "import ipaddress, json, socket",
+        "PUBLIC_IP = %r" % PUBLIC_IP,
+        "PUBLIC_PORT = %d" % PUBLIC_PORT,
+        "HOST = 'host.docker.internal'",
+        "def recvn(sock, n):",
+        "    data = b''",
+        "    while len(data) < n:",
+        "        chunk = sock.recv(n - len(data))",
+        "        if not chunk: raise OSError('short read')",
+        "        data += chunk",
+        "    return data",
         "def can_connect(host, port, timeout=2.0):",
         "    try:",
         "        s = socket.create_connection((host, port), timeout=timeout)",
@@ -73,11 +79,50 @@ def _probe_script(ollama_port: int, skip_host_probe: bool) -> str:
         "        return True",
         "    except Exception:",
         "        return False",
+        "def socks5_connect_public(port, timeout=3.0):",
+        "    s = None",
+        "    try:",
+        "        s = socket.create_connection((HOST, port), timeout=timeout)",
+        "        s.settimeout(timeout)",
+        "        s.sendall(b'\\x05\\x01\\x00')",
+        "        if recvn(s, 2) != b'\\x05\\x00': return False",
+        "        addr = ipaddress.ip_address(PUBLIC_IP).packed",
+        "        s.sendall(b'\\x05\\x01\\x00\\x01' + addr + PUBLIC_PORT.to_bytes(2, 'big'))",
+        "        reply = recvn(s, 4)",
+        "        return reply[0] == 5 and reply[1] == 0",
+        "    except Exception:",
+        "        return False",
+        "    finally:",
+        "        try:",
+        "            if s: s.close()",
+        "        except Exception: pass",
+        "def http_connect_public(port, timeout=3.0):",
+        "    s = None",
+        "    try:",
+        "        s = socket.create_connection((HOST, port), timeout=timeout)",
+        "        s.settimeout(timeout)",
+        "        target = PUBLIC_IP + ':' + str(PUBLIC_PORT)",
+        "        req = ('CONNECT ' + target + ' HTTP/1.1\\r\\nHost: ' + target + '\\r\\n\\r\\n').encode('ascii')",
+        "        s.sendall(req)",
+        "        head = s.recv(256).split(b'\\r\\n', 1)[0]",
+        "        return b' 200 ' in head or head.endswith(b' 200')",
+        "    except Exception:",
+        "        return False",
+        "    finally:",
+        "        try:",
+        "            if s: s.close()",
+        "        except Exception: pass",
         "result = {",
         "    'host_service': %s," % host_expr,
-        "    'public_ip_tcp': can_connect('%s', %d)," % (PUBLIC_IP, PUBLIC_PORT),
-        "    'public_dns': can_resolve('%s')," % PUBLIC_DNS_NAME,
-        "    'managed_host_relays': {%s}," % relay_expr,
+        "    'public_ip_tcp': can_connect(PUBLIC_IP, PUBLIC_PORT),",
+        "    'public_dns': can_resolve(%r)," % PUBLIC_DNS_NAME,
+        "    'managed_host_relays': {",
+        "        'tor_socks_9050': socks5_connect_public(9050),",
+        "        'tor_http_8118': http_connect_public(8118),",
+        "        'warp_socks_1080': socks5_connect_public(1080),",
+        "        'warp_http_8119': http_connect_public(8119),",
+        "        'searxng_8888': can_connect(HOST, 8888),",
+        "    },",
         "}",
         "print(json.dumps(result, sort_keys=True))",
     ])
@@ -130,9 +175,9 @@ def evaluate_probe_result(result: Mapping[str, object]) -> ProbeVerdict:
     reachable_relays = sorted(str(name) for name, value in relays.items() if bool(value))
     relays_blocked = not reachable_relays
     relay_message = (
-        "Managed Host relay endpoints are unreachable from Block."
+        "Managed Host relay endpoints cannot provide public egress from Block."
         if relays_blocked
-        else "Reachable managed Host relay endpoints: " + ", ".join(reachable_relays)
+        else "Reachable managed Host relay paths: " + ", ".join(reachable_relays)
     )
 
     return ProbeVerdict(
@@ -197,7 +242,7 @@ def run_diagnostic(
         network_name=name,
     )
     try:
-        probed = _run(cmd, timeout=25)
+        probed = _run(cmd, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print("[FAIL] probe container failed:", type(exc).__name__)
         return False
