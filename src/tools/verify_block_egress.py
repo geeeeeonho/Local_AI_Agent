@@ -22,14 +22,23 @@ from launcher import network_policy
 PUBLIC_IP = "1.1.1.1"
 PUBLIC_PORT = 443
 PUBLIC_DNS_NAME = "example.com"
+MANAGED_HOST_RELAYS = {
+    "tor_socks_9050": 9050,
+    "tor_http_8118": 8118,
+    "warp_socks_1080": 1080,
+    "warp_http_8119": 8119,
+    "searxng_8888": 8888,
+}
 
 
 @dataclass(frozen=True)
 class ProbeVerdict:
     public_egress_blocked: bool
     host_service_reachable: bool | None
+    managed_relays_blocked: bool
     ok: bool
     host_message: str
+    relay_message: str
 
 
 def build_network_inspect_command(network_name: str | None = None) -> list[str]:
@@ -44,6 +53,10 @@ def _probe_script(ollama_port: int, skip_host_probe: bool) -> str:
     """Return a stdlib-only Python probe executed inside the Block network."""
     host_expr = "None" if skip_host_probe else (
         "can_connect('host.docker.internal', %d)" % int(ollama_port)
+    )
+    relay_expr = ", ".join(
+        repr(name) + ": can_connect('host.docker.internal', %d)" % port
+        for name, port in MANAGED_HOST_RELAYS.items()
     )
     return "\n".join([
         "import json, socket",
@@ -64,6 +77,7 @@ def _probe_script(ollama_port: int, skip_host_probe: bool) -> str:
         "    'host_service': %s," % host_expr,
         "    'public_ip_tcp': can_connect('%s', %d)," % (PUBLIC_IP, PUBLIC_PORT),
         "    'public_dns': can_resolve('%s')," % PUBLIC_DNS_NAME,
+        "    'managed_host_relays': {%s}," % relay_expr,
         "}",
         "print(json.dumps(result, sort_keys=True))",
     ])
@@ -81,6 +95,7 @@ def build_probe_command(
         "docker", "run", "--rm",
         "--network", name,
         "--add-host", "host.docker.internal:host-gateway",
+        "--dns=0.0.0.0",
         "--entrypoint", "python",
         image,
         "-c", _probe_script(ollama_port, skip_host_probe),
@@ -110,11 +125,23 @@ def evaluate_probe_result(result: Mapping[str, object]) -> ProbeVerdict:
         )
         host_ok = host_reachable
 
+    raw_relays = result.get("managed_host_relays")
+    relays = raw_relays if isinstance(raw_relays, Mapping) else {}
+    reachable_relays = sorted(str(name) for name, value in relays.items() if bool(value))
+    relays_blocked = not reachable_relays
+    relay_message = (
+        "Managed Host relay endpoints are unreachable from Block."
+        if relays_blocked
+        else "Reachable managed Host relay endpoints: " + ", ".join(reachable_relays)
+    )
+
     return ProbeVerdict(
         public_egress_blocked=blocked,
         host_service_reachable=host_reachable,
-        ok=blocked and host_ok,
+        managed_relays_blocked=relays_blocked,
+        ok=blocked and host_ok and relays_blocked,
         host_message=host_message,
+        relay_message=relay_message,
     )
 
 
@@ -192,6 +219,10 @@ def run_diagnostic(
         "[OK]" if verdict.public_egress_blocked else "[FAIL]",
         "public raw-IP TCP and public DNS blocked:",
         verdict.public_egress_blocked,
+    )
+    print(
+        "[OK]" if verdict.managed_relays_blocked else "[FAIL]",
+        verdict.relay_message,
     )
     host_prefix = "[WARN]" if verdict.host_service_reachable is None else (
         "[OK]" if verdict.host_service_reachable else "[FAIL]"
