@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -140,3 +141,57 @@ def test_block_probe_command_matches_runtime_dns_guard_and_active_relay_probes(m
         "searxng_8888",
     ):
         assert marker in script
+
+
+def test_tor_published_proxy_ports_bind_only_to_loopback(monkeypatch):
+    from launcher import tor_runtime
+
+    calls = []
+    monkeypatch.setattr(tor_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(
+        tor_runtime,
+        "_run",
+        lambda args, timeout=25, capture=True: calls.append(list(args)) or _result(),
+    )
+
+    tor_runtime._run_container()
+    command = calls[-1]
+
+    assert "127.0.0.1:%d:%d" % (
+        tor_runtime.TOR_HOST_PORT,
+        tor_runtime.TOR_CONTAINER_PORT,
+    ) in command
+    assert "127.0.0.1:%d:%d" % (
+        tor_runtime.TOR_HTTP_PORT,
+        tor_runtime.TOR_HTTP_PORT,
+    ) in command
+
+
+def test_searxng_published_port_binds_only_to_loopback(monkeypatch, tmp_path: Path):
+    from launcher import searxng_runtime, warp_runtime
+
+    cfg = tmp_path / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.yml").write_text("search:\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setenv("NET_MODE", "block")
+    monkeypatch.setattr(searxng_runtime, "is_running", lambda: False)
+    monkeypatch.setattr(searxng_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(searxng_runtime, "image_exists", lambda: True)
+    monkeypatch.setattr(searxng_runtime, "container_exists", lambda: False)
+    monkeypatch.setattr(searxng_runtime, "_wait_ready", lambda timeout=60: True)
+    monkeypatch.setattr(searxng_runtime, "_cfg_dir", lambda env: cfg)
+    monkeypatch.setattr(warp_runtime, "start", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        searxng_runtime,
+        "_run",
+        lambda args, timeout=25, capture=True: calls.append(list(args)) or _result(),
+    )
+
+    assert searxng_runtime.start(tmp_path) is True
+    command = next(args for args in calls if args[:3] == ["run", "-d", "--rm"])
+    assert "127.0.0.1:%d:%d" % (
+        int(searxng_runtime.HOST_PORT),
+        searxng_runtime.CONTAINER_PORT,
+    ) in command
