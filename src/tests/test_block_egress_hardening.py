@@ -122,7 +122,7 @@ def test_block_probe_accepts_clean_managed_relay_surface():
     assert verdict.ok is True
 
 
-def test_block_probe_command_matches_runtime_dns_guard_and_relay_probes(monkeypatch):
+def test_block_probe_command_matches_runtime_dns_guard_and_active_relay_probes(monkeypatch):
     from tools import verify_block_egress as diagnostic
 
     monkeypatch.setattr(diagnostic.network_policy, "block_network_name", lambda: "llm_block_net")
@@ -130,6 +130,8 @@ def test_block_probe_command_matches_runtime_dns_guard_and_relay_probes(monkeypa
 
     assert "--dns=0.0.0.0" in cmd
     script = cmd[-1]
+    assert "def socks5_connect_public" in script
+    assert "def http_connect_public" in script
     for marker in (
         "tor_socks_9050",
         "tor_http_8118",
