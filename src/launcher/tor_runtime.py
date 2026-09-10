@@ -4,8 +4,9 @@
 SearXNG(settings.yml 의 socks5://host.docker.internal:9050) 와 인터프리터의 'Tor 경유'
 토글이 실제로 동작하도록, 로컬에 Tor SOCKS5 프록시 컨테이너를 9050 으로 띄운다.
 
-컨테이너는 9050 을 호스트에 게시(-p 9050:9050)하므로, 다른 컨테이너(SearXNG·샌드박스)는
-host.docker.internal:9050 으로 도달한다.
+호스트에서 사용하는 Tor 프록시 포트는 127.0.0.1 에만 게시한다. 컨테이너끼리는
+공유 llm_net 안에서 llm_tor 이름으로 직접 접근하므로 Host 전체 인터페이스 공개가
+필요하지 않다.
 
 주의(가상검증만, 실제 Docker 미검증):
   · 기본 이미지는 아래 TOR_IMAGE. 없으면 image_exists()=False → start()가 안내 후 False.
@@ -19,9 +20,8 @@ from __future__ import annotations
 import subprocess
 import time
 
-# TOR_CONFIG_v1: config 정본 참조 (없으면 리터럴 폴백)
 try:
-    from . import config as _config  # 패키지 컨텍스트
+    from . import config as _config
 except Exception:  # pragma: no cover
     try:
         import config as _config  # type: ignore
@@ -33,16 +33,14 @@ def _c(name, default):
     return getattr(_config, name, default) if _config else default
 
 
-# 사용자 조정 가능 상수 (정본 = launcher/config.py) --------------------
-TOR_IMAGE = _c("TOR_IMAGE", "dperson/torproxy")            # SOCKS5 Tor proxy
+TOR_IMAGE = _c("TOR_IMAGE", "dperson/torproxy")
 TOR_CONTAINER = _c("TOR_CONTAINER", "llm_tor")
-TOR_HOST_PORT = _c("TOR_SOCKS_PORT", 9050)                 # 호스트/컨테이너 접근 포트
-TOR_CONTAINER_PORT = _c("TOR_SOCKS_PORT", 9050)            # 이미지 내부 SocksPort
-TOR_HTTP_PORT = _c("TOR_HTTP_PORT", 8118)                  # Privoxy(HTTP)
-BOOT_TIMEOUT = _c("TOR_BOOT_TIMEOUT", 30)                  # config 정본(=90) 사용
-# ----------------------------------------------------------------------
+TOR_HOST_PORT = _c("TOR_SOCKS_PORT", 9050)
+TOR_CONTAINER_PORT = _c("TOR_SOCKS_PORT", 9050)
+TOR_HTTP_PORT = _c("TOR_HTTP_PORT", 8118)
+BOOT_TIMEOUT = _c("TOR_BOOT_TIMEOUT", 30)
 
-_CREATE_NO_WINDOW = 0x08000000  # Windows: 콘솔 창 안 띄움
+_CREATE_NO_WINDOW = 0x08000000
 
 
 def _run(args, timeout=25, capture=True):
@@ -77,19 +75,12 @@ def is_running() -> bool:
     return bool(r and r.returncode == 0 and TOR_CONTAINER in (r.stdout or ""))
 
 
-def _has_http_port() -> bool:  # TOR_RUNTIME_v8
-    """실행 중 컨테이너가 8118(Privoxy HTTP)을 게시했는지 확인."""
+def _has_http_port() -> bool:
     r = _run(["port", TOR_CONTAINER])
     return bool(r and r.returncode == 0 and ("8118" in (r.stdout or "")))
 
 
-def _socks5_handshake_ok(host, port, timeout=3) -> bool:  # TOR_HEALTHCHECK_v1
-    """SOCKS5 그리팅에 유효 응답하는지(=진짜 SOCKS 프록시인지) 확인.
-
-    TCP 연결만으로는 '누가 포트를 열었다'까지만 보장된다. Tor SOCKS 리스너는
-    05 01 00 (VER=5, NMETHODS=1, NOAUTH) 에 05 00(무인증 수락) 등으로 답한다.
-    포트만 점유한 죽은/다른 컨테이너를 '정상'으로 오판하지 않기 위한 강화 검사.
-    """
+def _socks5_handshake_ok(host, port, timeout=3) -> bool:
     import socket as _s
     try:
         c = _s.create_connection((host, port), timeout=timeout)
@@ -108,7 +99,7 @@ def _socks5_handshake_ok(host, port, timeout=3) -> bool:  # TOR_HEALTHCHECK_v1
             pass
 
 
-def _wait_port(timeout=BOOT_TIMEOUT) -> bool:  # TOR_HEALTHCHECK_v1: TCP + SOCKS5 확인
+def _wait_port(timeout=BOOT_TIMEOUT) -> bool:
     end = time.time() + timeout
     while time.time() < end:
         if _socks5_handshake_ok("127.0.0.1", TOR_HOST_PORT, timeout=2):
@@ -118,10 +109,6 @@ def _wait_port(timeout=BOOT_TIMEOUT) -> bool:  # TOR_HEALTHCHECK_v1: TCP + SOCKS
 
 
 def _write_torrc(env):
-    """TOR_RUNTIME_v2: 회로 격리(IsolateDestAddr/Port) torrc 생성. env 없으면 None."""
-    # TORRC_SKIP_v1: dperson/torproxy 는 /etc/tor/torrc 마운트 시 기동 실패(자가검증 확인).
-    #   torrc 를 비활성화하고 start() 가 '기본 구성'으로 동작하게 한다(= Tor 정상, 전 구간
-    #   우회 유지). 회로격리(IsolateDestAddr/Port)만 포기. 다른 이미지로 교체하면 가드 제거.
     if TOR_IMAGE == "dperson/torproxy":
         return None
     if not env:
@@ -140,11 +127,10 @@ def _write_torrc(env):
         return None
 
 
-NETWORK = _c("LLM_NETWORK", "llm_net")  # TOR_CONFIG_v1: 공유 네트워크 (config 정본)
+NETWORK = _c("LLM_NETWORK", "llm_net")
 
 
 def _ensure_net():
-    """공유 네트워크 생성(멱등). 컨테이너 간 이름 통신용."""
     try:
         r = _run(["network", "inspect", NETWORK], timeout=10)
         if not (r and r.returncode == 0):
@@ -157,19 +143,18 @@ def _run_container(extra=None):
     _ensure_net()
     args = ["run", "-d", "--rm", "--name", TOR_CONTAINER,
             "--network", NETWORK,
-            "-p", "%d:%d" % (TOR_HOST_PORT, TOR_CONTAINER_PORT),
-            "-p", "%d:%d" % (TOR_HTTP_PORT, TOR_HTTP_PORT)]
+            "-p", "127.0.0.1:%d:%d" % (TOR_HOST_PORT, TOR_CONTAINER_PORT),
+            "-p", "127.0.0.1:%d:%d" % (TOR_HTTP_PORT, TOR_HTTP_PORT)]
     if extra:
         args += extra
     args.append(TOR_IMAGE)
     return _run(args, timeout=40)
 
 
-_CLEANUP_REGISTERED = False  # TOR_RUNTIME_v8
+_CLEANUP_REGISTERED = False
 
 
 def _register_exit_cleanup():
-    """프로그램 종료 시 llm_tor 를 자동 종료/제거하도록 lifelog 에 등록 (1회)."""
     global _CLEANUP_REGISTERED
     if _CLEANUP_REGISTERED:
         return
@@ -213,9 +198,6 @@ def _register_exit_cleanup():
 
 
 def start(env=None, log=None) -> bool:
-    """Tor 컨테이너 기동. 이미 떠 있으면 True. 이미지 없으면 False.
-    env 가 주어지면 회로 격리 torrc 를 먼저 시도하고, 실패하면 기본 구성으로 폴백.
-    log(str) 콜백을 주면 각 단계를 자세히 보고한다(안 뜰 때 원인 추적용)."""
     def _p(m):
         if log:
             try:
@@ -223,9 +205,6 @@ def start(env=None, log=None) -> bool:
             except Exception:
                 pass
 
-    # NETMODE_TOR_GUARD_v1: warp 모드에서는 Tor 를 띄우지 않는다.
-    # 호출부(searxng_runtime, agent_chat 등)를 일일이 고치는 대신
-    # 여기서 한 번에 막는다. NET_MODE=tor 일 때만 진행.
     try:
         _nm_guard = str(_c("NET_MODE", "warp")).strip().lower()
     except Exception:
@@ -240,7 +219,7 @@ def start(env=None, log=None) -> bool:
         return False
 
     if is_running():
-        if _has_http_port():  # TOR_RUNTIME_v8: 8118 게시 확인
+        if _has_http_port():
             _p("Tor 이미 실행 중 (%d, HTTP 8118 확인)" % TOR_HOST_PORT)
             _register_exit_cleanup()
             return True
@@ -259,7 +238,7 @@ def start(env=None, log=None) -> bool:
         r = _run_container(["-v", "%s:/etc/tor/torrc:ro" % torrc])
         if r and r.returncode == 0 and _wait_port():
             _p("Tor 기동 완료 — 회로격리 활성 (포트 %d)" % TOR_HOST_PORT)
-            _register_exit_cleanup()  # TOR_RUNTIME_v8
+            _register_exit_cleanup()
             return True
         _err = ((r.stderr or "").strip()[:120] if r else "docker 응답 없음")
         _p("회로격리 기동 실패 → 기본 구성으로 폴백 (%s)" % _err)
@@ -273,7 +252,7 @@ def start(env=None, log=None) -> bool:
     ok = _wait_port()
     _p("Tor 기동 %s (포트 %d)" % ("완료" if ok else "타임아웃 — 포트 응답 없음", TOR_HOST_PORT))
     if ok:
-        _register_exit_cleanup()  # TOR_RUNTIME_v8
+        _register_exit_cleanup()
     return ok
 
 
