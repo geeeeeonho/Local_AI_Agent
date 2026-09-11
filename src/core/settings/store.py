@@ -28,3 +28,26 @@ class SettingsStore:
         return resolve_mode(session=session, project=project,
                             app=data.get('apps', {}).get(app, {}).get('network_mode'),
                             global_mode=data.get('global', {}).get('network_mode', fallback))
+
+    def theme(self) -> str:
+        """One appearance preference shared by Studio and standalone windows."""
+        data = schema_one(self.store.read())
+        appearance = data.get('appearance', {})
+        if not isinstance(appearance, dict):
+            raise ValueError('appearance settings must be an object')
+        value = appearance.get('theme', 'dark')
+        if not isinstance(value, str) or value not in ('dark', 'light'):
+            raise ValueError('unsupported theme preference')
+        return value
+
+    def set_theme(self, theme: str) -> None:
+        if not isinstance(theme, str) or theme not in ('dark', 'light'):
+            raise ValueError('theme must be dark or light')
+        def change(data):
+            data = schema_one(data)
+            appearance = data.setdefault('appearance', {})
+            if not isinstance(appearance, dict):
+                raise ValueError('appearance settings must be an object')
+            appearance['theme'] = theme
+            return data
+        self.store.update(change)

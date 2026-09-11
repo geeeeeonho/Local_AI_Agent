@@ -1,7 +1,7 @@
 """Persistent view construction. User actions are delegated to the shared shell."""
 import tkinter as tk
 from tkinter import ttk, filedialog
-from .widgets import heading, note, text_box, PanelHost, set_text
+from .widgets import heading, note, text_box, PanelHost, ScrollArea, set_text
 from .specs import LABELS, DESCRIPTIONS
 
 
@@ -9,8 +9,9 @@ def row(parent):
     frame=ttk.Frame(parent);frame.pack(fill='x',pady=(0,10));return frame
 
 
-def button(parent,text,fn,accent=False):
-    b=ttk.Button(parent,text=text,command=fn,style='Accent.TButton' if accent else 'TButton')
+def button(parent,text,fn,accent=False,kind=None):
+    style = kind + '.TButton' if kind else ('Accent.TButton' if accent else 'TButton')
+    b=ttk.Button(parent,text=text,command=fn,style=style)
     b.pack(side='left',padx=(0,8));return b
 
 
@@ -23,44 +24,102 @@ def mode_row(parent,w):
 
 
 def home(parent,w):
-    note(parent,'\uc790\uc8fc \uc4f0\ub294 \uae30\ub2a5\uc744 \ud558\ub098\uc758 \ucc3d\uc5d0\uc11c \uc2e4\ud589\ud558\uc138\uc694.\n'
-         '\ubaa8\ub378\uacfc \ubb38\uc11c\ub294 \uae30\uc874 \uc704\uce58\ub97c \uc720\uc9c0\ud569\ub2c8\ub2e4.')
-    for key,caption in [('chat','Chat / Knowledge'),('agent','Agent / Automation'),('projects','Project workspace'),('models','Model inventory')]:
-        card=ttk.Frame(parent,style='Card.TFrame',padding=18);card.pack(fill='x',pady=6)
-        ttk.Button(card,text=caption,command=lambda k=key:w.navigate(k)).pack(side='left')
-        ttk.Label(card,text=DESCRIPTIONS[key],wraplength=500,style='Card.TLabel').pack(side='left',padx=20)
-    note(parent,'Studio / Chat / Interpreter / Setup\uc740 \ub3d9\uc77c\ud55c \uc11c\ube44\uc2a4\ub97c \uc0ac\uc6a9\ud569\ub2c8\ub2e4.\n'
-         '\uc0c1\ud0dc \ud655\uc778\uc740 \uc124\uce58\ub098 \ubaa8\ub378 \uc2e4\ud589\uc744 \uc790\ub3d9\uc73c\ub85c \uc2dc\uc791\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.')
+    note(parent,'주요 작업은 Chat과 Agent에서. 준비가 필요할 때만 모델을 관리하세요.')
+    tasks=ttk.Frame(parent);tasks.pack(fill='x',pady=(4,20))
+    tasks.columnconfigure((0,1),weight=1,uniform='main')
+    for column,key in enumerate(('chat','agent')):
+        kind=key.title()
+        card=ttk.Frame(tasks,style=kind+'.Card.TFrame',padding=24)
+        card.grid(row=0,column=column,sticky='nsew',padx=(0,8) if column==0 else (8,0))
+        ttk.Label(card,text='01 / CHAT' if key=='chat' else '02 / AGENT',
+                  style=kind+'.Card.TLabel',font=('Segoe UI',11,'bold')).pack(anchor='w')
+        title='대화와 문서' if key=='chat' else '코딩과 자동화'
+        detail=('프로젝트 · Workspace · RAG\nAnythingLLM에서 함께 관리합니다.' if key=='chat' else
+                '명령 · 파일 변경 · 승인\nOpen Interpreter로 작업합니다.')
+        ttk.Label(card,text=title,style=kind+'.Card.TLabel',font=('Segoe UI',19,'bold')).pack(anchor='w',pady=(12,10))
+        ttk.Label(card,text=detail,style=kind+'.CardMuted.TLabel',wraplength=330,justify='left').pack(anchor='w',pady=(0,22))
+        ttk.Button(card,text=kind+' 열기',style=kind+'.TButton',command=lambda k=key:w.navigate(k)).pack(anchor='w')
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18);card.pack(fill='x',pady=(0,18))
+    ttk.Label(card,text='모델 · 설치 관리',style='Manage.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
+    ttk.Label(card,text='모델 용량 확인, 설치와 삭제, 실행 환경 복구',style='Manage.CardMuted.TLabel').pack(anchor='w',pady=(6,14))
+    actions=ttk.Frame(card,style='Manage.CardBody.TFrame');actions.pack(anchor='w')
+    button(actions,'모델 보기',lambda:w.navigate('models'),kind='Manage')
+    button(actions,'설치 / 복구',lambda:w.navigate('setup'),kind='Manage')
+    note(parent,'모델과 문서는 기존 위치를 유지합니다. 화면 이동은 실행 중인 세션을 중단하지 않습니다.')
+
+
+def link_selector(parent,w):
+    r=row(parent)
+    ttk.Label(r,text='Agent 연결 (선택)',style='Muted.TLabel').pack(side='left',padx=(0,10))
+    box=ttk.Combobox(r,textvariable=w.project_id,state='readonly',values=('(none)',),width=24)
+    box.pack(side='left')
+    box.bind('<<ComboboxSelected>>',lambda event:w.project_selected())
+    w.project_boxes.append(box)
+    if not hasattr(w,'project_box'):w.project_box=box
+    return r
 
 
 def chat(parent,w):
-    mode_row(parent,w)
-    r=row(parent)
-    button(r,'\ucc44\ud305 \uc900\ube44',w.start_chat,True)
-    w.chat_open_button=button(r,'AnythingLLM \uc5f4\uae30',w.open_chat)
+    w.chat_tabs=ttk.Notebook(parent);w.chat_tabs.pack(fill='both',expand=True)
+    main=ttk.Frame(w.chat_tabs,padding=(4,16))
+    w.chat_links_page=ttk.Frame(w.chat_tabs,padding=(4,16))
+    w.chat_tabs.add(main,text='대화 · Workspace')
+    w.chat_tabs.add(w.chat_links_page,text='Agent 연결 (선택)')
+    content=ScrollArea(main);w.page_scrolls['chat.main']=content
+    main=content.body
+    mode_row(main,w)
+    r=row(main)
+    button(r,'Chat 시작',w.start_chat,kind='Chat')
+    w.chat_open_button=button(r,'대화 화면 열기',w.open_chat)
     w.chat_open_button.configure(state='disabled')
-    button(r,'\uc138\uc158 \uc885\ub8cc',w.stop_sessions)
-    note(parent,'AnythingLLM\uc758 \uc6d0\ub798 \ud654\uba74\uc744 \ube0c\ub77c\uc6b0\uc800\uc5d0\uc11c \uc5fd\ub2c8\ub2e4. \ubb38\uc11c / RAG / \ub300\ud654 \uae30\ub85d\uc744 \ubcf5\uc81c\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.\n'
-         '\ub2e4\ub978 \ud0ed\uc73c\ub85c \uc774\ub3d9\ud574\ub3c4 \uc138\uc158\uc740 \uc720\uc9c0\ub429\ub2c8\ub2e4. \ub204\ub77d\ub41c \uc124\uce58\ub294 Setup / Repair\uc5d0\uc11c \uc9c4\ud589\ud569\ub2c8\ub2e4.')
-    w.chat_text=text_box(parent)
-    set_text(w.chat_text,'Ready to connect\n\nSelect a project and network intent, then prepare Chat.\nBlock: local Chat/RAG only; public search stays disabled.')
+    button(r,'세션 종료',w.stop_sessions)
+    card=ttk.Frame(main,style='Chat.Card.TFrame',padding=18);card.pack(fill='x',pady=(8,8))
+    ttk.Label(card,text='프로젝트는 Chat 안에서',style='Chat.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
+    ttk.Label(card,text='Workspace를 만들고, 문서와 대화를 AnythingLLM에서 관리합니다.',
+              style='Chat.CardMuted.TLabel',wraplength=740).pack(anchor='w',pady=(6,12))
+    ttk.Button(card,text='프로젝트 만들기 / 관리',style='Chat.TButton',command=w.manage_chat_projects).pack(anchor='w')
+    note(main,'프로젝트 연결은 필수가 아닙니다. AnythingLLM의 대화와 문서 데이터는 복제하지 않습니다.\n'
+         'AnythingLLM은 브라우저로 열리며, 테마는 그 화면의 설정을 따릅니다.')
+    w.chat_text=text_box(main,height=5)
+    set_text(w.chat_text,'Ready to connect\n\nChat works without a LocalAI connection record.\nBlock: local Chat/RAG only; public search stays disabled.')
+    content.bind_content()
+    projects(w.chat_links_page,w)
 
 
 def agent(parent,w):
-    r=mode_row(parent,w)
-    button(r,'Agent \uc2dc\uc791',w.start_agent,True)
-    button(r,'\uc138\uc158 \uc885\ub8cc',w.stop_sessions)
-    note(parent,'\uae30\uc874 \ud504\ub85c\ud544 / \ubaa8\ub378 / Host\u00b7Sandbox / \ud3f4\ub354 \uc120\ud0dd\uacfc \uc2b9\uc778 \uc808\ucc28\ub97c \uc0ac\uc6a9\ud569\ub2c8\ub2e4.\n'
-         'Project \uc791\uc5c5 \ud3f4\ub354\ub294 \uc120\ud0dd \ucc3d\uc758 \uae30\ubcf8\uac12\uc77c \ubfd0, \uc790\ub3d9 \uc811\uadfc \ud5c8\uc6a9\uc774 \uc544\ub2d9\ub2c8\ub2e4.')
-    w.hosts['agent']=PanelHost(parent)
+    link=link_selector(parent,w)
+    main=parent
+    if 'chat' in w.spec.pages:
+        button(link,'Chat에서 연결 관리',w.show_project_links)
+    else:
+        # Standalone Interpreter retains optional saved linkage without a
+        # separate Projects navigation item or another persistent registry.
+        w.agent_tabs=ttk.Notebook(parent);w.agent_tabs.pack(fill='both',expand=True)
+        main=ttk.Frame(w.agent_tabs,padding=(4,12))
+        w.agent_links_page=ttk.Frame(w.agent_tabs,padding=(4,12))
+        w.agent_tabs.add(main,text='Agent 실행')
+        w.agent_tabs.add(w.agent_links_page,text='Chat 연결 (선택)')
+        projects(w.agent_links_page,w)
+    r=mode_row(main,w)
+    button(r,'Agent 시작',w.start_agent,kind='Agent')
+    button(r,'세션 종료',w.stop_sessions)
+    note(main,'기존 프로필 / 모델 / Host·Sandbox / 폴더 선택과 승인 절차를 유지합니다.\n'
+         '연결 폴더는 선택 창의 기본값이며, 자동 접근 허용이 아닙니다.')
+    w.hosts['agent']=PanelHost(main)
 
 
 def projects(parent,w):
+    scroller=ScrollArea(parent);w.page_scrolls['links']=scroller
+    parent=scroller.body
+    note(parent,'이 화면은 Chat Workspace와 Agent 작업 폴더의 연결 정보만 관리합니다.\n'
+         '실제 프로젝트와 문서는 AnythingLLM 안에서 만들고 관리하세요.')
+    selector=link_selector(parent,w)
+    button(selector,'새 연결',w.new_project_link)
     w.project_fields={key:tk.StringVar(master=w.root,value='inherit' if key=='network_mode' else '')
                       for key in ('id','name','workspace_path','anythingllm_workspace','chat_model','agent_model','network_mode')}
-    labels={'id':'Project ID','name':'\uc774\ub984','workspace_path':'Workspace \ud3f4\ub354',
-            'anythingllm_workspace':'AnythingLLM Workspace slug','chat_model':'Chat \ubaa8\ub378 (\uc120\ud0dd)',
-            'agent_model':'Agent \ubaa8\ub378 \ucc38\uace0\uac12','network_mode':'Network override'}
+    labels={'id':'연결 ID','name':'이름','workspace_path':'Workspace 폴더',
+            'anythingllm_workspace':'AnythingLLM Workspace slug','chat_model':'Chat 모델 (선택)',
+            'agent_model':'Agent 모델 참고값','network_mode':'Network override'}
     form=ttk.Frame(parent);form.pack(fill='x')
     for index,(key,value) in enumerate(w.project_fields.items()):
         ttk.Label(form,text=labels[key]).grid(row=index,column=0,sticky='w',padx=(0,16),pady=6)
@@ -71,16 +130,18 @@ def projects(parent,w):
         value=filedialog.askdirectory(parent=w.root,mustexist=True)
         if value:w.project_fields['workspace_path'].set(value)
     r=row(parent)
-    button(r,'\ud3f4\ub354 \uc120\ud0dd',choose)
-    button(r,'\uc800\uc7a5',w.save_project,True)
-    button(r,'\uc5f0\uacb0 \uc0ad\uc81c',w.delete_project)
-    note(parent,'\uc5f0\uacb0 \uc815\ubcf4\ub9cc \uc800\uc7a5\ud569\ub2c8\ub2e4. Workspace \ub0b4\uc6a9\uc774\ub098 AnythingLLM \ub370\uc774\ud130\ub294 \uc774\ub3d9\u00b7\uc0ad\uc81c\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.\n'
-         'Agent \ubaa8\ub378\uc740 \uc2dc\uc791 \uc124\uc815\uc5d0\uc11c \ub2e4\uc2dc \ud655\uc778\ud558\uc138\uc694.')
+    button(r,'폴더 선택',choose)
+    button(r,'저장',w.save_project,True)
+    button(r,'연결 삭제',w.delete_project,kind='Danger')
+    note(parent,'연결 정보만 저장합니다. Workspace 내용이나 AnythingLLM 데이터는 이동·삭제하지 않습니다.\n'
+         'Agent 모델은 시작 설정에서 다시 확인하세요.')
+
+    scroller.bind_content()
 
 
 def models(parent,w):
-    r=row(parent);button(r,'\uc778\ub371\uc2a4 \uac31\uc2e0',w.refresh_models,True)
-    button(r,'Setup / Repair',lambda:w.navigate('setup'))
+    r=row(parent);button(r,'인덱스 갱신',w.refresh_models,kind='Manage')
+    button(r,'모델 설치 / 관리',lambda:w.navigate('setup'),kind='Manage')
     w.model_summary=tk.StringVar(master=w.root,value=str(w.services.model_dir))
     ttk.Label(parent,textvariable=w.model_summary,style='Muted.TLabel').pack(anchor='w',pady=8)
     columns=('name','size','shared','exclusive','status')
@@ -97,25 +158,35 @@ def models(parent,w):
 
 
 def network(parent,w):
-    note(parent,'Direct = \uc778\ud130\ub137 \uc9c1\uc811 \uc5f0\uacb0\nWARP / Tor = \uad00\ub9ac\ud615 \ud504\ub85d\uc2dc \uc900\ube44 \uc2e4\ud328 \uc2dc \uc2e4\ud589 \uc911\ub2e8\n'
-         'Block = \uacf5\uc6a9 \uc6f9 egress \ucc28\ub2e8, \uac80\uc0c9 \ube44\ud65c\uc131, Host Block \uac70\ubd80\n\n'
-         '\uc774 \ubc84\uc804\uc740 \ub3d9\uc77c \ud504\ub85c\uc81d\ud2b8\uc758 \ud55c \ucc3d\uc774 \uad00\ub9ac\ud615 \uc2e4\ud589\uc744 \uc18c\uc720\ud569\ub2c8\ub2e4. \ub2e4\ub978 \ucc3d\uc740 \uc870\ud68c\ud560 \uc218 \uc788\uc73c\uba70, '
-         '\uc18c\uc720 \ucc3d\uc758 \uc138\uc158\uc744 \uc885\ub8cc\ud55c \ub4a4 \ubcc0\uacbd\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.')
-    r=row(parent);button(r,'\uc0c1\ud0dc \ud655\uc778',w.refresh_health)
-    button(r,'\uc815\ucc45 \uc124\uc815',lambda:w.navigate('settings'))
-    button(r,'\uc138\uc158 \uc885\ub8cc / \uc7a0\uae08 \ud574\uc81c',w.stop_sessions)
+    note(parent,'Direct = 인터넷 직접 연결\nWARP / Tor = 관리형 프록시 준비 실패 시 실행 중단\n'
+         'Block = 공용 웹 egress 차단, 검색 비활성, Host Block 거부\n\n'
+         '이 버전은 동일 프로젝트의 한 창이 관리형 실행을 소유합니다. 다른 창은 조회할 수 있으며, '
+         '소유 창의 세션을 종료한 뒤 변경할 수 있습니다.')
+    r=row(parent);button(r,'상태 확인',w.refresh_health)
+    button(r,'정책 설정',lambda:w.navigate('settings'))
+    button(r,'세션 종료 / 잠금 해제',w.stop_sessions)
     w.network_text=text_box(parent)
     set_text(w.network_text,'No managed session started in this window.')
 
 
 def system(parent,w):
-    r=row(parent);button(r,'\uc0c1\ud0dc \uc0c8\ub85c\uace0\uce68',w.refresh_health,True)
-    button(r,'Setup / Repair',lambda:w.navigate('setup'))
+    r=row(parent);button(r,'상태 새로고침',w.refresh_health,True)
+    button(r,'모델 설치 / 관리',lambda:w.navigate('setup'),kind='Manage')
     w.system_text=text_box(parent)
     set_text(w.system_text,'Environment: '+str(w.services.env)+'\nModels: '+str(w.services.model_dir)+'\nUser data: '+str(w.services.data))
 
 
 def settings(parent,w):
+    ttk.Label(parent,text='화면 테마',style='Section.TLabel').pack(anchor='w',pady=(0,8))
+    r=row(parent)
+    w.theme_buttons=[]
+    for value,label in (('dark','다크'),('light','라이트')):
+        choice=ttk.Radiobutton(r,text=label,variable=w.theme_choice,value=value,command=w.save_theme)
+        choice.pack(side='left',padx=(0,20));w.theme_buttons.append(choice)
+    note(parent,'선택 즉시 적용하고 네 앱의 공통 설정으로 저장합니다. 대화와 작업은 중단하지 않습니다.\n'
+         'AnythingLLM 브라우저 화면과 운영체제 대화상자는 각자의 테마 설정을 따릅니다.')
+    ttk.Separator(parent).pack(fill='x',pady=(8,20))
+    ttk.Label(parent,text='네트워크 정책',style='Section.TLabel').pack(anchor='w',pady=(0,8))
     w.settings_scope=tk.StringVar(master=w.root,value='global')
     w.settings_mode=tk.StringVar(master=w.root,value='warp')
     r=row(parent)
@@ -123,34 +194,39 @@ def settings(parent,w):
     scope_box.pack(side='left',padx=(0,12))
     scope_box.bind('<<ComboboxSelected>>',lambda event:w.load_settings())
     ttk.Combobox(r,textvariable=w.settings_mode,values=('warp','tor','direct','block'),state='readonly',width=18).pack(side='left',padx=(0,12))
-    button(r,'\uc800\uc7a5',w.save_settings,True)
-    note(parent,'\ubcc0\uacbd\uc740 \ub2e4\uc74c \uc138\uc158\ubd80\ud130 \uc801\uc6a9\ub429\ub2c8\ub2e4. \uc2e4\ud589 \uc911\uc778 \uc11c\ube44\uc2a4\uc758 \ub124\ud2b8\uc6cc\ud06c\ub97c \uc989\uc2dc \ubc14\uafb8\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.\n'
-         '\uc0c8 \uc124\uc815\uc774 \uc5c6\uc73c\uba74 \uae30\uc874 \ub7f0\ucc98\uc758 \ub124\ud2b8\uc6cc\ud06c \uc124\uc815\uc744 \uae30\ubcf8\uac12\uc73c\ub85c \uc0ac\uc6a9\ud569\ub2c8\ub2e4.')
+    button(r,'저장',w.save_settings,True)
+    note(parent,'변경은 다음 세션부터 적용됩니다. 실행 중인 서비스의 네트워크를 즉시 바꾸지 않습니다.\n'
+         '새 설정이 없으면 기존 런처의 네트워크 설정을 기본값으로 사용합니다.')
 
 
 def setup(parent,w):
-    r=row(parent);button(r,'\uc124\uce58 / \ubcf5\uad6c \uc2dc\uc791',w.repair,True)
-    button(r,'\uc0c1\ud0dc \ud655\uc778',w.refresh_health)
-    note(parent,'\uc124\uce58\uae30\ub294 \ubcc4\ub3c4 \ucf58\uc194\uc5d0\uc11c \uc5f4\ub9ac\uba70 \uc644\ub8cc\ub420 \ub54c\uae4c\uc9c0 \uc774 \ucc3d\uc774 \ucd94\uc801\ud569\ub2c8\ub2e4.\n'
-         '\uad00\ub9ac\ud615 \uc138\uc158\uc744 \uba3c\uc800 \uc885\ub8cc\ud558\uc138\uc694. \uae30\uc874 \uc124\uce58\u00b7\ubaa8\ub378 \uacbd\ub85c\ub97c \uc720\uc9c0\ud569\ub2c8\ub2e4.')
+    r=row(parent);button(r,'설치 / 복구 시작',w.repair,kind='Manage')
+    button(r,'상태 확인',w.refresh_health)
+    note(parent,'설치기는 별도 콘솔에서 열리며 완료될 때까지 이 창이 추적합니다.\n'
+         '관리형 세션을 먼저 종료하세요. 기존 설치·모델 경로를 유지합니다.')
     ttk.Label(parent,text='Model management',style='Section.TLabel').pack(anchor='w',pady=(12,8))
     r=row(parent);w.install_tag=tk.StringVar(master=w.root)
     ttk.Entry(r,textvariable=w.install_tag,width=35).pack(side='left',padx=(0,10))
-    button(r,'\ubaa8\ub378 \uc124\uce58',lambda:w.change_model('install'))
-    button(r,'\ubaa8\ub378 \uc0ad\uc81c',lambda:w.change_model('remove'))
-    note(parent,'\uc124\uce58 \ub2e4\uc6b4\ub85c\ub4dc\ub294 Ollama \uc11c\ubc84\uc758 \ud638\uc2a4\ud2b8 \ub124\ud2b8\uc6cc\ud06c\ub97c \uc0ac\uc6a9\ud569\ub2c8\ub2e4. WARP/Tor \uc6b0\ud68c\ub97c \ubcf4\uc7a5\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4. Block\uc5d0\uc11c\ub294 \ub2e4\uc6b4\ub85c\ub4dc\ub97c \uac70\ubd80\ud569\ub2c8\ub2e4.')
+    button(r,'모델 설치',lambda:w.change_model('install'),kind='Manage')
+    button(r,'모델 삭제',lambda:w.change_model('remove'),kind='Danger')
+    note(parent,'설치 다운로드는 Ollama 서버의 호스트 네트워크를 사용합니다. WARP/Tor 우회를 보장하지 않습니다. Block에서는 다운로드를 거부합니다.')
     r=row(parent)
-    for key,text in [('docker_image','Docker \ube4c\ub4dc'),('docker_clean','Docker \uc815\ub9ac'),('searxng_action','Search \uad00\ub9ac'),('settings_action','\uae30\uc874 \uc124\uc815')]:
+    for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),('searxng_action','Search 관리'),('settings_action','기존 설정')]:
         button(r,text,lambda k=key:w.maintenance(k))
     w.hosts['setup']=PanelHost(parent)
 
 
-BUILDERS={'home':home,'chat':chat,'projects':projects,'agent':agent,'models':models,
+BUILDERS={'home':home,'chat':chat,'agent':agent,'models':models,
           'network':network,'system':system,'settings':settings,'setup':setup}
 
 
 def build(parent,key,w):
     page=ttk.Frame(parent,padding=(26,24))
-    heading(page,LABELS[key],DESCRIPTIONS[key])
-    BUILDERS[key](page,w)
+    heading(page,LABELS[key],DESCRIPTIONS[key],kind={'chat':'Chat','agent':'Agent','models':'Manage','setup':'Manage'}.get(key))
+    if key in ('home','settings','setup','network','system'):
+        scroller=ScrollArea(page);w.page_scrolls[key]=scroller
+        BUILDERS[key](scroller.body,w)
+        scroller.bind_content()
+    else:
+        BUILDERS[key](page,w)
     return page

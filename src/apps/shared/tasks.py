@@ -41,3 +41,6 @@ class TaskRunner:
         self.stopped = True
         self._mutations.shutdown(wait=True, cancel_futures=True)
         self._reads.shutdown(wait=True, cancel_futures=True)
+        # Release unconsumed UI callbacks on the calling GUI thread. Keeping
+        # these cycles could finalize Tk variables later on a worker thread.
+        self._tasks.clear()

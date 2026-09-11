@@ -1,5 +1,6 @@
 """Real Tk integration tests; external runtimes are deliberately injected."""
 import os
+import gc
 import time
 from pathlib import Path
 import pytest
@@ -17,6 +18,8 @@ def pump(window, predicate=lambda:True, timeout=3):
 
 @pytest.fixture
 def ui(tmp_path):
+    # Finalize prior Tk cycles on the GUI thread, never a new executor worker.
+    gc.collect()
     import tkinter as tk
     from apps.shared.window import DesktopWindow
     svc,backend=make(tmp_path)
@@ -25,14 +28,17 @@ def ui(tmp_path):
     window=DesktopWindow('studio',svc,root=root,start_polling=False)
     yield window,svc,backend
     window.runner.shutdown()
+    window._unsubscribe()
     svc.close()
+    try: root.after_cancel(window._timer)
+    except tk.TclError: pass
     try: root.destroy()
     except tk.TclError: pass
 
 
 def test_all_studio_pages_are_persistent(ui):
     w,_,_=ui
-    expected={'home','chat','projects','agent','models','network','system','settings','setup'}
+    expected={'home','chat','agent','models','network','system','settings','setup'}
     assert set(w.pages)==expected
     for key in expected:
         page=w.pages[key];w.navigate(key);pump(w)
@@ -120,7 +126,7 @@ def test_apps_do_not_import_backend_or_process_commands():
     root=Path(__file__).resolve().parents[1]/'apps'
     assert root.exists()
     for path in root.rglob('*.py'):
-        tree=ast.parse(path.read_text())
+        tree=ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             names=[node.module or ''] if isinstance(node,ast.ImportFrom) else [v.name for v in node.names] if isinstance(node,ast.Import) else []
             assert not any(n.split('.')[0] in {'integrations','launcher','installer','subprocess'} for n in names),str(path)

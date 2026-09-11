@@ -21,18 +21,51 @@ retained maintenance interface. The old Python modules remain compatibility
 entrypoints, not copies of a new backend. Launching Studio on an uninstalled PC
 opens the shell and Setup guidance, rather than silently downloading programs.
 
+## Appearance and navigation
+
+Settings > Screen theme offers Dark and Light. The preference is stored under
+`appearance.theme` in the existing `user_data/settings/localai.json`, shared by
+Studio/Chat/Interpreter/Setup. It is applied in place after a successful save;
+text, panel identities, selections and running sessions are not reconstructed.
+Other active windows refresh the preference on focus and during normal polling.
+An invalid/unreadable preference uses the dark fallback at startup with a warning,
+without overwriting the original file. Failed saves retain the previous theme.
+
+The shell, its raw Tk text areas and recognized retained Agent/Presenter colors
+are themed, including warning/error tags. AnythingLLM in the browser and native
+OS dialogs keep their own appearance settings; the shell does not modify them.
+
+Chat and Agent lead the sidebar with larger typography and one restrained
+blue-gray accent in both themes. Home gives them the two principal action cards.
+Models and Setup / Repair use a separate group with neutral surfaces and outlined
+buttons, not a competing accent color. Card borders/body copy are quiet; selection
+uses a soft fill rather than a large solid accent. Deletion, warnings and success
+keep independent semantic colors, so reducing feature colors does not hide risk.
+Static forms and cards scroll at small window sizes, with local mouse-wheel and
+keyboard-focus scrolling rather than application-wide wheel bindings.
+
 ## Views and workflow
 
-Studio provides Home, Chat, Projects, Agent, Models, Network, System, Settings,
-and Setup / Repair. Each standalone app exposes the relevant subset of those
+Studio provides Home, Chat, Agent, Models, Network, System, Settings, and
+Setup / Repair. Each standalone app exposes the relevant subset of those
 same views. Navigation retains the Agent panel and active conversation instead
 of destroying the session when switching pages.
 
 Chat prepares the shared services, then opens the actual local AnythingLLM UI
 in the default browser. This release uses the browser fallback, not an embedded
 WebView or an iframe. Documents, workspaces, uploads, RAG and conversation history
-remain owned by AnythingLLM. A Project's workspace slug is linkage information;
-it does not create or clone an AnythingLLM workspace. Chat's initial model can
+remain owned by AnythingLLM. Project/Workspace creation and document management happen inside the actual
+AnythingLLM Chat UI. Chat's "Create/manage projects" action opens that UI, preparing
+Chat first if needed. No LocalAI connection record is required for normal Chat.
+There is no separate Projects navigation item or global project toolbar.
+
+The previous LocalAI Project registry is preserved as optional "Agent connection"
+linkage inside Chat's second tab. It connects an existing AnythingLLM workspace
+slug to an Agent working folder, without creating/cloning/deleting the real
+workspace. Standalone Interpreter exposes the same optional records in its
+nested Chat connection tab. The old `navigate('projects')` request routes to this
+nested editor. Existing saved IDs/fields/files and policy precedence are retained.
+A Project's workspace slug remains linkage information only; Chat's initial model can
 come from the Project. The Agent model field is a reference value; the existing
 Agent wizard still confirms its model, execution mode and folder permissions.
 
