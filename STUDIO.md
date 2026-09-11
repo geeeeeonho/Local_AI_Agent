@@ -1,0 +1,117 @@
+# LocalAI Studio and standalone applications
+
+## Run
+
+- `RUN.bat` or `STUDIO.bat`: LocalAI Studio.
+- `CHAT.bat` or `RUN.bat --app chat`: LocalAI Chat.
+- `INTERPRETER.bat` or `RUN.bat --app interpreter`: LocalAI Interpreter.
+- `SETUP.bat` or `RUN.bat --app setup`: LocalAI Setup.
+
+With `PYTHONPATH=src`, the equivalent modules are `apps.studio`, `apps.chat`,
+`apps.interpreter` and `apps.setup`. They use one parser, shared views and one
+service composition. `--help` does not load a runtime. Python 3.11+ with Tk is
+required for the desktop. The current copy contains both Korean and English
+labels; `--lang` initializes the retained installer/runtime language preference,
+not a complete translation of the new shell.
+
+`RUN.bat --tui` retains the legacy terminal launcher. `SETUP.bat --install`
+(and the existing `--skip-model`, `--skip-sandbox`, `--skip-build`, `--skip-search`
+flags) runs the retained installer explicitly. `SETUP.bat --manage` opens the
+retained maintenance interface. The old Python modules remain compatibility
+entrypoints, not copies of a new backend. Launching Studio on an uninstalled PC
+opens the shell and Setup guidance, rather than silently downloading programs.
+
+## Views and workflow
+
+Studio provides Home, Chat, Projects, Agent, Models, Network, System, Settings,
+and Setup / Repair. Each standalone app exposes the relevant subset of those
+same views. Navigation retains the Agent panel and active conversation instead
+of destroying the session when switching pages.
+
+Chat prepares the shared services, then opens the actual local AnythingLLM UI
+in the default browser. This release uses the browser fallback, not an embedded
+WebView or an iframe. Documents, workspaces, uploads, RAG and conversation history
+remain owned by AnythingLLM. A Project's workspace slug is linkage information;
+it does not create or clone an AnythingLLM workspace. Chat's initial model can
+come from the Project. The Agent model field is a reference value; the existing
+Agent wizard still confirms its model, execution mode and folder permissions.
+
+Agent uses the existing RuntimeCoordinator, native Open Interpreter thread IDs,
+approval descriptions and ChatSessionController. Its conversation, command
+output, file sidebar, model controls, stop/restart and approvals use the retained
+Agent panel. A Project folder is only a dialog default: it never grants Host or
+Sandbox access automatically. Host Block remains rejected.
+
+Models shows the canonical MODEL_INDEX.json observation: manifest/blob links,
+shared/exclusive bytes and missing/mismatched files. Setup is the explicit entry
+for pull/remove and repair. An orphan observation is never permission for this
+shell to delete blobs. Model downloads use the local Ollama server's own network;
+WARP/Tor routing is not promised for these management downloads. Saved Setup Block
+intent or a currently pinned Block mode rejects the model download action.
+
+## Ownership, policy and shutdown
+
+Network preferences resolve Session > Project > App > Global, falling back to
+the retained launcher's current mode when no new global setting exists. A
+selected Project is read again before session startup. Changing preferences
+does not reconfigure an existing session's network mid-operation.
+
+One window per checkout owns managed runtime mutations via a permanent OS-backed
+lock under `user_data/cache`. That window can run Chat and Agent together with
+the same network mode; other windows may inspect state. Stop its sessions before
+another window starts or repairs managed runtimes. This is a deliberately coarse
+first desktop coordination policy, not a machine-wide multi-user service or a
+cross-checkout lock. External clients can still use Ollama's API. Old launchers
+invoked directly outside the new entrypoints do not participate in this lock.
+
+Block calls the original relay quiescence and internal-network verification;
+protected preparation failures never select Direct. Search runs only after the
+NetworkManager prepares the selected mode. Direct search no longer starts WARP.
+A mode-specific SearXNG settings derivative is stored under `user_data/cache/search`.
+The original installer settings are not rewritten. Unrecognized custom outgoing
+proxy sections fail closed for search and require explicit configuration repair.
+The official image may initialize the writable derived configuration directory.
+
+Closing a window cancels new startup, waits for active operations, and verifies
+its Agent/Chat/Search shutdown before releasing ownership. Finish an open
+approval or installer prompt when requested. Unverified shutdown retains the
+window and lock. Previously running shared Chat containers are not stopped;
+containers recreated by this window are tracked by their immutable ID. Shared
+Ollama and proxy runtimes are not indiscriminately killed on every window close.
+
+## Paths and scope
+
+Existing `project_paths` remains authoritative for the desktop: project-local
+`llm_environment`, existing `user_data`, and `C:\LLM_Models` (or `LLM_MODEL_DIR`).
+The shell does not silently enable the separately staged official Ollama
+installer, move models to `C:\Ollama\models`, relocate user data, or rebuild
+AnythingLLM/OI data. That earlier unpublished migration proposal is not shipped
+with this UI commit.
+
+The layering is Apps -> Services -> transition Integrations, with UI-independent
+Core contracts. Existing reviewed launcher implementations are reused behind
+adapters; their physical relocation and the elimination of every historical
+import/direct CLI call are not claimed complete. The original DockerService
+remains the single concrete Docker CLI primitive implementation.
+
+This is a Python-source desktop release. Four Windows EXE packages, embedded
+WebView distribution, official Ollama migration activation and user-data
+relocation are separate work, not artifacts produced by this change.
+
+## Validation
+
+Run the full repository suite in a complete checkout:
+
+```bat
+set PYTHONPATH=%CD%\src
+python -m compileall -q src
+python -m pytest -q src\tests
+```
+
+For the focused desktop/core/index tests on Linux, provide a real display such
+as Xvfb. UI tests inject external runtimes but instantiate real Tk windows.
+The authoring environment only had a SHA-verified related-source snapshot, not
+the full repository. Local related tests and source compilation do not replace
+native Windows, official Ollama, Docker, SearXNG-image or end-to-end OI acceptance.
+Record CI runner failures separately from code-test failures; no executed steps
+is not a pass. Do not change branch protection or force-push to bypass checks.

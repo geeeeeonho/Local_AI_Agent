@@ -1,0 +1,1 @@
+"""Explicit-mode SearXNG integration."""

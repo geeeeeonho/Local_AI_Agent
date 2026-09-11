@@ -142,8 +142,8 @@ class RepositoryStructureTests(unittest.TestCase):
         managed_python = "llm_environment\\venv\\Scripts\\python.exe"
         self.assertIn(managed_python, setup)
         self.assertIn(managed_python, run)
-        self.assertIn("-m installer", setup)
-        self.assertIn("-m launcher", run)
+        self.assertIn("-m apps.setup", setup)
+        self.assertIn("-m apps.studio", run)
 
     def test_project_paths_keep_runtime_data_at_repository_root(self):
         path_module = REPO_ROOT / "src" / "project_paths.py"

@@ -1,0 +1,1 @@
+"""Shared LocalAI application boundary."""
