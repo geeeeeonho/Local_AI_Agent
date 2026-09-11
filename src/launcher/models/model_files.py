@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """model_files — 디스크의 blob 파일과 모델 이름을 잇는 표.
 
-MODEL_FILES_v1.
+MODEL_FILES_v1 compatibility. MODEL_INDEX.json is now authoritative; CSV is a derived view.
 
 Ollama 는 받은 모델을 내용 해시로만 저장한다.
 
@@ -18,7 +18,7 @@ Ollama 는 받은 모델을 내용 해시로만 저장한다.
 세 가지를 구분해서 알려 준다.
   ok      : manifest 가 가리키고 실제로 있는 파일
   missing : manifest 는 가리키는데 파일이 없다 (받다 만 모델 — 다시 pull 해야 함)
-  orphan  : 어떤 manifest 도 안 쓰는 파일 (지워도 되는 잔여물)
+  orphan  : unreferenced candidate, NEVER permission to delete during a live pull
 
 같은 blob 을 여러 모델이 공유하는 일이 흔하다(같은 template/license, 같은 베이스
 가중치). shared_with 열이 그 수를 보여 주므로, 모델 하나를 지운다고 그 파일이
@@ -28,32 +28,18 @@ stdlib 전용. Ollama 가 떠 있지 않아도 동작한다(파일만 읽는다)
 """
 from __future__ import annotations
 
-import csv
-import json
-import os
+import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-CSV_NAME = "MODEL_FILES.csv"
+from . import model_index as _index
+
+CSV_NAME = _index.CSV_NAME
+INDEX_NAME = _index.INDEX_NAME
 MARKER = "MODEL_FILES_v1"
 
-# manifest 의 mediaType -> 사람이 읽는 이름
-_LAYER_NAMES = {
-    "application/vnd.ollama.image.model": "weights",
-    "application/vnd.ollama.image.projector": "projector",
-    "application/vnd.ollama.image.adapter": "adapter",
-    "application/vnd.ollama.image.template": "template",
-    "application/vnd.ollama.image.system": "system",
-    "application/vnd.ollama.image.params": "params",
-    "application/vnd.ollama.image.prompt": "prompt",
-    "application/vnd.ollama.image.license": "license",
-    "application/vnd.ollama.image.messages": "messages",
-}
-_CONFIG_LAYER = "config"
-
-FIELDS = ("file_name", "model", "role", "layer", "size_bytes", "size_gb",
-          "shared_with", "status", "rel_path")
+FIELDS = _index.CSV_FIELDS
 
 
 @dataclass(frozen=True)
@@ -65,7 +51,7 @@ class FileRow:
     size_bytes: int
     size_gb: float
     shared_with: int    # 이 파일을 함께 쓰는 모델 수 (1 이면 전용)
-    status: str         # ok | missing | orphan
+    status: str         # ok | missing | size_mismatch | partial | orphan | unknown | unavailable
     rel_path: str       # 저장소 루트 기준 상대 경로
 
 
@@ -74,38 +60,14 @@ def _blob_file_name(digest: str) -> str:
     return str(digest).replace(":", "-", 1)
 
 
-def _model_name(manifest_root: Path, path: Path) -> str:
-    """manifests/<host>/<ns>/<name>/<tag> -> 'ns/name:tag' (library 는 ns 생략)."""
-    parts = path.relative_to(manifest_root).parts
-    if len(parts) < 3:
-        return ":".join(parts)
-    tag = parts[-1]
-    name = parts[-2]
-    namespace = parts[-3]
-    # parts[0] 은 레지스트리 호스트. library 네임스페이스는 표기에서 뺀다.
-    if namespace == "library":
-        return "%s:%s" % (name, tag)
-    return "%s/%s:%s" % (namespace, name, tag)
-
-
 def read_manifests(model_dir) -> Dict[str, dict]:
-    """{모델이름: manifest dict}. 읽을 수 없는 파일은 건너뛴다."""
-    root = Path(model_dir)
-    manifest_root = root / "manifests"
-    out: Dict[str, dict] = {}
-    if not manifest_root.is_dir():
-        return out
-    for path in sorted(manifest_root.rglob("*")):
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError):
-            continue
-        if not isinstance(data, dict) or "layers" not in data:
-            continue  # manifest 가 아닌 파일(.DS_Store 등)
-        out[_model_name(manifest_root, path)] = data
-    return out
+    """Compatibility view of validated manifests; build_index includes errors."""
+    return _index.read_manifests(model_dir)
+
+
+def build_index(model_dir) -> dict:
+    """Build the canonical, non-destructive model inventory in memory."""
+    return _index.build_index(model_dir, roles=_catalog_roles())
 
 
 def _catalog_roles() -> Dict[str, str]:
@@ -122,76 +84,9 @@ def _catalog_roles() -> Dict[str, str]:
         return {}
 
 
-def _iter_layers(manifest: dict):
-    """(mediaType, digest, size) — config 레이어까지 포함."""
-    config = manifest.get("config")
-    if isinstance(config, dict) and config.get("digest"):
-        yield _CONFIG_LAYER, config["digest"], int(config.get("size") or 0)
-    for layer in manifest.get("layers") or []:
-        if not isinstance(layer, dict) or not layer.get("digest"):
-            continue
-        media = layer.get("mediaType") or ""
-        yield _LAYER_NAMES.get(media, media or "unknown"), layer["digest"], int(
-            layer.get("size") or 0)
-
-
 def scan(model_dir) -> List[FileRow]:
-    """blob 하나당 한 행. 여러 모델이 공유하면 모델별로 행이 생긴다."""
-    root = Path(model_dir)
-    blobs_dir = root / "blobs"
-    manifests = read_manifests(root)
-    roles = _catalog_roles()
-
-    on_disk: Dict[str, int] = {}
-    if blobs_dir.is_dir():
-        try:
-            for entry in blobs_dir.iterdir():
-                if entry.is_file():
-                    try:
-                        on_disk[entry.name] = entry.stat().st_size
-                    except OSError:
-                        on_disk[entry.name] = 0
-        except OSError:
-            pass
-
-    # 먼저 blob 별 참조 모델 수를 센다 (shared_with 계산용)
-    refs: Dict[str, List[str]] = {}
-    for model, manifest in manifests.items():
-        for _layer, digest, _size in _iter_layers(manifest):
-            refs.setdefault(_blob_file_name(digest), []).append(model)
-
-    rows: List[FileRow] = []
-    referenced = set()
-    for model in sorted(manifests):
-        for layer, digest, declared in _iter_layers(manifests[model]):
-            name = _blob_file_name(digest)
-            referenced.add(name)
-            actual = on_disk.get(name)
-            size = actual if actual is not None else declared
-            rows.append(FileRow(
-                file_name=name,
-                model=model,
-                role=roles.get(model, ""),
-                layer=layer,
-                size_bytes=int(size),
-                size_gb=round(int(size) / (1024 ** 3), 3),
-                shared_with=len(set(refs.get(name, []))),
-                status="ok" if actual is not None else "missing",
-                rel_path=str(Path("blobs") / name),
-            ))
-
-    for name in sorted(set(on_disk) - referenced):
-        size = on_disk[name]
-        rows.append(FileRow(
-            file_name=name, model="", role="", layer="unreferenced",
-            size_bytes=int(size), size_gb=round(int(size) / (1024 ** 3), 3),
-            shared_with=0, status="orphan",
-            rel_path=str(Path("blobs") / name),
-        ))
-
-    # 큰 파일이 위로 — 폴더를 열어 본 사람이 가장 먼저 알고 싶은 순서.
-    rows.sort(key=lambda r: (-r.size_bytes, r.model, r.layer))
-    return rows
+    """Compatibility rows derived from the same scanner as MODEL_INDEX.json."""
+    return [FileRow(**row) for row in build_index(model_dir)["files"]]
 
 
 def _writable(path: Path) -> bool:
@@ -202,17 +97,12 @@ def _writable(path: Path) -> bool:
     """
     if not path.is_dir():
         return False
-    probe = path / ".model_files_write_probe"
     try:
-        probe.write_text("", encoding="utf-8")
+        with tempfile.TemporaryFile(dir=path, prefix=".model_files_probe."):
+            pass
         return True
     except OSError:
         return False
-    finally:
-        try:
-            probe.unlink()
-        except OSError:
-            pass
 
 
 def default_csv_path(model_dir) -> Path:
@@ -249,13 +139,7 @@ def write_csv(model_dir, path=None, rows: Optional[Iterable[FileRow]] = None
     rows = list(rows) if rows is not None else scan(root)
     out = Path(path) if path is not None else default_csv_path(root)
     try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with open(out, "w", encoding="utf-8-sig", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(FIELDS),
-                                    lineterminator="\r\n")
-            writer.writeheader()
-            for row in rows:
-                writer.writerow({k: asdict(row)[k] for k in FIELDS})
+        _index.atomic_write(out, _index.csv_bytes(asdict(row) for row in rows))
         return out
     except OSError:
         return None
@@ -267,7 +151,7 @@ def summary_lines(rows: Iterable[FileRow]) -> List[str]:
     weights = [r for r in rows if r.layer == "weights" and r.status == "ok"]
     missing = [r for r in rows if r.status == "missing"]
     orphans = [r for r in rows if r.status == "orphan"]
-    unique_bytes = {r.file_name: r.size_bytes for r in rows if r.status != "missing"}
+    unique_bytes = {r.file_name: r.size_bytes for r in rows if r.status not in {"missing", "unavailable"}}
     total_gb = sum(unique_bytes.values()) / (1024 ** 3)
 
     out = ["모델 %d개 · 파일 %d개 · 합계 %.1fGB"
@@ -282,29 +166,49 @@ def summary_lines(rows: Iterable[FileRow]) -> List[str]:
         gb = sum(r.size_bytes for r in orphans) / (1024 ** 3)
         out.append("  참조 없는 잔여 파일 %d개 (%.1fGB) — `ollama rm` 후 남은 것일 수 있습니다."
                    % (len(orphans), gb))
+    for status in ("partial", "size_mismatch", "unavailable", "unknown", "unreferenced_unknown"):
+        names = sorted({r.file_name for r in rows if r.status == status})
+        if names:
+            out.append("  %s: %d files - %s" % (status, len(names), ", ".join(names[:3])))
+    if orphans or any(r.status in {"partial", "unreferenced_unknown"} for r in rows):
+        out.append("  Inventory is not deletion approval; concurrent downloads may still own these files.")
     return out
 
 
-def refresh(model_dir, log=None) -> Optional[Path]:
-    """설치/삭제 뒤에 부르는 진입점. 실패해도 예외를 올리지 않는다."""
-    try:
-        rows = scan(model_dir)
-        out = write_csv(model_dir, rows=rows)
-    except Exception:
-        return None
-    if log:
+def _log_message(log, message: str) -> None:
+    """Diagnostics must not make an optional inventory refresh fail."""
+    if log is not None:
         try:
-            if out:
-                log("모델 파일 목록: " + str(out))
-                for line in summary_lines(rows):
-                    log("  " + line)
-            else:
-                log("모델 파일 목록을 쓰지 못했습니다 (쓰기 권한 확인).")
+            log(message)
         except Exception:
             pass
+
+
+def refresh(model_dir, log=None) -> Optional[Path]:
+    """Publish one JSON/CSV snapshot, reporting failures without raising them."""
+    try:
+        if not Path(model_dir).is_dir():
+            _log_message(log, "Model store is missing or inaccessible: " + str(model_dir))
+            return None
+        index = build_index(model_dir)
+        rows = [FileRow(**row) for row in index["files"]]
+        out = default_csv_path(model_dir)
+        _index.publish(index, out)
+    except Exception as exc:
+        _log_message(log, "Unable to publish model inventory for %s: %s: %s"
+                     % (model_dir, type(exc).__name__, exc))
+        return None
+    _log_message(log, "모델 파일 목록: " + str(out))
+    _log_message(log, "MODEL_INDEX.json: " + str(out.with_name(INDEX_NAME)))
+    if not index["scan_complete"]:
+        _log_message(log, "scan_complete=false: references are incomplete; no cleanup conclusion is safe.")
+        for error in index["errors"]:
+            _log_message(log, "  " + error["path"] + ": " + error["reason"])
+    for line in summary_lines(rows):
+        _log_message(log, "  " + line)
     return out
 
 
 __all__ = ["FileRow", "FIELDS", "CSV_NAME", "MARKER",
            "read_manifests", "scan", "write_csv", "default_csv_path",
-           "summary_lines", "refresh"]
+           "summary_lines", "refresh", "INDEX_NAME", "build_index"]

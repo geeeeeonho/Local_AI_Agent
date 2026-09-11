@@ -57,32 +57,19 @@ def run(env: Path, p: Presenter) -> None:
 
 
 def _show_file_map(svc, p) -> None:
-    """MODEL_FILES_v1: 저장소의 sha256-... 파일이 어느 모델인지 보여 주고 CSV 로 남긴다.
-
-    저장소를 열어 보면 이름 없는 blob 만 있어서, 어느 파일이 무엇인지 · 지워도
-    되는지 알 수 없다. 여기서 그 대응을 한 번 보여 주고 표를 갱신한다.
-    """
+    """Show and publish one canonical JSON/CSV snapshot, even for an empty store."""
     try:
         from launcher.models import model_files as mf
-    except Exception:
+    except Exception as exc:
+        p.warn("모델 파일 목록을 불러오지 못했습니다: %r" % exc)
         return
     p.info("-" * 40)
     p.info("저장소 파일 -> 모델 (" + str(svc.model_dir) + ")")
-    try:
-        rows = mf.scan(svc.model_dir)
-    except Exception as e:
-        p.warn("저장소를 읽지 못했습니다: %r" % e)
-        return
-    if not rows:
-        p.info("  저장소에 모델 파일이 없습니다.")
-        return
-    for line in mf.summary_lines(rows):
-        p.info("  " + line)
-    out = mf.write_csv(svc.model_dir, rows=rows)
-    if out:
-        p.info("  전체 표(CSV): " + str(out))
-    else:
-        p.warn("  CSV 를 쓰지 못했습니다 (저장소 쓰기 권한 확인).")
+    # CSV-only export would leave the canonical JSON stale. Do not return early
+    # on an empty scan: deleting the last model must clear both old inventories.
+    out = mf.refresh(svc.model_dir, log=p.info)
+    if out is None:
+        p.warn("모델 인덱스(JSON/CSV)를 갱신하지 못했습니다. 위 오류와 저장소 권한을 확인하세요.")
 
 
 # >>> MODELINFO_PURPOSE_v1 helper - 모델 용도 매핑 + 권장 표
