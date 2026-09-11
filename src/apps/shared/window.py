@@ -8,9 +8,10 @@ from types import SimpleNamespace
 import webbrowser
 from core.projects.model import Project
 from core.urls import local_url
-from .specs import SPECS, LABELS
+from .specs import SPECS, LABELS, navigation_groups, nav_style
 from .tasks import TaskRunner
-from .widgets import BG, MUTED, ACCENT, SURFACE, set_text, theme
+from .widgets import set_text, theme
+from .themes import themed
 from . import views
 
 
@@ -18,7 +19,15 @@ class DesktopWindow:
     def __init__(self, app, services, *, root=None, start_polling=True):
         self.app, self.spec, self.services = app, SPECS[app], services
         self.root = root if root is not None else tk.Tk()
-        theme(self.root)
+        appearance_error = None
+        try:
+            appearance = services.settings.theme()
+        except (OSError, ValueError) as exc:
+            appearance, appearance_error = 'dark', str(exc)
+        self.theme = theme(self.root, appearance)
+        self.theme_choice = tk.StringVar(master=self.root, value=appearance)
+        self._appearance_generation = 0
+        self._appearance_error = None
         self.root.title(self.spec.title)
         self.root.geometry('1280x860');self.root.minsize(1000,720)
         self.runner = TaskRunner()
@@ -26,8 +35,8 @@ class DesktopWindow:
         self._unsubscribe = services.events.subscribe('*', self._enqueue)
         self.closing = False;self.closed = False;self._shutdown_started = False
         self._polling = start_polling;self._ticks = 0
-        self.pages = {};self.hosts = {};self.presenters = {};self.nav = {}
-        self._model_records = {};self._projects = {}
+        self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
+        self._model_records = {};self._projects = {};self.project_boxes = []
         self.agent_panel = None;self.agent_session = None
         self.session_mode = tk.StringVar(master=self.root,value='inherit')
         self.project_id = tk.StringVar(master=self.root,value='(none)')
@@ -36,32 +45,40 @@ class DesktopWindow:
         self._build()
         self.load_projects()
         self.navigate(self.spec.primary)
+        self.theme.refresh()
+        if appearance_error:
+            self.log('Theme preference could not be loaded: ' + appearance_error)
+        self.root.bind('<FocusIn>', self._appearance_focus, add='+')
         self.root.protocol('WM_DELETE_WINDOW', self.request_close)
         self._timer = self.root.after(50, self._tick)
 
     def _build(self):
         outer=ttk.Frame(self.root);outer.pack(fill='both',expand=True)
-        sidebar=tk.Frame(outer,bg=BG,width=215);sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False)
-        tk.Label(sidebar,text='LOCAL AI',bg=BG,fg=ACCENT,font=('Segoe UI',17,'bold')).pack(anchor='w',padx=23,pady=(27,3))
-        tk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),bg=BG,fg=MUTED,font=('Segoe UI',10)).pack(anchor='w',padx=24,pady=(0,30))
-        for key in self.spec.pages:
-            b=ttk.Button(sidebar,text=LABELS[key],style='Nav.TButton',command=lambda k=key:self.navigate(k))
-            b.pack(fill='x',padx=10,pady=2);self.nav[key]=b
-        tk.Label(sidebar,text='Shared services\nLocal data stays local',bg=BG,fg=MUTED,
-                 justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=24,pady=22)
-        tk.Frame(outer,width=1,bg='#2b3545').pack(side='left',fill='y')
+        sidebar=ttk.Frame(outer,style='Sidebar.TFrame',width=235)
+        sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False)
+        ttk.Label(sidebar,text='LOCAL AI',style='Brand.TLabel').pack(anchor='w',padx=22,pady=(25,4))
+        ttk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),style='Sidebar.TLabel').pack(anchor='w',padx=23,pady=(0,22))
+        captions={'WORK':'\uc8fc\uc694 \uc791\uc5c5','MANAGE':'\ubaa8\ub378 \u00b7 \uc124\uce58 \uad00\ub9ac','GENERAL':'\ud658\uacbd \u00b7 \uc124\uc815'}
+        for group,keys in navigation_groups(self.app):
+            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',font=('Segoe UI',9,'bold')).pack(anchor='w',padx=22,pady=(8,8))
+            for key in keys:
+                b=ttk.Button(sidebar,text=LABELS[key],style=nav_style(key),command=lambda k=key:self.navigate(k))
+                b.pack(fill='x',padx=12,pady=3);self.nav[key]=b
+            ttk.Separator(sidebar).pack(fill='x',padx=20,pady=(14,6))
+        ttk.Label(sidebar,text='Shared services\nLocal data stays local',style='Sidebar.TLabel',
+                  justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=22,pady=18)
+        ttk.Separator(outer,orient='vertical').pack(side='left',fill='y')
         content=ttk.Frame(outer);content.pack(fill='both',expand=True)
-        header=ttk.Frame(content,padding=(24,18));header.pack(fill='x')
-        ttk.Label(header,text='PROJECT',style='Muted.TLabel').pack(side='left',padx=(0,12))
-        self.project_box=ttk.Combobox(header,textvariable=self.project_id,state='readonly',values=('(none)',),width=22)
-        self.project_box.pack(side='left')
-        self.project_box.bind('<<ComboboxSelected>>',lambda event:self.project_selected())
+        header=ttk.Frame(content,padding=(24,16));header.pack(fill='x')
+        ttk.Label(header,text=self.spec.title,style='Section.TLabel').pack(side='left')
         ttk.Label(header,textvariable=self.health,style='Muted.TLabel').pack(side='right')
-        tk.Frame(content,height=1,bg='#2b3545').pack(fill='x')
+        ttk.Separator(content).pack(fill='x')
         footer=ttk.Frame(content,padding=(18,8));footer.pack(side='bottom',fill='x')
         ttk.Label(footer,textvariable=self.message,style='Muted.TLabel',wraplength=900).pack(anchor='w')
-        self.activity=tk.Text(content,height=4,bg=SURFACE,fg=MUTED,relief='flat',
-                              font=('Consolas',9),padx=14,pady=8,state='disabled')
+        self.activity=themed(tk.Text(content,height=3,relief='flat',
+                              font=('Consolas',9),padx=14,pady=8,state='disabled'),
+                              background='surface',foreground='muted',highlightbackground='border',highlightcolor='chat',
+                              selectbackground='selected',selectforeground='fg')
         self.activity.pack(side='bottom',fill='x',padx=24,pady=(4,0))
         self.page_area=ttk.Frame(content);self.page_area.pack(fill='both',expand=True)
         self.page_area.columnconfigure(0,weight=1);self.page_area.rowconfigure(0,weight=1)
@@ -69,12 +86,15 @@ class DesktopWindow:
             page=views.build(self.page_area,key,self);page.grid(row=0,column=0,sticky='nsew');self.pages[key]=page
 
     def navigate(self,key):
+        if key=='projects':
+            self.show_project_links()
+            return
         if key not in self.pages: return
         self.pages[key].tkraise();self.current_page=key
         for name,button in self.nav.items():
-            button.configure(style='Selected.Nav.TButton' if name==key else 'Nav.TButton')
-        if key=='projects':self.load_projects();self.project_selected()
-        if key=='settings':self.load_settings()
+            button.configure(style=nav_style(name,name==key))
+        if key in ('chat','agent'):self.load_projects()
+        if key=='settings':self.load_settings();self.sync_theme()
 
     def _enqueue(self,event):
         try:self.events.put_nowait(event)
@@ -130,7 +150,8 @@ class DesktopWindow:
     def load_projects(self):
         try:
             self._projects={p.id:p for p in self.services.projects.list()}
-            self.project_box.configure(values=('(none)',*self._projects))
+            for box in self.project_boxes:
+                box.configure(values=('(none)',*self._projects))
             if self.project_id.get() not in self._projects:self.project_id.set('(none)')
         except Exception as exc:self.log('Project registry: '+str(exc))
 
@@ -141,6 +162,24 @@ class DesktopWindow:
         data=project.to_dict() if project else {}
         for key,var in self.project_fields.items():
             var.set(data.get(key) or ('inherit' if key=='network_mode' else ''))
+
+    def show_project_links(self):
+        if 'chat' in self.pages:
+            self.navigate('chat')
+            self.chat_tabs.select(self.chat_links_page)
+        elif 'agent' in self.pages:
+            self.navigate('agent')
+            self.agent_tabs.select(self.agent_links_page)
+        self.load_projects()
+        self.project_selected()
+
+    def new_project_link(self):
+        self.project_id.set('(none)')
+        self.project_selected()
+
+    def manage_chat_projects(self):
+        # Workspace creation is owned by AnythingLLM, not the LocalAI registry.
+        self.start_chat(open_when_ready=True)
 
     def save_project(self):
         data={k:v.get().strip() for k,v in self.project_fields.items()}
@@ -155,7 +194,55 @@ class DesktopWindow:
         identifier=self.project_fields['id'].get().strip()
         if identifier not in self._projects:return
         if not messagebox.askyesno('Project', 'Delete this linkage only? Workspace files remain unchanged.',parent=self.root):return
-        self.run_task('project.delete',lambda:self.services.projects.delete(identifier),lambda _:self.load_projects())
+        self.run_task('project.delete',lambda:self.services.projects.delete(identifier),lambda _:(self.load_projects(),self.project_selected()))
+
+    def _appearance_focus(self, event):
+        if event.widget is self.root:
+            self.sync_theme()
+
+    def sync_theme(self):
+        if self.closing or self.runner.busy('appearance.save') or self.runner.busy('appearance.sync'):
+            return
+        generation = self._appearance_generation
+        def done(value):
+            if self.closing or generation != self._appearance_generation:
+                return
+            if value != self.theme.name:
+                self.theme.apply(value)
+            self.theme_choice.set(value)
+            self._appearance_error = None
+        def failed(exc):
+            if self.closing or generation != self._appearance_generation:
+                return
+            if str(exc) != self._appearance_error:
+                self.log('Theme preference: ' + str(exc))
+                self._appearance_error = str(exc)
+        self.runner.submit('appearance.sync',self.services.settings.theme,done,failed,mutate=False)
+
+    def save_theme(self):
+        if self.closing or self.runner.busy('appearance.save'):
+            self.theme_choice.set(self.theme.name)
+            return
+        value = self.theme_choice.get()
+        self._appearance_generation += 1
+        for button in self.theme_buttons:
+            button.state(['disabled'])
+        def unlock():
+            for button in self.theme_buttons:
+                button.state(['!disabled'])
+        def done(_):
+            if not self.closing:
+                self.theme.apply(value)
+                self.theme_choice.set(value)
+                self.log('Theme saved: ' + value)
+            unlock()
+        def failed(exc):
+            self.theme_choice.set(self.theme.name)
+            self.log('Theme could not be saved: ' + str(exc))
+            unlock()
+        # Appearance writes do not wait behind a long-running Agent/installation
+        # task; JsonStore still serializes all writes with its OS-backed lock.
+        self.runner.submit('appearance.save',lambda:self.services.settings.set_theme(value),done,failed,mutate=False)
 
     def load_settings(self):
         scope=self.settings_scope.get()
@@ -167,7 +254,7 @@ class DesktopWindow:
         self.run_task('settings.save',lambda:self.services.settings.set_network_mode(mode,
             app=None if scope=='global' else scope))
 
-    def start_chat(self):
+    def start_chat(self, *, open_when_ready=False):
         if self.services.chat.started:self.open_chat();return
         try:project=self.current_project();mode=self.selected_mode('chat')
         except Exception as exc:self.log(str(exc));return
@@ -177,6 +264,7 @@ class DesktopWindow:
             set_text(self.chat_text,'AnythingLLM is ready\n\n'+str(url)+'\nNetwork: '+mode+
                 '\nWorkspace linkage: '+(project.anythingllm_workspace if project else '(none)')+
                 '\n\nOpen AnythingLLM to use Chat, files, documents and RAG.\nUse Session stop when finished.')
+            if open_when_ready:self.open_chat()
         self.run_task('chat.start',lambda:self.services.chat.start(mode,model=model,cancel=self.runner.cancel.is_set),ready)
 
     def open_chat(self):
@@ -305,6 +393,7 @@ class DesktopWindow:
             self.runner.submit('shutdown',self.services.close,done,failed)
         elif not self.closing and self._polling:
             self._ticks+=1
+            if self._ticks%20==0:self.sync_theme()
             if self._ticks==1 or self._ticks%200==0:self.refresh_health()
             session=self.agent_session
             if session is not None and self._ticks%2==0:
