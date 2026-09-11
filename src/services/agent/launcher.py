@@ -1,0 +1,38 @@
+"""Desktop facade for the existing Interpreter coordinator and approval flow."""
+from .session import AgentSession
+
+
+class AgentLauncher:
+    def __init__(self, backend, network, events):
+        self.backend, self.network, self.events = backend, network, events
+        self.session = None
+
+    @property
+    def opened(self):
+        return self.session is not None
+
+    def open(self, presenter, mode, *, project=None, cancel=None):
+        if self.opened:
+            raise RuntimeError('An Agent view is already active. Close it before opening a new one.')
+        if cancel is not None and cancel():
+            return None
+        selected = self.network.prepare(mode)
+        binding = self.backend.agent_open(presenter, selected.value, project)
+        if binding is None or (cancel is not None and cancel()):
+            return None
+        self.session = AgentSession(binding, self.events)
+        if not self.session.start():
+            if self.session.close():
+                self.session = None
+            raise RuntimeError('Interpreter startup failed. Check Setup / Repair.')
+        self.events.emit('agent.started', {'mode': selected.value, 'session': self.session.id})
+        return self.session
+
+    def stop(self):
+        if self.session is None:
+            return True
+        if not self.session.close():
+            return False
+        self.session = None
+        self.events.emit('agent.stopped', {})
+        return True

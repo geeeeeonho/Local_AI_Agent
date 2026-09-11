@@ -1,0 +1,142 @@
+"""Real Tk integration tests; external runtimes are deliberately injected."""
+import os
+import time
+from pathlib import Path
+import pytest
+from test_desktop_services import make
+
+
+def pump(window, predicate=lambda:True, timeout=3):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        window.root.update()
+        if predicate(): return
+        time.sleep(.01)
+    raise AssertionError('UI condition did not settle')
+
+
+@pytest.fixture
+def ui(tmp_path):
+    import tkinter as tk
+    from apps.shared.window import DesktopWindow
+    svc,backend=make(tmp_path)
+    try: root=tk.Tk()
+    except tk.TclError: pytest.skip('Real Tk requires DISPLAY; run with Xvfb on Linux')
+    window=DesktopWindow('studio',svc,root=root,start_polling=False)
+    yield window,svc,backend
+    window.runner.shutdown()
+    svc.close()
+    try: root.destroy()
+    except tk.TclError: pass
+
+
+def test_all_studio_pages_are_persistent(ui):
+    w,_,_=ui
+    expected={'home','chat','projects','agent','models','network','system','settings','setup'}
+    assert set(w.pages)==expected
+    for key in expected:
+        page=w.pages[key];w.navigate(key);pump(w)
+        assert w.pages[key] is page and page.winfo_exists()
+
+
+def test_chat_start_invokes_shared_service_without_installer(ui):
+    w,svc,backend=ui
+    w.session_mode.set('block');w.start_chat()
+    pump(w,lambda:svc.chat.started)
+    assert ('chat','') in backend.calls
+    assert not any(c[0]=='search' for c in backend.calls)
+    assert svc.chat.url=='http://127.0.0.1:3001'
+
+
+def test_model_table_uses_real_index(ui):
+    import json
+    w,svc,_=ui
+    blobs=svc.model_dir/'blobs';blobs.mkdir()
+    (blobs/('sha256-'+'a'*64)).write_bytes(b'weights')
+    m=svc.model_dir/'manifests'/'registry.ollama.ai'/'library'/'demo';m.mkdir(parents=True)
+    (m/'latest').write_text(json.dumps({'layers':[{'digest':'sha256:'+'a'*64,'size':7,'mediaType':'application/vnd.ollama.image.model'}]}))
+    w.refresh_models();pump(w,lambda:bool(w.model_tree.get_children()))
+    values=w.model_tree.item(w.model_tree.get_children()[0])['values']
+    assert values[0]=='demo:latest'
+    assert (svc.model_dir/'MODEL_INDEX.json').exists()
+
+
+def test_project_save_round_trips_without_copying_workspace(ui,tmp_path):
+    w,svc,_=ui
+    w.project_fields['id'].set('demo')
+    w.project_fields['name'].set('Demo')
+    w.project_fields['workspace_path'].set(str(tmp_path))
+    w.save_project();pump(w,lambda:svc.projects.get('demo') is not None)
+    assert svc.projects.get('demo').workspace_path==str(tmp_path)
+    assert not (tmp_path/'anythingllm').exists()
+
+
+def test_settings_change_is_shared_not_live_reconfiguration(ui):
+    w,svc,backend=ui
+    w.settings_scope.set('chat');w.settings_mode.set('tor');w.save_settings()
+    pump(w,lambda:svc.settings.network_mode(app='chat').value=='tor')
+    assert backend.calls==[]
+
+
+def test_busy_duplicate_operation_is_not_scheduled(ui):
+    import threading
+    w,_,_=ui;done=threading.Event()
+    assert w.run_task('example',lambda:done.wait(1))
+    assert not w.run_task('example',lambda:None)
+    done.set();pump(w,lambda:not w.runner.busy('example'))
+
+
+def test_shutdown_does_not_destroy_ui_before_workers_finish(ui):
+    import threading
+    w,_,_=ui;done=threading.Event()
+    w.run_task('example',lambda:done.wait(2))
+    w.request_close()
+    pump(w)
+    assert w.root.winfo_exists()
+    done.set()
+    # The window owns final destruction; fixture tolerates an already closed root.
+    deadline=time.monotonic()+3
+    while not w.closed and time.monotonic()<deadline:
+        w.root.update();time.sleep(.01)
+    assert w.closed
+
+
+@pytest.mark.parametrize('app,primary', [('chat','chat'),('interpreter','agent'),('setup','setup'),('studio','home')])
+def test_app_specs_have_independent_primary_views(app,primary):
+    from apps.shared.specs import SPECS
+    assert SPECS[app].primary==primary
+    assert primary in SPECS[app].pages
+
+
+def test_cli_help_does_not_load_runtime():
+    import subprocess,sys
+    for app in ('studio','chat','interpreter','setup'):
+        p=subprocess.run([sys.executable,'-m','apps.'+app,'--help'],capture_output=True,text=True)
+        assert p.returncode==0 and 'LocalAI' in p.stdout
+
+
+def test_apps_do_not_import_backend_or_process_commands():
+    import ast
+    root=Path(__file__).resolve().parents[1]/'apps'
+    assert root.exists()
+    for path in root.rglob('*.py'):
+        tree=ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            names=[node.module or ''] if isinstance(node,ast.ImportFrom) else [v.name for v in node.names] if isinstance(node,ast.Import) else []
+            assert not any(n.split('.')[0] in {'integrations','launcher','installer','subprocess'} for n in names),str(path)
+
+
+def test_settings_view_loads_the_saved_scope(ui):
+    w,svc,_=ui
+    svc.settings.set_network_mode('tor')
+    w.navigate('settings')
+    assert w.settings_mode.get()=='tor'
+
+
+def test_selected_project_is_reloaded_before_start(ui,tmp_path):
+    from core.projects.model import Project
+    w,svc,_=ui
+    svc.projects.save(Project(id='demo',name='Demo',workspace_path=str(tmp_path),network_mode='warp'))
+    w.load_projects();w.project_id.set('demo')
+    svc.projects.save(Project(id='demo',name='Demo',workspace_path=str(tmp_path),network_mode='tor'))
+    assert w.selected_mode('chat')=='tor'

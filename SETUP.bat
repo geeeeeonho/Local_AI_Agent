@@ -19,15 +19,15 @@ if not errorlevel 1 goto RUN_PY
 goto NOPY
 
 :RUN_MANAGED
-"%MANAGED_PY%" -m installer %*
+"%MANAGED_PY%" -m apps.setup %*
 goto CHECK
 
 :RUN_PYTHON
-python -m installer %*
+python -m apps.setup %*
 goto CHECK
 
 :RUN_PY
-py -3 -m installer %*
+py -3 -m apps.setup %*
 goto CHECK
 
 :CHECK
