@@ -175,32 +175,37 @@ def summary_lines(rows: Iterable[FileRow]) -> List[str]:
     return out
 
 
+def _log_message(log, message: str) -> None:
+    """Diagnostics must not make an optional inventory refresh fail."""
+    if log is not None:
+        try:
+            log(message)
+        except Exception:
+            pass
+
+
 def refresh(model_dir, log=None) -> Optional[Path]:
-    """설치/삭제 뒤에 부르는 진입점. 실패해도 예외를 올리지 않는다."""
+    """Publish one JSON/CSV snapshot, reporting failures without raising them."""
     try:
         if not Path(model_dir).is_dir():
+            _log_message(log, "Model store is missing or inaccessible: " + str(model_dir))
             return None
         index = build_index(model_dir)
         rows = [FileRow(**row) for row in index["files"]]
         out = default_csv_path(model_dir)
         _index.publish(index, out)
-    except Exception:
+    except Exception as exc:
+        _log_message(log, "Unable to publish model inventory for %s: %s: %s"
+                     % (model_dir, type(exc).__name__, exc))
         return None
-    if log:
-        try:
-            if out:
-                log("모델 파일 목록: " + str(out))
-                log("MODEL_INDEX.json: " + str(out.with_name(INDEX_NAME)))
-                if not index["scan_complete"]:
-                    log("scan_complete=false: references are incomplete; no cleanup conclusion is safe.")
-                    for error in index["errors"]:
-                        log("  " + error["path"] + ": " + error["reason"])
-                for line in summary_lines(rows):
-                    log("  " + line)
-            else:
-                log("모델 파일 목록을 쓰지 못했습니다 (쓰기 권한 확인).")
-        except Exception:
-            pass
+    _log_message(log, "모델 파일 목록: " + str(out))
+    _log_message(log, "MODEL_INDEX.json: " + str(out.with_name(INDEX_NAME)))
+    if not index["scan_complete"]:
+        _log_message(log, "scan_complete=false: references are incomplete; no cleanup conclusion is safe.")
+        for error in index["errors"]:
+            _log_message(log, "  " + error["path"] + ": " + error["reason"])
+    for line in summary_lines(rows):
+        _log_message(log, "  " + line)
     return out
 
 

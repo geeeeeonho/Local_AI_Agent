@@ -32,6 +32,7 @@ _BLOB = re.compile(r'sha256-[0-9a-f]{64}\Z')
 _PARTIAL = re.compile(r'sha256-[0-9a-f]{64}-partial(?:-\d+)?\Z')
 _IGNORED_METADATA = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+_MAX_LAYER_BYTES = (1 << 63) - 1
 _LAYER_NAMES = {
     'application/vnd.ollama.image.' + name: label for name, label in (
         ('model', 'weights'), ('projector', 'projector'), ('adapter', 'adapter'),
@@ -115,8 +116,8 @@ def _layer(value: object, config=False) -> dict:
     digest, size = value.get('digest'), value.get('size')
     if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
         raise ValueError('layer must have a canonical sha256 digest')
-    if type(size) is not int or size < 0:
-        raise ValueError('layer size must be a non-negative integer')
+    if type(size) is not int or not 0 <= size <= _MAX_LAYER_BYTES:
+        raise ValueError('layer size must be a non-negative signed 64-bit integer')
     media = value.get('mediaType', '')
     if not isinstance(media, str):
         raise ValueError('layer mediaType must be a string')
@@ -316,13 +317,20 @@ def main(argv=None) -> int:
     from launcher.models import model_files
     try:
         while True:
-            out = model_files.refresh(args.model_dir)
+            out = model_files.refresh(
+                args.model_dir,
+                log=lambda message: print(message, file=sys.stderr, flush=True),
+            )
             if out is None:
                 print('Unable to publish model inventory; check the store and output permissions.', file=sys.stderr)
-                return 1
-            print(str(out.with_name(INDEX_NAME)), flush=True)
-            if args.watch is None:
-                return 0
+                if args.watch is None:
+                    return 1
+            else:
+                print(str(out.with_name(INDEX_NAME)), flush=True)
+                if args.watch is None:
+                    return 0
+            # A reader may temporarily lock CSV on Windows. Keep an explicit
+            # watch alive; the next iteration repairs any JSON/CSV mismatch.
             time.sleep(args.watch)
     except KeyboardInterrupt:
         return 130

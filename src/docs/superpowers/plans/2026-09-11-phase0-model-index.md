@@ -32,6 +32,10 @@ No new provider, empty service stub, GUI or migration is introduced.
 - [x] Add a one-shot / explicit foreground polling command and behavior tests.
 - [x] Use fresh `Path.lstat()` identities, not Windows `DirEntry.stat()` zero identities.
 - [x] Distinguish inaccessible blob directories from proven missing files.
+- [x] Route the model-info view through canonical refresh, including an empty store.
+- [x] Report scan/publication errors and retry transient errors in explicit watch mode.
+- [x] Reject impossible layer sizes above the signed 64-bit range.
+- [x] Re-run related tests with the original real model catalogue; no exclusions.
 - [ ] Run the complete repository suite and real Windows/Ollama integration checks.
 - [ ] Complete the remaining official-runtime Phase 0 requirements before the app refactor.
 
@@ -76,11 +80,13 @@ python -m launcher.models.model_index "C:\LLM_Models" --watch 5
 ```
 
 Watch is explicit foreground polling, not an installed background service or an
-instantaneous filesystem watcher. Ctrl+C returns 130; publication errors return 1;
-invalid intervals return 2. Exit 0 confirms publication, not model health: inspect
+instantaneous filesystem watcher. Ctrl+C returns 130. A one-shot publication error
+returns 1; watch mode logs the error and retries at the configured interval until
+interrupted. Invalid intervals return 2. Diagnostics go to stderr and successful
+output paths go to stdout. Exit 0 confirms publication, not model health: inspect
 scan_complete, errors and per-blob statuses in JSON.
 
-## Verification evidence and limits
+## Initial verification evidence and limits (before refinement)
 
 A sparse isolated source snapshot was assembled through the GitHub connector;
 it is not a complete checkout. The original model_files.py and original
@@ -111,6 +117,48 @@ git diff --check
 
 The repository's Windows CI should run the original test without deselection in
 a complete checkout. No workflow configuration is changed by this patch.
+
+## Pre-merge refinement (2026-09-11)
+
+The user requested further refinements and merge into main. The changes remain
+inside the model-inventory slice; no runtime or storage migration is added.
+
+- `actions/model_info.py::_show_file_map` now calls `model_files.refresh` instead
+  of the CSV-only export. The view publishes both outputs and does not leave the
+  last snapshot stale after all model files are removed.
+- `refresh` reports missing stores, incomplete scans, exception types and write
+  failure details to the supplied logger. A failing UI logger cannot interrupt
+  publication. Its return value remains the CSV path or None.
+- The explicit watch command retries a transient CSV lock rather than terminating.
+  One-shot exit codes remain compatible. This is still foreground polling.
+- Layer sizes must fit non-negative signed 64-bit bytes; impossible declarations
+  produce incomplete-scan diagnostics instead of overflowing size conversion.
+
+Related-source verification uses the original, Git-blob-verified model catalogue
+(`1cb77792ad758c1e4631ab96f0ea54b7461d933b`) and original model-info action
+(`4f79e8493b7a685716e1443e5ebe17d8eba34a29`) as baselines. The catalogue is not
+modified. The formerly excluded catalogue test now runs against the real module.
+
+- Original model-files tests: 14 passing, no deselection.
+- Original index tests: 51 passing.
+- New refinement tests: 10 passing (9 reproduced failures before the fixes and
+  one diagnostic-isolation guard).
+- Total: **75 passed**, with no exclusions in these three related test modules.
+- Compilation and `git diff --check` pass on the locally available sources.
+
+```sh
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src python -m pytest -q src/tests
+python -m compileall -q src
+git diff --check
+```
+
+This local directory is a sparse source snapshot, NOT the complete repository.
+The UI integration tests execute the real presentation function extracted from
+its AST, with real inventory I/O; they do not start the GUI or Ollama. Windows
+locks and filesystem boundaries are simulated. Full-repository Windows CI and
+live Windows/Docker/Ollama validation are separate checks, not implied by 75
+passing tests. The existing Windows workflow is left unchanged; its actual
+pre-merge execution outcome is recorded in PR #19 rather than predicted here.
 
 ## Remaining sequence from the supplied plan
 
