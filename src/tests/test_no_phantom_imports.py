@@ -173,8 +173,6 @@ class DynamicLegacyReferenceTests(unittest.TestCase):
             "launcher.warp_runtime": ("image_exists", "start"),
             "launcher.tor_runtime": ("image_exists", "start"),
             "launcher.presenter.base": ("RISK_HIGH",),
-            "launcher.presenter.gui": ("TkPresenter",),
-            "launcher.presenter.gui.chat_panel": ("ChatPanel",),
             "launcher.agent.runtime_coordinator": ("prepare_runtime", "RuntimeCoordinator"),
             "launcher.agent.runtime_config": ("resolve_resource_limits", "build_cmd_for_mode"),
             "launcher.agent.chat_session_controller": ("ChatSessionController",),
@@ -183,6 +181,13 @@ class DynamicLegacyReferenceTests(unittest.TestCase):
                 "_approval_description", "_open_folder",
             ),
         }
+        try:
+            importlib.import_module("tkinter")
+        except ImportError:
+            pass  # A Python without Tk cannot answer for the presenter modules.
+        else:
+            required["launcher.presenter.gui"] = ("TkPresenter",)
+            required["launcher.presenter.gui.chat_panel"] = ("ChatPanel",)
         missing = []
         for name, attributes in required.items():
             module = importlib.import_module(name)

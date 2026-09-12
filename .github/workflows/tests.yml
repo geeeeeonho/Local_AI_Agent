@@ -4,13 +4,16 @@ on:
   push:
   pull_request:
 
-env:
-  PYTHONPATH: ${{ github.workspace }}\src
-
 jobs:
+  # Windows is the product's target platform, so this stays the acceptance job
+  # and its name is unchanged. Since 2026-09-10 every attempt has ended in under
+  # four seconds with runner_id=0, no steps and no logs, which means no runner
+  # picked the job up - an infrastructure result, not a code result.
   pytest:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}\src
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,3 +27,38 @@ jobs:
         run: python -m compileall -q src
       - name: Run tests
         run: python -m pytest -q src\tests
+
+  # A second runner so there is a real result while the Windows job cannot
+  # start. The suite is stdlib-only and the desktop tests open actual Tk windows
+  # under Xvfb here; they skip cleanly when a Python has no Tk at all. This does
+  # not replace native Windows acceptance - it makes the absence of any result
+  # distinguishable from a failure.
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Tk, a virtual display and the test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tk xvfb
+          python -m pip install pytest
+      - name: Report whether the UI tests can run here
+        run: |
+          python - <<'PY'
+          try:
+              import tkinter
+          except ImportError as exc:
+              print("no Tk (%s) - desktop tests will skip" % exc)
+          else:
+              print("Tk %s - desktop tests will run" % tkinter.TkVersion)
+          PY
+      - name: Compile all modules
+        run: python -m compileall -q src
+      - name: Run tests
+        run: xvfb-run -a python -m pytest -q src/tests

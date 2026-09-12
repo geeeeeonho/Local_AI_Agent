@@ -14,7 +14,7 @@ from test_desktop_services import make
 @pytest.fixture
 def ui(tmp_path):
     gc.collect()
-    import tkinter as tk
+    tk = pytest.importorskip("tkinter")
     from apps.shared.window import DesktopWindow
     services, backend = make(tmp_path)
     try:
@@ -120,7 +120,7 @@ def test_an_unused_panel_host_claims_no_space(ui):
 
 
 def test_a_panel_host_appears_once_it_has_something_to_show(ui):
-    import tkinter as tk
+    tk = pytest.importorskip("tkinter")
     w, _, _ = ui
     w.navigate('agent')
     w.root.update()

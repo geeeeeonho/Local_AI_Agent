@@ -20,7 +20,7 @@ def pump(window, predicate=lambda:True, timeout=3):
 def ui(tmp_path):
     # Finalize prior Tk cycles on the GUI thread, never a new executor worker.
     gc.collect()
-    import tkinter as tk
+    tk = pytest.importorskip("tkinter")
     from apps.shared.window import DesktopWindow
     svc,backend=make(tmp_path)
     try: root=tk.Tk()

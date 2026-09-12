@@ -244,6 +244,41 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertIn("compileall", workflow)
         self.assertNotIn("legacy_backend.py", workflow)
 
+    def test_ci_runs_somewhere_besides_the_native_target(self):
+        """A second runner so 'no result' is distinguishable from 'failed'.
+
+        Every Windows attempt since 2026-09-10 ended in under four seconds with
+        runner_id=0 and no steps. With only that job, a repository-wide runner
+        outage and a genuine test failure look identical from the outside.
+        """
+        workflow = self._text(".github/workflows/tests.yml")
+        self.assertIn("windows-latest", workflow)
+        self.assertIn("ubuntu-latest", workflow)
+        # The acceptance job keeps its name so an existing required check still
+        # refers to the same thing.
+        self.assertIn("  pytest:", workflow)
+
+    def test_no_test_module_needs_tk_just_to_be_collected(self):
+        """A Python without Tk must still run the ~580 tests that do not need it.
+
+        Two modules imported tkinter at module scope, so a stock Linux or macOS
+        Python failed collection and the whole suite reported zero tests.
+        """
+        offenders = []
+        for path in sorted((REPO_ROOT / "src" / "tests").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in tree.body:
+                names = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or ""]
+                if any(name.split(".")[0] == "tkinter" for name in names):
+                    offenders.append("%s:%d" % (path.name, node.lineno))
+        self.assertEqual(offenders, [], "module-level tkinter imports break "
+                                        "collection without Tk:\n  "
+                                        + "\n  ".join(offenders))
+
     def test_open_interpreter_transition_modules_are_explicit(self):
         for relative in (
             "src/launcher/agent/execution_policy.py",

@@ -2,11 +2,14 @@
 import json
 import gc
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk
 from types import SimpleNamespace as NS
 
 import pytest
+
+# A stock Linux/macOS Python has no tkinter. Skip this module rather than
+# failing collection, which used to take the whole suite down with it.
+tk = pytest.importorskip("tkinter")
+ttk = pytest.importorskip("tkinter.ttk")
 from test_desktop_ui import ui, pump
 from test_desktop_services import make
 

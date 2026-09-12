@@ -39,7 +39,7 @@ def store_model(services, name='demo', digest='a' * 64, payload=b'weights'):
 @pytest.fixture
 def ui(tmp_path):
     gc.collect()
-    import tkinter as tk
+    tk = pytest.importorskip("tkinter")
     from apps.shared.window import DesktopWindow
     services, backend = make(tmp_path)
     try:
