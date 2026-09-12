@@ -457,6 +457,27 @@ python -m launcher --tui       # 기존 터미널 런처
 python -m installer --manage
 ```
 
+### 카탈로그 태그 점검
+
+카탈로그는 손으로 관리하는데 Ollama 레지스트리는 그 아래에서 계속 움직입니다.
+`devstral-small:24b`(라이브러리에 없던 이름)와 `qwen3.5:27b`가 실제로 그렇게 틀렸고,
+둘 다 사용자가 고른 **뒤에** `pull` 단계에서야 드러났습니다. 선언한 용량도 같은 식으로
+낡는데, 그 숫자가 바로 메모리 사다리가 예산을 잡는 기준입니다.
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+python -m tools.verify_model_catalog          # 사람이 읽는 요약
+python -m tools.verify_model_catalog --json   # 기계용
+```
+
+manifest 만 읽고 아무것도 받지 않습니다. 404(태그 없음)만 실패로 보고하고,
+응답이 없거나 차단된 경우는 `UNKNOWN` 으로 남깁니다 — 네트워크 장애를
+"모델이 사라졌다"로 보고하지 않기 위해서입니다.
+
+이 명령은 **공개 인터넷으로 직접 나갑니다.** 개발자용이고, 데스크톱이나 설치기가
+부르지 않으며, 관리형 WARP/Tor/Block 정책을 거치지 않습니다. 공용 egress 가 없는
+것이 확인 대상인 상황에서는 실행하지 마세요.
+
 테스트:
 
 ```powershell
