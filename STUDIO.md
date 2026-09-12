@@ -175,13 +175,35 @@ python -m compileall -q src
 python -m pytest -q src\tests
 ```
 
-For the focused desktop/core/index tests on Linux, provide a real display such
-as Xvfb. UI tests inject external runtimes but instantiate real Tk windows.
-The authoring environment only had a SHA-verified related-source snapshot, not
-the full repository. Local related tests and source compilation do not replace
-native Windows, official Ollama, Docker, SearXNG-image or end-to-end OI acceptance.
-Record CI runner failures separately from code-test failures; no executed steps
-is not a pass. Do not change branch protection or force-push to bypass checks.
+On Linux the desktop tests need a real display, such as Xvfb; they instantiate
+real Tk windows while injecting the external runtimes. A Python with no Tk at
+all skips them and still runs the rest:
+
+  with Tk:    659 passed
+  without Tk: 579 passed, 37 skipped
+
+Local tests and source compilation do not replace native Windows, official
+Ollama, Docker, SearXNG-image or end-to-end Open Interpreter acceptance.
+
+### GitHub Actions is not running
+
+No workflow run has executed since 2026-09-10. Every attempt, on Windows and on
+Linux alike, ends in two to four seconds with `runner_id=0`, an empty step list,
+a 404 for its logs and zero billable milliseconds. The workflow is active and
+the repository is not disabled; the job is simply refused before any runner is
+assigned. On a private repository that is what an exhausted Actions allowance or
+a spending limit of zero looks like, and only the account owner can clear it at
+https://github.com/settings/billing.
+
+Until then a red check on this repository means "nothing ran", not "the tests
+failed", and the two cannot be told apart from the badge. Read the job: zero
+steps and `runner_id=0` is not a test result. Re-pushing does not help, and an
+empty commit to retry is never the answer.
+
+The substitute is to run what CI would run, against a fresh clone rather than a
+working tree, on both a Python with Tk and one without, plus `compileall` on
+3.11 to match the workflow's interpreter. Record which of those you actually
+ran. Do not change branch protection or force-push to bypass checks.
 
 ## Transition adapter contract
 

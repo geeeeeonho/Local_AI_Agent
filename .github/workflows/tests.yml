@@ -6,9 +6,16 @@ on:
 
 jobs:
   # Windows is the product's target platform, so this stays the acceptance job
-  # and its name is unchanged. Since 2026-09-10 every attempt has ended in under
-  # four seconds with runner_id=0, no steps and no logs, which means no runner
-  # picked the job up - an infrastructure result, not a code result.
+  # and its name is unchanged.
+  #
+  # No run has executed since 2026-09-10. Every attempt, on either runner type,
+  # ends in two to four seconds with runner_id=0, an empty step list, a 404 for
+  # its logs and zero billable milliseconds: the job is refused before a runner
+  # is ever assigned. That is an account-level result, not a code result, and it
+  # cannot be fixed from this file. On a private repository it is what an
+  # exhausted Actions allowance or a spending limit of zero looks like - see
+  # https://github.com/settings/billing. windows-latest bills at 2x and
+  # ubuntu-latest at 1x, so the Linux job below also stretches that allowance.
   pytest:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -28,11 +35,11 @@ jobs:
       - name: Run tests
         run: python -m pytest -q src\tests
 
-  # A second runner so there is a real result while the Windows job cannot
-  # start. The suite is stdlib-only and the desktop tests open actual Tk windows
-  # under Xvfb here; they skip cleanly when a Python has no Tk at all. This does
-  # not replace native Windows acceptance - it makes the absence of any result
-  # distinguishable from a failure.
+  # A second runner, at half the minute cost, so a result exists as soon as the
+  # allowance above allows any job to start. The suite is stdlib-only and the
+  # desktop tests open actual Tk windows under Xvfb here; they skip cleanly when
+  # a Python has no Tk at all. This does not replace native Windows acceptance -
+  # it makes "no runner ran" distinguishable from "the tests failed".
   linux:
     runs-on: ubuntu-latest
     timeout-minutes: 15
