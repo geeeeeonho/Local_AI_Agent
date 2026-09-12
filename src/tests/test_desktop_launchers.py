@@ -28,7 +28,7 @@ def test_core_keeps_active_legacy_model_default(monkeypatch):
 def test_default_inference_does_not_activate_official_migration(monkeypatch,tmp_path):
     from services.inference.service import InferenceService
     from integrations.legacy import desktop
-    monkeypatch.setitem(sys.modules,'project_paths',NS(ENV_DIR=tmp_path/'env',MODEL_STORAGE_DIR=tmp_path/'models'))
+    monkeypatch.setitem(sys.modules,'project_paths',NS(ENV_DIR=tmp_path/'env',MODEL_STORAGE_DIR=tmp_path/'models',USER_DATA_DIR=tmp_path/'user_data'))
     got=[]
     monkeypatch.setattr(desktop,'ManagedInference',lambda env,models,importer:got.append((env,models)) or NS(client=object(),model_dir=models))
     service=InferenceService()
@@ -90,3 +90,30 @@ def test_chat_replaced_by_another_process_is_not_stopped(tmp_path):
     b.chat_start('',print,None)
     assert not b.chat_stop()
     assert not c
+
+
+def parse(app, argv):
+    from apps.shared.entry import parse_args
+    return parse_args(app, argv)
+
+
+def test_installation_flags_select_setup_from_any_launcher():
+    # RUN.bat detects these flags and routes them to a console. Rejecting them
+    # there left the launcher advertising a command the application refused.
+    for argv in (['--install'], ['--manage'], ['--skip-model'], ['--skip-search']):
+        assert parse('studio', argv).app == 'setup', argv
+    assert parse('studio', ['--install']).install
+    assert parse('chat', []).app == 'chat'
+    assert parse('studio', ['--app', 'chat']).app == 'chat'
+
+
+def test_naming_a_different_application_with_installation_flags_is_refused():
+    for app in ('studio', 'chat', 'interpreter'):
+        with pytest.raises(SystemExit):
+            parse('studio', ['--app', app, '--install'])
+
+
+def test_run_bat_console_path_covers_every_flag_the_parser_reroutes():
+    run = (ROOT / 'RUN.bat').read_text()
+    for flag in ('--install', '--manage', '--skip-', '--help', '--tui'):
+        assert flag in run, flag

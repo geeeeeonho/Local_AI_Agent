@@ -7,7 +7,7 @@ from .specs import SPECS
 
 def parse_args(app,argv=None):
     parser=argparse.ArgumentParser(description='LocalAI Studio / Chat / Interpreter / Setup')
-    parser.add_argument('--app',choices=tuple(SPECS),default=app,help='Select a standalone application')
+    parser.add_argument('--app',choices=tuple(SPECS),default=None,help='Select a standalone application')
     mode=parser.add_mutually_exclusive_group()
     mode.add_argument('--gui',action='store_true',help='Open the shared desktop shell (default)')
     mode.add_argument('--tui',action='store_true',help='Use the retained legacy terminal launcher')
@@ -19,7 +19,13 @@ def parse_args(app,argv=None):
         parser.add_argument('--skip-'+flag,action='store_true',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     flags=args.install or args.manage or any(getattr(args,'skip_'+key) for key in ('model','sandbox','build','search'))
-    if flags and args.app!='setup':parser.error('Installation flags are valid only for --app setup.')
+    if args.app is None:
+        # RUN.bat forwards these flags too. They name the installer no matter
+        # which launcher was used, so treat them as the application choice
+        # rather than rejecting a command the launcher itself accepted.
+        args.app='setup' if flags else app
+    elif flags and args.app!='setup':
+        parser.error('Installation flags are valid only for --app setup.')
     return args
 
 

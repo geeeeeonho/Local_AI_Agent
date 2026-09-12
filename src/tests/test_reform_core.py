@@ -11,15 +11,16 @@ import pytest
 
 
 def _isolated_paths():
+    """Load the one path module fresh so environment overrides are observable."""
     import importlib.util
-    path = Path(__file__).parents[1] / 'core/paths.py'
-    spec = importlib.util.spec_from_file_location('isolated_core_paths', path)
+    path = Path(__file__).parents[1] / 'project_paths.py'
+    spec = importlib.util.spec_from_file_location('isolated_project_paths', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_core_paths_preserve_existing_user_data_layout(monkeypatch, tmp_path):
+def test_paths_preserve_existing_user_data_layout(monkeypatch, tmp_path):
     monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path))
     paths = _isolated_paths()
     assert paths.USER_DATA_DIR == tmp_path / 'user_data'

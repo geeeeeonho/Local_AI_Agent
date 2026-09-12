@@ -29,7 +29,10 @@ class DesktopWindow:
         self._appearance_generation = 0
         self._appearance_error = None
         self.root.title(self.spec.title)
-        self.root.geometry('1280x860');self.root.minsize(1000,720)
+        self.root.geometry('1280x860')
+        # Fits a 1366x768 laptop with its title bar and taskbar; the static
+        # pages scroll, so a smaller window loses no controls.
+        self.root.minsize(880,560)
         self.runner = TaskRunner()
         self.events = queue.Queue(maxsize=2048)
         self._unsubscribe = services.events.subscribe('*', self._enqueue)
@@ -37,6 +40,8 @@ class DesktopWindow:
         self._polling = start_polling;self._ticks = 0
         self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
         self._model_records = {};self._projects = {};self.project_boxes = []
+        self._stack_rows = {};self._catalog = None;self.choice_vars = {}
+        self.current_page = None
         self.agent_panel = None;self.agent_session = None
         self.session_mode = tk.StringVar(master=self.root,value='inherit')
         self.project_id = tk.StringVar(master=self.root,value='(none)')
@@ -74,12 +79,14 @@ class DesktopWindow:
         ttk.Label(header,textvariable=self.health,style='Muted.TLabel').pack(side='right')
         ttk.Separator(content).pack(fill='x')
         footer=ttk.Frame(content,padding=(18,8));footer.pack(side='bottom',fill='x')
-        ttk.Label(footer,textvariable=self.message,style='Muted.TLabel',wraplength=900).pack(anchor='w')
+        self.message_label=ttk.Label(footer,textvariable=self.message,style='Muted.TLabel',wraplength=900)
+        self.message_label.pack(anchor='w')
         self.activity=themed(tk.Text(content,height=3,relief='flat',
                               font=('Consolas',9),padx=14,pady=8,state='disabled'),
                               background='surface',foreground='muted',highlightbackground='border',highlightcolor='chat',
                               selectbackground='selected',selectforeground='fg')
         self.activity.pack(side='bottom',fill='x',padx=24,pady=(4,0))
+        self.activity.tag_configure('alert',foreground=self.theme.palette.danger)
         self.page_area=ttk.Frame(content);self.page_area.pack(fill='both',expand=True)
         self.page_area.columnconfigure(0,weight=1);self.page_area.rowconfigure(0,weight=1)
         for key in self.spec.pages:
@@ -95,6 +102,8 @@ class DesktopWindow:
             button.configure(style=nav_style(name,name==key))
         if key in ('chat','agent'):self.load_projects()
         if key=='settings':self.load_settings();self.sync_theme()
+        if key=='models' and self._catalog is None:
+            self.load_catalog();self.refresh_stack()
 
     def _enqueue(self,event):
         try:self.events.put_nowait(event)
@@ -105,11 +114,15 @@ class DesktopWindow:
             try:self.events.put_nowait(event)
             except queue.Full:pass
 
-    def log(self,text):
+    def log(self,text,*,level='info'):
+        # A failure used to look exactly like progress on the same muted line.
         text=str(text)
         self.message.set(text[:220])
+        self.message_label.configure(style='Alert.TLabel' if level=='error' else 'Muted.TLabel')
         self.activity.configure(state='normal')
+        start=self.activity.index('end-1c')
         self.activity.insert('end',text+'\n')
+        if level=='error':self.activity.tag_add('alert',start,'end-1c')
         if int(self.activity.index('end-1c').split('.')[0])>400:
             self.activity.delete('1.0','101.0')
         self.activity.see('end');self.activity.configure(state='disabled')
@@ -131,7 +144,7 @@ class DesktopWindow:
         def finish(value):
             if done and not self.closing:done(value)
             self.log(key+' completed')
-        ok=self.runner.submit(key,fn,finish,lambda exc:self.log(key+': '+str(exc)),mutate=mutate)
+        ok=self.runner.submit(key,fn,finish,lambda exc:self.log(key+': '+str(exc),level='error'),mutate=mutate)
         if ok:self.log(key+' ...')
         return ok
 
@@ -153,11 +166,11 @@ class DesktopWindow:
             for box in self.project_boxes:
                 box.configure(values=('(none)',*self._projects))
             if self.project_id.get() not in self._projects:self.project_id.set('(none)')
-        except Exception as exc:self.log('Project registry: '+str(exc))
+        except Exception as exc:self.log('Project registry: '+str(exc),level='error')
 
     def project_selected(self):
         try:project=self.current_project()
-        except Exception as exc:self.log('Project registry: '+str(exc));return
+        except Exception as exc:self.log('Project registry: '+str(exc),level='error');return
         if not hasattr(self,'project_fields'):return
         data=project.to_dict() if project else {}
         for key,var in self.project_fields.items():
@@ -185,7 +198,7 @@ class DesktopWindow:
         data={k:v.get().strip() for k,v in self.project_fields.items()}
         data['network_mode']=None if data['network_mode']=='inherit' else data['network_mode']
         try:project=Project(**data)
-        except (TypeError,ValueError) as exc:self.log(str(exc));return
+        except (TypeError,ValueError) as exc:self.log(str(exc),level='error');return
         def saved(_):
             self.load_projects();self.project_id.set(project.id);self.project_selected()
         self.run_task('project.save',lambda:self.services.projects.save(project),saved)
@@ -247,7 +260,7 @@ class DesktopWindow:
     def load_settings(self):
         scope=self.settings_scope.get()
         try:self.settings_mode.set(self.services.resolve_mode(None if scope=='global' else scope).value)
-        except Exception as exc:self.log('Settings: '+str(exc))
+        except Exception as exc:self.log('Settings: '+str(exc),level='error')
 
     def save_settings(self):
         scope,mode=self.settings_scope.get(),self.settings_mode.get()
@@ -257,7 +270,7 @@ class DesktopWindow:
     def start_chat(self, *, open_when_ready=False):
         if self.services.chat.started:self.open_chat();return
         try:project=self.current_project();mode=self.selected_mode('chat')
-        except Exception as exc:self.log(str(exc));return
+        except Exception as exc:self.log(str(exc),level='error');return
         model=project.chat_model if project else ''
         def ready(url):
             self.chat_open_button.configure(state='normal')
@@ -270,7 +283,7 @@ class DesktopWindow:
     def open_chat(self):
         try:
             if self.services.chat.url:webbrowser.open(local_url(self.services.chat.url))
-        except Exception as exc:self.log(str(exc))
+        except Exception as exc:self.log(str(exc),level='error')
 
     def presenter(self,key):
         if key not in self.presenters:
@@ -286,7 +299,7 @@ class DesktopWindow:
         if self.services.agent.opened:
             self.log('An Agent is already active. Stop the session before opening another.');return
         try:p=self.presenter('agent');mode=self.selected_mode('interpreter');project=self.current_project()
-        except Exception as exc:self.log(str(exc));return
+        except Exception as exc:self.log(str(exc),level='error');return
         def ready(session):
             if session is None:return
             self.agent_session=session
@@ -330,6 +343,162 @@ class DesktopWindow:
         chosen=self.model_tree.selection()
         if chosen:set_text(self.model_details,json.dumps(self._model_records[chosen[0]],ensure_ascii=False,indent=2))
 
+    # ── model screen: current stack ───────────────────────────────────────
+    def refresh_stack(self):
+        def display(stack):
+            self._stack_rows={}
+            self.stack_tree.delete(*self.stack_tree.get_children())
+            for role in stack['roles']:
+                iid=self.stack_tree.insert('','end',values=(
+                    role['label'],role['chosen'] or '(사다리 없음)',
+                    f"{role['need_gb']:.1f} GB",'있음' if role['on_disk'] else '없음'))
+                self._stack_rows[iid]=role
+            free=stack['free_gb']
+            missing=sum(0 if role['on_disk'] else 1 for role in stack['roles'])
+            self.stack_summary.set(
+                ('여유 메모리 확인 불가' if free is None else f'여유 메모리 {free:.1f} GB')
+                + f" · 메모리 예산 {stack['budget_gb']:.0f} GB · "
+                + ('모든 역할의 모델이 디스크에 있습니다.' if not missing
+                   else f'{missing}개 역할의 선택 모델이 디스크에 없습니다.'))
+        self.run_task('models.stack',self.services.models.current_stack,display,mutate=False)
+
+    def show_stack_detail(self):
+        chosen=self.stack_tree.selection()
+        if not chosen:return
+        role=self._stack_rows.get(chosen[0])
+        if role is None:return
+        lines=[role['label']+'  ('+role['name']+')','',
+               '지금 선택될 모델: '+(role['chosen'] or '(없음)'),'','사다리 (무거운 단계부터):']
+        for rung in role['ladder']:
+            mark='O' if rung['on_disk'] else 'X'
+            here=' <- 선택' if rung['tag']==role['chosen'] else ''
+            lines.append(f"  [{mark}] {rung['tag']}  (>= {rung['need_gb']:.1f} GB){here}")
+        lines+=['','[O] 디스크에 있음 · [X] 없음. 없는 단계는 실행 시 건너뜁니다.']
+        set_text(self.stack_detail,'\n'.join(lines))
+
+    def ensure_ollama(self):
+        """Explicit managed-Ollama start/verify, with the retained diagnostics."""
+        try:presenter=self.presenter('models')
+        except Exception as exc:self.log(str(exc),level='error');return
+        self.run_task('models.ollama',lambda:self.services.setup.maintenance('ollama_action',presenter))
+
+    # ── model screen: catalog selection ──────────────────────────────────
+    def load_catalog(self):
+        def display(catalog):
+            self._catalog=catalog
+            self.build_catalog_rows(catalog)
+            self.update_choice_summary()
+        self.run_task('models.catalog',self.services.models.catalog,display,mutate=False)
+
+    def build_catalog_rows(self,catalog):
+        for child in self.choice_body.winfo_children():child.destroy()
+        self.choice_vars={}
+        groups=(('기본 (권장)',[m for m in catalog['models'] if m['group']=='core']),
+                ('추가 후보 (역할별)',[m for m in catalog['models'] if m['group']!='core']))
+        for title,models in groups:
+            if not models:continue
+            self.add_catalog_group(title)
+            for model in models:
+                self.add_catalog_row(model,checked=model['installed'] or model['recommended'])
+        if catalog['extra_installed']:
+            self.add_catalog_group('설치됨 (카탈로그 외)')
+            for tag in catalog['extra_installed']:
+                self.add_catalog_row({'tag':tag,'role':'직접 받은 모델','level_label':'','note':'',
+                                      'size_gb':0.0,'memory_gb':0.0,'installed':True,
+                                      'desc':'카탈로그에 없는 모델입니다. 체크를 풀면 삭제합니다.'},
+                                     checked=True)
+        plan=catalog['plan']
+        parts=[f"[{label}] "+(', '.join(plan.get(key) or ()) or '없음')
+               for key,label in catalog['levels']]
+        self.choice_plan.set(f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 3단계를 미리 체크했습니다 "
+                             '(여유 메모리는 오르내리므로 세 단계를 모두 둡니다).\n  '+'\n  '.join(parts))
+        self.choice_scroller.bind_content()
+
+    def add_catalog_group(self,title):
+        ttk.Label(self.choice_body,text=title,style='Section.TLabel').pack(anchor='w',pady=(16,2))
+        ttk.Separator(self.choice_body).pack(fill='x',pady=(0,8))
+
+    def add_catalog_row(self,model,*,checked):
+        var=tk.BooleanVar(master=self.root,value=checked)
+        self.choice_vars[model['tag']]=var
+        card=ttk.Frame(self.choice_body,style='Manage.Card.TFrame',padding=12)
+        card.pack(fill='x',pady=4)
+        facts=[model['tag'],model['role']]
+        if model.get('level_label'):
+            facts.append('['+model['level_label']+']'+((' '+model['note']) if model.get('note') else ''))
+        if model['size_gb']:facts.append(f"~{model['size_gb']:.1f}GB")
+        if model['installed']:facts.append('설치됨')
+        ttk.Checkbutton(card,text='   ·   '.join(facts),variable=var,
+                        command=self.update_choice_summary,
+                        style='Card.TCheckbutton').pack(anchor='w',fill='x')
+        if model.get('desc'):
+            ttk.Label(card,text=model['desc'],style='Manage.CardMuted.TLabel',
+                      wraplength=660,justify='left').pack(anchor='w',padx=(26,0),pady=(4,0))
+
+    def selected_tags(self):
+        return {tag for tag,var in self.choice_vars.items() if var.get()}
+
+    def set_selection(self,mode):
+        catalog=getattr(self,'_catalog',None)
+        if catalog is None:return
+        recommended=set(catalog['recommended'])
+        installed={m['tag'] for m in catalog['models'] if m['installed']}|set(catalog['extra_installed'])
+        for tag,var in self.choice_vars.items():
+            if mode=='all':var.set(True)
+            elif mode=='none':var.set(False)
+            else:var.set(tag in recommended or tag in installed)
+        self.update_choice_summary()
+
+    def update_choice_summary(self):
+        catalog=getattr(self,'_catalog',None)
+        if catalog is None:return
+        try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
+        except Exception as exc:self.choice_summary.set('선택 계산 실패: '+str(exc));return
+        self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (~{plan['download_gb']:.1f} GB)"
+                                f"   ·   삭제 예정 {len(plan['remove'])}개")
+        self.apply_button.state(['!disabled'] if plan['install'] or plan['remove'] else ['disabled'])
+
+    def catalog_installed(self):
+        catalog=getattr(self,'_catalog',None)
+        if catalog is None:return set()
+        return {m['tag'] for m in catalog['models'] if m['installed']}|set(catalog['extra_installed'])
+
+    def apply_selection(self):
+        if self.runner.busy('models.apply'):return
+        try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
+        except Exception as exc:self.log('선택 계산 실패: '+str(exc),level='error');return
+        if not plan['install'] and not plan['remove']:
+            self.log('변경할 내용이 없습니다.');return
+        lines=[]
+        if plan['install']:
+            lines.append(f"설치 {len(plan['install'])}개 (~{plan['download_gb']:.1f} GB):")
+            lines+=['  + '+tag for tag in plan['install'][:12]]
+        if plan['remove']:
+            lines.append(f"삭제 {len(plan['remove'])}개:")
+            lines+=['  - '+tag for tag in plan['remove'][:12]]
+        lines.append('')
+        lines.append('설치는 로컬 Ollama 서버가 받고, 삭제는 Ollama가 정리합니다. 계속할까요?')
+        if not messagebox.askyesno('모델 적용','\n'.join(lines),parent=self.root):return
+        def work():
+            done={'install':[],'remove':[],'failed':[]}
+            for tag in plan['remove']:
+                try:self.services.setup.remove_model(tag);done['remove'].append(tag)
+                except Exception as exc:done['failed'].append(('remove',tag,str(exc)))
+            for tag in plan['install']:
+                if self.runner.cancel.is_set():break
+                try:self.services.setup.install_model(tag);done['install'].append(tag)
+                except Exception as exc:done['failed'].append(('install',tag,str(exc)))
+            return done
+        def finished(done):
+            for kind,tag,error in done['failed']:
+                self.log(kind+' 실패 '+tag+': '+error,level='error')
+            self.log(f"설치 {len(done['install'])}개 · 삭제 {len(done['remove'])}개 완료"
+                     + (f" · 실패 {len(done['failed'])}개" if done['failed'] else ''),
+                     level='error' if done['failed'] else 'info')
+            self.load_catalog();self.refresh_stack()
+            if 'models' in self.pages:self.refresh_models()
+        self.run_task('models.apply',work,finished)
+
     def refresh_health(self):
         def display(status):
             shown=lambda value:'ready' if value is True else 'stopped' if value is False else 'unknown'
@@ -344,23 +513,15 @@ class DesktopWindow:
 
     def repair(self):
         if self.services.chat.started or self.services.agent.opened:
-            self.log('Stop active sessions before Setup / Repair.');return
+            self.log('Stop active sessions before Setup / Repair.',level='error');return
         if not messagebox.askyesno('Setup / Repair','Run the existing installer in a separate console?\nReview its prompts before installing or migrating data.',parent=self.root):return
         self.run_task('setup.repair',self.services.setup.repair)
 
-    def change_model(self,operation):
-        name=self.install_tag.get().strip()
-        if not name:return
-        text=('Download '+name+' through the local Ollama server?' if operation=='install' else 'Remove model '+name+' using Ollama? Shared blobs are managed by Ollama.')
-        if not messagebox.askyesno('Model management',text,parent=self.root):return
-        fn=self.services.setup.install_model if operation=='install' else self.services.setup.remove_model
-        self.run_task('models.'+operation,lambda:fn(name),lambda _:self.refresh_models() if 'models' in self.pages else None)
-
-    def maintenance(self,key):
+    def maintenance(self,key,host='setup'):
         if self.services.chat.started or self.services.agent.opened:
-            self.log('Stop active sessions before maintenance.');return
-        try:p=self.presenter('setup')
-        except Exception as exc:self.log(str(exc));return
+            self.log('Stop active sessions before maintenance.',level='error');return
+        try:p=self.presenter(host)
+        except Exception as exc:self.log(str(exc),level='error');return
         self.run_task('setup.'+key,lambda:self.services.setup.maintenance(key,p))
 
     def request_close(self):
@@ -393,11 +554,11 @@ class DesktopWindow:
             self.runner.submit('shutdown',self.services.close,done,failed)
         elif not self.closing and self._polling:
             self._ticks+=1
-            if self._ticks%20==0:self.sync_theme()
+            if self._ticks%200==0:self.sync_theme()
             if self._ticks==1 or self._ticks%200==0:self.refresh_health()
             session=self.agent_session
             if session is not None and self._ticks%2==0:
-                self.runner.submit('agent.poll',session.poll_once,lambda _:None,lambda exc:self.log(str(exc)),mutate=False)
+                self.runner.submit('agent.poll',session.poll_once,lambda _:None,lambda exc:self.log(str(exc),level='error'),mutate=False)
         if not self.closed:self._timer=self.root.after(50,self._tick)
 
     def run(self):

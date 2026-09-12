@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 from .widgets import heading, note, text_box, PanelHost, ScrollArea, set_text
 from .specs import LABELS, DESCRIPTIONS
+from . import models_view
 
 
 def row(parent):
@@ -140,21 +141,7 @@ def projects(parent,w):
 
 
 def models(parent,w):
-    r=row(parent);button(r,'인덱스 갱신',w.refresh_models,kind='Manage')
-    button(r,'모델 설치 / 관리',lambda:w.navigate('setup'),kind='Manage')
-    w.model_summary=tk.StringVar(master=w.root,value=str(w.services.model_dir))
-    ttk.Label(parent,textvariable=w.model_summary,style='Muted.TLabel').pack(anchor='w',pady=8)
-    columns=('name','size','shared','exclusive','status')
-    wrapper=ttk.Frame(parent);wrapper.pack(fill='both',expand=True)
-    w.model_tree=ttk.Treeview(wrapper,columns=columns,show='headings',height=7)
-    for key,title,width in zip(columns,('Model','Size (GiB)','Shared','Exclusive','Files'),(350,90,90,90,150)):
-        w.model_tree.heading(key,text=title);w.model_tree.column(key,width=width,minwidth=70)
-    scroll=ttk.Scrollbar(wrapper,orient='vertical',command=w.model_tree.yview)
-    w.model_tree.configure(yscrollcommand=scroll.set)
-    scroll.pack(side='right',fill='y');w.model_tree.pack(fill='both',expand=True)
-    w.model_tree.bind('<<TreeviewSelect>>',lambda event:w.show_model_details())
-    w.model_details=text_box(parent,height=7)
-    set_text(w.model_details,'Select a model to inspect its manifest and blobs.\nUnreferenced files are observations, never permission to delete.')
+    models_view.build(parent,w)
 
 
 def network(parent,w):
@@ -204,15 +191,21 @@ def setup(parent,w):
     button(r,'상태 확인',w.refresh_health)
     note(parent,'설치기는 별도 콘솔에서 열리며 완료될 때까지 이 창이 추적합니다.\n'
          '관리형 세션을 먼저 종료하세요. 기존 설치·모델 경로를 유지합니다.')
-    ttk.Label(parent,text='Model management',style='Section.TLabel').pack(anchor='w',pady=(12,8))
-    r=row(parent);w.install_tag=tk.StringVar(master=w.root)
-    ttk.Entry(r,textvariable=w.install_tag,width=35).pack(side='left',padx=(0,10))
-    button(r,'모델 설치',lambda:w.change_model('install'),kind='Manage')
-    button(r,'모델 삭제',lambda:w.change_model('remove'),kind='Danger')
-    note(parent,'설치 다운로드는 Ollama 서버의 호스트 네트워크를 사용합니다. WARP/Tor 우회를 보장하지 않습니다. Block에서는 다운로드를 거부합니다.')
+    if 'models' in w.spec.pages:
+        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18);card.pack(fill='x',pady=(4,14))
+        ttk.Label(card,text='모델 설치와 삭제',style='Manage.Card.TLabel',
+                  font=('Segoe UI',12,'bold')).pack(anchor='w')
+        ttk.Label(card,text='모델은 "모델" 화면 한 곳에서 고르고, 지금 무엇이 선택되는지와 함께 봅니다.',
+                  style='Manage.CardMuted.TLabel',wraplength=700).pack(anchor='w',pady=(6,12))
+        ttk.Button(card,text='모델 화면 열기',style='Manage.TButton',
+                   command=lambda:w.navigate('models')).pack(anchor='w')
+    ttk.Label(parent,text='유지보수',style='Section.TLabel').pack(anchor='w',pady=(8,8))
     r=row(parent)
-    for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),('searxng_action','Search 관리'),('settings_action','기존 설정')]:
+    for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),
+                     ('searxng_action','Search 관리'),('settings_action','기존 설정'),
+                     ('ollama_action','Ollama 확인')]:
         button(r,text,lambda k=key:w.maintenance(k))
+    note(parent,'유지보수 작업은 기존 런처의 액션을 그대로 실행하고, 그 로그를 아래에 보여 줍니다.')
     w.hosts['setup']=PanelHost(parent)
 
 

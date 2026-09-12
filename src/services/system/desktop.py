@@ -2,6 +2,12 @@
 from core.network.policy import NetworkMode
 
 
+# The operations this shell is willing to hand to the retained launcher. The
+# backend maps each key onto a real module; a stub backend keeps the same keys.
+MAINTENANCE_OPERATIONS = ('docker_image', 'docker_clean',
+                          'searxng_action', 'settings_action', 'ollama_action')
+
+
 class SystemService:
     def __init__(self, backend):
         self.backend = backend
@@ -48,7 +54,7 @@ class SetupService:
 
     def maintenance(self, key, presenter):
         self.require_idle()
-        if key not in {'docker_image', 'docker_clean', 'settings_action', 'searxng_action'}:
+        if key not in MAINTENANCE_OPERATIONS:
             raise ValueError('unknown maintenance operation')
         self.network.owner.acquire()
         return self.backend.maintenance(key, presenter)

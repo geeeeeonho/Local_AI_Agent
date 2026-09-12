@@ -6,7 +6,7 @@ from core.network.policy import NetworkMode, resolve_mode
 class SettingsStore:
     def __init__(self, path: Path | None = None):
         if path is None:
-            from core.paths import USER_DATA_DIR
+            from project_paths import USER_DATA_DIR
             path = USER_DATA_DIR / 'settings' / 'localai.json'
         self.store = JsonStore(path)
 

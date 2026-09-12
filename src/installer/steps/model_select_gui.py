@@ -94,7 +94,7 @@ def select_models(entries, installed, lang: str = "ko",
     ko = str(lang).startswith("ko")
     T = _texts(ko)
     installed = set(installed or [])
-    wanted = _default_checked(entries, free_gb)
+    wanted = _default_checked(entries, budget_gb)
     cat_tags = {e.tag for e in entries}
     extra_installed = sorted(installed - cat_tags)
     size_of = {e.tag: float(getattr(e, "size_gb", 0.0)) for e in entries}
@@ -154,8 +154,22 @@ def select_models(entries, installed, lang: str = "ko",
     canvas.configure(yscrollcommand=sb.set)
     canvas.pack(side="left", fill="both", expand=True)
     sb.pack(side="right", fill="y")
-    canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(
-        int(-1 * (e.delta / 120)) if e.delta else 0, "units"))
+    def _wheel(event):
+        delta = getattr(event, "delta", 0)
+        if getattr(event, "num", None) == 4:
+            step = -3
+        elif getattr(event, "num", None) == 5:
+            step = 3
+        else:
+            step = int(-1 * (delta / 120)) if delta else 0
+        canvas.yview_scroll(step, "units")
+        return "break"
+
+    # bind_all would also steal the wheel from any other Tk window this process
+    # owns. Keep the handler on this dialog's own widgets.
+    for _target in (root, canvas, inner):
+        for _sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            _target.bind(_sequence, _wheel, add="+")
 
     def _group(title):
         g = tk.Frame(inner, bg=_BG)

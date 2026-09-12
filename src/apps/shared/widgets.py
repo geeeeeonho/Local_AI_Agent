@@ -42,10 +42,13 @@ class PanelHost:
     """Compatibility host for existing Presenter panels, inside one persistent view."""
     def __init__(self,parent):
         self.frame=themed(tk.Frame(parent), background='bg')
-        self.frame.pack(fill='both',expand=True,pady=(12,0))
         self._current=None
 
     def replace(self, builder):
+        # Claim layout space only once there is a panel to show; an empty host
+        # used to take half the page before a session or action existed.
+        if not self.frame.winfo_ismapped():
+            self.frame.pack(fill='both',expand=True,pady=(12,0))
         if self._current is not None:
             hook=getattr(self._current,'on_destroy',None)
             if callable(hook): hook()

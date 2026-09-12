@@ -93,8 +93,11 @@ class ThemeController:
         # The toplevel bindtag runs after existing per-widget handlers. Panels
         # created later (including the retained Agent) therefore inherit theme.
         root.bind('<Map>', self._mapped, add='+')
-        root.bind('<Enter>', self._mapped, add='+')
-        root.bind('<Leave>', self._mapped, add='+')
+        # Legacy hover handlers rewrite their own colors on the widget under the
+        # pointer. Restyle exactly that widget; walking its subtree on every
+        # mouse crossing made large panels and tables crawl.
+        root.bind('<Enter>', self._hovered, add='+')
+        root.bind('<Leave>', self._hovered, add='+')
         self.apply(name)
 
     @property
@@ -112,6 +115,13 @@ class ThemeController:
     def _mapped(self, event):
         if isinstance(event.widget, tk.Misc):
             self.refresh(event.widget)
+
+    def _hovered(self, event):
+        if isinstance(event.widget, tk.Misc):
+            try:
+                self._style_widget(event.widget)
+            except tk.TclError:
+                return
 
     def _style_widget(self, widget):
         if not widget.winfo_exists() or isinstance(widget, ttk.Widget):
@@ -183,10 +193,13 @@ class ThemeController:
         style.configure('TSeparator', background=p.border, bordercolor=p.border,
                         lightcolor=p.border, darkcolor=p.border)
         style.map('TSeparator', background=[('disabled', p.border), ('active', p.border)])
-        style.configure('TButton', background=p.surface, foreground=p.fg, padding=(14, 9), borderwidth=0)
-        style.map('TButton', background=[('disabled', p.surface), ('active', p.hover)],
+        style.configure('TButton', background=p.surface, foreground=p.fg, padding=(14, 9),
+                        borderwidth=0, focuscolor=p.chat)
+        style.map('TButton', background=[('disabled', p.surface), ('active', p.hover), ('focus', p.hover)],
                   foreground=[('disabled', p.muted)])
-        style.configure('Nav.TButton', anchor='w', background=p.sidebar, padding=(16, 10))
+        style.configure('Nav.TButton', anchor='w', background=p.sidebar, padding=(16, 10),
+                        focuscolor=p.chat)
+        style.map('Nav.TButton', background=[('focus', p.hover), ('active', p.hover)])
         style.configure('Selected.Nav.TButton', background=p.selected)
         for kind in ('Chat', 'Agent', 'Manage'):
             role = kind.lower()
@@ -229,6 +242,19 @@ class ThemeController:
         style.map('TCombobox', fieldbackground=[('readonly', p.input)], foreground=[('readonly', p.fg)])
         style.configure('TRadiobutton', background=p.bg, foreground=p.fg, padding=8)
         style.map('TRadiobutton', background=[('active', p.hover)], foreground=[('disabled', p.muted)])
+        # Selection lists use checkbuttons; without these they kept clam's pale
+        # beige indicator and an unreadable label on the dark surface.
+        for name, ground in (('TCheckbutton', p.bg), ('Card.TCheckbutton', p.manage_soft)):
+            style.configure(name, background=ground, foreground=p.fg,
+                            indicatorcolor=p.input, indicatorbackground=p.input,
+                            focuscolor=p.chat, padding=4)
+            style.map(name,
+                      background=[('active', ground)],
+                      foreground=[('disabled', p.muted)],
+                      indicatorcolor=[('selected', p.chat), ('pressed', p.hover)],
+                      indicatorbackground=[('selected', p.chat), ('active', p.hover)])
+        # Failures need to be legible as failures, not one more muted line.
+        style.configure('Alert.TLabel', foreground=p.danger)
         style.configure('TNotebook', background=p.bg, borderwidth=0)
         style.configure('TNotebook.Tab', background=p.surface, foreground=p.muted, padding=(17, 10))
         style.map('TNotebook.Tab', background=[('selected', p.chat_soft), ('active', p.hover)],

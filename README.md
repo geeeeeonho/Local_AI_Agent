@@ -2,10 +2,14 @@
 
 Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한 자기완결형 프로젝트입니다.
 
-사용자 관점에서 프로젝트 루트에서 알아야 할 진입점은 두 개입니다.
+사용자 관점에서 프로젝트 루트에서 알아야 할 진입점은 다음과 같습니다.
 
-- `SETUP.bat` — 최초 설치 + 이후 환경/모델 관리
-- `RUN.bat` — 프로그램 실행(GUI/TUI)
+- `SETUP.bat` — 최초 설치 + 이후 환경 복구
+- `RUN.bat` — 통합 실행 (LocalAI Studio)
+- `CHAT.bat` / `INTERPRETER.bat` / `STUDIO.bat` — 같은 창의 단독 실행 형태
+
+네 진입점 모두 하나의 데스크톱 셸과 하나의 서비스 구성을 공유합니다.
+화면 구성과 경계는 [STUDIO.md](STUDIO.md) 에 정리되어 있습니다.
 
 사용자 설정·로그·세션 같은 영속 데이터는 루트의 `user_data/`에 유지되고, 프로그램 소스와 개발용 파일은 `src/` 아래에 모여 있습니다.
 대용량 Ollama 모델은 프로젝트와 분리된 공용 저장소 `C:\LLM_Models`에 저장됩니다.
@@ -39,14 +43,29 @@ SETUP.bat --manage
 RUN.bat
 ```
 
-기본은 GUI입니다.
+기본은 통합 GUI(LocalAI Studio)입니다. 필요한 화면만 열려면:
 
 ```bat
-RUN.bat --gui
+CHAT.bat            :: 대화 · 문서 · RAG (AnythingLLM)
+INTERPRETER.bat     :: 코딩 · 자동화 에이전트 (Open Interpreter)
+STUDIO.bat          :: 전체 화면
+RUN.bat --app chat  :: 위와 동일
+```
+
+기존 터미널 런처는 그대로 남아 있습니다.
+
+```bat
 RUN.bat --tui
 ```
 
-GUI를 사용할 수 없는 환경에서는 런처가 TUI로 폴백할 수 있습니다.
+설치 플래그는 어느 런처에 주더라도 설치기로 연결됩니다.
+
+```bat
+SETUP.bat --install
+SETUP.bat --manage
+RUN.bat --install     :: SETUP.bat --install 과 같습니다
+```
+
 기존 `RUN_TUI.bat`은 제거되었으며 `RUN.bat --tui`로 통합되었습니다.
 
 ## 현재 디렉터리 구조
@@ -59,12 +78,20 @@ Local_AI_Agent/
 ├─ .github/                 GitHub Actions
 ├─ .gitignore
 ├─ README.md                현재 사용법
-├─ SETUP.bat                설치 + 관리 통합 진입점
-├─ RUN.bat                  GUI + TUI 통합 실행 진입점
+├─ SETUP.bat                설치 + 복구 진입점
+├─ RUN.bat                  통합 실행 진입점 (GUI + TUI)
+├─ STUDIO.bat               ┐
+├─ CHAT.bat                 ├ 같은 셸의 단독 실행 형태
+├─ INTERPRETER.bat          ┘
+├─ STUDIO.md                데스크톱 셸 사용법과 경계
 │
 ├─ src/
-│  ├─ project_paths.py      프로젝트/공용 모델 경로 정본
+│  ├─ project_paths.py      프로젝트/런타임/공용 모델 경로 정본 (유일)
 │  ├─ runtime_versions.py   외부 런타임 버전 정본 (Open Interpreter 등)
+│  ├─ apps/                 네 진입점과 공용 데스크톱 화면
+│  ├─ core/                 UI 비의존 계약 (이벤트·설정·네트워크 정책)
+│  ├─ services/             앱이 쓰는 단일 서비스 경계
+│  ├─ integrations/         기존 런처 구현으로 가는 전환 어댑터
 │  ├─ launcher/             런처 / 서비스 / Agent runtime
 │  ├─ installer/            설치 / 관리 구현
 │  ├─ tools/                개발·평가 도구
@@ -73,6 +100,9 @@ Local_AI_Agent/
 │
 └─ user_data/               사용자 영속 데이터
 ```
+
+계층은 `apps → services → integrations` 이고, `core` 는 UI에 의존하지 않는
+계약만 담습니다. 모든 경로는 `src/project_paths.py` 한 곳에서만 정해집니다.
 
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
 설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
@@ -387,8 +417,8 @@ C:\LLM_Models\
 
 `src/launcher/models/model_files.py` 가 manifest 를 읽어 대응을 복원하고
 **`C:\LLM_Models\MODEL_FILES.csv`** 로 저장합니다(저장소에 쓸 수 없으면
-`user_data/models/` 로). 모델 설치·삭제 후 자동으로 갱신되고, `RUN.bat` →
-**[모델 정보]** 에서도 다시 씁니다.
+`user_data/models/` 로). 모델 설치·삭제 후 자동으로 갱신되고, **모델 → 디스크 사용량**
+화면의 [인덱스 갱신] 으로도 다시 씁니다.
 
 | 열 | 뜻 |
 | --- | --- |
@@ -421,7 +451,9 @@ PowerShell 예시:
 
 ```powershell
 $env:PYTHONPATH = "$PWD\src"
-python -m launcher --tui
+python -m apps.studio          # 통합 GUI
+python -m apps.chat            # 단독 실행 형태
+python -m launcher --tui       # 기존 터미널 런처
 python -m installer --manage
 ```
 
@@ -461,8 +493,8 @@ URL인지**까지 확인하므로, 검색을 한 번 호출하고 나머지를 �
 ## 로그
 
 Agent 세션마다 `user_data/logs/agent_trace_*.jsonl` 이 하나 생성됩니다.
-설정 메뉴 **[8] → [5] 로그 기록**을 끄면 프롬프트·모델 출력·명령·도구 인자 같은
-세부 입출력이 기록되지 않습니다(수명주기와 실패 원인은 계속 남습니다).
+**Setup / Repair → 유지보수 → [기존 설정]** 의 로그 기록을 끄면 프롬프트·모델 출력·
+명령·도구 인자 같은 세부 입출력이 기록되지 않습니다(수명주기와 실패 원인은 계속 남습니다).
 비밀값은 항상 마스킹되며, 오래된 트레이스 파일은 자동으로 정리됩니다.
 
 ## 데이터 보존

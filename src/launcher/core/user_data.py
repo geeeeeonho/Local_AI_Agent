@@ -4,7 +4,7 @@
 The repository-root ``user_data/`` directory remains the single product-owned
 location for settings, logs, chat data, and interpreter runtime state. Open
 Interpreter thread IDs are the Agent session source of truth; this module does
-not create or scan product-owned ``session_*.json`` files.
+not create or scan any product-owned per-session state file.
 """
 from __future__ import annotations
 
@@ -84,8 +84,8 @@ _README = (
     "  interpreter/host/    Open Interpreter host runtime state/assets\n"
     "\n"
     "Agent session identity and resume are owned by Open Interpreter thread IDs.\n"
-    "Legacy session_*.json files, if present from older versions, are not\n"
-    "treated as active sessions and are not deleted automatically.\n"
+    "Per-session JSON files left by older versions are not treated as active\n"
+    "sessions and are not deleted automatically.\n"
 )
 
 

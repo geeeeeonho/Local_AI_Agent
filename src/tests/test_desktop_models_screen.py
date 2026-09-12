@@ -1,0 +1,212 @@
+"""One model screen: the current stack, the selection, and what is on disk.
+
+The retained launcher split this across "installed model info" and "model
+management", and the first desktop replaced the second with a free-text tag
+entry. These tests hold the merged screen to the selection contract the
+installer dialog already used: checked means the model should exist.
+"""
+import gc
+import json
+import time
+
+import pytest
+
+from test_desktop_services import make
+
+
+def pump(window, predicate=lambda: True, timeout=6):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        window.root.update()
+        if predicate():
+            return
+        time.sleep(.01)
+    raise AssertionError('UI condition did not settle')
+
+
+def store_model(services, name='demo', digest='a' * 64, payload=b'weights'):
+    blobs = services.model_dir / 'blobs'
+    blobs.mkdir(parents=True, exist_ok=True)
+    (blobs / ('sha256-' + digest)).write_bytes(payload)
+    folder = services.model_dir / 'manifests' / 'registry.ollama.ai' / 'library' / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'latest').write_text(json.dumps({'layers': [
+        {'digest': 'sha256:' + digest, 'size': len(payload),
+         'mediaType': 'application/vnd.ollama.image.model'}]}))
+    return name + ':latest'
+
+
+@pytest.fixture
+def ui(tmp_path):
+    gc.collect()
+    import tkinter as tk
+    from apps.shared.window import DesktopWindow
+    services, backend = make(tmp_path)
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip('Real Tk requires DISPLAY; run with Xvfb on Linux')
+    window = DesktopWindow('studio', services, root=root, start_polling=False)
+    yield window, services, backend
+    window.runner.shutdown()
+    window._unsubscribe()
+    services.close()
+    try:
+        root.after_cancel(window._timer)
+    except tk.TclError:
+        pass
+    try:
+        root.destroy()
+    except tk.TclError:
+        pass
+
+
+def open_models(window):
+    window.navigate('models')
+    pump(window, lambda: window._catalog is not None and bool(window.stack_tree.get_children()))
+
+
+# ── selection ────────────────────────────────────────────────────────────
+def test_opening_models_offers_the_catalogue_with_the_budget_set_checked(ui):
+    w, svc, _ = ui
+    open_models(w)
+    assert len(w.choice_vars) >= 10
+    checked = {tag for tag, var in w.choice_vars.items() if var.get()}
+    assert checked == set(w._catalog['recommended'])
+    assert '설치 예정' in w.choice_summary.get()
+
+
+def test_an_installed_model_stays_checked_so_it_is_not_silently_removed(ui):
+    w, svc, _ = ui
+    tag = store_model(svc)
+    open_models(w)
+    assert tag in w.choice_vars and w.choice_vars[tag].get()
+    assert w.services.models.plan_changes(w.selected_tags(),
+                                          installed=w.catalog_installed())['remove'] == []
+
+
+def test_clearing_the_selection_plans_removal_of_what_is_installed(ui):
+    w, svc, _ = ui
+    tag = store_model(svc)
+    open_models(w)
+    w.set_selection('none')
+    assert not any(var.get() for var in w.choice_vars.values())
+    plan = w.services.models.plan_changes(w.selected_tags(), installed=w.catalog_installed())
+    assert plan['install'] == [] and plan['remove'] == [tag]
+    assert '삭제 예정 1개' in w.choice_summary.get()
+
+
+def test_recommended_restores_the_budget_set_without_dropping_installed(ui):
+    w, svc, _ = ui
+    tag = store_model(svc)
+    open_models(w)
+    w.set_selection('none')
+    w.set_selection('recommended')
+    checked = {name for name, var in w.choice_vars.items() if var.get()}
+    assert tag in checked
+    assert set(w._catalog['recommended']) <= checked
+
+
+def test_apply_pulls_and_removes_through_the_guarded_setup_service(ui, monkeypatch):
+    w, svc, backend = ui
+    tag = store_model(svc)
+    open_models(w)
+    w.set_selection('none')
+    wanted = sorted(w.choice_vars)[0]
+    w.choice_vars[wanted].set(True)
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: True)
+    w.apply_selection()
+    pump(w, lambda: ('pull', wanted) in backend.calls and ('remove', tag) in backend.calls)
+    # Removal runs first so a disk-full store is not asked to hold both copies.
+    assert backend.calls.index(('remove', tag)) < backend.calls.index(('pull', wanted))
+
+
+def test_apply_asks_before_touching_anything_and_honours_a_refusal(ui, monkeypatch):
+    w, svc, backend = ui
+    store_model(svc)
+    open_models(w)
+    w.set_selection('none')
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: False)
+    w.apply_selection()
+    pump(w, lambda: not w.runner.busy(), timeout=1)
+    assert not any(call[0] in ('pull', 'remove') for call in backend.calls)
+
+
+def test_no_change_needs_no_confirmation_and_no_work(ui, monkeypatch):
+    w, svc, backend = ui
+    open_models(w)
+    w.set_selection('none')
+    pump(w, lambda: True, timeout=.2)
+    asked = []
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno',
+                        lambda *a, **k: asked.append(1) or True)
+    w.apply_selection()
+    assert not asked and not any(call[0] in ('pull', 'remove') for call in backend.calls)
+
+
+# ── current stack ────────────────────────────────────────────────────────
+def test_the_stack_names_the_model_each_role_would_load_now(ui):
+    w, _, _ = ui
+    open_models(w)
+    rows = [w.stack_tree.item(iid)['values'] for iid in w.stack_tree.get_children()]
+    assert rows, 'no roles were reported'
+    for label, model, need, on_disk in rows:
+        assert label and model
+        assert need.endswith('GB')
+        assert on_disk in ('있음', '없음')
+
+
+def test_the_requirement_shown_belongs_to_the_chosen_rung(ui):
+    w, _, _ = ui
+    open_models(w)
+    stack = w.services.models.current_stack(free_gb=15.1)
+    for role in stack['roles']:
+        rung = next((r for r in role['ladder'] if r['tag'] == role['chosen']), None)
+        if rung is not None:
+            assert role['need_gb'] == rung['need_gb']
+
+
+def test_selecting_a_role_shows_its_whole_ladder_with_disk_state(ui):
+    w, _, _ = ui
+    open_models(w)
+    first = w.stack_tree.get_children()[0]
+    w.stack_tree.selection_set(first)
+    pump(w, lambda: '사다리' in w.stack_detail.get('1.0', 'end'))
+    text = w.stack_detail.get('1.0', 'end')
+    role = w._stack_rows[first]
+    for rung in role['ladder']:
+        assert rung['tag'] in text
+
+
+def test_a_stopped_ollama_still_reports_the_stack_and_the_catalogue(ui):
+    w, svc, backend = ui
+    def refuse():
+        raise RuntimeError('Ollama is not running')
+    backend.inference.ensure_running = refuse
+    open_models(w)
+    assert w._catalog is not None
+    assert w.stack_tree.get_children()
+
+
+# ── disk view ────────────────────────────────────────────────────────────
+def test_the_disk_tab_keeps_the_canonical_index_view(ui):
+    w, svc, _ = ui
+    tag = store_model(svc)
+    w.refresh_models()
+    pump(w, lambda: bool(w.model_tree.get_children()))
+    assert w.model_tree.item(w.model_tree.get_children()[0])['values'][0] == tag
+    assert (svc.model_dir / 'MODEL_INDEX.json').exists()
+
+
+def test_ollama_check_runs_the_retained_action_in_the_model_screen(ui):
+    w, _, backend = ui
+    open_models(w)
+    w.ensure_ollama()
+    pump(w, lambda: ('maintenance', 'ollama_action') in backend.calls)
+    assert w.presenters['models']._window.host is w.hosts['models']
+
+
+def test_setup_no_longer_asks_the_user_to_type_a_model_tag(ui):
+    w, _, _ = ui
+    assert not hasattr(w, 'install_tag')
+    assert not hasattr(w, 'change_model')

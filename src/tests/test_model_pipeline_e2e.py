@@ -112,6 +112,23 @@ class ModelPipelineTests(unittest.TestCase):
         self.addCleanup(setattr, installer_model.subprocess, "run", real_run)
         installer_model.subprocess.run = self.ollama.run
 
+        # The selection dialog is a real modal window. Stand in for "the user
+        # opened it and accepted the pre-checked plan" so this pipeline test
+        # never depends on a display and never blocks in mainloop().
+        from installer.steps import model_select_gui
+        real_select = model_select_gui.select_models
+        self.addCleanup(setattr, model_select_gui, "select_models", real_select)
+        self.selected = None
+        model_select_gui.select_models = self._select
+        self.select_calls = []
+
+    def _select(self, entries, installed, lang="ko", budget_gb=None):
+        self.select_calls.append((len(entries), set(installed), budget_gb))
+        if self.selected is not None:
+            return self.selected
+        return set(installed) | catalog.recommended_for(
+            catalog.MEMORY_BUDGET_GB if budget_gb is None else budget_gb)
+
     # ── 설치 ────────────────────────────────────────────────────
     def _install(self):
         from installer.steps import model as installer_model

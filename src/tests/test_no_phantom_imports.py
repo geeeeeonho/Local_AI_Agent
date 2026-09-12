@@ -18,7 +18,8 @@ import unittest
 from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
-FIRST_PARTY_ROOTS = {"launcher", "installer", "tools", "tests"}
+FIRST_PARTY_ROOTS = {"launcher", "installer", "tools", "tests",
+                     "apps", "core", "services", "integrations"}
 
 
 def _module_index():
@@ -127,3 +128,75 @@ class WindowCleanupHookTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DynamicLegacyReferenceTests(unittest.TestCase):
+    """Names the transition adapter loads by string must exist for real.
+
+    The adapter reaches the retained launcher through ``importlib`` and plain
+    attribute access, so neither compileall nor the AST check above can see the
+    reference. Unit tests stub those modules, which is exactly how a renamed or
+    missing constant survived to the desktop: ``launcher.config.MODEL_CONTEXT``
+    and ``launcher.actions.searxng_action`` never existed outside the stubs.
+    """
+
+    def test_maintenance_keys_resolve_to_real_action_modules(self):
+        import importlib
+        from integrations.legacy.desktop import LegacyBackend
+        from services.system.desktop import MAINTENANCE_OPERATIONS
+
+        self.assertEqual(sorted(MAINTENANCE_OPERATIONS),
+                         sorted(LegacyBackend.MAINTENANCE_MODULES))
+        for key, name in LegacyBackend.MAINTENANCE_MODULES.items():
+            module = importlib.import_module("launcher.actions." + name)
+            self.assertTrue(callable(getattr(module, "run", None)),
+                            "%s -> launcher.actions.%s has no run()" % (key, name))
+
+    def test_adapter_only_reads_attributes_the_real_modules_expose(self):
+        import importlib
+
+        required = {
+            "launcher.config": (
+                "OLLAMA_PORT", "MODEL_TAG", "SANDBOX_CONTAINER_PREFIX",
+                "SEARXNG_IMAGE", "SEARXNG_CONTAINER", "SEARXNG_HOST_PORT",
+                "SEARXNG_CONTAINER_PORT", "LLM_NETWORK",
+            ),
+            "launcher.network_policy": (
+                "current_mode", "set_mode", "ensure_block_network",
+                "container_proxy_env",
+            ),
+            "launcher.services.docker": ("DockerService",),
+            "launcher.services.ollama": ("OllamaService",),
+            "launcher.anythingllm_runtime": (
+                "is_running", "image_exists", "start", "URL", "CONTAINER",
+            ),
+            "launcher.warp_runtime": ("image_exists", "start"),
+            "launcher.tor_runtime": ("image_exists", "start"),
+            "launcher.presenter.base": ("RISK_HIGH",),
+            "launcher.presenter.gui": ("TkPresenter",),
+            "launcher.presenter.gui.chat_panel": ("ChatPanel",),
+            "launcher.agent.runtime_coordinator": ("prepare_runtime", "RuntimeCoordinator"),
+            "launcher.agent.runtime_config": ("resolve_resource_limits", "build_cmd_for_mode"),
+            "launcher.agent.chat_session_controller": ("ChatSessionController",),
+            "launcher.actions.agent_chat": (
+                "_ensure_gui", "_select_setup", "_match_installed_model",
+                "_approval_description", "_open_folder",
+            ),
+        }
+        missing = []
+        for name, attributes in required.items():
+            module = importlib.import_module(name)
+            missing.extend("%s.%s" % (name, a) for a in attributes
+                           if not hasattr(module, a))
+        self.assertEqual(missing, [], "adapter reads names that do not exist:\n  "
+                                      + "\n  ".join(missing))
+
+    def test_chat_token_limit_comes_from_a_constant_that_exists(self):
+        import importlib
+        from integrations.legacy.desktop import LegacyBackend
+
+        backend = LegacyBackend.__new__(LegacyBackend)
+        backend.load = importlib.import_module
+        resolved = backend._chat_context(importlib.import_module("launcher.config"))
+        self.assertIsInstance(resolved, int)
+        self.assertGreater(resolved, 0)

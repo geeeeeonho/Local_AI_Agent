@@ -17,7 +17,10 @@ not a complete translation of the new shell.
 `RUN.bat --tui` retains the legacy terminal launcher. `SETUP.bat --install`
 (and the existing `--skip-model`, `--skip-sandbox`, `--skip-build`, `--skip-search`
 flags) runs the retained installer explicitly. `SETUP.bat --manage` opens the
-retained maintenance interface. The old Python modules remain compatibility
+retained maintenance interface. Those installation flags select Setup from any
+launcher, so `RUN.bat --install` does the same thing as `SETUP.bat --install`;
+naming a different application alongside them (`--app chat --install`) is still
+rejected rather than guessed. The old Python modules remain compatibility
 entrypoints, not copies of a new backend. Launching Studio on an uninstalled PC
 opens the shell and Setup guidance, rather than silently downloading programs.
 
@@ -34,6 +37,12 @@ without overwriting the original file. Failed saves retain the previous theme.
 The shell, its raw Tk text areas and recognized retained Agent/Presenter colors
 are themed, including warning/error tags. AnythingLLM in the browser and native
 OS dialogs keep their own appearance settings; the shell does not modify them.
+
+Focus is visible on navigation, buttons and selection checkboxes in both
+themes, so the shell stays usable from the keyboard. Failures are shown in the
+semantic danger color on the status line and in the activity log rather than as
+one more muted line. The window's minimum size fits a 1366x768 laptop, and a
+panel host claims layout space only once it has a panel to show.
 
 Chat and Agent lead the sidebar with larger typography and one restrained
 blue-gray accent in both themes. Home gives them the two principal action cards.
@@ -75,12 +84,35 @@ output, file sidebar, model controls, stop/restart and approvals use the retaine
 Agent panel. A Project folder is only a dialog default: it never grants Host or
 Sandbox access automatically. Host Block remains rejected.
 
-Models shows the canonical MODEL_INDEX.json observation: manifest/blob links,
-shared/exclusive bytes and missing/mismatched files. Setup is the explicit entry
-for pull/remove and repair. An orphan observation is never permission for this
-shell to delete blobs. Model downloads use the local Ollama server's own network;
-WARP/Tor routing is not promised for these management downloads. Saved Setup Block
-intent or a currently pinned Block mode rejects the model download action.
+Models is one screen with three tabs, replacing the retained launcher's split
+between "installed model info" and "model management" and the first desktop's
+free-text tag field.
+
+*Current stack* names the model each role would load right now, its memory
+requirement and whether it is on disk. The choice comes from the retained ladder
+resolver; this view reports it rather than adding a second selection policy.
+Selecting a role shows that role's whole ladder with per-rung disk state, so a
+role falling back to a lighter model is visible instead of surprising.
+
+*Choose models* is the catalogue selection, on the same contract as the
+installer dialog: checked means the model should exist, so checking installs and
+unchecking an installed model removes it. The memory budget's three levels are
+pre-checked and the plan behind that choice is spelled out; installed models the
+catalogue does not know about are listed too, so removing one is deliberate.
+Applying states the downloads and deletions and asks before doing either;
+removals run before downloads so a full store is never asked to hold both.
+
+*Disk usage* keeps the canonical MODEL_INDEX.json observation: manifest/blob
+links, shared/exclusive bytes and missing/mismatched files. An orphan observation
+is never permission for this shell to delete blobs.
+
+Both the screen's install state and its stack view read the on-disk index, so
+they stay truthful while Ollama is stopped; "Ollama start / check" runs the
+retained service action and shows its log in place. Model downloads use the
+local Ollama server's own network; WARP/Tor routing is not promised for these
+management downloads. Saved Setup Block intent or a currently pinned Block mode
+rejects the model download action. Setup keeps installation, repair and the
+retained maintenance actions.
 
 ## Ownership, policy and shutdown
 
@@ -114,8 +146,10 @@ Ollama and proxy runtimes are not indiscriminately killed on every window close.
 
 ## Paths and scope
 
-Existing `project_paths` remains authoritative for the desktop: project-local
-`llm_environment`, existing `user_data`, and `C:\LLM_Models` (or `LLM_MODEL_DIR`).
+`src/project_paths.py` is the single assignment source for every path the
+product uses - project-local `llm_environment`, existing `user_data`,
+`C:\LLM_Models` (or `LLM_MODEL_DIR`) and `C:\Ollama` (or `LLM_OLLAMA_DIR`).
+Core reads it rather than defining a second copy.
 The shell does not silently enable the separately staged official Ollama
 installer, move models to `C:\Ollama\models`, relocate user data, or rebuild
 AnythingLLM/OI data. That earlier unpublished migration proposal is not shipped
@@ -148,3 +182,16 @@ the full repository. Local related tests and source compilation do not replace
 native Windows, official Ollama, Docker, SearXNG-image or end-to-end OI acceptance.
 Record CI runner failures separately from code-test failures; no executed steps
 is not a pass. Do not change branch protection or force-push to bypass checks.
+
+## Transition adapter contract
+
+The desktop reaches the retained launcher through `importlib` and attribute
+access, which neither `compileall` nor an AST import check can see, and which
+unit-test stubs can satisfy with names that do not exist. Two constants shipped
+that way: `launcher.config.MODEL_CONTEXT`, which never existed and made every
+Chat start raise, and `launcher.actions.searxng_action`, a package attribute
+rather than a submodule, which made two maintenance buttons raise.
+
+`src/tests/test_no_phantom_imports.py` now checks the dynamic references against
+the real modules, so a rename on either side fails a test instead of a button.
+Stubs in other tests mirror real constant names for the same reason.
