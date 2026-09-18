@@ -9,6 +9,7 @@ class Backend:
     def __init__(self, root):
         self.root = root
         self.calls = []
+        self.health_calls = []
         self.ready = True
         self.images = True
         self.mode = 'warp'
@@ -18,7 +19,10 @@ class Backend:
         self.inference.model_dir.mkdir(exist_ok=True)
     def pull(self, name, progress=None): self.calls.append(('pull', name))
     def remove(self, name): self.calls.append(('remove', name))
-    def health(self): return {'ollama': True, 'docker': False, 'chat': False, 'search': False}
+    def health(self, max_age=None):
+        # Kept out of `calls`, which records side effects; health has none.
+        self.health_calls.append(max_age)
+        return {'ollama': True, 'docker': False, 'chat': False, 'search': False}
     def prepare_network(self, mode, log):
         self.calls.append(('prepare', mode)); self.mode = mode; return self.ready
     def current_mode(self): return self.mode

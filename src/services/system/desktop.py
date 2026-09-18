@@ -12,8 +12,9 @@ class SystemService:
     def __init__(self, backend):
         self.backend = backend
 
-    def health(self):
-        return self.backend.health()
+    def health(self, *, fresh=False):
+        """Service status. ``fresh`` forces a new probe instead of a recent one."""
+        return self.backend.health(max_age=0) if fresh else self.backend.health()
 
     def create_presenter(self, window):
         return self.backend.create_presenter(window)

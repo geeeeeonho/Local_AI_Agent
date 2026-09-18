@@ -471,20 +471,32 @@ def _lightest(lad, installed=None):
     return min(lad, key=lambda x: x[1])[0]
 
 
-def resolve_ladder(role_name: str, free_gb: Optional[float] = None):
+# installed=None 은 "조회 실패", 빈 집합은 "정말 아무것도 없음" 이다.
+# 둘을 구분해야 하므로 "직접 물어보라" 는 기본값에 별도 표식을 쓴다.
+_ASK_SERVER = object()
+
+
+def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
+                   installed=_ASK_SERVER):
     """여유 메모리에 맞는 최상위 후보 1차 선택. 사다리 없으면 None.
 
     [LADDER_FALLBACK_v1] 설치된 모델을 우선한다. 없는 모델을 골라 놓고
     뒤늦게 auto_match_installed 가 수습하면 엉뚱한 곳으로 떨어진다.
     설치 목록 조회에 실패하면 기존 동작(설치 무시)으로 안전 폴백한다.
+
+    installed 를 넘기면 /api/tags 를 묻지 않는다. 역할마다 한 번씩 물어
+    화면 한 장에 같은 요청을 다섯 번 보내던 것을 없애고, 무엇보다 이미
+    저장소를 읽어 답을 아는 호출자가 서버가 꺼졌다는 이유로 '아무것도
+    설치되지 않음' 이라는 다른 답을 받는 일을 막는다.
     """
     lad = LADDERS.get(role_name)
     if not lad:
         return None
-    try:
-        installed = installed_models()
-    except Exception:
-        installed = None
+    if installed is _ASK_SERVER:
+        try:
+            installed = installed_models()
+        except Exception:
+            installed = None
     free = free_gb if free_gb is not None else detect_free_memory_gb()
     if free is None:
         return _lightest(lad, installed)

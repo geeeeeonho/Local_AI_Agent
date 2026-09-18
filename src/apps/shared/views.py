@@ -149,7 +149,7 @@ def network(parent,w):
          'Block = 공용 웹 egress 차단, 검색 비활성, Host Block 거부\n\n'
          '이 버전은 동일 프로젝트의 한 창이 관리형 실행을 소유합니다. 다른 창은 조회할 수 있으며, '
          '소유 창의 세션을 종료한 뒤 변경할 수 있습니다.')
-    r=row(parent);button(r,'상태 확인',w.refresh_health)
+    r=row(parent);button(r,'상태 확인',lambda:w.refresh_health(fresh=True))
     button(r,'정책 설정',lambda:w.navigate('settings'))
     button(r,'세션 종료 / 잠금 해제',w.stop_sessions)
     w.network_text=text_box(parent)
@@ -157,7 +157,7 @@ def network(parent,w):
 
 
 def system(parent,w):
-    r=row(parent);button(r,'상태 새로고침',w.refresh_health,True)
+    r=row(parent);button(r,'상태 새로고침',lambda:w.refresh_health(fresh=True),True)
     button(r,'모델 설치 / 관리',lambda:w.navigate('setup'),kind='Manage')
     w.system_text=text_box(parent)
     set_text(w.system_text,'Environment: '+str(w.services.env)+'\nModels: '+str(w.services.model_dir)+'\nUser data: '+str(w.services.data))
@@ -188,7 +188,7 @@ def settings(parent,w):
 
 def setup(parent,w):
     r=row(parent);button(r,'설치 / 복구 시작',w.repair,kind='Manage')
-    button(r,'상태 확인',w.refresh_health)
+    button(r,'상태 확인',lambda:w.refresh_health(fresh=True))
     note(parent,'설치기는 별도 콘솔에서 열리며 완료될 때까지 이 창이 추적합니다.\n'
          '관리형 세션을 먼저 종료하세요. 기존 설치·모델 경로를 유지합니다.')
     if 'models' in w.spec.pages:

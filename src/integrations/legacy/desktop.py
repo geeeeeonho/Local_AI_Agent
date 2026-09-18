@@ -10,6 +10,7 @@ import os
 import secrets
 import subprocess
 import sys
+import time
 from core.network.policy import NetworkMode, NetworkPolicy
 from integrations.ollama.client import OllamaClient
 from core.urls import local_url
@@ -38,11 +39,31 @@ class LegacyBackend:
         self._chat_owned_id = None
         self._chat_probe_failed = False
         self._search_runtime = None
+        self._health = None          # (monotonic, result)
 
     def current_mode(self):
         return self.load('launcher.network_policy').current_mode().value
 
-    def health(self):
+    # A status line is not worth a process storm. Each health pass shells out to
+    # Docker three times and, on Windows, runs PowerShell twice to identify the
+    # port's owner; the desktop polls it on a timer. Answers this coarse do not
+    # change within a few seconds, so a repeat inside the window reuses the last
+    # one. Anything that acts on the result - ensure_running before a real
+    # operation, or the user pressing refresh - asks for a fresh pass.
+    HEALTH_MAX_AGE = 30.0
+
+    def health(self, max_age=None):
+        max_age = self.HEALTH_MAX_AGE if max_age is None else max_age
+        cached = self._health
+        if cached is not None and max_age > 0:
+            age = time.monotonic() - cached[0]
+            if 0 <= age < max_age:
+                return dict(cached[1])
+        result = self._probe_health()
+        self._health = (time.monotonic(), dict(result))
+        return result
+
+    def _probe_health(self):
         # None is unknown/error, not a falsely reported stopped or ready service.
         checks = {
             'ollama': lambda: self.load('launcher.services.ollama').OllamaService(

@@ -136,10 +136,6 @@ def executable_names() -> tuple:
     return ('ollama.exe', 'ollama') if os.name == 'nt' else ('ollama', 'ollama.exe')
 
 
-def executable_name() -> str:
-    return executable_names()[0]
-
-
 # Ollama's Windows installer is Inno Setup, so /DIR= chooses where the binaries
 # land and the silent switches make it scriptable. Installing into Program Files
 # is deliberately not attempted: it produces a mix of per-machine files and

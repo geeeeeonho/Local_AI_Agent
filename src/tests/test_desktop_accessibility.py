@@ -151,3 +151,27 @@ def test_the_theme_file_is_not_reread_on_every_frame(ui):
         if w._ticks % 200 == 0:
             w.sync_theme()
     assert not reads
+
+
+def test_the_status_button_actually_asks_for_a_fresh_answer(ui):
+    """The poll reuses a recent answer; pressing refresh must not."""
+    import time
+    w, _, backend = ui
+    w.refresh_health(fresh=True)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and 0 not in backend.health_calls:
+        w.root.update()
+        time.sleep(.01)
+    assert 0 in backend.health_calls
+
+
+def test_the_idle_poll_does_not_demand_a_fresh_answer(ui):
+    import time
+    w, _, backend = ui
+    w.refresh_health()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and None not in backend.health_calls:
+        w.root.update()
+        time.sleep(.01)
+    assert None in backend.health_calls
+    assert 0 not in backend.health_calls

@@ -67,10 +67,12 @@ class OllamaService:
     @staticmethod
     def is_running() -> bool:
         try:
-            urllib.request.urlopen(
+            # Close it: this runs on the status poll, and a discarded response
+            # holds its socket open until the garbage collector gets to it.
+            with urllib.request.urlopen(
                 config.OLLAMA_API_TAGS, timeout=config.OLLAMA_PROBE_TIMEOUT,
-            )
-            return True
+            ):
+                return True
         except (urllib.error.URLError, OSError):
             return False
 
@@ -176,8 +178,11 @@ class OllamaService:
         if not served:
             return True
         try:
+            # Manifests only. build_index also stats every blob, which answers a
+            # question nobody asked here and grows with the store rather than
+            # with the number of models - and this runs on the health poll.
             from ..models import model_index
-            on_disk = {m["name"] for m in model_index.build_index(self.model_dir)["models"]}
+            on_disk = set(model_index.read_manifests(self.model_dir))
         except Exception:
             return None
         lowered = {name.lower() for name in on_disk}

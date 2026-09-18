@@ -103,7 +103,7 @@ class DesktopWindow:
         if key in ('chat','agent'):self.load_projects()
         if key=='settings':self.load_settings();self.sync_theme()
         if key=='models' and self._catalog is None:
-            self.load_catalog();self.refresh_stack()
+            self.load_models_screen()
 
     def _enqueue(self,event):
         try:self.events.put_nowait(event)
@@ -353,22 +353,23 @@ class DesktopWindow:
 
     # ── model screen: current stack ───────────────────────────────────────
     def refresh_stack(self):
-        def display(stack):
-            self._stack_rows={}
-            self.stack_tree.delete(*self.stack_tree.get_children())
-            for role in stack['roles']:
-                iid=self.stack_tree.insert('','end',values=(
-                    role['label'],role['chosen'] or '(사다리 없음)',
-                    f"{role['need_gb']:.1f} GB",'있음' if role['on_disk'] else '없음'))
-                self._stack_rows[iid]=role
-            free=stack['free_gb']
-            missing=sum(0 if role['on_disk'] else 1 for role in stack['roles'])
-            self.stack_summary.set(
-                ('여유 메모리 확인 불가' if free is None else f'여유 메모리 {free:.1f} GB')
-                + f" · 메모리 예산 {stack['budget_gb']:.0f} GB · "
-                + ('모든 역할의 모델이 디스크에 있습니다.' if not missing
-                   else f'{missing}개 역할의 선택 모델이 디스크에 없습니다.'))
-        self.run_task('models.stack',self.services.models.current_stack,display,mutate=False)
+        self.run_task('models.stack',self.services.models.current_stack,self.show_stack,mutate=False)
+
+    def show_stack(self,stack):
+        self._stack_rows={}
+        self.stack_tree.delete(*self.stack_tree.get_children())
+        for role in stack['roles']:
+            iid=self.stack_tree.insert('','end',values=(
+                role['label'],role['chosen'] or '(사다리 없음)',
+                f"{role['need_gb']:.1f} GB",'있음' if role['on_disk'] else '없음'))
+            self._stack_rows[iid]=role
+        free=stack['free_gb']
+        missing=sum(0 if role['on_disk'] else 1 for role in stack['roles'])
+        self.stack_summary.set(
+            ('여유 메모리 확인 불가' if free is None else f'여유 메모리 {free:.1f} GB')
+            + f" · 메모리 예산 {stack['budget_gb']:.0f} GB · "
+            + ('모든 역할의 모델이 디스크에 있습니다.' if not missing
+               else f'{missing}개 역할의 선택 모델이 디스크에 없습니다.'))
 
     def show_stack_detail(self):
         chosen=self.stack_tree.selection()
@@ -391,12 +392,21 @@ class DesktopWindow:
         self.run_task('models.ollama',lambda:self.services.setup.maintenance('ollama_action',presenter))
 
     # ── model screen: catalog selection ──────────────────────────────────
+    def load_models_screen(self):
+        """First open: one store scan feeds both the catalogue and the stack."""
+        def display(pair):
+            catalog,stack=pair
+            self.show_catalog(catalog)
+            self.show_stack(stack)
+        self.run_task('models.overview',self.services.models.overview,display,mutate=False)
+
     def load_catalog(self):
-        def display(catalog):
-            self._catalog=catalog
-            self.build_catalog_rows(catalog)
-            self.update_choice_summary()
-        self.run_task('models.catalog',self.services.models.catalog,display,mutate=False)
+        self.run_task('models.catalog',self.services.models.catalog,self.show_catalog,mutate=False)
+
+    def show_catalog(self,catalog):
+        self._catalog=catalog
+        self.build_catalog_rows(catalog)
+        self.update_choice_summary()
 
     def build_catalog_rows(self,catalog):
         for child in self.choice_body.winfo_children():child.destroy()
@@ -533,7 +543,7 @@ class DesktopWindow:
             if 'models' in self.pages:self.refresh_models()
         self.run_task('models.apply',work,finished)
 
-    def refresh_health(self):
+    def refresh_health(self,*,fresh=False):
         def display(status):
             shown=lambda value:'ready' if value is True else 'stopped' if value is False else 'unknown'
             self.health.set('    '.join(key.title()+': '+shown(value) for key,value in status.items()))
@@ -543,7 +553,7 @@ class DesktopWindow:
                 '\n\nPreferences apply to the next session. Block reuses canonical relay quiescence and internal-network verification.')
             if hasattr(self,'system_text'):set_text(self.system_text,json.dumps(status,indent=2)+
                 '\n\nEnvironment: '+str(self.services.env)+'\nModels: '+str(self.services.model_dir)+'\nUser data: '+str(self.services.data))
-        self.run_task('health',self.services.system.health,display,mutate=False)
+        self.run_task('health',lambda:self.services.system.health(fresh=fresh),display,mutate=False)
 
     def repair(self):
         if self.services.chat.started or self.services.agent.opened:

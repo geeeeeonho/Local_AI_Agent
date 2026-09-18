@@ -31,7 +31,8 @@ def parse_args(app,argv=None):
 
 def main(app='studio',argv=None):
     args=parse_args(app,argv)
-    from services.system.bootstrap import legacy_entry, initialize_language
+    from services.system.bootstrap import (legacy_entry, initialize_language,
+                                           install_exit_hooks, run_exit_cleanups)
     installer_flags=[]
     for flag in ('install','manage','skip_model','skip_sandbox','skip_build','skip_search'):
         if getattr(args,flag):installer_flags.append('--'+flag.replace('_','-'))
@@ -44,6 +45,11 @@ def main(app='studio',argv=None):
     try:
         from services.desktop import create_services
         from .window import DesktopWindow
+        from project_paths import PROJECT_ROOT
+        # Before anything can start a container: WARP, Tor and the sandbox
+        # hand their teardown to these hooks, so a shell without them leaves
+        # containers running after the window closes.
+        install_exit_hooks(PROJECT_ROOT)
         services=create_services()
         initialize_language(services.project_root,args.lang)
         DesktopWindow(args.app,services).run()
@@ -65,3 +71,7 @@ def main(app='studio',argv=None):
     finally:
         if services is not None:
             services.close()
+        # Runs the callbacks services.close() does not own — the WARP and Tor
+        # containers among them. atexit would eventually do this; doing it here
+        # keeps the teardown inside the shutdown the user is waiting on.
+        run_exit_cleanups()

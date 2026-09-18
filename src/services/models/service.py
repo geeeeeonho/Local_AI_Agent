@@ -49,10 +49,6 @@ class ModelService:
     def remove_model(self, name):
         return self._change(name, 'remove')
 
-    def get_model_info(self, name):
-        return next((model for model in index.build_index(self.model_dir)['models']
-                     if model['name'] == name), None)
-
     def inventory(self):
         """Read a full on-disk snapshot without starting inference."""
         return index.build_index(self.model_dir)
@@ -60,18 +56,19 @@ class ModelService:
     def disk_usage(self):
         return index.build_index(self.model_dir)['totals']
 
-    def recommended_models(self, memory_gb=None):
-        from launcher.models import model_catalog
-        budget = model_catalog.MEMORY_BUDGET_GB if memory_gb is None else memory_gb
-        return sorted(model_catalog.recommended_for(budget))
-
     # ── selection and stack views ──────────────────────────────────────────
     # These read the on-disk index rather than Ollama's HTTP API, so the model
     # screen still tells the truth while the server is stopped.
 
     def installed_tags(self):
-        """Model names actually present in the store. Does not start Ollama."""
-        return {model['name'] for model in index.build_index(self.model_dir)['models']}
+        """Model names actually present in the store. Does not start Ollama.
+
+        Manifests only. Both views name models from the same records, and
+        build_index would additionally stat every blob to answer a question
+        about names — cost that grows with the size of the store, on a read
+        the model screen makes every time it opens.
+        """
+        return set(index.read_manifests(self.model_dir))
 
     def catalog(self, *, installed=None, budget_gb=None):
         """Catalog rows for the selection view, each with its install state."""
@@ -119,7 +116,10 @@ class ModelService:
         rows = []
         for role in roles.ROLES:
             try:
-                chosen = roles.resolve_ladder(role.name, free)
+                # The store we already read is the answer; asking Ollama again
+                # would be five HTTP calls for one screen, and would report a
+                # different choice whenever the server happens to be stopped.
+                chosen = roles.resolve_ladder(role.name, free, installed=present)
             except Exception:
                 chosen = None
             ladder = [{'tag': tag, 'need_gb': float(need),
@@ -174,6 +174,16 @@ class ModelService:
             'shared': ollama_paths.models_dir_is_shared(),
             'per_user': ollama_paths.is_per_user_store(path),
         }
+
+    def overview(self, *, free_gb=None):
+        """Catalogue and stack from one scan of the store.
+
+        Both views need the installed set, and reading it twice means walking
+        the whole store twice to answer one question.
+        """
+        installed = self.installed_tags()
+        return (self.catalog(installed=installed),
+                self.current_stack(free_gb=free_gb, installed=installed))
 
     def plan_changes(self, desired, *, installed=None):
         """Checked means 'should exist': the difference is the work to do."""
