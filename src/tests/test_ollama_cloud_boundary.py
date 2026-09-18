@@ -115,3 +115,85 @@ def test_the_catalogue_view_marks_any_remote_tag(tmp_path):
         assert catalogue['cloud_installed'] == []
     finally:
         services.close()
+
+
+# ── configuring the relay itself ─────────────────────────────────────────
+# Refusing cloud names at this project's own boundary only covers requests it
+# originates. Ollama has an official switch, verified against a real binary:
+# OLLAMA_NO_CLOUD=1 makes the server answer 403 "ollama cloud is disabled" on
+# both /api/chat and /v1/chat/completions, while local models are unaffected.
+# GET /api/status reports the decision, so a server this project did not launch
+# can be asked rather than assumed.
+
+def service(tmp_path):
+    from launcher.services.ollama import OllamaService
+    return OllamaService(tmp_path, model_dir=tmp_path / 'models')
+
+
+def test_a_server_we_launch_is_told_to_have_no_cloud(tmp_path):
+    assert service(tmp_path).env_vars({})['OLLAMA_NO_CLOUD'] == '1'
+
+
+def test_the_switch_is_set_even_when_the_store_needs_no_override(tmp_path):
+    from core import ollama_paths
+    from launcher.services.ollama import OllamaService
+    shared = ollama_paths.SHARED_MODELS_DIR
+    env = OllamaService(tmp_path, model_dir=shared).env_vars(
+        {'OLLAMA_MODELS': str(shared)})
+    assert 'OLLAMA_MODELS' in env and env['OLLAMA_NO_CLOUD'] == '1'
+
+
+def answer(monkeypatch, payload):
+    """Stand in for GET /api/status on the running server."""
+    import json
+    from launcher.services import ollama as module
+
+    class Response:
+        def read(self, n=None):
+            return json.dumps(payload).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(module.urllib.request, 'urlopen', lambda *a, **k: Response())
+
+
+def test_cloud_status_reads_the_servers_own_answer(tmp_path, monkeypatch):
+    svc = service(tmp_path)
+    answer(monkeypatch, {'cloud': {'disabled': True, 'source': 'env'}})
+    assert svc.cloud_status() is True
+    answer(monkeypatch, {'cloud': {'disabled': False, 'source': 'none'}})
+    assert svc.cloud_status() is False
+
+
+def test_an_unreachable_or_odd_answer_is_unknown_not_a_verdict(tmp_path, monkeypatch):
+    from launcher.services import ollama as module
+    svc = service(tmp_path)
+    def refuse(*a, **k):
+        raise OSError('connection refused')
+    monkeypatch.setattr(module.urllib.request, 'urlopen', refuse)
+    assert svc.cloud_status() is None
+    for payload in ({}, {'cloud': {}}, {'cloud': {'disabled': 'yes'}}, {'cloud': 1}):
+        answer(monkeypatch, payload)
+        assert svc.cloud_status() is None, payload
+
+
+def test_attaching_to_a_relay_that_allows_cloud_says_so(tmp_path, monkeypatch):
+    svc = service(tmp_path)
+    warned = []
+    monkeypatch.setattr(svc, '_warn', lambda m: warned.append(m))
+    monkeypatch.setattr(svc, 'cloud_status', lambda timeout=5: False)
+    svc._warn_if_cloud_enabled()
+    assert any('cloud' in m.lower() or '클라우드' in m for m in warned)
+    assert any('OLLAMA_NO_CLOUD' in m for m in warned), 'say how to fix it'
+
+
+def test_a_relay_with_cloud_off_or_unknown_is_not_nagged_about(tmp_path, monkeypatch):
+    svc = service(tmp_path)
+    warned = []
+    monkeypatch.setattr(svc, '_warn', lambda m: warned.append(m))
+    for state in (True, None):
+        monkeypatch.setattr(svc, 'cloud_status', lambda timeout=5, s=state: s)
+        svc._warn_if_cloud_enabled()
+    assert warned == []

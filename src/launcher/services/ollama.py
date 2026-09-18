@@ -183,6 +183,25 @@ class OllamaService:
         lowered = {name.lower() for name in on_disk}
         return all(name.lower() in lowered for name in served)
 
+    def cloud_status(self, timeout: float = 5) -> Optional[bool]:
+        """Is remote inference disabled on the running server? None = unknown.
+
+        A server this process did not launch carries whatever policy its owner
+        gave it, so ask rather than assume. /api/status answers with the
+        decision and where it came from (env, Ollama's own server.json, or both).
+        """
+        try:
+            request = urllib.request.Request(
+                f"http://{config.OLLAMA_HOST}:{config.OLLAMA_PORT}/api/status")
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read(64 * 1024).decode("utf-8"))
+        except Exception:
+            return None
+        cloud = payload.get("cloud")
+        if not isinstance(cloud, dict) or not isinstance(cloud.get("disabled"), bool):
+            return None
+        return bool(cloud["disabled"])
+
     def legacy_stores(self) -> tuple:
         """Earlier locations this project kept models in, newest first."""
         forced = project_paths.LEGACY_FORCED_MODEL_DIR
@@ -282,6 +301,13 @@ class OllamaService:
         if configured is None or not _same_path(configured, self.model_dir):
             e["OLLAMA_MODELS"] = str(self.model_dir)
         e["OLLAMA_HOST"] = f"{config.OLLAMA_HOST}:{config.OLLAMA_PORT}"
+        # Turn the relay local-only at the source. Ollama's cloud tags are not
+        # downloaded: the daemon proxies the prompt to Ollama's servers with the
+        # user's credentials, which Direct/WARP/Tor/Block cannot see because the
+        # daemon makes that call on its own behalf. Refusing such names at our
+        # own boundary only covers requests we originate; this refuses them in
+        # the server, with 403, including on the OpenAI-compatible endpoint.
+        e["OLLAMA_NO_CLOUD"] = "1"
         e.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
         e.setdefault("OLLAMA_KEEP_ALIVE", "5m")
         return e
@@ -396,9 +422,11 @@ class OllamaService:
                 agrees = self.store_agrees()
                 if agrees:
                     self._ok("이미 실행 중인 Ollama 를 사용합니다: " + str(executable))
+                    self._warn_if_cloud_enabled()
                     return True
                 if agrees is None:
                     self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다.")
+                    self._warn_if_cloud_enabled()
                     return True
                 self._err("실행 중인 Ollama 가 다른 모델 저장소를 쓰고 있습니다.")
                 self._err("OLLAMA_MODELS 를 %s 로 맞추고 Ollama 를 재시작하세요."
@@ -454,6 +482,16 @@ class OllamaService:
         return False
 
     # ── 로그 헬퍼 ──
+    def _warn_if_cloud_enabled(self) -> None:
+        """A relay we do not control may still route prompts off the machine."""
+        if self.cloud_status() is False:
+            self._warn("이 Ollama 는 클라우드 모델을 허용합니다. cloud 태그로 보낸 "
+                       "요청은 Ollama 서버로 나가며 Direct/WARP/Tor/Block 이 보지 "
+                       "못합니다.")
+            self._warn("끄려면 OLLAMA_NO_CLOUD=1 을 설정하거나 "
+                       "~/.ollama/server.json 에 disable_ollama_cloud 를 넣고 "
+                       "Ollama 를 재시작하세요.")
+
     def _info(self, m: str):
         if self._log:
             self._log.info(m)

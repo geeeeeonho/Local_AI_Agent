@@ -140,6 +140,26 @@ first desktop coordination policy, not a machine-wide multi-user service or a
 cross-checkout lock. External clients can still use Ollama's API. Old launchers
 invoked directly outside the new entrypoints do not participate in this lock.
 
+Ollama does not remember the store on its own. `ollama serve` re-reads
+`OLLAMA_MODELS` at every start and keeps nothing; the Ollama desktop app does
+remember it, in its own database under `%LOCALAPPDATA%\Ollama`, and injects it
+as `OLLAMA_MODELS` when it launches the server - the same mechanism this project
+uses. The durable memory is therefore the machine-wide environment variable, and
+that variable is also what the Ollama app adopts as its own default when its
+setting is empty. Setting it once configures the relay for every way it is
+started, by this project or not, and for every account.
+
+The relay is also configured to stay local. `OLLAMA_NO_CLOUD=1` is set on any
+server this project launches, which makes Ollama answer 403 "ollama cloud is
+disabled" to a cloud model on `/api/chat` and on the OpenAI-compatible
+`/v1/chat/completions` alike, while local models are untouched. That closes the
+hole at the source rather than only at this project's own name check, which
+covers only requests it originates. A server this project did not launch carries
+its owner's policy, so it is asked rather than assumed: `GET /api/status` reports
+whether cloud is disabled and whether that came from the environment or from
+Ollama's `server.json`. Attaching to a relay that still allows cloud is reported,
+with the two ways to turn it off, rather than silently accepted.
+
 Ollama cloud tags are refused wherever a model has to stay on this machine.
 A tag Ollama marks as cloud is not downloaded: the local daemon attaches the
 user's credentials and proxies the request to Ollama's servers, and every
