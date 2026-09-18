@@ -192,6 +192,39 @@ def _open_main_log() -> Optional[TextIO]:
         return None
 
 
+# 실행마다 새 파일을 만들고 지우는 곳이 없었다. 터미널 런처만 이 코드를
+# 부르던 동안에는 눈에 띄지 않았지만, 데스크톱 창도 같은 종료 hook 을 쓰게
+# 되면서 창을 열 때마다 한 개씩 쌓인다. agent_trace 와 같은 방식으로 최근
+# 것만 남긴다 — 진단에 필요한 것은 마지막 몇 번의 실행이다.
+_KEEP_LAUNCHER_LOGS = 20
+
+
+def _prune_old_logs(keep: Optional[int] = None) -> None:
+    """이번 세션 파일보다 오래된 실행 로그를 정리. 실패는 무시한다."""
+    if _log_dir is None:
+        return
+    keep = _KEEP_LAUNCHER_LOGS if keep is None else keep
+    current = getattr(_main_log_fh, "name", None)
+    try:
+        # 이름이 launcher_<YYYYmmdd>_<HHMMSS>.log 인 것만. launcher_fatal.log
+        # 는 크래시 기록이고 하나뿐이므로 건드리지 않는다.
+        existing = sorted(
+            (path for path in _log_dir.glob("launcher_2*.log")
+             if str(path) != str(current)),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return
+    # keep 은 이번 실행 파일을 포함한 총 개수다.
+    room = keep - (1 if current else 0)
+    for stale in existing[max(0, room):]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
 def log(level: str, msg: str) -> None:
     """메인 launcher 로그에 한 줄 기록 + 즉시 flush+fsync."""
     line = "[" + _ts() + "] [" + level.ljust(7) + "] " + msg + "\n"
@@ -464,6 +497,7 @@ def install_global_hooks(project_root: Path) -> None:
                 _log_dir = None
                 return
             _open_main_log()
+            _prune_old_logs()
     except Exception as e:
         print("[FAIL] lifelog 기본 초기화 실패: " + str(e), file=sys.stderr)
         traceback.print_exc()

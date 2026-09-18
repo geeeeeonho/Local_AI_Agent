@@ -264,3 +264,52 @@ def test_the_stack_names_a_model_that_is_actually_on_disk(monkeypatch, tmp_path)
     for row in stopped['roles']:
         assert row['on_disk'], row['name'] + ' points at a model that is not here'
         assert row['chosen'] in lightest
+
+
+# ── what the program leaves behind on disk ───────────────────────────────
+
+def test_every_launch_does_not_leave_another_log_file_forever(tmp_path, monkeypatch):
+    """One file per run, and nothing that deleted them. Now the shell runs it too."""
+    from launcher.core import lifelog
+    logs = tmp_path / 'user_data' / 'logs'
+    logs.mkdir(parents=True)
+    for index in range(40):
+        path = logs / ('launcher_2026010%d_00000%d.log' % (index // 10, index % 10))
+        path.write_text('run %d' % index)
+    keep_me = logs / 'launcher_fatal.log'
+    keep_me.write_text('a crash worth keeping')
+    (logs / 'agent_trace_20260101_000000_0_1.jsonl').write_text('{}')
+
+    monkeypatch.setattr(lifelog, '_log_dir', logs)
+    monkeypatch.setattr(lifelog, '_main_log_fh', None)
+    lifelog._prune_old_logs(keep=5)
+
+    remaining = sorted(path.name for path in logs.glob('launcher_2*.log'))
+    assert len(remaining) == 5, remaining
+    assert remaining[-1] == 'launcher_20260103_000009.log', 'the newest must survive'
+    assert keep_me.exists(), 'launcher_fatal.log is not one of the rotating files'
+    assert (logs / 'agent_trace_20260101_000000_0_1.jsonl').exists()
+
+
+def test_pruning_never_deletes_the_log_being_written(tmp_path, monkeypatch):
+    from launcher.core import lifelog
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    current = logs / 'launcher_20260101_000000.log'
+    current.write_text('in use')
+    for index in range(5):
+        (logs / ('launcher_20260102_00000%d.log' % index)).write_text('newer')
+
+    monkeypatch.setattr(lifelog, '_log_dir', logs)
+    monkeypatch.setattr(lifelog, '_main_log_fh',
+                        types.SimpleNamespace(name=str(current)))
+    lifelog._prune_old_logs(keep=1)
+    assert current.exists(), 'the open handle would keep writing to a deleted file'
+    assert sorted(p.name for p in logs.glob('launcher_2*.log')) == [current.name]
+
+
+def test_a_log_directory_that_cannot_be_read_is_not_fatal(tmp_path, monkeypatch):
+    from launcher.core import lifelog
+    monkeypatch.setattr(lifelog, '_log_dir', tmp_path / 'never' / 'created')
+    monkeypatch.setattr(lifelog, '_main_log_fh', None)
+    lifelog._prune_old_logs(keep=1)
