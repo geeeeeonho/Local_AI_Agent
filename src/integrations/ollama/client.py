@@ -21,6 +21,39 @@ def model_name(value: str) -> str:
     return value
 
 
+def is_cloud_tag(value: str) -> bool:
+    """A tag Ollama runs remotely rather than on this machine.
+
+    Ollama marks these with a ``cloud`` label (``gpt-oss:20b-cloud``,
+    ``gemma4:cloud``). The local daemon attaches the user's credentials and
+    proxies the request to Ollama's servers, so the prompt leaves the machine
+    through the daemon - not through anything this project prepared. Every
+    OpenAI-compatible client, this one included, talks to them exactly like a
+    local model, and on Windows the suffix has been reported stripped from run
+    and API calls, so the name alone cannot be trusted to look remote later.
+    """
+    if not isinstance(value, str):
+        return False
+    label = value.rpartition(':')[2].lower()
+    return label == 'cloud' or label.endswith('-cloud')
+
+
+def local_model_name(value: str) -> str:
+    """Model name for anything that must stay on this machine.
+
+    Block promises no public egress and WARP/Tor promise a specific route. A
+    cloud tag silently voids all three, so it is refused here rather than
+    somewhere the network policy can no longer see it.
+    """
+    name = model_name(value)
+    if is_cloud_tag(name):
+        raise ValueError(
+            'refusing the Ollama cloud model ' + name + ': it runs on Ollama\'s '
+            'servers, so it would leave this machine outside the selected '
+            'network policy. Choose a local tag.')
+    return name
+
+
 class OllamaClient:
     def __init__(self, base_url='http://127.0.0.1:11434', *, opener=None, timeout=10):
         parsed = urlsplit(base_url)

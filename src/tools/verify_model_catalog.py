@@ -30,6 +30,7 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Iterable
 
+from integrations.ollama.client import is_cloud_tag
 from launcher.models import model_catalog as catalog
 
 REGISTRY = "https://registry.ollama.ai/v2"
@@ -109,6 +110,11 @@ def manifest_gb(document: dict) -> float | None:
 
 
 def check(tag: str, declared_gb: float, *, opener=None, timeout: float = 15) -> TagReport:
+    # A cloud tag has no downloadable manifest, so asking the registry would
+    # report it as simply missing. It is a different and worse problem: it runs
+    # on Ollama's servers, outside every network mode this project offers.
+    if is_cloud_tag(tag):
+        return TagReport(tag, False, declared_gb, None, 'cloud tag - runs remotely')
     document, detail = fetch_manifest(tag, opener=opener, timeout=timeout)
     if document is None:
         # 404 is a real answer: the tag is gone. Anything else is "unknown", and
@@ -129,11 +135,16 @@ def catalogue_tags() -> list[tuple[str, float]]:
 
 
 def summarise(reports: list[TagReport], tolerance_gb: float = DEFAULT_TOLERANCE_GB) -> list[str]:
-    missing = [r for r in reports if r.exists is False]
+    cloud = [r for r in reports if r.detail == 'cloud tag - runs remotely']
+    missing = [r for r in reports if r.exists is False and r not in cloud]
     unknown = [r for r in reports if r.exists is None]
     drifted = [r for r in reports
                if r.drift_gb is not None and abs(r.drift_gb) > tolerance_gb]
     lines = ["%d catalogue tags checked against %s" % (len(reports), REGISTRY), ""]
+    if cloud:
+        lines.append("CLOUD - these run on Ollama's servers, not this machine:")
+        lines += ["  %s" % r.tag for r in cloud]
+        lines.append("")
     if missing:
         lines.append("MISSING - these cannot be installed at all:")
         lines += ["  %-52s %s" % (r.tag, r.detail) for r in missing]
@@ -147,8 +158,9 @@ def summarise(reports: list[TagReport], tolerance_gb: float = DEFAULT_TOLERANCE_
         lines.append("UNKNOWN - not answered, so not a verdict:")
         lines += ["  %-52s %s" % (r.tag, r.detail) for r in unknown]
         lines.append("")
-    if not missing and not drifted:
-        lines.append("Every tag resolves and every declared size is within %.1fGB." % tolerance_gb)
+    if not cloud and not missing and not drifted:
+        lines.append("Every tag is local, resolves, and is within %.1fGB of its declared size."
+                     % tolerance_gb)
     return lines
 
 

@@ -335,7 +335,13 @@ class DesktopWindow:
                     str(issue_count)+' issue(s)' if issue_count else 'observed')
                 iid=self.model_tree.insert('','end',values=values);self._model_records[iid]=model
             totals=index['totals']
-            self.model_summary.set(f"{totals['models']} models | {totals['size_bytes']/1024**3:.3f} GiB | scan_complete={index['scan_complete']}")
+            store=self.services.models.storage()
+            free=store['free_bytes']
+            self.model_summary.set(
+                f"{store['path']}\n"
+                f"모델 {totals['models']}개 · 사용 {totals['size_bytes']/1024**3:.1f} GiB"
+                + ('' if free is None else f" · 남은 공간 {free/1024**3:.1f} GiB")
+                + f" · 전체 검사 완료={index['scan_complete']}")
             if index['errors']:set_text(self.model_details,json.dumps(index['errors'],ensure_ascii=False,indent=2))
         self.run_task('models.refresh',scan,display)
 
@@ -454,9 +460,27 @@ class DesktopWindow:
         if catalog is None:return
         try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
         except Exception as exc:self.choice_summary.set('선택 계산 실패: '+str(exc));return
-        self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (~{plan['download_gb']:.1f} GB)"
+        self._plan=plan
+        self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
                                 f"   ·   삭제 예정 {len(plan['remove'])}개")
+        self.choice_storage.set(self.storage_line(plan))
+        # A selection that cannot fit is shown as a problem, not as a number the
+        # user is expected to compare themselves mid-download.
+        short=plan['fits'] is False and plan['install']
+        self.choice_storage_label.configure(style='Alert.TLabel' if short else 'Muted.TLabel')
         self.apply_button.state(['!disabled'] if plan['install'] or plan['remove'] else ['disabled'])
+
+    def storage_line(self,plan):
+        store=plan['storage']
+        where='받는 곳 '+store['path']
+        if not store['exists']:
+            where+=' (아직 없음 — 첫 설치 때 만들어집니다)'
+        if plan['free_gb'] is None:
+            return where+'  ·  남은 공간을 확인할 수 없습니다'
+        line=where+f"  ·  남은 공간 {plan['free_gb']:.1f} GB"
+        if plan['install'] and plan['fits'] is False:
+            line+=f"  ·  {plan['download_gb']-plan['free_gb']:.1f} GB 부족합니다"
+        return line
 
     def catalog_installed(self):
         catalog=getattr(self,'_catalog',None)
@@ -476,6 +500,10 @@ class DesktopWindow:
         if plan['remove']:
             lines.append(f"삭제 {len(plan['remove'])}개:")
             lines+=['  - '+tag for tag in plan['remove'][:12]]
+        lines.append('')
+        lines.append(self.storage_line(plan))
+        if plan['install'] and plan['fits'] is False:
+            lines.append('공간이 모자라면 받다가 중간에 실패합니다. 먼저 정리하거나 덜 고르세요.')
         lines.append('')
         lines.append('설치는 로컬 Ollama 서버가 받고, 삭제는 Ollama가 정리합니다. 계속할까요?')
         if not messagebox.askyesno('모델 적용','\n'.join(lines),parent=self.root):return

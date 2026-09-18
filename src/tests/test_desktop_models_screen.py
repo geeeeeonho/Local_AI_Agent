@@ -210,3 +210,106 @@ def test_setup_no_longer_asks_the_user_to_type_a_model_tag(ui):
     w, _, _ = ui
     assert not hasattr(w, 'install_tag')
     assert not hasattr(w, 'change_model')
+
+
+# ── where models land, and whether they fit ──────────────────────────────
+def test_the_store_path_is_named_where_the_download_is_chosen(ui):
+    w, svc, _ = ui
+    open_models(w)
+    assert str(svc.model_dir) in w.choice_storage.get()
+
+
+def test_free_space_is_shown_next_to_what_the_selection_costs(ui):
+    w, _, _ = ui
+    open_models(w)
+    assert '남은 공간' in w.choice_storage.get()
+    assert '최대' in w.choice_summary.get()
+
+
+def test_a_selection_that_cannot_fit_is_flagged_as_a_problem(ui, monkeypatch):
+    w, svc, _ = ui
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage',
+                        lambda: dict(real(), free_bytes=1024 ** 3, total_bytes=2 * 1024 ** 3))
+    w.set_selection('recommended')
+    assert w.choice_storage_label.cget('style') == 'Alert.TLabel'
+    assert '부족' in w.choice_storage.get()
+
+
+def test_a_selection_that_fits_is_not_flagged(ui, monkeypatch):
+    w, svc, _ = ui
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage',
+                        lambda: dict(real(), free_bytes=4096 * 1024 ** 3, total_bytes=8192 * 1024 ** 3))
+    w.set_selection('recommended')
+    assert w.choice_storage_label.cget('style') == 'Muted.TLabel'
+    assert '부족' not in w.choice_storage.get()
+
+
+def test_removing_only_never_warns_about_space(ui, monkeypatch):
+    w, svc, _ = ui
+    store_model(svc)
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage', lambda: dict(real(), free_bytes=0, total_bytes=1))
+    w.set_selection('none')
+    assert w.choice_storage_label.cget('style') == 'Muted.TLabel'
+    assert '부족' not in w.choice_storage.get()
+
+
+def test_an_unreadable_disk_says_so_instead_of_claiming_a_number(ui, monkeypatch):
+    w, svc, _ = ui
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage',
+                        lambda: dict(real(), free_bytes=None, total_bytes=None))
+    w.set_selection('recommended')
+    assert '확인할 수 없습니다' in w.choice_storage.get()
+    assert w.choice_storage_label.cget('style') == 'Muted.TLabel'
+
+
+def test_a_store_that_does_not_exist_yet_is_explained_not_hidden(ui, monkeypatch):
+    w, svc, _ = ui
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage', lambda: dict(real(), exists=False))
+    w.set_selection('recommended')
+    assert '아직 없음' in w.choice_storage.get()
+
+
+def test_the_confirmation_repeats_where_it_goes_and_whether_it_fits(ui, monkeypatch):
+    w, svc, _ = ui
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage',
+                        lambda: dict(real(), free_bytes=1024 ** 3, total_bytes=2 * 1024 ** 3))
+    w.set_selection('recommended')
+    asked = {}
+    def capture(title, message, **kw):
+        asked['message'] = message
+        return False
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', capture)
+    w.apply_selection()
+    assert str(svc.model_dir) in asked['message']
+    assert '부족' in asked['message']
+    assert '중간에 실패' in asked['message']
+
+
+def test_the_disk_tab_reports_used_and_free_at_the_store(ui):
+    w, svc, _ = ui
+    store_model(svc)
+    w.refresh_models()
+    pump(w, lambda: bool(w.model_tree.get_children()))
+    summary = w.model_summary.get()
+    assert str(svc.model_dir) in summary
+    assert '사용' in summary and '남은 공간' in summary
+
+
+def test_the_plan_calls_its_download_size_an_upper_bound(ui):
+    """Ollama shares blob layers, so summed catalogue sizes are a ceiling."""
+    w, svc, _ = ui
+    open_models(w)
+    plan = svc.models.plan_changes(w.selected_tags(), installed=w.catalog_installed())
+    assert plan['download_is_upper_bound'] is True

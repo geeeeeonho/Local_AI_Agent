@@ -106,6 +106,17 @@ removals run before downloads so a full store is never asked to hold both.
 links, shared/exclusive bytes and missing/mismatched files. An orphan observation
 is never permission for this shell to delete blobs.
 
+All three tabs name the store the models actually land in - one machine-wide
+directory, not a project folder, so re-cloning the project does not re-download
+anything. Choosing shows the free space there next to what the selection costs,
+and says how much is short before the download starts rather than after it fails
+partway; the confirmation repeats both. A store that does not exist yet is
+measured against the drive it will live on and labelled as not yet created, and
+a disk that cannot be read reports unknown rather than a number. Sizes are
+ceilings: Ollama shares blob layers between models, so the real cost is usually
+lower. Files are never deleted directly - unchecking a model hands it to Ollama,
+which knows which layers another model still needs.
+
 Both the screen's install state and its stack view read the on-disk index, so
 they stay truthful while Ollama is stopped; "Ollama start / check" runs the
 retained service action and shows its log in place. Model downloads use the
@@ -128,6 +139,18 @@ another window starts or repairs managed runtimes. This is a deliberately coarse
 first desktop coordination policy, not a machine-wide multi-user service or a
 cross-checkout lock. External clients can still use Ollama's API. Old launchers
 invoked directly outside the new entrypoints do not participate in this lock.
+
+Ollama cloud tags are refused wherever a model has to stay on this machine.
+A tag Ollama marks as cloud is not downloaded: the local daemon attaches the
+user's credentials and proxies the request to Ollama's servers, and every
+OpenAI-compatible client - this one included - talks to it exactly like a local
+model. That would void all three network promises at once, since Block's
+no-public-egress, WARP's route and Tor's route cannot see traffic the daemon
+makes on its own behalf, and the suffix has been reported stripped from run and
+API calls on Windows. So the refusal sits at the model-name boundary, before a
+policy that cannot observe it is asked to protect it. Removal stays allowed, so
+a tag pulled elsewhere can still be got rid of. The shipped catalogue contains
+none, and a test keeps it that way.
 
 Block calls the original relay quiescence and internal-network verification;
 protected preparation failures never select Direct. Search runs only after the

@@ -80,6 +80,10 @@ def _choose(parent, w):
     w.choice_summary = tk.StringVar(master=w.root, value='카탈로그를 아직 읽지 않았습니다.')
     ttk.Label(parent, textvariable=w.choice_summary, style='Section.TLabel',
               wraplength=780, justify='left').pack(anchor='w', pady=(0, 6))
+    w.choice_storage = tk.StringVar(master=w.root, value='')
+    w.choice_storage_label = ttk.Label(parent, textvariable=w.choice_storage,
+                                       style='Muted.TLabel', wraplength=780, justify='left')
+    w.choice_storage_label.pack(anchor='w', pady=(0, 10))
     w.choice_plan = tk.StringVar(master=w.root, value='')
     ttk.Label(parent, textvariable=w.choice_plan, style='Muted.TLabel',
               wraplength=780, justify='left').pack(anchor='w', pady=(0, 12))
@@ -97,6 +101,7 @@ def _choose(parent, w):
     apply_bar = _row(parent)
     w.apply_button = _button(apply_bar, '선택대로 적용', w.apply_selection, accent=True)
     note(parent, '체크 = 있어야 함. 체크하면 설치하고, 설치된 모델의 체크를 풀면 삭제합니다.\n'
+                 '용량은 최대치입니다 — Ollama가 모델 간에 같은 계층을 공유하면 실제로는 더 적게 받습니다.\n'
                  '다운로드는 로컬 Ollama 서버의 호스트 네트워크를 씁니다. WARP/Tor 우회는 보장되지 않고, '
                  'Block에서는 거부합니다.')
 
@@ -106,7 +111,8 @@ def _disk(parent, w):
     _button(bar, '인덱스 갱신', w.refresh_models, kind='Manage')
     _button(bar, '모델 고르기', lambda: w.model_tabs.select(w.model_pages['choose']))
     w.model_summary = tk.StringVar(master=w.root, value=str(w.services.model_dir))
-    ttk.Label(parent, textvariable=w.model_summary, style='Muted.TLabel').pack(anchor='w', pady=(0, 8))
+    ttk.Label(parent, textvariable=w.model_summary, style='Muted.TLabel',
+              wraplength=780, justify='left').pack(anchor='w', pady=(0, 8))
     w.model_tree = _tree(parent, ('name', 'size', 'shared', 'exclusive', 'status'),
                          ('Model', 'Size (GiB)', 'Shared', 'Exclusive', 'Files'),
                          (330, 100, 100, 100, 140), 7)
@@ -114,3 +120,7 @@ def _disk(parent, w):
     w.model_details = text_box(parent, height=7)
     set_text(w.model_details, '모델을 선택하면 manifest와 blob 구성을 보여 줍니다.\n'
                               '참조 없는 파일은 관찰 결과일 뿐, 삭제 허가가 아닙니다.')
+    note(parent, '모든 모델은 이 한 곳에 모입니다. 프로젝트 폴더가 아니라 기계 공용 저장소라, '
+                 '프로젝트를 다시 받아도 모델을 다시 받지 않습니다.\n'
+                 '파일을 직접 지우지 마세요 — 여러 모델이 같은 계층을 공유합니다. "모델 고르기"에서 '
+                 '체크를 풀면 Ollama가 안전하게 정리합니다.')

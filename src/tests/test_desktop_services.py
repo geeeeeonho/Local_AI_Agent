@@ -169,3 +169,75 @@ def test_inspection_allowed_while_another_app_has_active_session(tmp_path):
     assert two.system.health()['ollama']
     assert two.models.disk_usage()['models'] == 0
     one.close(); two.close()
+
+
+# ── where the models go ──────────────────────────────────────────────────
+def test_storage_reports_the_store_and_its_free_space(tmp_path):
+    services, _ = make(tmp_path)
+    try:
+        store = services.models.storage()
+        assert store['path'] == str(services.model_dir)
+        assert store['exists'] is True
+        assert store['measured_at'] == str(services.model_dir)
+        assert store['free_bytes'] > 0 and store['total_bytes'] >= store['free_bytes']
+    finally:
+        services.close()
+
+
+def test_a_store_that_does_not_exist_yet_measures_its_future_drive(tmp_path):
+    """A fresh Windows machine has no C:\\LLM_Models but does have the drive."""
+    services, _ = make(tmp_path)
+    try:
+        services.models.model_dir = tmp_path / 'not' / 'created' / 'yet'
+        store = services.models.storage()
+        assert store['exists'] is False
+        assert store['measured_at'] == str(tmp_path)
+        assert store['free_bytes'] > 0
+    finally:
+        services.close()
+
+
+def test_an_unreadable_disk_reports_unknown_rather_than_zero(tmp_path, monkeypatch):
+    import shutil
+    services, _ = make(tmp_path)
+    try:
+        def refuse(path):
+            raise OSError('device not ready')
+        monkeypatch.setattr(shutil, 'disk_usage', refuse)
+        store = services.models.storage()
+        assert store['free_bytes'] is None and store['total_bytes'] is None
+        plan = services.models.plan_changes(['gemma4:12b'])
+        # Unknown space must not be reported as "it fits" or "it does not".
+        assert plan['free_gb'] is None and plan['fits'] is None
+    finally:
+        services.close()
+
+
+def test_a_plan_knows_whether_it_fits_where_it_is_going(tmp_path, monkeypatch):
+    import shutil
+    from collections import namedtuple
+    Usage = namedtuple('Usage', 'total used free')
+    services, _ = make(tmp_path)
+    try:
+        monkeypatch.setattr(shutil, 'disk_usage',
+                            lambda path: Usage(100 * 1024 ** 3, 99 * 1024 ** 3, 1024 ** 3))
+        assert services.models.plan_changes(['gemma4:12b'])['fits'] is False
+        monkeypatch.setattr(shutil, 'disk_usage',
+                            lambda path: Usage(900 * 1024 ** 3, 0, 800 * 1024 ** 3))
+        assert services.models.plan_changes(['gemma4:12b'])['fits'] is True
+    finally:
+        services.close()
+
+
+def test_removing_everything_never_reads_as_not_fitting(tmp_path, monkeypatch):
+    import shutil
+    from collections import namedtuple
+    Usage = namedtuple('Usage', 'total used free')
+    services, _ = make(tmp_path)
+    try:
+        monkeypatch.setattr(shutil, 'disk_usage', lambda path: Usage(1, 1, 0))
+        plan = services.models.plan_changes([])
+        assert plan['install'] == [] and plan['download_gb'] == 0
+        assert plan['fits'] is True
+    finally:
+        services.close()

@@ -124,7 +124,7 @@ def test_the_summary_separates_missing_from_drifted_from_unanswered():
 def test_a_clean_catalogue_says_so_without_listing_every_tag():
     reports = build({'a:1': manifest(int(7.6 * 1024 ** 3))}, {'a:1': 7.6})
     text = '\n'.join(verify.summarise(reports))
-    assert 'Every tag resolves' in text
+    assert 'Every tag is local, resolves' in text
     assert 'MISSING' not in text and 'SIZE DRIFT' not in text
 
 
@@ -165,3 +165,33 @@ def test_a_missing_tag_fails_the_command_and_an_outage_does_not(monkeypatch, cap
                         lambda tags, **kw: [verify.TagReport('a:1', None, 1.0, None, 'URLError')])
     assert verify.main([]) == 0
     assert 'UNKNOWN' in capsys.readouterr().out
+
+
+# ── cloud tags ───────────────────────────────────────────────────────────
+def test_a_cloud_tag_is_reported_as_cloud_without_asking_the_registry():
+    """It has no downloadable manifest, so 'missing' would name the wrong fault."""
+    opener = FakeOpener({})
+    result = verify.check('gpt-oss:20b-cloud', 12.0, opener=opener)
+    assert result.exists is False
+    assert result.detail == 'cloud tag - runs remotely'
+    assert opener.urls == []
+
+
+def test_the_summary_calls_out_cloud_separately_from_missing():
+    opener = FakeOpener({url('a:1'): 404})
+    reports = verify.report([('a:1', 1.0), ('gemma4:cloud', 1.0)], opener=opener)
+    text = '\n'.join(verify.summarise(reports))
+    assert 'CLOUD' in text and 'gemma4:cloud' in text
+    assert 'MISSING' in text and 'a:1' in text
+    assert 'gemma4:cloud' not in text.split('MISSING')[1]
+
+
+def test_a_cloud_tag_fails_the_command(monkeypatch, capsys):
+    monkeypatch.setattr(verify, 'catalogue_tags', lambda: [('gemma4:cloud', 1.0)])
+    assert verify.main([]) == 1
+    assert 'CLOUD' in capsys.readouterr().out
+
+
+def test_a_clean_catalogue_message_claims_local_too():
+    reports = build({'a:1': manifest(int(7.6 * 1024 ** 3))}, {'a:1': 7.6})
+    assert 'local' in '\n'.join(verify.summarise(reports))

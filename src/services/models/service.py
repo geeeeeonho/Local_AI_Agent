@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from core.events import EventBus
 from core.persistence import file_lock
-from integrations.ollama.client import model_name
+from integrations.ollama.client import is_cloud_tag, local_model_name, model_name
 from . import index
 
 
@@ -23,7 +23,7 @@ class ModelService:
                              self.events.emit('runtime.progress', {'service': 'models', 'message': message}))
 
     def _change(self, name, operation):
-        name = model_name(name)
+        name = model_name(name) if operation == 'remove' else local_model_name(name)
         with file_lock(self.lock_path):
             self.inference.ensure_ready()
             try:
@@ -85,6 +85,7 @@ class ModelService:
             level = catalog.level_of(entry.tag)
             models.append({
                 'tag': entry.tag, 'role': entry.role, 'desc': entry.desc,
+                'cloud': is_cloud_tag(entry.tag),
                 'note': entry.note, 'group': entry.group, 'kind': entry.kind,
                 'size_gb': float(entry.size_gb), 'memory_gb': float(entry.memory_gb),
                 'level': level or '', 'level_label': catalog.level_label(level) if level else '',
@@ -97,6 +98,9 @@ class ModelService:
             # Models the user pulled themselves. Listed so unchecking one is a
             # deliberate removal rather than an invisible leftover.
             'extra_installed': sorted(present - catalog.catalog_tags()),
+            # Remote tags occupy no disk, so the store never sees them; report
+            # them separately rather than letting them look like local models.
+            'cloud_installed': sorted(tag for tag in present if is_cloud_tag(tag)),
             'plan': {key: list(tags) for key, tags in catalog.plan_by_level(budget).items()},
             'levels': [(key, catalog.level_label(key)) for key in catalog.LEVEL_KEYS],
         }
@@ -135,6 +139,36 @@ class ModelService:
             })
         return {'free_gb': free, 'budget_gb': catalog.MEMORY_BUDGET_GB, 'roles': rows}
 
+    def storage(self):
+        """Where models land, and whether there is room for more there.
+
+        Reported against the nearest existing ancestor when the store itself has
+        not been created yet, because a fresh machine has no C:\\LLM_Models but
+        does have the drive it will live on.
+        """
+        import shutil
+        path = Path(self.model_dir)
+        probe, exists = path, path.is_dir()
+        if not exists:
+            for parent in path.parents:
+                if parent.is_dir():
+                    probe = parent
+                    break
+            else:
+                probe = None
+        usage = None
+        if probe is not None:
+            try:
+                usage = shutil.disk_usage(probe)
+            except OSError:
+                usage = None
+        return {
+            'path': str(path), 'exists': exists,
+            'measured_at': None if probe is None else str(probe),
+            'total_bytes': None if usage is None else usage.total,
+            'free_bytes': None if usage is None else usage.free,
+        }
+
     def plan_changes(self, desired, *, installed=None):
         """Checked means 'should exist': the difference is the work to do."""
         from launcher.models import model_catalog as catalog
@@ -142,5 +176,14 @@ class ModelService:
         present = catalog.canonicalize_installed(
             self.installed_tags() if installed is None else installed)
         install = sorted(wanted - present)
-        return {'install': install, 'remove': sorted(present - wanted),
-                'download_gb': catalog.download_gb(install)}
+        download_gb = catalog.download_gb(install)
+        store = self.storage()
+        free_gb = None if store['free_bytes'] is None else store['free_bytes'] / 1024 ** 3
+        return {
+            'install': install, 'remove': sorted(present - wanted),
+            # Ollama shares blob layers between models, so a sum of catalogue
+            # sizes is the ceiling, not the exact cost.
+            'download_gb': download_gb, 'download_is_upper_bound': True,
+            'free_gb': free_gb, 'storage': store,
+            'fits': None if free_gb is None else download_gb <= free_gb,
+        }
