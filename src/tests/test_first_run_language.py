@@ -103,3 +103,60 @@ def test_the_shell_reaches_its_window_on_a_first_run_with_no_console(monkeypatch
                             run=lambda: opened.append(app)))
     assert entry.main('studio', []) == 0
     assert opened == ['studio'], 'first launch must open the window, not an error box'
+
+
+# ── the same mistake everywhere else a prompt is written ─────────────────
+# Every one of these already meant to survive a console-less process; they
+# just named EOFError, which is not what pythonw raises.
+
+def test_no_prompt_in_the_program_crashes_without_a_console():
+    import ast
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    unguarded = []
+    for path in sorted(root.rglob('*.py')):
+        if path.parent.name == 'tests':
+            continue
+        source = path.read_text(encoding='utf-8')
+        if 'input(' not in source:
+            continue
+        stack = []
+
+        def walk(node):
+            if isinstance(node, ast.Try):
+                stack.append(node)
+                for child in ast.iter_child_nodes(node):
+                    walk(child)
+                stack.pop()
+                return
+            if isinstance(node, ast.Call) and getattr(node.func, 'id', '') == 'input':
+                caught = set()
+                for block in stack:
+                    for handler in block.handlers:
+                        kind = handler.type
+                        if kind is None:
+                            caught.add('bare')
+                        elif isinstance(kind, ast.Tuple):
+                            caught.update(getattr(e, 'id', '') for e in kind.elts)
+                        else:
+                            caught.add(getattr(kind, 'id', ''))
+                if 'bare' not in caught and 'RuntimeError' not in caught:
+                    unguarded.append('%s:%d' % (path.relative_to(root), node.lineno))
+            for child in ast.iter_child_nodes(node):
+                walk(child)
+
+        walk(ast.parse(source))
+    assert unguarded == [], \
+        'input() raises RuntimeError, not EOFError, when there is no stdin: ' \
+        + ', '.join(unguarded)
+
+
+@pytest.mark.parametrize('failure', [RuntimeError, OSError, EOFError])
+def test_the_terminal_launcher_gives_up_instead_of_raising(monkeypatch, failure):
+    from launcher.presenter import tui
+
+    def refuse(prompt=''):
+        raise failure('no stdin')
+    monkeypatch.setattr('builtins.input', refuse)
+    assert tui.prompt('> ') == 'q'
+    tui.pause('x')

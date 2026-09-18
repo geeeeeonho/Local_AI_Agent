@@ -133,7 +133,7 @@ class TerminalPresenter(Presenter):
         print()
         try:
             input(_C.DIM + msg + _C.E)
-        except (KeyboardInterrupt, EOFError):
+        except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
             self._eof_count += 1
             self._maybe_abort_on_eof_storm()
 
@@ -148,16 +148,20 @@ class TerminalPresenter(Presenter):
             response = input(prompt).strip()
             self._eof_count = 0  # 정상 입력 → 카운터 리셋
             return response if response else default
-        except (KeyboardInterrupt, EOFError):
+        except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
             self._eof_count += 1
             self._maybe_abort_on_eof_storm()
             return ""
 
     def _maybe_abort_on_eof_storm(self):
-        """짧은 시간 EOF 가 5회 이상이면 stdin 없는 환경으로 판단, 종료.
+        """짧은 시간 입력 실패가 5회 이상이면 stdin 없는 환경으로 판단, 종료.
 
-        pythonw.exe 로 실행하면 stdin 이 없어 input() 이 즉시 EOFError 를
-        반환. 이 경우 메뉴 루프가 무한 재출력되므로 강제 종료가 필요.
+        pythonw.exe 로 실행하면 stdin 이 아예 None 이고, 그때 input() 이
+        내는 것은 EOFError 가 아니라 RuntimeError("input(): lost sys.stdin")
+        다. EOFError 만 잡던 동안에는 이 방어가 한 번도 돌지 않고 예외가
+        그대로 올라갔다. 파이프를 물린 헤드리스 환경에서는 EOFError 가
+        맞으므로 둘 다 센다. 이 경우 메뉴 루프가 무한 재출력되므로 강제
+        종료가 필요.
         """
         if self._eof_count >= 5:
             import sys
@@ -174,7 +178,7 @@ class TerminalPresenter(Presenter):
         try:
             r = input(full).strip().lower()
             return r if r in [c.lower() for c in choices] else None
-        except (KeyboardInterrupt, EOFError):
+        except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
             return None
 
     def prompt_path(
@@ -425,7 +429,7 @@ def err(m): print(f"{_C.R}[FAIL]{_C.E} {m}")
 def prompt(text: str = "> ") -> str:
     try:
         return input(text).strip()
-    except (KeyboardInterrupt, EOFError):
+    except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
         return "q"
 
 
@@ -433,5 +437,5 @@ def pause(text: str = "엔터를 누르면 계속..."):
     print()
     try:
         input(_C.DIM + text + _C.E)
-    except (KeyboardInterrupt, EOFError):
+    except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
         pass

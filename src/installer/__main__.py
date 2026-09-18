@@ -203,7 +203,7 @@ def _run_install(args) -> int:
 
     try:
         input("\n" + t("common.exit_prompt"))
-    except (EOFError, KeyboardInterrupt):
+    except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
         pass
     return 0
 

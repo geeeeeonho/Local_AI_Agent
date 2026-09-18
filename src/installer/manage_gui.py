@@ -184,7 +184,7 @@ def _text_menu() -> int:
         print("  [1] 환경 설치/업데이트   [Q] 종료")
         try:
             c = input("선택: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
             return 0
         if c == "1":
             _spawn_module("installer", "--install")
