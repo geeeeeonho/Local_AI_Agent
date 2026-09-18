@@ -1,3 +1,5 @@
+import pytest
+
 import json
 from pathlib import Path
 
@@ -341,3 +343,34 @@ def test_an_explicit_model_dir_is_not_published_or_reacled(tmp_path, monkeypatch
                         lambda *a, **k: touched.append("setx"))
     filesystem.create_environment(tmp_path / "env", model_dir=tmp_path / "chosen")
     assert touched == []
+
+
+# ── matching Ollama's own resolution ─────────────────────────────────────
+# Verified against a real ollama binary built from source: envconfig.Models is
+#     if OLLAMA_MODELS != "" -> it, else <home>/.ollama/models
+# and envconfig.Var is strings.Trim(strings.TrimSpace(v), "\"'"). Disagreeing
+# with either sends this project looking in a directory that does not exist
+# while Ollama serves happily from the real one.
+
+@pytest.mark.parametrize("raw,expected", [
+    (r"C:\Ollama\models", r"C:\Ollama\models"),
+    # Quotes are easy to end up with from a Windows dialog or a batch file.
+    (r'"C:\Ollama\models"', r"C:\Ollama\models"),
+    (r"'C:\Ollama\models'", r"C:\Ollama\models"),
+    (r'""C:\Ollama\models""', r"C:\Ollama\models"),
+    ("  C:\\Ollama\\models  ", r"C:\Ollama\models"),
+    # Ollama trims the quotes but not spaces inside them, and so must this.
+    (r'" C:\Ollama\models "', r" C:\Ollama\models "),
+    (r"D:\내 모델\ollama", r"D:\내 모델\ollama"),
+])
+def test_ollama_models_is_parsed_the_way_ollama_parses_it(raw, expected):
+    from core import ollama_paths
+    assert str(ollama_paths.configured_models_dir({"OLLAMA_MODELS": raw})) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "   ", '""', "''", None])
+def test_an_empty_or_quote_only_value_means_unconfigured(raw):
+    from core import ollama_paths
+    environ = {} if raw is None else {"OLLAMA_MODELS": raw}
+    assert ollama_paths.configured_models_dir(environ) is None
+    assert ollama_paths.models_dir(environ) == ollama_paths.SHARED_MODELS_DIR

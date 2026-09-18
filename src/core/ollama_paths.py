@@ -58,11 +58,25 @@ def home(environ=None) -> Path:
     return Path.home()
 
 
+def _ollama_var(value):
+    """Read a variable the way Ollama reads it.
+
+    Ollama's envconfig.Var trims whitespace and then strips surrounding quotes,
+    so OLLAMA_MODELS="C:\\Ollama\\models" - quotes and all, which is easy to end up
+    with from a Windows dialog or a batch file - resolves to the bare path.
+    Keeping the quotes would send this project looking in a directory that does
+    not exist while Ollama serves happily from the real one.
+    """
+    if not isinstance(value, str):
+        return ''
+    return value.strip().strip('"\'')
+
+
 def configured_models_dir(environ=None) -> Path | None:
     """An OLLAMA_MODELS the user set, or None. Never guessed."""
     environ = os.environ if environ is None else environ
-    configured = environ.get('OLLAMA_MODELS')
-    return _expanded(configured.strip()) if configured and configured.strip() else None
+    configured = _ollama_var(environ.get('OLLAMA_MODELS'))
+    return _expanded(configured) if configured else None
 
 
 def user_default_models_dir(environ=None) -> Path:

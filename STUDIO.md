@@ -182,6 +182,23 @@ re-download everything. An `OLLAMA_MODELS` the user set themselves always wins:
 overriding that was exactly what the old forced `C:\LLM_Models` got wrong, and
 that store is now migrated out of rather than written to.
 
+This was checked against a real ollama binary built from source rather than
+from documentation. Pointed at a store by `OLLAMA_MODELS`, Ollama lists a model
+placed there; started without it, the same server reports an empty library
+because it looks in the user profile - the per-user problem, reproduced. Two
+servers under different home directories sharing one `OLLAMA_MODELS` both serve
+the same model, and the second home holds no blobs at all: one copy, two
+accounts. This project's own resolver, `env_vars`, disk index and store-agreement
+check were then run against that live server and agreed with it on every point.
+
+The one divergence the exercise found is fixed: Ollama's `envconfig.Var` strips
+surrounding quotes as well as whitespace, so `OLLAMA_MODELS="C:\Ollama\models"`
+- quotes included, which a Windows dialog or batch file makes easy - resolves to
+the bare path. This project kept the quotes, so it would have reported an empty
+store and blocked startup against a perfectly healthy server. The parser now
+matches `envconfig.Var` exactly, compared case by case against the real Go
+function, and tests pin it.
+
 A server this process did not launch is no longer refused on sight. It is
 accepted when it runs from a known install and is demonstrably reading the same
 store - what it serves on `/api/tags` has to exist in the on-disk index - and
