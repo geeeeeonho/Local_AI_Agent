@@ -337,8 +337,10 @@ class DesktopWindow:
             totals=index['totals']
             store=self.services.models.storage()
             free=store['free_bytes']
+            kind=(' · 모든 계정 공용' if store.get('shared')
+                  else ' · 이 계정 전용' if store.get('per_user') else '')
             self.model_summary.set(
-                f"{store['path']}\n"
+                f"{store['path']}{kind}\n"
                 f"모델 {totals['models']}개 · 사용 {totals['size_bytes']/1024**3:.1f} GiB"
                 + ('' if free is None else f" · 남은 공간 {free/1024**3:.1f} GiB")
                 + f" · 전체 검사 완료={index['scan_complete']}")
@@ -473,6 +475,10 @@ class DesktopWindow:
     def storage_line(self,plan):
         store=plan['storage']
         where='받는 곳 '+store['path']
+        if store.get('shared'):
+            where+=' (이 PC의 모든 Windows 계정이 함께 씁니다)'
+        elif store.get('per_user'):
+            where+=' (이 계정 전용 — 다른 계정은 다시 받아야 합니다)'
         if not store['exists']:
             where+=' (아직 없음 — 첫 설치 때 만들어집니다)'
         if plan['free_gb'] is None:

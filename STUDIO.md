@@ -170,9 +170,25 @@ Ollama and proxy runtimes are not indiscriminately killed on every window close.
 ## Paths and scope
 
 `src/project_paths.py` is the single assignment source for every path the
-product uses - project-local `llm_environment`, existing `user_data`,
-`C:\LLM_Models` (or `LLM_MODEL_DIR`) and `C:\Ollama` (or `LLM_OLLAMA_DIR`).
-Core reads it rather than defining a second copy.
+product uses - project-local `llm_environment`, existing `user_data`, and the
+model store. Core reads it rather than defining a second copy.
+
+Ollama is the intermediary rather than something this project contains. It owns
+downloading, storing and serving; an Ollama already on the machine is used as-is,
+and only an absent one is installed, officially, with `/DIR=C:\Ollama`. The store
+is `C:\Ollama\models`, inside that install and shared by every Windows account,
+because Ollama's own default lives in one user profile and a second account would
+re-download everything. An `OLLAMA_MODELS` the user set themselves always wins:
+overriding that was exactly what the old forced `C:\LLM_Models` got wrong, and
+that store is now migrated out of rather than written to.
+
+A server this process did not launch is no longer refused on sight. It is
+accepted when it runs from a known install and is demonstrably reading the same
+store - what it serves on `/api/tags` has to exist in the on-disk index - and
+it is never terminated, because it may be the user's own Windows service. Only
+the portable copy in this project's folder stays ours to restart. Ownership is
+decided by the pid in our runtime state file, not by the binary path, since the
+official install is now the binary we would launch ourselves.
 The shell does not silently enable the separately staged official Ollama
 installer, move models to `C:\Ollama\models`, relocate user data, or rebuild
 AnythingLLM/OI data. That earlier unpublished migration proposal is not shipped

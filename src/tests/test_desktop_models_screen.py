@@ -313,3 +313,15 @@ def test_the_plan_calls_its_download_size_an_upper_bound(ui):
     open_models(w)
     plan = svc.models.plan_changes(w.selected_tags(), installed=w.catalog_installed())
     assert plan['download_is_upper_bound'] is True
+
+
+def test_the_screen_says_whether_other_accounts_share_the_store(ui, monkeypatch):
+    w, svc, _ = ui
+    open_models(w)
+    real = svc.models.storage
+    monkeypatch.setattr(svc.models, 'storage', lambda: dict(real(), shared=True, per_user=False))
+    w.set_selection('recommended')
+    assert '모든 Windows 계정' in w.choice_storage.get()
+    monkeypatch.setattr(svc.models, 'storage', lambda: dict(real(), shared=False, per_user=True))
+    w.set_selection('recommended')
+    assert '이 계정 전용' in w.choice_storage.get()

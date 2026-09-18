@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from core import ollama_paths
+
 
 SRC_ROOT = Path(__file__).resolve().parent
 
@@ -22,10 +24,17 @@ PROJECT_ROOT = _override("LLM_PROJECT_ROOT", SRC_ROOT.parent)
 USER_DATA_DIR = PROJECT_ROOT / "user_data"
 ENV_DIR = PROJECT_ROOT / "llm_environment"
 
-# Large Ollama model files are machine-shared rather than tied to one checkout.
-# LLM_MODEL_DIR exists mainly for controlled deployments/tests; normal installs use C:\LLM_Models.
-MODEL_STORAGE_DIR = _override("LLM_MODEL_DIR", Path(r"C:\LLM_Models"))
+# Models live inside Ollama's own install, shared by every account on the
+# machine: OLLAMA_MODELS when the user set one, otherwise C:\Ollama\models.
+# Ollama's own default lives in a user profile, so a second Windows account
+# would see an empty library and re-download everything.
+# LLM_MODEL_DIR remains for controlled deployments and tests.
+MODEL_STORAGE_DIR = _override("LLM_MODEL_DIR", ollama_paths.models_dir())
 
-# Where an official Ollama runtime would be installed. LLM_OLLAMA_DIR keeps the
-# same controlled-deployment escape hatch as the model store.
-OLLAMA_INSTALL_DIR = _override("LLM_OLLAMA_DIR", Path(r"C:\Ollama"))
+# The store this project used to force before Ollama owned the location. Kept so
+# the installer can find models left there and move them, never to write to.
+LEGACY_FORCED_MODEL_DIR = ollama_paths.LEGACY_FORCED_STORE
+
+# Where this project installs Ollama when the machine has none. The official
+# installer is per-user under LOCALAPPDATA; this is the /DIR= target we ask for.
+OLLAMA_INSTALL_DIR = _override("LLM_OLLAMA_DIR", ollama_paths.PROJECT_INSTALL_DIR)

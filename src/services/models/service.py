@@ -162,11 +162,17 @@ class ModelService:
                 usage = shutil.disk_usage(probe)
             except OSError:
                 usage = None
+        from core import ollama_paths
         return {
             'path': str(path), 'exists': exists,
             'measured_at': None if probe is None else str(probe),
             'total_bytes': None if usage is None else usage.total,
             'free_bytes': None if usage is None else usage.free,
+            # Ollama's own default sits in one account's profile. Saying which
+            # kind of store this is tells the user whether the machine's other
+            # Windows accounts will see the same models.
+            'shared': ollama_paths.models_dir_is_shared(),
+            'per_user': ollama_paths.is_per_user_store(path),
         }
 
     def plan_changes(self, desired, *, installed=None):

@@ -45,8 +45,11 @@ def test_host_permission_translator_is_an_explicit_transition_boundary():
 def test_project_and_shared_model_paths_have_one_assignment_source():
     assert _assignment_sources("PROJECT_ROOT") == ["src/project_paths.py"]
     assert _assignment_sources("MODEL_STORAGE_DIR") == ["src/project_paths.py"]
+    # The default is Ollama's rule now, not a constant this project picked, so
+    # the guard is that one module still decides - not which literal it holds.
     text = (SRC_ROOT / "project_paths.py").read_text(encoding="utf-8")
-    assert 'Path(r"C:\\LLM_Models")' in text
+    assert "ollama_paths.models_dir()" in text
+    assert _assignment_sources("LEGACY_FORCED_MODEL_DIR") == ["src/project_paths.py"]
 
 
 def test_runtime_coordinator_is_part_of_the_active_agent_boundary():

@@ -158,7 +158,7 @@ def _run_install(args) -> int:
     components = []
     utils.write_install_manifest(paths, HERE, "installing", components)
 
-    ollama.install_portable(paths)
+    ollama.install(paths)
     ollama.start_service(paths)
     components.append("ollama")
 

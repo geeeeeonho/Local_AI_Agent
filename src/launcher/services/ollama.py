@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Protocol
 
+import project_paths
+from core import ollama_paths
 from project_paths import MODEL_STORAGE_DIR
 from .. import config
 
@@ -51,7 +53,11 @@ class OllamaService:
         model_dir: Optional[Path] = None,
     ):
         self.env = Path(env)
-        self.exe = self.env / "ollama_runtime" / "ollama.exe"
+        self.portable_exe = self.env / "ollama_runtime" / ollama_paths.PORTABLE_EXECUTABLE
+        # Prefer an Ollama the machine already has. The portable copy this
+        # project used to unzip into its own folder is now only a fallback.
+        self.exe = ollama_paths.find_executable(
+            fallback=(self.portable_exe.parent,)) or self.portable_exe
         self.log_file = self.env / "logs" / "ollama_run.log"
         self.runtime_state_file = self.env / "logs" / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
@@ -72,21 +78,117 @@ class OllamaService:
         return self.exe.exists()
 
     def is_managed_running(self) -> bool:
-        """부작용 없이 현재 포트가 추적 중인 관리형 Ollama인지 확인한다."""
+        """부작용 없이 지금 쓸 수 있는 Ollama가 떠 있는지 확인한다.
+
+        우리가 띄운 서버면 런타임 상태 파일로 확인하고, 공식 Ollama 처럼 우리가
+        띄우지 않은 서버면 알려진 위치에서 실행 중이고 같은 저장소를 보고 있는지로
+        확인한다. 후자를 제외하면 이 프로그램은 자기 서버 외에는 아무것도 못 쓴다.
+        """
         if not self.is_running():
             return False
         pid = self._listener_pid()
-        if pid is None or not self._listener_is_managed(pid):
+        if pid is None:
             return False
-        return self._state_matches(pid)
+        if self._listener_is_managed(pid) and self._state_matches(pid):
+            return True
+        executable = self._process_executable(pid)
+        if not self._is_known(executable):
+            return False
+        if _same_path(executable, self.portable_exe) and not self._state_matches(pid):
+            # Our own portable server with settings we no longer track. It is
+            # not ready to use until ensure_running restarts it.
+            return False
+        return self.store_agrees() is not False
 
     def _migration_pending(self) -> bool:
-        """공용 저장소가 비어 있고 이전/중단 모델 데이터가 남았는지 확인."""
+        """Ollama's store is empty while earlier/interrupted model data remains.
+
+        Starting here would show an empty model list next to tens of gigabytes
+        the user can still see on disk, so refuse and send them to Setup.
+        """
         if _dir_has_entries(self.model_dir):
             return False
-        legacy = self.env / "llm_models"
         staging = self.model_dir.with_name(self.model_dir.name + ".migrating")
-        return _dir_has_entries(legacy) or staging.exists()
+        if staging.exists():
+            return True
+        for source in self.legacy_stores():
+            if _dir_has_entries(source):
+                return True
+        return False
+
+    def known_executables(self) -> tuple:
+        """Ollama binaries this machine may legitimately be running.
+
+        Broker mode: an Ollama installed officially and started by Windows is
+        not an intruder, so attaching to it is allowed. Anything outside these
+        locations still is, because its model store cannot be accounted for.
+        """
+        found = [self.exe, self.portable_exe]
+        found += [Path(folder) / name
+                  for folder in ollama_paths.install_candidates()
+                  for name in ollama_paths.executable_names()]
+        seen, out = set(), []
+        for candidate in found:
+            key = os.path.normcase(os.path.abspath(str(candidate)))
+            if key not in seen:
+                seen.add(key)
+                out.append(candidate)
+        return tuple(out)
+
+    def _is_known(self, executable: Optional[Path]) -> bool:
+        return executable is not None and any(
+            _same_path(executable, known) for known in self.known_executables())
+
+    def _state_pid(self) -> Optional[int]:
+        try:
+            data = json.loads(self.runtime_state_file.read_text(encoding="utf-8"))
+            return int(data["pid"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def _launched_by_us(self, pid: Optional[int]) -> bool:
+        """Did this process start that server?
+
+        The binary path cannot answer it: now that an official Ollama is
+        preferred, ``self.exe`` is what we *would* launch, and a server Windows
+        started runs the very same file. The runtime state file is the only
+        record of a pid we actually started.
+        """
+        recorded = self._state_pid()
+        return pid is not None and recorded is not None and recorded == int(pid)
+
+    def store_agrees(self, timeout: float = 5) -> Optional[bool]:
+        """Is the running server using the store we resolved? None = unknown.
+
+        There is no API for the model directory, so this compares what the
+        server lists against what is actually on disk where we think it is. A
+        server holding models we cannot see is pointed somewhere else.
+        """
+        try:
+            request = urllib.request.Request(
+                f"http://{config.OLLAMA_HOST}:{config.OLLAMA_PORT}/api/tags")
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8"))
+        except Exception:
+            return None
+        served = {str(m.get("name", "")) for m in payload.get("models") or []}
+        served.discard("")
+        if not served:
+            return True
+        try:
+            from ..models import model_index
+            on_disk = {m["name"] for m in model_index.build_index(self.model_dir)["models"]}
+        except Exception:
+            return None
+        lowered = {name.lower() for name in on_disk}
+        return all(name.lower() in lowered for name in served)
+
+    def legacy_stores(self) -> tuple:
+        """Earlier locations this project kept models in, newest first."""
+        forced = project_paths.LEGACY_FORCED_MODEL_DIR
+        sources = [] if _same_path(forced, self.model_dir) else [forced]
+        sources.append(self.env / "llm_models")
+        return tuple(sources)
 
     def _powershell(self, script: str) -> Optional[str]:
         """Windows 프로세스 소유권 확인용 PowerShell 한 줄 실행."""
@@ -172,7 +274,13 @@ class OllamaService:
     # ── 환경변수 ──
     def env_vars(self, base: Optional[dict] = None) -> dict:
         e = (base or os.environ).copy()
-        e["OLLAMA_MODELS"] = str(self.model_dir)
+        # Say where the store is, because Ollama's own default is per-user and
+        # would send a second Windows account to an empty library. The one thing
+        # never overwritten is an OLLAMA_MODELS the user already set to this
+        # same place - overriding a user's own choice was the old store's fault.
+        configured = ollama_paths.configured_models_dir(e)
+        if configured is None or not _same_path(configured, self.model_dir):
+            e["OLLAMA_MODELS"] = str(self.model_dir)
         e["OLLAMA_HOST"] = f"{config.OLLAMA_HOST}:{config.OLLAMA_PORT}"
         e.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
         e.setdefault("OLLAMA_KEEP_ALIVE", "5m")
@@ -264,21 +372,42 @@ class OllamaService:
         if self.is_running():
             pid = self._listener_pid()
             executable = self._process_executable(pid) if pid is not None else None
-            if pid is None or executable is None or not _same_path(executable, self.exe):
+            if pid is None or not self._is_known(executable):
                 shown = str(executable) if executable is not None else "확인 불가"
                 self._err(
-                    "포트 %s가 외부 Ollama에 의해 사용 중입니다: %s"
+                    "포트 %s가 알 수 없는 Ollama에 의해 사용 중입니다: %s"
                     % (config.OLLAMA_PORT, shown)
                 )
-                self._err("외부 Ollama를 종료한 뒤 다시 실행하세요.")
+                self._err("해당 Ollama를 종료한 뒤 다시 실행하세요.")
                 return False
 
             if self._state_matches(pid):
                 return True
 
+            # 우리가 띄우지 않은 공식 Ollama 는 Windows 가 관리한다. 같은 저장소를
+            # 보고 있으면 그대로 쓴다 — 중간 매개체로 쓰는 것이 목적이고, 남의
+            # 서비스를 죽이는 것은 목적이 아니다.
+            # The portable copy lives in this project's own folder, so nothing
+            # else on the machine runs it: restarting it is restarting ours.
+            # An official install may be the user's Windows service.
+            ours = (self._launched_by_us(pid)
+                    or _same_path(executable, self.portable_exe))
+            if not ours:
+                agrees = self.store_agrees()
+                if agrees:
+                    self._ok("이미 실행 중인 Ollama 를 사용합니다: " + str(executable))
+                    return True
+                if agrees is None:
+                    self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다.")
+                    return True
+                self._err("실행 중인 Ollama 가 다른 모델 저장소를 쓰고 있습니다.")
+                self._err("OLLAMA_MODELS 를 %s 로 맞추고 Ollama 를 재시작하세요."
+                          % self.model_dir)
+                return False
+
             # 이전 버전이 같은 포터블 exe를 다른 OLLAMA_MODELS 값으로 실행했을 수
             # 있다. 환경변수는 실행 중 프로세스에 소급 적용되지 않으므로 한 번
-            # 재시작해 현재 공용 저장소를 확실히 적용한다.
+            # 재시작해 현재 저장소를 확실히 적용한다.
             self._warn("관리형 Ollama의 모델 저장소 설정을 갱신하기 위해 재시작합니다.")
             if not self._terminate_listener(pid):
                 return False

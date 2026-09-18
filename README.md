@@ -12,7 +12,8 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 화면 구성과 경계는 [STUDIO.md](STUDIO.md) 에 정리되어 있습니다.
 
 사용자 설정·로그·세션 같은 영속 데이터는 루트의 `user_data/`에 유지되고, 프로그램 소스와 개발용 파일은 `src/` 아래에 모여 있습니다.
-대용량 Ollama 모델은 프로젝트와 분리된 공용 저장소 `C:\LLM_Models`에 저장됩니다.
+대용량 Ollama 모델은 Ollama 설치 폴더 밑의 기계 공용 저장소 `C:\Ollama\models`에 저장됩니다.
+이 PC의 다른 Windows 계정도 같은 모델을 그대로 씁니다 — 계정마다 수십 GB를 다시 받지 않습니다.
 
 ## 빠른 시작
 
@@ -68,6 +69,38 @@ RUN.bat --install     :: SETUP.bat --install 과 같습니다
 
 기존 `RUN_TUI.bat`은 제거되었으며 `RUN.bat --tui`로 통합되었습니다.
 
+## Ollama 를 중간 매개체로 쓰기
+
+이 프로그램은 Ollama 를 품지 않고 **중간 매개체로 씁니다.** 모델을 받고, 보관하고,
+서빙하는 일은 전부 Ollama 가 합니다. 그래서 같은 모델을 AnythingLLM, Open Interpreter,
+그리고 이 PC 의 다른 프로그램이 함께 씁니다.
+
+**설치** — 기계에 이미 Ollama 가 있으면 그것을 씁니다. 없을 때만 공식 설치기를
+`OllamaSetup.exe /DIR=C:\Ollama /VERYSILENT /NORESTART` 로 돌립니다. 공식 설치기는
+관리자 권한이 필요 없고 기본값은 `%LOCALAPPDATA%\Programs\Ollama` 이므로, C: 루트에
+두려면 `/DIR` 이 필요합니다. `C:\Program Files` 로는 넣지 않습니다 — 공식 설치기가
+per-machine 파일과 per-user 레지스트리가 섞인 상태를 만든다고 보고돼 있습니다.
+
+**모델 위치** — `C:\Ollama\models`. Ollama 자체 기본값(`%USERPROFILE%\.ollama\models`)은
+계정 전용이라 두 번째 Windows 계정이 빈 목록을 보고 전부 다시 받게 됩니다. 그래서
+설치기가 `OLLAMA_MODELS` 를 **시스템 범위**로 기록하고(관리자 권한 필요),
+`BUILTIN\Users` 에 읽기/실행 권한을 줍니다. 쓰기 권한은 주지 않습니다 — 모델은 AI
+동작을 좌우하는 신뢰 자산입니다.
+
+**이미 `OLLAMA_MODELS` 를 직접 설정해 뒀다면 그 값이 이깁니다.** 예전 버전이
+`C:\LLM_Models` 를 강제해서 사용자가 옮겨 둔 저장소를 덮어썼는데, 그 실수를
+반복하지 않습니다.
+
+**예전 `C:\LLM_Models`** — 설치기가 찾아서 새 위치로 옮깁니다. 같은 볼륨이면 rename,
+다른 볼륨이면 복사 → 완료 marker(출처 기록) → 원본 정리 순서라 어느 지점에서
+중단돼도 다음 실행이 완성본과 부분 복사본을 구분합니다. 새 위치에 이미 모델이 있으면
+자동 병합하지 않고 경고만 합니다. 이전이 끝나기 전에는 실행을 거부합니다 — 디스크에
+수십 GB 가 보이는데 목록이 비어 있는 상태로 시작하지 않기 위해서입니다.
+
+**이미 떠 있는 Ollama** — 알려진 위치에서 실행 중이고 우리와 같은 저장소를 보고 있으면
+(`/api/tags` 와 디스크 인덱스 대조) 그대로 씁니다. 남의 Windows 서비스를 죽이지
+않습니다. 다른 저장소를 쓰고 있으면 무엇을 맞춰야 하는지 알려주고 중단합니다.
+
 ## 현재 디렉터리 구조
 
 ```text
@@ -121,7 +154,7 @@ SRC_ROOT          -> <project>/src
 PROJECT_ROOT      -> <project>
 USER_DATA_DIR     -> <project>/user_data
 ENV_DIR           -> <project>/llm_environment
-MODEL_STORAGE_DIR -> C:\LLM_Models
+MODEL_STORAGE_DIR -> C:\Ollama\models   (OLLAMA_MODELS 를 직접 설정했다면 그 값)
 ```
 
 따라서 `launcher/`와 `installer/`가 `src/` 아래로 이동해도 사용자 데이터와 설치 환경 위치는 바뀌지 않습니다.

@@ -18,11 +18,14 @@ def test_run_and_setup_forward_to_one_application_parser():
         assert flag in run
 
 
-def test_core_keeps_active_legacy_model_default(monkeypatch):
+def test_paths_follow_ollama_and_still_remember_the_old_store(monkeypatch):
     monkeypatch.delenv('LLM_MODEL_DIR',raising=False)
     monkeypatch.delenv('LLM_OLLAMA_DIR',raising=False)
+    from core import ollama_paths
     from test_reform_core import _isolated_paths
-    assert str(_isolated_paths().MODEL_STORAGE_DIR)==r'C:\LLM_Models'
+    paths=_isolated_paths()
+    assert paths.MODEL_STORAGE_DIR==ollama_paths.models_dir()
+    assert str(paths.LEGACY_FORCED_MODEL_DIR)==r'C:\LLM_Models'
 
 
 def test_default_inference_does_not_activate_official_migration(monkeypatch,tmp_path):
