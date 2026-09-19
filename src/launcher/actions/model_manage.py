@@ -25,16 +25,17 @@ def _catalog():
 
 
 def _installed_tags(svc) -> set:
+    """설치된 태그. 모델 확인 정본 하나만 거친다.
+
+    예전에는 `ollama list` 를 프로세스로 띄워 열 맞춘 stdout 을 잘랐다.
+    같은 답을 HTTP 로 얻을 수 있는데 프로세스를 하나 더 띄웠고, 출력
+    형식이 바뀌면 조용히 빈 집합이 되었다. 서버가 꺼져 있으면 저장소가
+    답하므로 이제는 그 경우에도 빈 집합이 아니다.
+    """
     try:
-        r = subprocess.run([str(svc.exe), "list"], env=svc.env_vars(),
-                           capture_output=True, text=True, timeout=30, **_NO_WINDOW_KW)
-        out = set()
-        for line in (r.stdout or "").splitlines()[1:]:  # 헤더 스킵
-            tok = line.split()
-            if tok:
-                out.add(tok[0])
-        # 카탈로그 표기로 맞춰 둬야 이후의 `tag in installed` 비교가 전부 맞는다.
-        return _catalog().canonicalize_installed(out)
+        from integrations.ollama import inventory
+        found = inventory.read(getattr(svc, "model_dir", None))
+        return set(found.tags) if found.known else set()
     except Exception:
         return set()
 

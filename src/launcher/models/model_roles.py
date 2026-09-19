@@ -493,6 +493,9 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
     if not lad:
         return None
     if installed is _ASK_SERVER:
+        # 라우터가 답하면 그 답이, 꺼져 있으면 저장소가 답한다. 예전에는
+        # 서버가 꺼졌다는 이유만으로 '설치된 것 없음' 취급이 되어, 받아둔
+        # 모델을 놔두고 사다리 위쪽의 없는 모델을 골랐다.
         try:
             installed = installed_models()
         except Exception:
@@ -557,20 +560,32 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
 
 
 # >>> MODEL_INSTALLED_MATCH_v1 — 설치 모델 자동 매치 (additive)
-def installed_models(host="127.0.0.1:11434", timeout=5):
-    """Ollama /api/tags 로 설치된 모델 태그 집합 반환. 조회 실패 시 None."""
+def _inventory(model_dir=None, host=None, timeout=5, router=True, store=True):
+    """모델 확인 정본. 임포트는 함수 안에서 — 순환을 만들지 않기 위해서다."""
+    from integrations.ollama import inventory as _inv
+    endpoint = ("http://" + host) if host else None
+    return _inv.read(model_dir, endpoint=endpoint, timeout=timeout,
+                     router=router, store=store)
+
+
+def installed_models(host="127.0.0.1:11434", timeout=5, model_dir=None):
+    """쓸 수 있는 모델 태그 집합. 아무 쪽도 못 읽으면 None.
+
+    이 프로그램에서 '어떤 모델이 있나' 를 묻는 자리는 전부 여기로 온다.
+    답은 정본 파이프라인이 만든다 — 라우터(올라마)가 답하면 그 답이,
+    꺼져 있으면 저장소가 답한다. 예전에는 맨 urlopen 으로 /api/tags 만
+    물었고, 서버가 꺼져 있으면 None 을 돌려줬다. 받는 쪽은 그걸 '모름'
+    으로 처리해, 이미 받아 둔 모델을 놔두고 사다리 위쪽의 없는 모델을
+    골랐다. None 은 이제 정말로 양쪽 다 못 읽은 경우만 뜻한다.
+
+    맨 urlopen 은 환경에 http_proxy 가 있으면 루프백 요청을 프록시로
+    보내기도 했다. 정본 전송은 프록시와 리다이렉트를 거부한다.
+    """
     try:
-        req = _urlreq.Request("http://" + host + "/api/tags")
-        with _urlreq.urlopen(req, timeout=timeout) as r:
-            data = _json.loads(r.read().decode("utf-8"))
-        out = set()
-        for m in (data.get("models") or []):
-            nm = m.get("name") or m.get("model")
-            if nm:
-                out.add(nm)
-        return _canonical(out)
+        found = _inventory(model_dir, host, timeout)
     except Exception:
         return None
+    return set(found.tags) if found.known else None
 
 
 def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.0.1:11434"):

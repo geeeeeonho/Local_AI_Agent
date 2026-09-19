@@ -63,12 +63,17 @@ class ModelService:
     def installed_tags(self):
         """Model names actually present in the store. Does not start Ollama.
 
-        Manifests only. Both views name models from the same records, and
-        build_index would additionally stat every blob to answer a question
-        about names — cost that grows with the size of the store, on a read
-        the model screen makes every time it opens.
+        The store alone, deliberately: this feeds a management screen that has
+        to stay truthful while the router is stopped, and that offers to delete
+        files - which is a question about the directory, not about what some
+        server is willing to serve.
         """
-        return set(index.read_manifests(self.model_dir))
+        return set(self.inventory_view(router=False).tags)
+
+    def inventory_view(self, *, router=True):
+        """What this machine can use, through the one model-check pipeline."""
+        from integrations.ollama import inventory
+        return inventory.read(self.model_dir, router=router)
 
     def catalog(self, *, installed=None, budget_gb=None):
         """Catalog rows for the selection view, each with its install state."""

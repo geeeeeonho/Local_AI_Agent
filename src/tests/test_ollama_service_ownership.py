@@ -231,56 +231,27 @@ def test_health_sees_an_official_server_we_did_not_launch(tmp_path, monkeypatch)
 
 
 def test_store_agreement_compares_served_models_against_the_disk(tmp_path, monkeypatch):
-    import json
-    from launcher.services import ollama as module
+    import model_router_stub as router
     svc = _service(tmp_path)
 
-    class Response:
-        def __init__(self, payload):
-            self.payload = json.dumps(payload).encode()
-        def read(self, n=None):
-            return self.payload
-        def __enter__(self):
-            return self
-        def __exit__(self, *exc):
-            return False
-
-    def serve(payload):
-        monkeypatch.setattr(module.urllib.request, "urlopen",
-                            lambda *a, **k: Response(payload))
-
-    serve({"models": []})
+    router.serve(monkeypatch, [])
     assert svc.store_agrees() is True, "nothing served, nothing to disagree about"
 
-    serve({"models": [{"name": "ghost:7b"}]})
-    monkeypatch.setattr("launcher.models.model_index.read_manifests", lambda path: {})
+    router.serve(monkeypatch, ["ghost:7b"])
+    router.store(monkeypatch, [])
     assert svc.store_agrees() is False, "serves a model we cannot see on disk"
 
-    monkeypatch.setattr("launcher.models.model_index.read_manifests",
-                        lambda path: {"Ghost:7B": {}})
+    router.store(monkeypatch, ["Ghost:7B"])
     assert svc.store_agrees() is True, "case differences are not disagreement"
 
 
 def test_agreement_reads_manifests_only_not_every_blob(tmp_path, monkeypatch):
     """This runs on the health poll; it must not grow with the store."""
-    import json
-    from launcher.services import ollama as module
+    import model_router_stub as router
     svc = _service(tmp_path)
-
-    class Response:
-        def read(self, n=None):
-            return json.dumps({"models": [{"name": "a:1"}]}).encode()
-        def __enter__(self):
-            return self
-        def __exit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(module.urllib.request, "urlopen", lambda *a, **k: Response())
-    walked = []
-    monkeypatch.setattr("launcher.models.model_index.build_index",
-                        lambda path: walked.append(path) or {"models": []})
-    monkeypatch.setattr("launcher.models.model_index.read_manifests",
-                        lambda path: {"a:1": {}})
+    router.serve(monkeypatch, ["a:1"])
+    router.store(monkeypatch, ["a:1"])
+    walked = router.forbid_blob_walk(monkeypatch)
     assert svc.store_agrees() is True
     assert walked == [], "build_index stats every blob for no reason here"
 

@@ -96,26 +96,13 @@ def test_the_service_layer_passes_a_refresh_request_through(tmp_path):
 
 def test_store_agreement_does_not_walk_the_blob_store(tmp_path, monkeypatch):
     """It runs on the health poll, so its cost must track models, not blobs."""
-    import json
-    from launcher.services import ollama as module
+    import model_router_stub as router
     from launcher.services.ollama import OllamaService
 
     service = OllamaService(tmp_path, model_dir=tmp_path / 'models')
-
-    class Response:
-        def read(self, n=None):
-            return json.dumps({'models': [{'name': 'a:1'}]}).encode()
-        def __enter__(self):
-            return self
-        def __exit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(module.urllib.request, 'urlopen', lambda *a, **k: Response())
-    walked = []
-    monkeypatch.setattr('launcher.models.model_index.build_index',
-                        lambda path: walked.append(path) or {'models': []})
-    monkeypatch.setattr('launcher.models.model_index.read_manifests',
-                        lambda path: {'a:1': {}})
+    router.serve(monkeypatch, ['a:1'])
+    router.store(monkeypatch, ['a:1'])
+    walked = router.forbid_blob_walk(monkeypatch)
     assert service.store_agrees() is True
     assert walked == []
 

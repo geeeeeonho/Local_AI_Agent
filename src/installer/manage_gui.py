@@ -85,10 +85,12 @@ def _check_docker():
 
 def _check_ollama(host="http://127.0.0.1:11434"):
     try:
-        urllib.request.urlopen(host + "/api/tags", timeout=2)
-        return True, "실행 중 (" + host + ")"
+        from integrations.ollama import inventory
+        if inventory.router_reachable(endpoint=host, timeout=2):
+            return True, "실행 중 (" + host + ")"
     except Exception:
-        return False, "응답 없음 — 모델 관리 시 자동 기동 시도"
+        pass
+    return False, "응답 없음 — 모델 관리 시 자동 기동 시도"
 
 
 def _check_env():
@@ -145,12 +147,15 @@ def _class_view(free_gb=None, installed=None):
 
 
 def _installed_set():
+    """설치된 태그, 또는 확인 불가면 None.
+
+    서버가 꺼져 있어도 저장소가 답한다. 예전에는 이 화면이 '모델 없음'
+    으로 보여, 이미 받아 둔 모델을 다시 받게 만들었다.
+    """
     try:
-        from launcher.models import model_roles as mr
-    except Exception:
-        return None
-    try:
-        return mr.installed_models()
+        from integrations.ollama import inventory
+        found = inventory.read()
+        return set(found.tags) if found.known else None
     except Exception:
         return None
 

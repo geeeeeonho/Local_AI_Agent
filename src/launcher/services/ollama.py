@@ -163,30 +163,17 @@ class OllamaService:
         """Is the running server using the store we resolved? None = unknown.
 
         There is no API for the model directory, so this compares what the
-        server lists against what is actually on disk where we think it is. A
-        server holding models we cannot see is pointed somewhere else.
+        router lists against what is actually on disk where we think it is. A
+        router holding models we cannot see is pointed somewhere else.
+
+        Both sides come from the one model-check pipeline, so this can no
+        longer disagree with the model screen about what either side holds.
         """
         try:
-            request = urllib.request.Request(
-                f"http://{config.OLLAMA_HOST}:{config.OLLAMA_PORT}/api/tags")
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8"))
+            from integrations.ollama import inventory
+            return inventory.read(self.model_dir, timeout=timeout).agreement
         except Exception:
             return None
-        served = {str(m.get("name", "")) for m in payload.get("models") or []}
-        served.discard("")
-        if not served:
-            return True
-        try:
-            # Manifests only. build_index also stats every blob, which answers a
-            # question nobody asked here and grows with the store rather than
-            # with the number of models - and this runs on the health poll.
-            from ..models import model_index
-            on_disk = set(model_index.read_manifests(self.model_dir))
-        except Exception:
-            return None
-        lowered = {name.lower() for name in on_disk}
-        return all(name.lower() in lowered for name in served)
 
     def cloud_status(self, timeout: float = 5) -> Optional[bool]:
         """Is remote inference disabled on the running server? None = unknown.
