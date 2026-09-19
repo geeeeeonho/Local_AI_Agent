@@ -17,46 +17,18 @@ from .console import section, ok, warn
 
 INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
 _MIGRATION_COMPLETE_MARKER = ".LOCAL_AI_MIGRATION_COMPLETE"
-_BUILTIN_USERS_SID = "S-1-5-32-545"
-
-
 def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) -> bool:
     """다른 로컬 사용자도 공용 모델을 읽을 수 있도록 최소 권한을 보장한다.
 
-    모델 저장소는 AI 동작에 영향을 주는 신뢰 자산이므로 모든 사용자에게 쓰기
-    권한을 열지는 않는다. ``BUILTIN\\Users`` 에 읽기/실행 권한을 재귀적으로
-    추가하고 기존 ACL은 보존한다.
+    정본은 ``integrations.ollama.sharing`` 이다. 설치 때 한 번만이 아니라
+    나중에도 확인·복구할 수 있어야 해서 그쪽으로 옮겼고, 여기서는 설치
+    화면이 쓰는 이름만 유지한다.
     """
-    use_windows = (os.name == "nt") if windows is None else bool(windows)
-    if not use_windows:
+    from integrations.ollama import sharing
+    if sharing.ensure_readable(model_dir, windows=windows):
         return True
-
-    command = [
-        "icacls",
-        str(model_dir),
-        "/grant",
-        f"*{_BUILTIN_USERS_SID}:(OI)(CI)(RX)",
-        "/T",
-        "/Q",
-    ]
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-            creationflags=0x08000000,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        warn(f"공용 모델 폴더 읽기 권한 설정 실패: {exc}")
-        return False
-
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        warn(f"공용 모델 폴더 읽기 권한 설정 실패: {detail or 'icacls error'}")
-        return False
-    return True
+    warn("공용 모델 폴더 읽기 권한 설정 실패")
+    return False
 
 
 def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) -> bool:
@@ -64,31 +36,19 @@ def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) ->
 
     읽기 권한만으로는 부족하다. 다른 계정의 Ollama 는 자기 프로필 밑
     ``.ollama\\models`` 를 보므로, 시스템 범위 ``OLLAMA_MODELS`` 가 있어야
-    같은 모델을 가리킨다. 사용자 범위 값이 이미 있으면 그쪽이 우선하므로
-    개인 설정을 덮어쓰지 않는다.
+    같은 모델을 가리킨다.
 
-    관리자 권한이 필요하다. 실패해도 설치를 중단하지 않고, 이 계정에서는
-    실행 시 주입하는 값으로 계속 동작한다.
+    관리자 권한이 필요하다. 실패해도 설치를 중단하지 않는다 — 이 계정에서는
+    실행 시 주입하는 값으로 계속 동작하고, 모델 화면에서 나중에 고칠 수 있다.
     """
-    use_windows = (os.name == "nt") if windows is None else bool(windows)
-    if not use_windows:
+    from integrations.ollama import sharing
+    if sharing.publish_machine_variable(model_dir, windows=windows):
         return True
-    try:
-        result = subprocess.run(
-            ["setx", "OLLAMA_MODELS", str(model_dir), "/M"],
-            capture_output=True, text=True, timeout=20, check=False,
-            creationflags=0x08000000,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        warn(f"시스템 범위 OLLAMA_MODELS 설정 실패: {exc}")
-        return False
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        warn(f"시스템 범위 OLLAMA_MODELS 설정 실패: {detail or 'setx error'}")
-        warn("이 계정에서는 정상 동작하지만, 다른 Windows 계정은 같은 모델을 "
-             "보지 못합니다. 관리자 권한으로 SETUP.bat 을 한 번 실행하세요.")
-        return False
-    return True
+    warn("시스템 범위 OLLAMA_MODELS 설정 실패")
+    warn("이 계정에서는 정상 동작하지만, 다른 Windows 계정은 같은 모델을 "
+         "보지 못합니다. 모델 화면의 '모든 계정 공용으로 고치기' 를 "
+         "관리자 권한으로 한 번 실행하세요.")
+    return False
 
 
 def _remove_migration_staging(staging: Path) -> None:

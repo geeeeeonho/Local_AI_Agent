@@ -110,8 +110,16 @@ def _disk(parent, w):
     bar = _row(parent)
     _button(bar, '인덱스 갱신', w.refresh_models, kind='Manage')
     _button(bar, '모델 고르기', lambda: w.model_tabs.select(w.model_pages['choose']))
+    w.sharing_button = _button(bar, '모든 계정 공용으로 고치기', w.repair_sharing,
+                               kind='Manage')
     w.model_summary = tk.StringVar(master=w.root, value=str(w.services.model_dir))
     ttk.Label(parent, textvariable=w.model_summary, style='Muted.TLabel',
+              wraplength=780, justify='left').pack(anchor='w', pady=(0, 4))
+    # Whether every Windows account can really use this store is a fact about
+    # the machine, not about the path, so it gets its own line and can say it
+    # does not know.
+    w.sharing_summary = tk.StringVar(master=w.root, value='공용 상태 확인 중...')
+    ttk.Label(parent, textvariable=w.sharing_summary, style='Muted.TLabel',
               wraplength=780, justify='left').pack(anchor='w', pady=(0, 8))
     w.model_tree = _tree(parent, ('name', 'size', 'shared', 'exclusive', 'status'),
                          ('Model', 'Size (GiB)', 'Shared', 'Exclusive', 'Files'),

@@ -325,7 +325,11 @@ class DesktopWindow:
     def refresh_models(self):
         def scan():
             self.services.models.refresh_index()
-            return self.services.models.inventory()
+            index=self.services.models.inventory()
+            # Reading the registry and the ACL belongs on the worker with the
+            # rest of the scan, not on the Tk thread painting the result.
+            index['sharing']=self.services.models.sharing()
+            return index
         def display(index):
             self.model_tree.delete(*self.model_tree.get_children())
             self._model_records={}
@@ -336,6 +340,7 @@ class DesktopWindow:
                 iid=self.model_tree.insert('','end',values=values);self._model_records[iid]=model
             totals=index['totals']
             store=self.services.models.storage()
+            self.show_sharing(index.get('sharing'))
             free=store['free_bytes']
             kind=(' · 모든 계정 공용' if store.get('shared')
                   else ' · 이 계정 전용' if store.get('per_user') else '')
@@ -481,6 +486,35 @@ class DesktopWindow:
         short=plan['fits'] is False and plan['install']
         self.choice_storage_label.configure(style='Alert.TLabel' if short else 'Muted.TLabel')
         self.apply_button.state(['!disabled'] if plan['install'] or plan['remove'] else ['disabled'])
+
+    SHARING_UNKNOWN='다른 계정도 쓸 수 있는지 확인하지 못했습니다.'
+
+    def show_sharing(self,state):
+        if not state:
+            self.sharing_summary.set(self.SHARING_UNKNOWN);return
+        every=state.get('every_account')
+        if every is True:
+            text='이 PC의 모든 Windows 계정이 같은 모델을 씁니다.'
+        elif every is None:
+            text=self.SHARING_UNKNOWN
+        else:
+            text='이 계정에서만 쓸 수 있습니다. '+' '.join(state.get('reasons') or ())
+        self.sharing_summary.set(text)
+        button=getattr(self,'sharing_button',None)
+        if button is not None:
+            # Offer the fix only where there is something the program can fix;
+            # a user-scope override is that account's own setting.
+            button.configure(state='normal' if state.get('repairable') else 'disabled')
+
+    def repair_sharing(self):
+        def done(result):
+            self.show_sharing(result)
+            if result.get('every_account') is True:
+                self.log('공용 설정을 고쳤습니다: '+result['path'])
+            else:
+                self.log('공용 설정을 끝내지 못했습니다. 관리자 권한으로 다시 시도하세요. '
+                         +' '.join(result.get('reasons') or ()),level='error')
+        self.run_task('models.sharing',self.services.models.repair_sharing,done)
 
     def storage_line(self,plan):
         store=plan['storage']

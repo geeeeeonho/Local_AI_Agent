@@ -180,6 +180,32 @@ class ModelService:
             'per_user': ollama_paths.is_per_user_store(path),
         }
 
+    def sharing(self):
+        """Whether the machine's other accounts can really use this store.
+
+        The path having the right shape is not the same as the machine being
+        set up for it: publishing the machine-scope OLLAMA_MODELS needs
+        administrator rights and can simply have failed during setup. Saying
+        "모든 계정 공용" on the strength of the path alone told those users
+        something false.
+        """
+        from integrations.ollama import sharing
+        state = sharing.read(self.model_dir)
+        return {'path': state.path, 'every_account': state.every_account,
+                'blockers': list(state.blockers), 'repairable': state.repairable,
+                'reasons': list(sharing.describe(state))}
+
+    def repair_sharing(self):
+        """Grant read access and publish the machine-scope variable. Idempotent."""
+        from integrations.ollama import sharing
+        result = sharing.repair(self.model_dir)
+        payload = {'path': result['path'], 'every_account': result['every_account'],
+                   'blockers': list(result['blockers']),
+                   'repaired': list(result['repaired']), 'failed': list(result['failed']),
+                   'reasons': list(sharing.describe(result['after']))}
+        self.events.emit('models.sharing', payload)
+        return payload
+
     def overview(self, *, free_gb=None):
         """Catalogue and stack from one scan of the store.
 
