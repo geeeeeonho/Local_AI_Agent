@@ -95,7 +95,9 @@ class SearchRuntime:
 
     def stop(self):
         if not self.owned:return True
-        result=self.docker.run(['stop',self.container],timeout=25)
+        # `docker stop` 의 종료 코드는 판정에 쓰지 않는다. 이미 사라진 컨테이너에는
+        # 실패로 돌아오기 때문에, 아래 `ps` 관찰만을 정본으로 삼는다.
+        self.docker.run(['stop',self.container],timeout=25)
         state=self.docker.run(['ps','--filter',f'name=^{self.container}$','--format','{{.Names}}'],timeout=15)
         stopped=state is not None and state.returncode==0 and self.container not in (state.stdout or '').split()
         if stopped:self.owned=False
