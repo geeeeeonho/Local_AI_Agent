@@ -17,6 +17,22 @@ def test_run_and_setup_forward_to_one_application_parser():
         assert flag in run
 
 
+def test_every_standalone_batch_file_opens_its_own_application():
+    for name, app in (('STUDIO.bat','studio'),('CHAT.bat','chat'),('INTERPRETER.bat','interpreter')):
+        text=(ROOT/name).read_text()
+        assert 'RUN.bat" --app '+app in text, name
+        assert 'exit /b %errorlevel%' in text, name   # 실패를 삼키지 않는다
+
+
+def test_readme_names_every_entrypoint_a_user_can_double_click():
+    """루트의 .bat 을 늘리고 README 를 안 고치면 아무도 그 진입점을 모른다."""
+    readme=(ROOT/'README.md').read_text(encoding='utf-8')
+    present=sorted(path.name for path in ROOT.glob('*.bat'))
+    assert present
+    missing=[name for name in present if name not in readme]
+    assert not missing, 'README 에 없는 진입점: '+', '.join(missing)
+
+
 def test_core_keeps_active_legacy_model_default(monkeypatch):
     monkeypatch.delenv('LLM_MODEL_DIR',raising=False)
     monkeypatch.delenv('LLM_OLLAMA_DIR',raising=False)
