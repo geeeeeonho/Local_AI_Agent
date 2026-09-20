@@ -131,7 +131,7 @@ class ModelPipelineTests(unittest.TestCase):
 
         def unavailable(entries, installed, **kwargs):
             self.selection_calls.append((entries, set(installed), kwargs))
-            raise RuntimeError("no display")
+            raise ModuleNotFoundError("No module named 'tkinter'")
 
         self.select = unavailable
         model_select_gui.select_models = (
@@ -178,6 +178,25 @@ class ModelPipelineTests(unittest.TestCase):
         self.assertNotIn(drop, self.ollama.installed(),
                          "체크 해제한 설치 모델이 지워지지 않았다")
         self.assertIn(keep, self.ollama.installed())
+
+    def test_a_broken_selection_window_is_reported_loudly_not_swallowed(self):
+        """Tk 부재는 예상된 폴백이지만, 코드 결함은 크게 알려야 한다.
+
+        실제로 NameError 하나가 이 except 절에 삼켜져, 선택 창이 한 번도 뜨지
+        않은 채 매 설치가 권장 세트를 통째로 받았다.
+        """
+        from installer import utils
+        said = []
+        self.addCleanup(setattr, utils, "err", utils.err)
+        utils.err = lambda message: said.append(str(message))
+
+        def broken(*a, **kw):
+            raise NameError("name 'free_gb' is not defined")
+
+        self.select = broken
+        planned = self._install()
+        self.assertTrue(planned, "권장 세트로는 계속 진행해야 한다")
+        self.assertTrue(any("free_gb" in line for line in said), said)
 
     def test_cancelling_the_selection_window_downloads_nothing(self):
         self.select = lambda *a, **kw: None

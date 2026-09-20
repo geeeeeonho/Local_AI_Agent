@@ -69,8 +69,10 @@ def test_legacy_entry_restores_argv_on_exception(monkeypatch,tmp_path):
 def chat_backend(tmp_path,ids):
     from test_desktop_integration import fixture
     b,m,c=fixture(tmp_path)
+    started=[]
     m['launcher.anythingllm_runtime']=NS(CONTAINER='chat',URL='http://localhost:3001',
-        start=lambda **k:True,stop=lambda:c.append('stopped'),is_running=lambda:False)
+        started=started,start=lambda **k:started.append(k) or True,
+        stop=lambda:c.append('stopped'),is_running=lambda:False)
     sequence=iter(ids)
     m['launcher.services.docker'].DockerService.stop_container=lambda identifier,timeout:c.append('stopped') or True
     m['launcher.services.docker'].DockerService.run=lambda *a,**k: NS(returncode=0,stdout=next(sequence))
@@ -82,6 +84,24 @@ def test_chat_recreated_container_is_stopped_on_close(tmp_path):
     assert b.chat_start('',print,None)=='http://localhost:3001'
     assert b.chat_stop()
     assert c==['stopped']
+
+
+def test_chat_start_passes_the_canonical_token_limit_and_model(tmp_path):
+    """컨텍스트 한도는 config 한 곳에서만 온다. 예전 코드는 존재하지 않는
+    이름 두 개를 거쳐 AttributeError 로 Chat 시작 자체를 막았다."""
+    from launcher import config
+    b,m,c=chat_backend(tmp_path,['','id\n'])
+    b.chat_start('picked:tag',print,None)
+    started,=m['launcher.anythingllm_runtime'].started
+    assert started['token_limit']==config.CHAT_CONTEXT_WINDOW
+    assert started['model_tag']=='picked:tag'
+
+
+def test_chat_start_falls_back_to_the_catalog_default_model(tmp_path):
+    b,m,c=chat_backend(tmp_path,['','id\n'])
+    b.chat_start('',print,None)
+    started,=m['launcher.anythingllm_runtime'].started
+    assert started['model_tag']==m['launcher.config'].MODEL_TAG
 
 
 def test_chat_reused_container_is_not_stopped(tmp_path):
