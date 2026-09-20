@@ -147,8 +147,39 @@ def build_probe_command(
     ]
 
 
+# What the probe must actually have reported for its answer to mean anything.
+# Absence is not evidence of blocking: `bool(None)` is False, so a result that
+# never ran the check used to read exactly like one that ran it and was
+# refused - and the tool printed "public raw-IP TCP and public DNS blocked:
+# True" and exited 0.
+REQUIRED_PROBE_KEYS = ("public_ip_tcp", "public_dns", "host_service",
+                       "managed_host_relays")
+
+
+def _check_probe_result(result: Mapping[str, object]) -> None:
+    """Raise unless the probe reported every fact the verdict rests on."""
+    if not isinstance(result, Mapping):
+        raise ValueError("probe result is not an object")
+    missing = [key for key in REQUIRED_PROBE_KEYS if key not in result]
+    if missing:
+        raise ValueError("probe result did not report: " + ", ".join(missing))
+    for key in ("public_ip_tcp", "public_dns"):
+        if not isinstance(result[key], bool):
+            raise ValueError("probe result %s is not a boolean: %r" % (key, result[key]))
+    host = result["host_service"]
+    if host is not None and not isinstance(host, bool):
+        raise ValueError("probe result host_service is neither a boolean nor null")
+    if not isinstance(result["managed_host_relays"], Mapping):
+        raise ValueError("probe result managed_host_relays is not an object")
+
+
 def evaluate_probe_result(result: Mapping[str, object]) -> ProbeVerdict:
-    """Interpret probe JSON without performing Docker I/O."""
+    """Interpret probe JSON without performing Docker I/O.
+
+    Raises when the probe did not report a fact this verdict depends on: a
+    security check must not turn a missing answer into a passing one.
+    """
+    _check_probe_result(result)
     public_ip = bool(result.get("public_ip_tcp"))
     public_dns = bool(result.get("public_dns"))
     blocked = not public_ip and not public_dns
@@ -208,9 +239,16 @@ def _parse_probe_output(stdout: str) -> dict[str, object]:
             value = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
-            return value
-    raise ValueError("probe container did not emit a JSON result")
+        if not isinstance(value, dict):
+            continue
+        # Any JSON object used to be accepted, so an unrelated log line - or
+        # the probe crashing after printing "{}" - was read as a clean result.
+        try:
+            _check_probe_result(value)
+        except ValueError:
+            continue
+        return value
+    raise ValueError("probe container did not emit a complete JSON result")
 
 
 def run_diagnostic(
