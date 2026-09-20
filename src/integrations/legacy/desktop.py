@@ -121,10 +121,10 @@ class LegacyBackend:
             raise RuntimeError('Docker is unavailable. Open Setup / Repair.')
         before = self._chat_id()
         self._chat_probe_failed = False
-        try:
-            context = int(self.load('launcher.models.model_roles').chat_context_window())
-        except Exception:
-            context = int(cfg.MODEL_CONTEXT)
+        # launcher.config.CHAT_CONTEXT_WINDOW (TOKEN_LIMITS_v1) is the one context
+        # source. The previous pair named two attributes that never existed, so the
+        # fallback raised AttributeError and Chat could not start at all.
+        context = int(cfg.CHAT_CONTEXT_WINDOW)
         try:
             if not runtime.start(log=log, model_tag=model or cfg.MODEL_TAG,
                                  token_limit=context, cancel_check=cancel):
@@ -234,8 +234,21 @@ class LegacyBackend:
         # Lifetime is owned by AgentSession and DesktopWindow, not panel destruction.
         return panel
 
+    # The retained package re-exports two of these under *_action aliases, so a
+    # module path built from the key alone raised ModuleNotFoundError the first
+    # time a user pressed those buttons. Name the real modules here instead.
+    MAINTENANCE_MODULES = {
+        'docker_image': 'launcher.actions.docker_image',
+        'docker_clean': 'launcher.actions.docker_clean',
+        'settings_action': 'launcher.actions.settings',
+        'searxng_action': 'launcher.actions.searxng',
+    }
+
     def maintenance(self, key, presenter):
-        return self.load('launcher.actions.' + key).run(self.env, presenter)
+        module = self.MAINTENANCE_MODULES.get(key)
+        if module is None:
+            raise ValueError('unknown maintenance operation')
+        return self.load(module).run(self.env, presenter)
 
     def setup_command(self):
         executable = Path(sys.executable)

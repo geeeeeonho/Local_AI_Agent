@@ -13,12 +13,38 @@
 컴파일도 테스트도 통과하므로 AST 로 직접 확인한다.
 """
 import ast
+import builtins
+import symtable
 import sys
 import unittest
 from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
-FIRST_PARTY_ROOTS = {"launcher", "installer", "tools", "tests"}
+
+
+def _first_party_roots():
+    """src/ 에 실제로 있는 최상위 이름에서 뽑는다.
+
+    손으로 적어 둔 목록은 새 패키지(apps / services / core / integrations)가
+    생겼을 때 조용히 낡는다. 정작 검사가 가장 필요한 새 코드가 빠진다.
+    """
+    roots = set()
+    for entry in SRC_ROOT.iterdir():
+        if entry.is_dir() and any(entry.rglob("*.py")):
+            roots.add(entry.name)
+        elif entry.is_file() and entry.suffix == ".py" and entry.stem != "__init__":
+            roots.add(entry.stem)
+    return roots
+
+
+FIRST_PARTY_ROOTS = _first_party_roots()
+
+# 모듈 전역으로 읽히지만 어디에도 정의되지 않은 이름을 걸러낼 때, 모듈 수준에
+# 대입되지 않아도 항상 존재하는 이름들.
+MODULE_DUNDERS = {
+    "__file__", "__name__", "__doc__", "__package__", "__spec__",
+    "__loader__", "__builtins__", "__debug__", "__path__",
+}
 
 
 def _module_index():
@@ -77,6 +103,15 @@ class PhantomImportTests(unittest.TestCase):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             where = path.relative_to(SRC_ROOT)
             for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    # `import launcher.foo` 도 같은 방식으로 조용히 사라진다.
+                    for alias in node.names:
+                        root = alias.name.split(".")[0]
+                        if (root in FIRST_PARTY_ROOTS and alias.name not in stdlib
+                                and alias.name not in modules):
+                            broken.append("%s:%d  import %s"
+                                          % (where, node.lineno, alias.name))
+                    continue
                 if not isinstance(node, ast.ImportFrom):
                     continue
                 module = _absolute_module(path, node)
@@ -105,6 +140,41 @@ class PhantomImportTests(unittest.TestCase):
 
         self.assertEqual(broken, [], "존재하지 않는 모듈을 가리키는 import:\n  "
                                      + "\n  ".join(broken))
+
+
+class UndefinedNameTests(unittest.TestCase):
+    """함수 안에서 읽히는데 어디에도 없는 이름은 그 줄에서 NameError 가 된다.
+
+    컴파일도 import 도 통과하므로, 그 함수가 실제로 불릴 때까지 드러나지
+    않는다. 게다가 이 저장소는 선택 기능을 try/except 로 감싸는 자리가 많아
+    NameError 가 그대로 삼켜지고 기능만 조용히 사라진다. 실제로
+    `installer.steps.model_select_gui.select_models` 가 그랬다 — 설치할 모델을
+    고르는 창이 한 번도 뜬 적이 없고, 권장 세트(100GB 이상)가 매번 자동으로
+    받아졌다.
+    """
+
+    def test_no_function_reads_a_global_that_is_never_defined(self):
+        undefined = []
+        for path in sorted(SRC_ROOT.rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            table = symtable.symtable(source, str(path), "exec")
+            module_names = set(table.get_identifiers()) | MODULE_DUNDERS
+            where = path.relative_to(SRC_ROOT)
+
+            def visit(scope, trail):
+                for symbol in scope.get_symbols():
+                    name = symbol.get_name()
+                    if (symbol.is_global() and not symbol.is_assigned()
+                            and name not in module_names
+                            and not hasattr(builtins, name)):
+                        undefined.append("%s  %s: %s" % (where, trail, name))
+                for child in scope.get_children():
+                    visit(child, (trail + "." if trail else "") + child.get_name())
+
+            visit(table, "")
+
+        self.assertEqual(undefined, [], "정의된 적 없는 이름을 읽는다:\n  "
+                                        + "\n  ".join(undefined))
 
 
 class WindowCleanupHookTests(unittest.TestCase):

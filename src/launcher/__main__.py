@@ -120,7 +120,7 @@ def main():
         try:
             from launcher.core import lifelog as _ll2
             _ll2.log("TRACE", "[main] " + stage)
-        except Exception as _te:
+        except Exception:
             try:
                 print("[TRACE main] " + stage, file=sys.stderr)
             except Exception:

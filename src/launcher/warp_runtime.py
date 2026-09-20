@@ -247,13 +247,3 @@ def stop() -> None:
         _run(["stop", CONTAINER], timeout=30)
 
 
-def selftest() -> str:
-    if not is_running():
-        return "WARP 미기동"
-    result = _run([
-        "exec", CONTAINER, "sh", "-c",
-        "curl -s -x socks5h://127.0.0.1:%d https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -E 'ip=|warp='"
-        % PROXY_PORT,
-    ], timeout=30)
-    output = (result.stdout if result else "") or ""
-    return output.strip() or "trace 실패(이미지 curl 미포함 가능)"

@@ -1,20 +1,29 @@
-"""Shared path policy. Importing this module never creates or migrates data."""
+"""Shared path policy. Importing this module never creates or migrates data.
+
+``src/project_paths.py`` stays the one place the project root and the shared
+model store are decided (see README, "경로 정책"). This module re-exports them
+and adds only what the new service layer needs on top, so the two trees cannot
+drift into two different answers for the same directory.
+"""
 from __future__ import annotations
 import os
 from pathlib import Path
 
-SRC_ROOT = Path(__file__).resolve().parents[1]
+from project_paths import (
+    ENV_DIR,
+    MODEL_STORAGE_DIR,
+    PROJECT_ROOT,
+    SRC_ROOT,
+    USER_DATA_DIR,
+)
+
+__all__ = ['SRC_ROOT', 'PROJECT_ROOT', 'USER_DATA_DIR', 'ENV_DIR',
+           'MODEL_STORAGE_DIR', 'OLLAMA_INSTALL_DIR']
 
 def _override(name: str, default: Path) -> Path:
     value = os.environ.get(name)
     return Path(value).expanduser().resolve() if value else default
 
-PROJECT_ROOT = _override('LLM_PROJECT_ROOT', SRC_ROOT.parent)
-USER_DATA_DIR = PROJECT_ROOT / 'user_data'
-ENV_DIR = PROJECT_ROOT / 'llm_environment'
+# Staged official-Ollama location. Nothing here moves models into it; the
+# desktop shell keeps using MODEL_STORAGE_DIR until that migration ships.
 OLLAMA_INSTALL_DIR = _override('LLM_OLLAMA_DIR', Path(r'C:\Ollama'))
-MODEL_STORAGE_DIR = _override('LLM_MODEL_DIR', Path(r'C:\LLM_Models'))
-LEGACY_SHARED_MODEL_DIR = Path(r'C:\LLM_Models')
-
-# All new services use the same process-birth proof, not separate app-local files.
-OFFICIAL_RUNTIME_STATE = USER_DATA_DIR / 'cache' / 'ollama-process.json'

@@ -24,8 +24,9 @@ OLLAMA_PORT = 11434
 OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 OLLAMA_API_TAGS = f"{OLLAMA_URL}/api/tags"
 
-OPEN_WEBUI_PORT = 8080
-OPEN_WEBUI_URL = f"http://localhost:{OPEN_WEBUI_PORT}"
+# Open WebUI 는 AnythingLLM 으로 대체되었다(ANYTHINGLLM_v1 참고).
+# 남아 있던 포트/URL 상수는 아무도 읽지 않았고, 8080 은 이제 SearXNG 컨테이너
+# 내부 포트 의미로만 쓰인다.
 
 SEARXNG_HOST_PORT = 8888
 SEARXNG_URL = f"http://localhost:{SEARXNG_HOST_PORT}"
@@ -84,23 +85,9 @@ DDG_ONION_HOST = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion
 DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
 
 # ── 파생 URL (컨테이너 '이름' 기준) ───────────────────
-def tor_http_proxy(host: str = None) -> str:
-    """Privoxy HTTP 프록시 URL. 예) http://llm_tor:8118"""
-    return "http://%s:%d" % (host or TOR_CONTAINER, TOR_HTTP_PORT)
-
-
 def tor_socks_proxy(host: str = None) -> str:
     """SOCKS5 프록시 URL(원격 DNS). 예) socks5h://llm_tor:9050"""
     return "socks5h://%s:%d" % (host or TOR_CONTAINER, TOR_SOCKS_PORT)
-
-
-def searxng_internal_url(host: str = None) -> str:
-    """컨테이너 간 SearXNG 주소. 예) http://llm_searxng:8080
-
-    주의: 위쪽 SEARXNG_URL 은 '호스트에서' 접근하는 주소(localhost:8888)로
-    의미가 다르다. 컨테이너 안에서는 반드시 이 함수를 쓸 것.
-    """
-    return "http://%s:%d" % (host or SEARXNG_CONTAINER, SEARXNG_CONTAINER_PORT)
 
 
 SEARXNG_INTERNAL_URL = "http://%s:%d" % (SEARXNG_CONTAINER, SEARXNG_CONTAINER_PORT)
@@ -113,6 +100,12 @@ SEARXNG_INTERNAL_URL = "http://%s:%d" % (SEARXNG_CONTAINER, SEARXNG_CONTAINER_PO
 #    tor        : 기존 Tor (llm_tor:9050) - onion/익명성 경로 보존
 #  주소/포트/이미지는 여기서만 정의하고 다른 모듈은 이 값을 읽는다.
 #  (WARP 는 SOCKS5 만 제공 -> HTTP_PROXY 도 socks5h 로 통일)
+#
+#  ★ 프록시 '환경변수 묶음' 은 여기서 만들지 않는다. 그건
+#    launcher.network_policy.container_proxy_env(mode) 가 정본이다. 예전에
+#    여기 있던 net_proxy_env()/agent_proxy_env() 는 NET_MODE 만 보고 있어서,
+#    사용자가 지금 고른 모드를 무시한 env 를 내보낼 수 있었다 (호출부는 이미
+#    없었고, 지웠다).
 # =======================================================
 import os as _os  # 표준 라이브러리 (지연 참조용)
 
@@ -131,11 +124,6 @@ HTTP_BRIDGE_PORT = int(_os.environ.get("HTTP_BRIDGE_PORT", "8118"))
 HTTP_BRIDGE_HOST_PORT = int(_os.environ.get("HTTP_BRIDGE_HOST_PORT", "8119"))
 
 
-def http_bridge_proxy(host: str = None) -> str:
-    """HTTP_BRIDGE_v1: urllib 이 쓸 수 있는 HTTP 프록시 URL."""
-    return "http://%s:%d" % (host or HTTP_BRIDGE_CONTAINER, HTTP_BRIDGE_PORT)
-
-
 def warp_socks_proxy(host: str = None) -> str:
     """WARP SOCKS5 프록시 URL(원격 DNS). 예) socks5h://llm_warp:1080"""
     return "socks5h://%s:%d" % (host or WARP_CONTAINER, WARP_PORT)
@@ -149,50 +137,8 @@ def active_socks_proxy(host: str = None) -> str:
     return warp_socks_proxy(host)
 
 
-def active_container() -> str:
-    """현재 네트워크 모드의 프록시 컨테이너 이름."""
-    return TOR_CONTAINER if NET_MODE == "tor" else WARP_CONTAINER
-
-
-def active_image() -> str:
-    """현재 네트워크 모드의 프록시 이미지."""
-    return TOR_IMAGE if NET_MODE == "tor" else WARP_IMAGE
-
-
-def net_proxy_env(host: str = None) -> dict:
-    """NET_MODE 인지 프록시 env. warp 는 SOCKS 전용이라 HTTP_PROXY 도 socks5h.
-    tor 모드는 기존 agent_proxy_env() 와 동일 동작을 유지한다."""
-    if NET_MODE == "tor":
-        return agent_proxy_env(host)
-    # HTTP_BRIDGE_v1: urllib 은 SOCKS 를 못 쓴다. HTTP_* 는 브리지(http://),
-    # ALL_PROXY 는 SOCKS 를 이해하는 클라이언트(curl/requests)용으로 유지.
-    p = warp_socks_proxy(host)
-    hp = http_bridge_proxy()
-    env = {}
-    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-        env[k] = hp
-    for k in ("ALL_PROXY", "all_proxy"):
-        env[k] = p
-    for k in ("NO_PROXY", "no_proxy"):
-        env[k] = NO_PROXY_HOSTS
-    return env
-
 # 프록시를 태우면 안 되는 대상 (로컬 Ollama 등)
 NO_PROXY_HOSTS = "host.docker.internal,localhost,127.0.0.1,::1"
-
-
-def agent_proxy_env(tor_host: str = None) -> dict:
-    """에이전트 컨테이너/호스트 프로세스에 넣을 프록시 환경변수 묶음."""
-    http_p = tor_http_proxy(tor_host)
-    socks_p = tor_socks_proxy(tor_host)
-    env = {}
-    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-        env[k] = http_p
-    for k in ("ALL_PROXY", "all_proxy"):
-        env[k] = socks_p
-    for k in ("NO_PROXY", "no_proxy"):
-        env[k] = NO_PROXY_HOSTS
-    return env
 
 
 # ═══════════════════════════════════════════════════════
@@ -204,6 +150,9 @@ def agent_proxy_env(tor_host: str = None) -> dict:
 #  이 섹션에는 원래 설명만 있고 상수가 없었다. 값은 launcher.runtime_guard 가
 #  준다고 적혀 있었지만 그 모듈은 저장소에 존재하지 않아, 호출부의 try/except 가
 #  매번 조용히 실패하고 하드코딩된 4096 이 쓰이고 있었다. 정본을 여기로 되돌린다.
+#  (상수를 되돌린 뒤에도 호출부는 존재하지 않는 model_roles.chat_context_window()
+#   를 계속 불렀다. 지금은 actions/chat.py 와 transition 어댑터가 이 상수를 직접
+#   읽는다 — 새 이름을 만들 때는 호출부까지 같이 고칠 것.)
 #
 #  AnythingLLM 은 이 값을 OLLAMA_MODEL_TOKEN_LIMIT 로 받는다.
 #  (Agent 런타임은 컨텍스트 길이를 AgentConfig 가 아니라 Open Interpreter/Ollama

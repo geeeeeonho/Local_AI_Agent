@@ -47,11 +47,6 @@ def managed_interpreter_exe(project_root: Path | None = None) -> Path:
     return root / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
 
 
-def managed_interpreter_home(project_root: Path | None = None) -> Path:
-    root = Path(project_root).resolve() if project_root is not None else _project_root()
-    return root / "llm_environment" / "open_interpreter" / "home"
-
-
 def runtime_interpreter_home(project_root: Path | None = None) -> Path:
     root = Path(project_root).resolve() if project_root is not None else _project_root()
     path = root / "user_data" / "open_interpreter"
