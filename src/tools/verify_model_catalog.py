@@ -159,8 +159,21 @@ def summarise(reports: list[TagReport], tolerance_gb: float = DEFAULT_TOLERANCE_
         lines += ["  %-52s %s" % (r.tag, r.detail) for r in unknown]
         lines.append("")
     if not cloud and not missing and not drifted:
-        lines.append("Every tag is local, resolves, and is within %.1fGB of its declared size."
-                     % tolerance_gb)
+        # An unanswered tag is not a confirmed one. Printing the all-clear
+        # directly under a list headed "not a verdict" told the reader the
+        # catalogue had been checked when nothing had been.
+        confirmed = [r for r in reports if r.exists is True]
+        if not confirmed:
+            lines.append("Nothing was confirmed: the registry answered for none of these "
+                         "tags. This is not a pass - run it again with outbound HTTPS "
+                         "to %s." % REGISTRY)
+        elif unknown:
+            lines.append("%d of %d tags are local, resolve, and are within %.1fGB of their "
+                         "declared size. The remaining %d were not answered."
+                         % (len(confirmed), len(reports), tolerance_gb, len(unknown)))
+        else:
+            lines.append("Every tag is local, resolves, and is within %.1fGB of its "
+                         "declared size." % tolerance_gb)
     return lines
 
 

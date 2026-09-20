@@ -195,3 +195,36 @@ def test_a_cloud_tag_fails_the_command(monkeypatch, capsys):
 def test_a_clean_catalogue_message_claims_local_too():
     reports = build({'a:1': manifest(int(7.6 * 1024 ** 3))}, {'a:1': 7.6})
     assert 'local' in '\n'.join(verify.summarise(reports))
+
+
+# ── an unanswered tag is not a confirmed one ─────────────────────────────
+# The all-clear used to print directly under a list headed "not a verdict",
+# telling the reader the catalogue had been checked when nothing had been.
+
+def _report(tag, exists, detail='', declared=1.0, actual=None):
+    from tools.verify_model_catalog import TagReport
+    # drift_gb is derived, so an unanswered tag simply has no actual size.
+    return TagReport(tag=tag, exists=exists, detail=detail,
+                     declared_gb=declared,
+                     actual_gb=declared if (actual is None and exists) else actual)
+
+
+def test_a_registry_that_answered_nothing_is_not_a_pass():
+    from tools.verify_model_catalog import summarise
+    text = '\n'.join(summarise([_report('a:1', None, 'HTTP 403'),
+                                _report('b:2', None, 'HTTP 403')]))
+    assert 'Nothing was confirmed' in text
+    assert 'Every tag is local' not in text
+
+
+def test_a_partial_answer_says_how_much_was_actually_checked():
+    from tools.verify_model_catalog import summarise
+    text = '\n'.join(summarise([_report('a:1', True), _report('b:2', None, 'timeout')]))
+    assert '1 of 2 tags' in text and 'remaining 1 were not answered' in text
+    assert 'Every tag is local' not in text
+
+
+def test_a_full_answer_still_reads_as_a_pass():
+    from tools.verify_model_catalog import summarise
+    text = '\n'.join(summarise([_report('a:1', True), _report('b:2', True)]))
+    assert 'Every tag is local' in text
