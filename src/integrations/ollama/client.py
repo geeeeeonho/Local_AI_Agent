@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import re
+import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -69,8 +70,39 @@ class OllamaClient:
         return urllib.request.Request(self.base_url + path, data=data, method=method,
                                       headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
 
+    def _failure(self, error):
+        """Ollama's own words for a failure, not just its status code.
+
+        A refused pull or delete answers with {"error": "..."} and a non-2xx
+        status, and urllib raises before the caller can read it. Reporting
+        "HTTP Error 500" hid the part the user can act on - the tag that does
+        not exist, the disk that is full, the registry that is unreachable.
+        """
+        detail = ''
+        try:
+            body = error.read(_MAX_JSON + 1)
+            value = json.loads(body.decode('utf-8', 'replace'))
+            if isinstance(value, dict) and value.get('error'):
+                detail = str(value['error'])
+        except Exception:
+            detail = ''
+        finally:
+            try:
+                error.close()
+            except Exception:
+                pass
+        if detail:
+            return RuntimeError(detail)
+        return RuntimeError('Ollama refused the request (HTTP %s)' % (error.code,))
+
+    def _open(self, request, timeout):
+        try:
+            return self.opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            raise self._failure(error) from None
+
     def _json(self, path, payload=None, method=None, *, empty=False):
-        with self.opener.open(self._request(path, payload, method), timeout=self.timeout) as response:
+        with self._open(self._request(path, payload, method), self.timeout) as response:
             raw = response.read(_MAX_JSON + 1)
         if len(raw) > _MAX_JSON:
             raise RuntimeError('Ollama JSON response exceeds size limit')
@@ -98,7 +130,7 @@ class OllamaClient:
     def pull(self, name: str, progress=None):
         request = self._request('/api/pull', {'model': model_name(name), 'stream': True})
         success = False
-        with self.opener.open(request, timeout=max(self.timeout, 120)) as response:
+        with self._open(request, max(self.timeout, 120)) as response:
             while True:
                 raw = response.readline(_MAX_LINE + 1)
                 if not raw:

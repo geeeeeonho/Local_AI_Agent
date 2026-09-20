@@ -195,3 +195,47 @@ def test_nothing_shells_out_to_ask_what_is_installed():
                 if 'list' in words and any('ollama' in w.lower() for w in words):
                     offenders.append('%s:%d' % (path.relative_to(SRC), node.lineno))
     assert offenders == [], offenders
+
+
+# ── failures the user can act on ─────────────────────────────────────────
+# Ollama answers a refused pull or delete with {"error": "..."} and a non-2xx
+# status. urllib raises before the caller can read the body, so the screen
+# used to show "HTTP Error 500: Internal Server Error" and hide the part that
+# says which tag does not exist or that the disk is full.
+
+def _client_answering(status, body, *, reason='Server Error'):
+    import io
+    import urllib.error
+    from integrations.ollama.client import OllamaClient
+
+    class Opener:
+        def open(self, request, timeout=None):
+            raise urllib.error.HTTPError(
+                request.full_url, status, reason, {},
+                io.BytesIO(body.encode('utf-8')))
+    return OllamaClient('http://127.0.0.1:11434', opener=Opener())
+
+
+def test_the_screen_gets_ollamas_reason_not_its_status_code():
+    client = _client_answering(404, '{"error": "model \'ghost:7b\' not found"}')
+    with pytest.raises(RuntimeError, match="ghost:7b"):
+        client.remove('ghost:7b')
+
+
+def test_a_failed_pull_says_why():
+    client = _client_answering(500, '{"error": "write blob: no space left on device"}')
+    with pytest.raises(RuntimeError, match='no space left'):
+        client.pull('gemma4:12b')
+
+
+@pytest.mark.parametrize('body', ['', 'not json', '{}', '{"error": ""}', '[]'])
+def test_an_unreadable_error_body_still_names_the_status(body):
+    client = _client_answering(503, body)
+    with pytest.raises(RuntimeError, match='503'):
+        client.show('gemma4:12b')
+
+
+def test_an_oversized_error_body_does_not_become_the_message():
+    client = _client_answering(500, '{"error": "' + 'x' * (5 * 1024 * 1024) + '"}')
+    with pytest.raises(RuntimeError):
+        client.show('gemma4:12b')
