@@ -1,5 +1,4 @@
 """New batch entrypoints and compatibility locks do not mutate runtime paths."""
-import importlib
 from pathlib import Path
 import sys
 from types import SimpleNamespace as NS
@@ -25,20 +24,26 @@ def test_core_keeps_active_legacy_model_default(monkeypatch):
     assert str(_isolated_paths().MODEL_STORAGE_DIR)==r'C:\LLM_Models'
 
 
+# Redirect the canonical module's attributes instead of replacing the module:
+# every deferred `from project_paths import ...` in the tree reads these, and a
+# partial stand-in would hide names that other importers legitimately need.
 def test_default_inference_does_not_activate_official_migration(monkeypatch,tmp_path):
     from services.inference.service import InferenceService
     from integrations.legacy import desktop
-    monkeypatch.setitem(sys.modules,'project_paths',NS(ENV_DIR=tmp_path/'env',MODEL_STORAGE_DIR=tmp_path/'models'))
+    import project_paths
+    monkeypatch.setattr(project_paths,'ENV_DIR',tmp_path/'env')
+    monkeypatch.setattr(project_paths,'MODEL_STORAGE_DIR',tmp_path/'models')
     got=[]
     monkeypatch.setattr(desktop,'ManagedInference',lambda env,models,importer:got.append((env,models)) or NS(client=object(),model_dir=models))
-    service=InferenceService()
+    InferenceService()
     assert got==[(tmp_path/'env',tmp_path/'models')]
 
 
 def test_legacy_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
     from services.system import bootstrap
     from services.network.ownership import RuntimeOwner
-    monkeypatch.setitem(sys.modules,'project_paths',NS(USER_DATA_DIR=tmp_path))
+    import project_paths
+    monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
     competing=RuntimeOwner(tmp_path/'cache'/'desktop-runtime.lock')
     observed=[]
     def check_locked(*a,**k):
@@ -53,7 +58,8 @@ def test_legacy_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
 
 def test_legacy_entry_restores_argv_on_exception(monkeypatch,tmp_path):
     from services.system import bootstrap
-    monkeypatch.setitem(sys.modules,'project_paths',NS(USER_DATA_DIR=tmp_path))
+    import project_paths
+    monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
     original=sys.argv
     monkeypatch.setattr(bootstrap.runpy,'run_module',lambda *a,**k:(_ for _ in ()).throw(ValueError('bad')))
     with pytest.raises(ValueError):bootstrap.legacy_entry('installer',[])

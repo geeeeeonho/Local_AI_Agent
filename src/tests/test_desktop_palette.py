@@ -5,11 +5,16 @@ Restoring the previous three-color palette or solid management/selection fills
 must fail these regressions in either theme.
 """
 import colorsys
-import tkinter as tk
-from tkinter import ttk
 
 import pytest
-from test_desktop_ui import ui, pump
+
+# Tk 가 없는 머신은 이 모듈만 건너뛴다. 모듈 최상단에서 tkinter 를 바로
+# import 하면 수집 단계에서 저장소 전체 테스트 실행이 중단된다.
+pytest.importorskip('tkinter')
+
+import tkinter as tk  # noqa: E402
+from tkinter import ttk  # noqa: E402
+from test_desktop_ui import ui, pump  # noqa: E402,F401  (pytest fixtures)
 
 
 def contrast(first, second):

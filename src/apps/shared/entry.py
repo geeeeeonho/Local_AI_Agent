@@ -6,7 +6,9 @@ from .specs import SPECS
 
 
 def parse_args(app,argv=None):
-    parser=argparse.ArgumentParser(description='LocalAI Studio / Chat / Interpreter / Setup')
+    # 기본값은 '__main__.py' 라서 사용법 줄이 어느 프로그램인지 말해 주지 않는다.
+    parser=argparse.ArgumentParser(prog='apps.'+app,
+        description='LocalAI Studio / Chat / Interpreter / Setup')
     parser.add_argument('--app',choices=tuple(SPECS),default=app,help='Select a standalone application')
     mode=parser.add_mutually_exclusive_group()
     mode.add_argument('--gui',action='store_true',help='Open the shared desktop shell (default)')

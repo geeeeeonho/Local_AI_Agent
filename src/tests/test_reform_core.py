@@ -11,12 +11,32 @@ import pytest
 
 
 def _isolated_paths():
+    """Load core.paths with a freshly executed project_paths underneath it.
+
+    core.paths re-exports the canonical project_paths values, so isolating only
+    the leaf would read whatever the session imported first and the environment
+    overrides under test would be ignored.
+    """
     import importlib.util
-    path = Path(__file__).parents[1] / 'core/paths.py'
-    spec = importlib.util.spec_from_file_location('isolated_core_paths', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    import sys
+    root = Path(__file__).parents[1]
+
+    def load(name, path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    saved = sys.modules.get('project_paths')
+    try:
+        load('project_paths', root / 'project_paths.py')
+        return load('isolated_core_paths', root / 'core/paths.py')
+    finally:
+        if saved is None:
+            sys.modules.pop('project_paths', None)
+        else:
+            sys.modules['project_paths'] = saved
 
 
 def test_core_paths_preserve_existing_user_data_layout(monkeypatch, tmp_path):

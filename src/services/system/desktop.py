@@ -19,6 +19,10 @@ class SystemService:
 
 
 class SetupService:
+    # Explicit allowlist. A key never becomes an import path or a command on its
+    # own; the backend maps these to the retained implementation modules.
+    MAINTENANCE_KEYS = ('docker_image', 'docker_clean', 'settings_action', 'searxng_action')
+
     def __init__(self, backend, models, network, settings, *, active=None):
         self.backend, self.models = backend, models
         self.network, self.settings = network, settings
@@ -48,7 +52,7 @@ class SetupService:
 
     def maintenance(self, key, presenter):
         self.require_idle()
-        if key not in {'docker_image', 'docker_clean', 'settings_action', 'searxng_action'}:
+        if key not in self.MAINTENANCE_KEYS:
             raise ValueError('unknown maintenance operation')
         self.network.owner.acquire()
         return self.backend.maintenance(key, presenter)

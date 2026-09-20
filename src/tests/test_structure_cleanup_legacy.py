@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -9,6 +10,13 @@ def _text(relative: str) -> str:
 
 
 def test_custom_session_helpers_are_not_runtime_owned():
+    """user_data may *describe* the retired session files, never handle them.
+
+    The retired helpers are gone, and so is any directory traversal that could
+    grow a second session store beside Open Interpreter's thread IDs. The check
+    reads the parsed module rather than raw text so the module docstring and the
+    user-facing README.txt can keep explaining the policy.
+    """
     text = _text("src/launcher/core/user_data.py")
     for name in (
         "new_session_id",
@@ -18,7 +26,12 @@ def test_custom_session_helpers_are_not_runtime_owned():
         "session_meta",
     ):
         assert f"def {name}(" not in text
-    assert "session_*.json" not in text
+    scans = {
+        node.func.attr
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    } & {"glob", "rglob", "iglob", "iterdir", "scandir", "walk", "listdir"}
+    assert not scans, f"user_data scans the filesystem again: {sorted(scans)}"
 
 
 def test_dead_sandbox_options_module_is_gone():

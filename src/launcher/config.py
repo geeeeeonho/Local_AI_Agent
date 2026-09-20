@@ -24,8 +24,9 @@ OLLAMA_PORT = 11434
 OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 OLLAMA_API_TAGS = f"{OLLAMA_URL}/api/tags"
 
-OPEN_WEBUI_PORT = 8080
-OPEN_WEBUI_URL = f"http://localhost:{OPEN_WEBUI_PORT}"
+# Open WebUI 는 AnythingLLM 으로 대체되었다(ANYTHINGLLM_v1 참고).
+# 남아 있던 포트/URL 상수는 아무도 읽지 않았고, 8080 은 이제 SearXNG 컨테이너
+# 내부 포트 의미로만 쓰인다.
 
 SEARXNG_HOST_PORT = 8888
 SEARXNG_URL = f"http://localhost:{SEARXNG_HOST_PORT}"
@@ -204,6 +205,9 @@ def agent_proxy_env(tor_host: str = None) -> dict:
 #  이 섹션에는 원래 설명만 있고 상수가 없었다. 값은 launcher.runtime_guard 가
 #  준다고 적혀 있었지만 그 모듈은 저장소에 존재하지 않아, 호출부의 try/except 가
 #  매번 조용히 실패하고 하드코딩된 4096 이 쓰이고 있었다. 정본을 여기로 되돌린다.
+#  (상수를 되돌린 뒤에도 호출부는 존재하지 않는 model_roles.chat_context_window()
+#   를 계속 불렀다. 지금은 actions/chat.py 와 transition 어댑터가 이 상수를 직접
+#   읽는다 — 새 이름을 만들 때는 호출부까지 같이 고칠 것.)
 #
 #  AnythingLLM 은 이 값을 OLLAMA_MODEL_TOKEN_LIMIT 로 받는다.
 #  (Agent 런타임은 컨텍스트 길이를 AgentConfig 가 아니라 Open Interpreter/Ollama
