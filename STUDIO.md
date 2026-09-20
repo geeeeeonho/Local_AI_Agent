@@ -141,10 +141,31 @@ python -m compileall -q src
 python -m pytest -q src\tests
 ```
 
-For the focused desktop/core/index tests on Linux, provide a real display such
-as Xvfb. UI tests inject external runtimes but instantiate real Tk windows.
-The authoring environment only had a SHA-verified related-source snapshot, not
-the full repository. Local related tests and source compilation do not replace
-native Windows, official Ollama, Docker, SearXNG-image or end-to-end OI acceptance.
-Record CI runner failures separately from code-test failures; no executed steps
-is not a pass. Do not change branch protection or force-push to bypass checks.
+For the desktop/core/index tests on Linux, provide a real display such as Xvfb.
+UI tests inject external runtimes but instantiate real Tk windows; without Tk
+those modules skip instead of aborting collection.
+
+### Verified
+
+On a live Linux Docker daemon (29.3.1), against the real `LegacyBackend` rather
+than a stand-in:
+
+- the full repository suite, on the CI Python (3.11) headless and with Tk under Xvfb;
+- `tools.verify_block_egress` end to end, with a normal-bridge baseline proving
+  the same probe does reach public DNS and raw-IP TCP (see README, "Linux Docker
+  에서 실제로 확인된 것", including the one item that fails there);
+- `integrations.searxng.runtime` against the daemon: derived per-fingerprint
+  config, loopback-bound published port, labels, idempotent restart, container
+  replacement on a mode change, `Block` refusal, verified stop;
+- Ollama ownership: a foreign listener answering on 11434 is not adopted
+  (`is_managed_running()` and `ensure_running()` both stay False);
+- Studio started on the real backend: Docker reported ready, the model index
+  scanned an empty store, and Chat failed closed with the Setup guidance.
+
+### Not verified here
+
+Native Windows and Docker Desktop, the official Ollama runtime, the AnythingLLM
+and SearXNG images (the registry CDN is blocked from this environment), and
+end-to-end Open Interpreter acceptance. Record CI runner failures separately
+from code-test failures; no executed steps is not a pass. Do not change branch
+protection or force-push to bypass checks.

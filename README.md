@@ -186,6 +186,29 @@ python -m tools.verify_block_egress
 
 `verify_block_egress`는 raw-IP 외부 접근, DNS 외부 접근, `host.docker.internal`을 통한 로컬 Ollama 접근을 분리해 확인합니다. GitHub Actions는 명령 생성과 판정 로직을 검증하지만, 호스티드 러너에서 실제 사용자의 Docker Desktop 방화벽 경로까지 검증했다고 간주하지 않습니다.
 
+### Linux Docker 에서 실제로 확인된 것
+
+살아 있는 Docker 데몬(Linux, Docker 29.3.1)에서 이 진단을 끝까지 돌린 결과입니다.
+같은 프로브가 일반 bridge 에서는 공용 DNS 와 `1.1.1.1:443` 에 **닿는다**는 기준선을
+먼저 잡고 비교했습니다.
+
+| 항목 | 결과 |
+| --- | --- |
+| `llm_block_net` 속성 | `Internal=true` · `Driver=bridge` |
+| 공용 raw-IP TCP | 차단됨 |
+| 공용 DNS | 차단됨 |
+| 관리형 Host relay 포트(Tor/WARP/SearXNG) | 도달 불가 |
+| `host.docker.internal` 로컬 Ollama | **도달 불가 (Linux 한정)** |
+
+마지막 항목은 Linux 의 네트워크 구조 때문입니다. `--add-host
+host.docker.internal:host-gateway` 는 언제나 기본 bridge 의 게이트웨이(`172.17.0.1`)를
+가리키는데, `llm_block_net` 은 다른 서브넷(`172.18.0.0/16`)이고 internal 이라 그
+주소로 가는 경로가 없습니다. 호스트 자체는 **그 네트워크의 자기 게이트웨이**
+(`172.18.0.1`)로는 닿습니다 — 즉 격리는 의도대로 동작하고, 이름만 다른 곳을
+가리킵니다. Windows Docker Desktop 은 `host.docker.internal` 을 Desktop 이 직접
+제공하므로 동작이 다를 수 있고, 여기서는 확인할 수 없습니다. **Block 에서 로컬
+Ollama 가 필요하면 자기 PC 에서 위 진단을 한 번 돌려 보세요.**
+
 ## 모델 정책
 
 받을 수 있는 모델(`src/launcher/models/model_catalog.py`)과 런타임이 고를 수 있는
