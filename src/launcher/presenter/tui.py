@@ -12,7 +12,7 @@ from typing import List, Optional, Set
 
 from .base import (
     Presenter, MenuItem, Option,
-    RISK_SAFE, RISK_MEDIUM, RISK_HIGH,
+    RISK_MEDIUM, RISK_HIGH,
 )
 
 
@@ -400,10 +400,6 @@ C = _C  # 외부에서 ui.C.G 등을 참조하던 코드 호환
 
 def clear():
     os.system("cls" if os.name == "nt" else "clear")
-
-
-def hr(char: str = "-", color: str = ""):
-    print(color + (char * 60) + (_C.E if color else ""))
 
 
 def header(title: str, subtitle: str = ""):

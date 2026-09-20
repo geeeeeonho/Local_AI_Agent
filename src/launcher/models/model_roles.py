@@ -18,7 +18,7 @@ import json as _json
 import os
 import urllib.request as _urlreq
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 
 # ─────────────────────────────────────────────

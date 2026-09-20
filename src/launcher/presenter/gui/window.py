@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable, List, Optional
+from typing import Callable, List
 
 from ..base import MenuItem
 from .sidebar import Sidebar
@@ -125,7 +125,7 @@ class MainWindow:
                     pass
 
             self.root.protocol('WM_DELETE_WINDOW', _on_window_close)
-        except Exception as _e:
+        except Exception:
             pass
 
         try:

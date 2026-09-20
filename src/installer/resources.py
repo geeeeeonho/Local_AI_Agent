@@ -287,17 +287,3 @@ def compute_safety_profile(spec: SystemSpec) -> SafetyProfile:
     )
 
 
-def env_for_pip(profile: SafetyProfile) -> dict:
-    """pip 빌드 시 사용할 환경변수.
-
-    MAKEFLAGS / CMAKE_BUILD_PARALLEL_LEVEL 로 병렬도 제한.
-    이걸로 메모리 폭주 거의 다 막힘.
-    """
-    env = os.environ.copy()
-    jobs = str(profile.pip_jobs)
-    env["MAKEFLAGS"] = f"-j{jobs}"
-    env["CMAKE_BUILD_PARALLEL_LEVEL"] = jobs
-    env["MAX_JOBS"] = jobs                           # PyTorch 등에서 사용
-    env["NPY_NUM_BUILD_JOBS"] = jobs                 # numpy
-    env["PIP_NO_CACHE_DIR"] = "1"                    # 디스크 압박 줄이기
-    return env

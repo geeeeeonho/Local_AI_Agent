@@ -13,7 +13,7 @@ from typing import Callable, List, Optional, Set
 from ..base import Option, RISK_MEDIUM
 from .dialogs import confirm_dangerous
 from .theme import Theme, risk_color, risk_icon, risk_label
-from .widgets import HoverCard, make_button
+from .widgets import make_button
 
 
 class _BasePanel:
