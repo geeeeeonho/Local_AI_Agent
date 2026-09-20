@@ -117,9 +117,25 @@ ceilings: Ollama shares blob layers between models, so the real cost is usually
 lower. Files are never deleted directly - unchecking a model hands it to Ollama,
 which knows which layers another model still needs.
 
-Both the screen's install state and its stack view read the on-disk index, so
-they stay truthful while Ollama is stopped; "Ollama start / check" runs the
-retained service action and shows its log in place. Model downloads use the
+*Disk usage* also says whether this store really is shared with every account on
+the machine, and offers to put it right. That is a fact about the machine, not
+about the path: publishing the machine-scope OLLAMA_MODELS needs administrator
+rights and can simply have failed during setup, so the screen reads the stored
+value and the store's ACL rather than inferring from the directory name. It
+distinguishes four answers - shared, not shared with the reason, an override
+this account set for itself, and could-not-tell - and offers the repair only
+where there is something the shell may fix. A user-scope OLLAMA_MODELS is that
+account's own setting, so it is explained rather than deleted, and other
+accounts are granted read and execute, never write: the store decides what the
+models on this machine are.
+
+Every reader of "which models are here" goes through one pipeline, with Ollama
+as the router: what it serves is what the machine can use, and the store answers
+when it is stopped. Both the screen's install state and its stack view
+deliberately ask the store alone, so they stay truthful while Ollama is stopped
+and so a screen that offers to delete files answers from the directory those
+files are in. "Ollama start / check" runs the retained service action and shows
+its log in place. Model downloads use the
 local Ollama server's own network; WARP/Tor routing is not promised for these
 management downloads. Saved Setup Block intent or a currently pinned Block mode
 rejects the model download action. Setup keeps installation, repair and the
@@ -226,10 +242,13 @@ it is never terminated, because it may be the user's own Windows service. Only
 the portable copy in this project's folder stays ours to restart. Ownership is
 decided by the pid in our runtime state file, not by the binary path, since the
 official install is now the binary we would launch ourselves.
-The shell does not silently enable the separately staged official Ollama
-installer, move models to `C:\Ollama\models`, relocate user data, or rebuild
-AnythingLLM/OI data. That earlier unpublished migration proposal is not shipped
-with this UI commit.
+The official Ollama install and the machine-shared store at
+`C:\Ollama\models` are shipped: Setup installs Ollama with `/DIR` when the
+machine has none, moves an earlier `C:\LLM_Models` there crash-safely, and
+publishes the machine-scope `OLLAMA_MODELS` so the other Windows accounts read
+the same copy. The shell still does not relocate user data or rebuild
+AnythingLLM/OI data, and it does not run any of the above silently - Setup
+does it, and the model screen reports and repairs the sharing afterwards.
 
 The layering is Apps -> Services -> transition Integrations, with UI-independent
 Core contracts. Existing reviewed launcher implementations are reused behind
@@ -255,8 +274,8 @@ On Linux the desktop tests need a real display, such as Xvfb; they instantiate
 real Tk windows while injecting the external runtimes. A Python with no Tk at
 all skips them and still runs the rest:
 
-  with Tk:    659 passed
-  without Tk: 579 passed, 37 skipped
+  with Tk:    876 passed
+  without Tk: 780 passed, 53 skipped
 
 Local tests and source compilation do not replace native Windows, official
 Ollama, Docker, SearXNG-image or end-to-end Open Interpreter acceptance.
