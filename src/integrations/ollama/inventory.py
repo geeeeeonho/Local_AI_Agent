@@ -33,6 +33,16 @@ def router_endpoint(host=None, port=None) -> str:
                              int(port if port is not None else config.OLLAMA_PORT))
 
 
+def _endpoint(value) -> str:
+    """Tolerate a trailing slash rather than reading it as a stopped server.
+
+    The transport requires a bare scheme://host:port and rejects anything with
+    a path, so a caller passing "http://127.0.0.1:11434/" raised - and the
+    raise was indistinguishable here from a server that is not running.
+    """
+    return str(value).rstrip('/') if value else router_endpoint()
+
+
 def canonical(names):
     """Catalogue spelling, applied to every side of every lookup.
 
@@ -88,7 +98,7 @@ def read(model_dir=None, *, endpoint=None, timeout=DEFAULT_TIMEOUT,
         model_dir = MODEL_STORAGE_DIR
     model_dir = Path(model_dir)
     return registry.resolve(
-        read_router=_from_router(endpoint or router_endpoint(), timeout) if router else None,
+        read_router=_from_router(_endpoint(endpoint), timeout) if router else None,
         read_store=_from_store(model_dir) if store else None,
         canonical=canonical,
         store_path=model_dir,

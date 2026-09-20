@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -21,7 +22,7 @@ __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
            'ensure_readable', 'publish_machine_variable', 'describe']
 
 # The local Users group, by SID so it works on a non-English Windows.
-BUILTIN_USERS_SID = 'S-1-5-32-545'
+BUILTIN_USERS_SID = policy.USERS_SID
 _MACHINE_KEY = r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
 _USER_KEY = 'Environment'
 _NO_WINDOW = 0x08000000
@@ -51,28 +52,64 @@ def _registry_value(root, key) -> Optional[str]:
         return None
     try:
         with winreg.OpenKey(root, key) as handle:
-            value, _kind = winreg.QueryValueEx(handle, VARIABLE)
-        return str(value)
+            value, kind = winreg.QueryValueEx(handle, VARIABLE)
+        value = str(value)
+        # REG_EXPAND_SZ comes back with %SystemDrive% and friends still in it.
+        # That is the same store written differently, and comparing the raw
+        # text reported it as pointing somewhere else.
+        if kind == getattr(winreg, 'REG_EXPAND_SZ', 2):
+            # ntpath, not os.path: this value came out of the Windows registry
+            # and uses %VAR% syntax, which posixpath.expandvars leaves alone.
+            # Naming the platform makes the rule checkable off Windows too.
+            import ntpath
+            value = ntpath.expandvars(value)
+        return value
     except FileNotFoundError:
         return ''
     except OSError:
         return None
 
 
+def _saved_sddl(model_dir: Path) -> Optional[str]:
+    """The store's DACL in SDDL form, via ``icacls /save``. None if unavailable.
+
+    ``icacls`` on its own prints account names in the language Windows is
+    installed in, so reading its normal output meant matching "BUILTIN\\Users"
+    against "BUILTIN\\사용자" on a Korean machine and concluding, permanently,
+    that nobody could read the store - including right after a repair that had
+    worked. SDDL names that group "BU" in every language.
+    """
+    handle, name = tempfile.mkstemp(prefix='localai-acl-', suffix='.txt')
+    os.close(handle)
+    saved = Path(name)
+    try:
+        # icacls will not overwrite an existing save file.
+        saved.unlink(missing_ok=True)
+        result = _run(['icacls', str(model_dir), '/save', str(saved), '/Q'])
+        if result is None or result.returncode != 0 or not saved.is_file():
+            return None
+        return saved.read_text(encoding='utf-16', errors='replace')
+    except (OSError, UnicodeError):
+        return None
+    finally:
+        try:
+            saved.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _readable_by_users(model_dir: Path) -> Optional[bool]:
     """Can BUILTIN\\Users read the store? None when the answer is unavailable."""
     if not model_dir.exists():
         return None
-    result = _run(['icacls', str(model_dir)])
-    if result is None or result.returncode != 0:
+    text = _saved_sddl(model_dir)
+    if text is None:
         return None
-    text = (result.stdout or '')
     for line in text.splitlines():
-        if BUILTIN_USERS_SID in line or '\\Users:' in line or 'Users:(' in line:
-            # Read-and-execute, or anything broader, satisfies the requirement.
-            if '(RX)' in line or '(R)' in line or '(F)' in line or '(M)' in line:
-                return True
-    return False
+        answer = policy.readable_from_sddl(line.strip())
+        if answer is not None:
+            return answer
+    return None
 
 
 def read(model_dir=None, *, windows=None) -> Sharing:
