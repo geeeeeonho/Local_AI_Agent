@@ -131,6 +131,10 @@ chat_ui/data/
 #  경로 통합 이전 잔재 + 런타임 산출물
 # ─────────────────────────────────────────────
 /launcher/user_data/
+
+# 테스트가 project_root 를 src/ 로 잡고 돌면 여기에 설정이 생긴다. 정본은
+# 루트의 user_data/ 이므로 이쪽은 언제나 부산물이다.
+/src/user_data/
 session_*.json
 !**/.gitkeep
 mcp_tools.json
