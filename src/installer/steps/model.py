@@ -186,7 +186,15 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
             _picked = _msg_gui.select_models(_entries, installed, lang=get_language(),
                                              budget_gb=_budget_gb())
         except Exception as _ge:
-            utils.warn("선택 GUI 불가 — 권장 세트 자동 설치 (" + repr(_ge) + ")")
+            # Tk 가 없거나 화면이 없는 환경은 예상된 폴백이다. 그 밖의 예외는
+            # 코드 결함일 가능성이 높은데, 조용히 넘어가면 선택 창이 영영 안 뜨고
+            # 매번 권장 세트(100GB+)가 통째로 받아진다. 실제로 그런 적이 있다.
+            _kind = type(_ge).__name__
+            if _kind in ("ImportError", "ModuleNotFoundError", "TclError"):
+                utils.warn("선택 GUI 사용 불가 — 권장 세트 자동 설치 (" + _kind + ")")
+            else:
+                utils.err("모델 선택 창 오류 — 권장 세트로 자동 설치합니다: " + repr(_ge))
+                utils.err("이 메시지가 보이면 버그입니다. 위 내용을 그대로 알려 주세요.")
             _picked = "AUTO"
         if _picked is None:
             utils.warn("모델 선택 취소 — 나중에 SETUP.bat --manage 에서 받으세요.")

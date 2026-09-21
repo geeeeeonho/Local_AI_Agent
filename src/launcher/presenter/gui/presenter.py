@@ -693,6 +693,7 @@ class TkPresenter(Presenter):
 
         # 현재 패널 캡처 (나중에 다른 패널로 바뀌어도 이 패널에 알림)
         target_panel = self._current_log_panel
+        pid = getattr(proc, "pid", None)
 
         def watcher():
             try:
@@ -713,7 +714,8 @@ class TkPresenter(Presenter):
                         )
                         target_panel.append(
                             "warn",
-                            f"외부 프로세스 종료됨 (PID 였음)",
+                            "외부 프로세스 종료됨"
+                            + (" (PID " + str(pid) + ")" if pid is not None else ""),
                         )
                     except Exception:
                         pass

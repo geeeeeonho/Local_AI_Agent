@@ -26,6 +26,11 @@ class SystemService:
 
 
 class SetupService:
+    # Explicit allowlist. A key never becomes an import path or a command on its
+    # own; the backend maps these to the retained implementation modules.
+    # One tuple, referenced by both spellings, so the two cannot drift.
+    MAINTENANCE_KEYS = MAINTENANCE_OPERATIONS
+
     def __init__(self, backend, models, network, settings, *, active=None):
         self.backend, self.models = backend, models
         self.network, self.settings = network, settings

@@ -136,26 +136,6 @@ class LegacyBackend:
 
     # The retained launcher reads this through getattr with a default; copying
     # the lookup without the default turned a missing constant into a crash.
-    _DEFAULT_CHAT_CONTEXT = 4096
-
-    def _chat_context(self, cfg):
-        """Token limit for AnythingLLM, from whichever source is actually present."""
-        roles = None
-        try:
-            roles = self.load('launcher.models.model_roles')
-        except Exception:
-            roles = None
-        for value in (getattr(roles, 'chat_context_window', None),
-                      getattr(cfg, 'MODEL_CONTEXT', None),
-                      getattr(cfg, 'CHAT_CONTEXT_WINDOW', None)):
-            try:
-                resolved = int(value() if callable(value) else value)
-            except Exception:
-                continue
-            if resolved > 0:
-                return resolved
-        return self._DEFAULT_CHAT_CONTEXT
-
     def chat_start(self, model, log, cancel):
         runtime = self.load('launcher.anythingllm_runtime')
         cfg = self.load('launcher.config')
@@ -164,7 +144,10 @@ class LegacyBackend:
             raise RuntimeError('Docker is unavailable. Open Setup / Repair.')
         before = self._chat_id()
         self._chat_probe_failed = False
-        context = self._chat_context(cfg)
+        # launcher.config.CHAT_CONTEXT_WINDOW (TOKEN_LIMITS_v1) is the one context
+        # source. The previous pair named two attributes that never existed, so the
+        # fallback raised AttributeError and Chat could not start at all.
+        context = int(cfg.CHAT_CONTEXT_WINDOW)
         try:
             if not runtime.start(log=log, model_tag=model or cfg.MODEL_TAG,
                                  token_limit=context, cancel_check=cancel):
@@ -274,22 +257,22 @@ class LegacyBackend:
         # Lifetime is owned by AgentSession and DesktopWindow, not panel destruction.
         return panel
 
-    # launcher.actions re-exports `searxng`/`settings` under *_action names as
-    # package attributes. They are not submodules, so import_module cannot find
-    # them; the operation key is mapped to the real module name here instead.
+    # The retained package re-exports two of these under *_action aliases, so a
+    # module path built from the key alone raised ModuleNotFoundError the first
+    # time a user pressed those buttons. Name the real modules here instead.
     MAINTENANCE_MODULES = {
-        'docker_image': 'docker_image',
-        'docker_clean': 'docker_clean',
-        'searxng_action': 'searxng',
-        'settings_action': 'settings',
-        'ollama_action': 'ollama',
+        'docker_image': 'launcher.actions.docker_image',
+        'docker_clean': 'launcher.actions.docker_clean',
+        'settings_action': 'launcher.actions.settings',
+        'searxng_action': 'launcher.actions.searxng',
+        'ollama_action': 'launcher.actions.ollama',
     }
 
     def maintenance(self, key, presenter):
         module = self.MAINTENANCE_MODULES.get(key)
         if module is None:
             raise ValueError('unknown maintenance operation: ' + str(key))
-        return self.load('launcher.actions.' + module).run(self.env, presenter)
+        return self.load(module).run(self.env, presenter)
 
     def setup_command(self):
         executable = Path(sys.executable)

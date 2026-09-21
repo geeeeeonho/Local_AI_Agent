@@ -78,18 +78,8 @@ def network_label(mode=None) -> str:
     return network_policy.display_label(mode or network_policy.current_mode())
 
 
-def network_flags(mode=None) -> tuple[bool, bool]:
-    """Return compatibility booleans ``(proxy_enabled, block_enabled)``."""
-    selected = network_policy.normalize_mode(mode or network_policy.current_mode())
-    return (
-        selected in (network_policy.NetworkMode.WARP, network_policy.NetworkMode.TOR),
-        selected is network_policy.NetworkMode.BLOCK,
-    )
-
-
 __all__ = [
     "resolve_resource_limits",
     "build_cmd_for_mode",
     "network_label",
-    "network_flags",
 ]

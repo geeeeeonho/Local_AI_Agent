@@ -4,7 +4,9 @@ import html
 import json
 import os
 import re
-import socket
+# 이름 해석의 정본 핸들. 직접 호출하지 않아도, 보안 테스트가 이 속성에
+# sentinel 을 꽂아 "검증 전에 DNS 를 타지 않는다" 를 확인한다.
+import socket  # noqa: F401
 import sys
 import urllib.parse
 import urllib.request
@@ -166,19 +168,6 @@ def _privacy_preflight(url: str) -> tuple[str | None, str | None]:
         if reason:
             return reason, None
     return None, normalized.url
-
-
-def _is_public_http_url(url: str) -> tuple[bool, str]:
-    mode = _network_mode()
-    reason, normalized_url = _privacy_preflight(url)
-    if reason:
-        return False, reason
-    try:
-        resolver = _resolver_for_mode(mode)
-    except Exception:
-        resolver = None
-    result = _validation(normalized_url or url, mode, resolver=resolver)
-    return result.ok, result.reason
 
 
 def _fetch_with_request(url: str, *, mode: str, timeout: float, limit: int, resolver=None) -> tuple[str, bytes, str] | str:

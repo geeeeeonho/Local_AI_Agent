@@ -1,5 +1,4 @@
 """New batch entrypoints and compatibility locks do not mutate runtime paths."""
-import importlib
 from pathlib import Path
 import sys
 from types import SimpleNamespace as NS
@@ -18,6 +17,22 @@ def test_run_and_setup_forward_to_one_application_parser():
         assert flag in run
 
 
+def test_every_standalone_batch_file_opens_its_own_application():
+    for name, app in (('STUDIO.bat','studio'),('CHAT.bat','chat'),('INTERPRETER.bat','interpreter')):
+        text=(ROOT/name).read_text()
+        assert 'RUN.bat" --app '+app in text, name
+        assert 'exit /b %errorlevel%' in text, name   # 실패를 삼키지 않는다
+
+
+def test_readme_names_every_entrypoint_a_user_can_double_click():
+    """루트의 .bat 을 늘리고 README 를 안 고치면 아무도 그 진입점을 모른다."""
+    readme=(ROOT/'README.md').read_text(encoding='utf-8')
+    present=sorted(path.name for path in ROOT.glob('*.bat'))
+    assert present
+    missing=[name for name in present if name not in readme]
+    assert not missing, 'README 에 없는 진입점: '+', '.join(missing)
+
+
 def test_paths_follow_ollama_and_still_remember_the_old_store(monkeypatch):
     monkeypatch.delenv('LLM_MODEL_DIR',raising=False)
     monkeypatch.delenv('LLM_OLLAMA_DIR',raising=False)
@@ -28,20 +43,26 @@ def test_paths_follow_ollama_and_still_remember_the_old_store(monkeypatch):
     assert str(paths.LEGACY_FORCED_MODEL_DIR)==r'C:\LLM_Models'
 
 
+# Redirect the canonical module's attributes instead of replacing the module:
+# every deferred `from project_paths import ...` in the tree reads these, and a
+# partial stand-in would hide names that other importers legitimately need.
 def test_default_inference_does_not_activate_official_migration(monkeypatch,tmp_path):
     from services.inference.service import InferenceService
     from integrations.legacy import desktop
-    monkeypatch.setitem(sys.modules,'project_paths',NS(ENV_DIR=tmp_path/'env',MODEL_STORAGE_DIR=tmp_path/'models',USER_DATA_DIR=tmp_path/'user_data'))
+    import project_paths
+    monkeypatch.setattr(project_paths,'ENV_DIR',tmp_path/'env')
+    monkeypatch.setattr(project_paths,'MODEL_STORAGE_DIR',tmp_path/'models')
     got=[]
     monkeypatch.setattr(desktop,'ManagedInference',lambda env,models,importer:got.append((env,models)) or NS(client=object(),model_dir=models))
-    service=InferenceService()
+    InferenceService()
     assert got==[(tmp_path/'env',tmp_path/'models')]
 
 
 def test_legacy_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
     from services.system import bootstrap
     from services.network.ownership import RuntimeOwner
-    monkeypatch.setitem(sys.modules,'project_paths',NS(USER_DATA_DIR=tmp_path))
+    import project_paths
+    monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
     competing=RuntimeOwner(tmp_path/'cache'/'desktop-runtime.lock')
     observed=[]
     def check_locked(*a,**k):
@@ -56,7 +77,8 @@ def test_legacy_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
 
 def test_legacy_entry_restores_argv_on_exception(monkeypatch,tmp_path):
     from services.system import bootstrap
-    monkeypatch.setitem(sys.modules,'project_paths',NS(USER_DATA_DIR=tmp_path))
+    import project_paths
+    monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
     original=sys.argv
     monkeypatch.setattr(bootstrap.runpy,'run_module',lambda *a,**k:(_ for _ in ()).throw(ValueError('bad')))
     with pytest.raises(ValueError):bootstrap.legacy_entry('installer',[])
@@ -66,8 +88,10 @@ def test_legacy_entry_restores_argv_on_exception(monkeypatch,tmp_path):
 def chat_backend(tmp_path,ids):
     from test_desktop_integration import fixture
     b,m,c=fixture(tmp_path)
+    started=[]
     m['launcher.anythingllm_runtime']=NS(CONTAINER='chat',URL='http://localhost:3001',
-        start=lambda **k:True,stop=lambda:c.append('stopped'),is_running=lambda:False)
+        started=started,start=lambda **k:started.append(k) or True,
+        stop=lambda:c.append('stopped'),is_running=lambda:False)
     sequence=iter(ids)
     m['launcher.services.docker'].DockerService.stop_container=lambda identifier,timeout:c.append('stopped') or True
     m['launcher.services.docker'].DockerService.run=lambda *a,**k: NS(returncode=0,stdout=next(sequence))
@@ -79,6 +103,24 @@ def test_chat_recreated_container_is_stopped_on_close(tmp_path):
     assert b.chat_start('',print,None)=='http://localhost:3001'
     assert b.chat_stop()
     assert c==['stopped']
+
+
+def test_chat_start_passes_the_canonical_token_limit_and_model(tmp_path):
+    """컨텍스트 한도는 config 한 곳에서만 온다. 예전 코드는 존재하지 않는
+    이름 두 개를 거쳐 AttributeError 로 Chat 시작 자체를 막았다."""
+    from launcher import config
+    b,m,c=chat_backend(tmp_path,['','id\n'])
+    b.chat_start('picked:tag',print,None)
+    started,=m['launcher.anythingllm_runtime'].started
+    assert started['token_limit']==config.CHAT_CONTEXT_WINDOW
+    assert started['model_tag']=='picked:tag'
+
+
+def test_chat_start_falls_back_to_the_catalog_default_model(tmp_path):
+    b,m,c=chat_backend(tmp_path,['','id\n'])
+    b.chat_start('',print,None)
+    started,=m['launcher.anythingllm_runtime'].started
+    assert started['model_tag']==m['launcher.config'].MODEL_TAG
 
 
 def test_chat_reused_container_is_not_stopped(tmp_path):

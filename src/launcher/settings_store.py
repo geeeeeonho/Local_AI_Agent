@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -162,11 +161,6 @@ def update_language(cfg: Settings, lang: str) -> Settings:
 
 def update_last_menu_choice(cfg: Settings, choice: str | None) -> Settings:
     cfg.last_menu_choice = choice
-    return cfg
-
-
-def update_last_workspace(cfg: Settings, workspace: str | Path | None) -> Settings:
-    cfg.last_workspace = None if workspace is None else str(workspace)
     return cfg
 
 

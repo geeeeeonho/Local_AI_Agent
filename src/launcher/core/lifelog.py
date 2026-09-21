@@ -57,7 +57,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 import traceback
 from pathlib import Path
 from typing import Callable, List, Optional, TextIO
@@ -871,122 +870,18 @@ def register_orphan_container_cleanup_auto() -> None:
 # ─────────────────────────────────────────────
 #  v6_9_visibility: Ollama 모델 사전 warm-up
 # ─────────────────────────────────────────────
-def warmup_ollama_model(model_tag: str, host: str = "http://127.0.0.1:11434",
-                       timeout: int = 30) -> bool:
-    """Ollama 모델을 메모리에 미리 로드.
-
-    docker 컨테이너 실행 직전 호출하면 첫 응답 지연 (~수십초) 제거.
-    /api/generate 를 keep_alive 만 설정해서 1토큰 생성 -> 모델 로드 트리거.
-
-    Returns True 면 모델이 메모리에 로드됨.
-    """
-    import json as _json
-    import urllib.request as _urlreq
-    import urllib.error as _urlerr
-
-    if not model_tag:
-        return False
-
-    log("INFO", "Ollama 모델 warm-up: " + model_tag)
-    try:
-        payload = _json.dumps({
-            "model": model_tag,
-            "prompt": "Hi",
-            "stream": False,
-            "keep_alive": "5m",  # AGENT_MEM_v1
-            "options": {"num_predict": 1},
-        }).encode("utf-8")
-        req = _urlreq.Request(
-            host + "/api/generate",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        t0 = time.time()
-        with _urlreq.urlopen(req, timeout=timeout) as resp:
-            _ = resp.read()
-        elapsed = time.time() - t0
-        log("OK", "모델 warm-up 완료 (" + str(round(elapsed, 1)) + "초): " + model_tag)
-        return True
-    except (_urlerr.URLError, OSError, ValueError) as e:
-        log("WARN", "모델 warm-up 실패: " + str(e))
-        return False
-
-
 # v7_1_unified: 호스트 프로세스 정리
 
 
 # ─────────────────────────────────────────────
 #  v7_1_unified: 호스트 interpreter 프로세스 정리
 # ─────────────────────────────────────────────
-def register_host_process_cleanup(get_pid_fn) -> None:
-    """호스트 직접 모드의 interpreter 프로세스 종료 cleanup 등록.
-
-    get_pid_fn: 현재 활성 PID 를 반환하는 콜러블 (없으면 None).
-    종료 시 해당 PID 프로세스를 graceful -> forceful 종료.
-    """
-    def _do():
-        try:
-            pid = get_pid_fn()
-        except Exception:
-            pid = None
-        if not pid:
-            return
-        log("CLEANUP", "호스트 interpreter 프로세스 종료 시도: PID=" + str(pid))
-        no_window = {}
-        if os.name == "nt":
-            no_window["creationflags"] = 0x08000000
-        try:
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    capture_output=True, timeout=5, **no_window
-                )
-                log("OK", "taskkill 완료: PID=" + str(pid))
-            else:
-                import signal as _sig
-                os.kill(pid, _sig.SIGTERM)
-                log("OK", "SIGTERM 전송: PID=" + str(pid))
-        except (subprocess.TimeoutExpired, ProcessLookupError, OSError) as e:
-            log("WARN", "프로세스 종료 예외: " + str(e))
-
-    register_cleanup(_do)
-    log("INFO", "호스트 프로세스 정리 cleanup 등록됨")
-
 # v7_5_dockercheck
 
 
 # ─────────────────────────────────────────────
 #  v7_5_dockercheck: Docker 데몬 상태 확인
 # ─────────────────────────────────────────────
-def check_docker_running(timeout: int = 3) -> bool:
-    """Docker 데몬이 응답하는지 확인.
-
-    Returns True 면 docker info 성공 (데몬 살아있음).
-    docker 미설치/미실행/응답없음 모두 False.
-    """
-    no_window = {}
-    if os.name == "nt":
-        no_window["creationflags"] = 0x08000000
-    try:
-        r = subprocess.run(
-            ["docker", "info"],
-            capture_output=True, timeout=timeout, **no_window
-        )
-        ok = (r.returncode == 0)
-        if ok:
-            log("INFO", "Docker 데몬 응답 정상")
-        else:
-            log("WARN", "Docker 데몬 미응답 (docker info rc=" + str(r.returncode) + ")")
-        return ok
-    except subprocess.TimeoutExpired:
-        log("WARN", "Docker 데몬 응답 타임아웃")
-        return False
-    except (FileNotFoundError, OSError) as e:
-        log("WARN", "Docker 명령 실행 불가: " + str(e))
-        return False
-
-
 # >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리
 def register_cache_cleanup(project_root) -> None:
     """종료 시 user_data/chat/cache 와 잔여 .tmp 를 자동 정리하도록 등록.

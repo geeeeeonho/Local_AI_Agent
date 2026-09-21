@@ -274,11 +274,42 @@ On Linux the desktop tests need a real display, such as Xvfb; they instantiate
 real Tk windows while injecting the external runtimes. A Python with no Tk at
 all skips them and still runs the rest:
 
-  with Tk:    876 passed
-  without Tk: 780 passed, 53 skipped
+  with Tk:    968 passed
+  without Tk: 856 passed, 54 skipped
 
-Local tests and source compilation do not replace native Windows, official
-Ollama, Docker, SearXNG-image or end-to-end Open Interpreter acceptance.
+### Verified
+
+On a live Linux Docker daemon (29.3.1), against the real `LegacyBackend` rather
+than a stand-in:
+
+- the full repository suite, on the CI Python (3.11) headless and with Tk under Xvfb;
+- `tools.verify_block_egress` end to end, with a normal-bridge baseline proving
+  the same probe does reach public DNS and raw-IP TCP (see README, "Linux Docker
+  에서 실제로 확인된 것", including the one item that fails there);
+- `integrations.searxng.runtime` against the daemon: derived per-fingerprint
+  config, loopback-bound published port, labels, idempotent restart, container
+  replacement on a mode change, `Block` refusal, verified stop;
+- Ollama ownership: a foreign listener answering on 11434 is not adopted
+  (`is_managed_running()` and `ensure_running()` both stay False);
+- Studio started on the real backend: Docker reported ready, the model index
+  scanned an empty store, and Chat failed closed with the Setup guidance.
+
+Against a real Ollama built from source, serving the machine-shared store:
+
+- every reader of "which models are here" returns the same set, and store
+  agreement reads True; a router pointed elsewhere reads False; a stopped one
+  reads unknown rather than empty;
+- `OLLAMA_NO_CLOUD=1` answers 403 on both `/api/chat` and `/v1/chat/completions`.
+
+### Not verified here
+
+Native Windows and Docker Desktop, the official Ollama runtime, the AnythingLLM
+and SearXNG images (the registry CDN is blocked from this environment), and
+end-to-end Open Interpreter acceptance. The machine-shared store's Windows
+half - `setx /M`, `icacls`, and the registry read - runs only against stubs
+here. Record CI runner failures separately from code-test failures; no executed
+steps is not a pass. Do not change branch protection or force-push to bypass
+checks.
 
 ### GitHub Actions is not running
 
@@ -298,16 +329,16 @@ empty commit to retry is never the answer.
 The substitute is to run what CI would run, against a fresh clone rather than a
 working tree, on both a Python with Tk and one without, plus `compileall` on
 3.11 to match the workflow's interpreter. Record which of those you actually
-ran. Do not change branch protection or force-push to bypass checks.
+ran.
 
 ## Transition adapter contract
 
 The desktop reaches the retained launcher through `importlib` and attribute
 access, which neither `compileall` nor an AST import check can see, and which
 unit-test stubs can satisfy with names that do not exist. Two constants shipped
-that way: `launcher.config.MODEL_CONTEXT`, which never existed and made every
-Chat start raise, and `launcher.actions.searxng_action`, a package attribute
-rather than a submodule, which made two maintenance buttons raise.
+that way: a context-window name that never existed and made every Chat start
+raise, and `launcher.actions.searxng_action`, a package attribute rather than a
+submodule, which made two maintenance buttons raise.
 
 `src/tests/test_no_phantom_imports.py` now checks the dynamic references against
 the real modules, so a rename on either side fails a test instead of a button.

@@ -11,8 +11,9 @@ class Mode(str, Enum):
 def fixture(tmp_path):
     from integrations.legacy.desktop import LegacyBackend
     calls=[]
-    # Mirror launcher.config's real names only. Inventing a constant here is how
-    # the desktop shipped a chat_start that crashed on launcher.config.MODEL_CONTEXT.
+    # Mirror launcher.config's real names only. A stub that invents a constant
+    # is how the desktop shipped a chat_start that crashed on a name the real
+    # config never had.
     cfg=NS(OLLAMA_PORT=11434, MODEL_TAG='chosen:latest', CHAT_CONTEXT_WINDOW=4096,
            SEARXNG_CONTAINER='search', SANDBOX_CONTAINER_PREFIX='box_')
     policy=NS(NetworkMode=Mode, current_mode=lambda: Mode.WARP,

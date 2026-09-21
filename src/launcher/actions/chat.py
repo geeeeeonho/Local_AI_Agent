@@ -121,11 +121,10 @@ def run(env: Path, p: Presenter):
         else:
             p.info("Block 모드: 공용 웹 검색은 비활성화됩니다.")
 
-        try:
-            from ..models import model_roles
-            ctx = int(model_roles.chat_context_window())
-        except Exception:
-            ctx = int(getattr(config, "MODEL_CONTEXT", 4096))
+        # TOKEN_LIMITS_v1: config 가 정본이다. 예전 코드는 존재하지 않는
+        # model_roles.chat_context_window() 를 부르고 실패를 삼켜, 정본 대신
+        # 하드코딩된 4096 이 늘 쓰였다.
+        ctx = int(config.CHAT_CONTEXT_WINDOW)
 
         p.info("AnythingLLM 시작 중...")
         ok = runtime.start(

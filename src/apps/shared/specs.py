@@ -26,7 +26,7 @@ DESCRIPTIONS = {
     'projects': '문서 Workspace와 코드 작업 폴더를 연결합니다.',
     'agent': 'Open Interpreter · 명령 · 승인 · 파일 변경',
     'models': '지금 선택될 모델 · 받을 모델 고르기 · 디스크 사용량',
-    'network': 'Direct / WARP / Tor / Block · 실행 중인 정책는 임의로 바뀌지 않습니다.',
+    'network': 'Direct / WARP / Tor / Block · 실행 중인 정책은 임의로 바뀌지 않습니다.',
     'system': '실제 서비스 상태와 현재 저장 경로',
     'settings': 'Session > Project > App > Global',
     'setup': '설치 · 진단 · 복구 · 유지보수',

@@ -142,16 +142,25 @@ def _get_vram_gb() -> Optional[float]:
 # ──────────────────────────────────────────────────────────────
 
 def _is_ssd(path: Path) -> Optional[bool]:
-    """경로의 드라이브가 SSD 인지. 감지 실패 시 None."""
+    """경로가 놓인 드라이브가 SSD 인지. 감지 실패 시 None.
+
+    이전 구현은 드라이브 문자를 구해 놓고 쓰지 않아, 경로와 상관없이 '첫 번째
+    물리 디스크' 의 MediaType 을 돌려줬다. SSD 로 부팅하고 모델은 HDD 에 두는
+    구성에서 HDD 경고가 전혀 뜨지 않는다.
+    """
     if os.name != "nt":
         return None
     try:
-        # PowerShell 로 MediaType 조회 — 실패하면 None
-        drive_letter = str(path.resolve())[0]
+        # 드라이브 문자 한 글자만 명령에 넣는다 (UNC/네트워크 경로는 감지 포기).
+        drive_letter = path.resolve().drive.rstrip(":\\/")
+        if len(drive_letter) != 1 or not drive_letter.isalpha():
+            return None
         cmd = (
-            f"Get-PhysicalDisk | "
-            f"Where-Object {{$_.MediaType -ne 'Unspecified'}} | "
-            f"Select-Object -First 1 -ExpandProperty MediaType"
+            "$ErrorActionPreference='Stop'; "
+            "$n = (Get-Partition -DriveLetter " + drive_letter + ").DiskNumber; "
+            "Get-PhysicalDisk | "
+            "Where-Object {[string]$_.DeviceId -eq [string]$n} | "
+            "Select-Object -First 1 -ExpandProperty MediaType"
         )
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command", cmd],
@@ -278,17 +287,3 @@ def compute_safety_profile(spec: SystemSpec) -> SafetyProfile:
     )
 
 
-def env_for_pip(profile: SafetyProfile) -> dict:
-    """pip 빌드 시 사용할 환경변수.
-
-    MAKEFLAGS / CMAKE_BUILD_PARALLEL_LEVEL 로 병렬도 제한.
-    이걸로 메모리 폭주 거의 다 막힘.
-    """
-    env = os.environ.copy()
-    jobs = str(profile.pip_jobs)
-    env["MAKEFLAGS"] = f"-j{jobs}"
-    env["CMAKE_BUILD_PARALLEL_LEVEL"] = jobs
-    env["MAX_JOBS"] = jobs                           # PyTorch 등에서 사용
-    env["NPY_NUM_BUILD_JOBS"] = jobs                 # numpy
-    env["PIP_NO_CACHE_DIR"] = "1"                    # 디스크 압박 줄이기
-    return env

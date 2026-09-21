@@ -264,6 +264,20 @@ class RepositoryStructureTests(unittest.TestCase):
         Two modules imported tkinter at module scope, so a stock Linux or macOS
         Python failed collection and the whole suite reported zero tests.
         """
+        def skips_first(body, before):
+            """Is there a module-level importorskip('tkinter') above this line?"""
+            for node in body:
+                if node.lineno >= before:
+                    return False
+                for call in ast.walk(node):
+                    if (isinstance(call, ast.Call)
+                            and getattr(call.func, "attr", "") == "importorskip"
+                            and call.args
+                            and isinstance(call.args[0], ast.Constant)
+                            and str(call.args[0].value).split(".")[0] == "tkinter"):
+                        return True
+            return False
+
         offenders = []
         for path in sorted((REPO_ROOT / "src" / "tests").glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -273,8 +287,11 @@ class RepositoryStructureTests(unittest.TestCase):
                     names = [alias.name for alias in node.names]
                 elif isinstance(node, ast.ImportFrom):
                     names = [node.module or ""]
-                if any(name.split(".")[0] == "tkinter" for name in names):
-                    offenders.append("%s:%d" % (path.name, node.lineno))
+                if not any(name.split(".")[0] == "tkinter" for name in names):
+                    continue
+                if skips_first(tree.body, node.lineno):
+                    continue
+                offenders.append("%s:%d" % (path.name, node.lineno))
         self.assertEqual(offenders, [], "module-level tkinter imports break "
                                         "collection without Tk:\n  "
                                         + "\n  ".join(offenders))

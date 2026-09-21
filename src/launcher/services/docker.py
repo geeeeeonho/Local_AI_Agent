@@ -22,10 +22,6 @@ if os.name == "nt":
     _NO_WINDOW_KW["creationflags"] = config.WIN_CREATE_NO_WINDOW
 
 
-class DockerError(Exception):
-    """Docker 실패 표현."""
-
-
 class DockerService:
     """Canonical Docker CLI boundary used by launcher/installer code."""
 

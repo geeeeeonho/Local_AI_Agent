@@ -2,14 +2,13 @@
 
 Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한 자기완결형 프로젝트입니다.
 
-사용자 관점에서 프로젝트 루트에서 알아야 할 진입점은 다음과 같습니다.
+사용자 관점에서 프로젝트 루트에서 알아야 할 진입점입니다.
 
-- `SETUP.bat` — 최초 설치 + 이후 환경 복구
-- `RUN.bat` — 통합 실행 (LocalAI Studio)
-- `CHAT.bat` / `INTERPRETER.bat` / `STUDIO.bat` — 같은 창의 단독 실행 형태
+- `SETUP.bat` — 최초 설치 + 이후 환경/모델 관리
+- `RUN.bat` — 프로그램 실행(기본: LocalAI Studio)
+- `STUDIO.bat` / `CHAT.bat` / `INTERPRETER.bat` — Studio 와 같은 셸을, 필요한 화면만 띄우는 단독 실행
 
-네 진입점 모두 하나의 데스크톱 셸과 하나의 서비스 구성을 공유합니다.
-화면 구성과 경계는 [STUDIO.md](STUDIO.md) 에 정리되어 있습니다.
+네 화면은 같은 서비스·설정·모델을 공유합니다. 화면 구성과 정책은 [STUDIO.md](STUDIO.md) 를 보세요.
 
 사용자 설정·로그·세션 같은 영속 데이터는 루트의 `user_data/`에 유지되고, 프로그램 소스와 개발용 파일은 `src/` 아래에 모여 있습니다.
 대용량 Ollama 모델은 Ollama 설치 폴더 밑의 기계 공용 저장소 `C:\Ollama\models`에 저장됩니다.
@@ -44,20 +43,17 @@ SETUP.bat --manage
 RUN.bat
 ```
 
-기본은 통합 GUI(LocalAI Studio)입니다. 필요한 화면만 열려면:
+기본은 LocalAI Studio(GUI)입니다. 필요한 화면만 띄우려면:
 
 ```bat
-CHAT.bat            :: 대화 · 문서 · RAG (AnythingLLM)
-INTERPRETER.bat     :: 코딩 · 자동화 에이전트 (Open Interpreter)
-STUDIO.bat          :: 전체 화면
-RUN.bat --app chat  :: 위와 동일
+STUDIO.bat            :: RUN.bat --app studio 와 같음
+CHAT.bat              :: 대화 · 문서 · Workspace
+INTERPRETER.bat       :: Agent · 명령 · 승인
+RUN.bat --tui         :: 이전 터미널 런처
 ```
 
-기존 터미널 런처는 그대로 남아 있습니다.
-
-```bat
-RUN.bat --tui
-```
+Studio 는 Tk 가 있는 Python 3.11+ 를 씁니다. GUI를 사용할 수 없는 환경에서는
+`RUN.bat --tui` 로 이전 터미널 런처를 쓸 수 있습니다.
 
 설치 플래그는 어느 런처에 주더라도 설치기로 연결됩니다.
 
@@ -188,20 +184,18 @@ Local_AI_Agent/
 ├─ .github/                 GitHub Actions
 ├─ .gitignore
 ├─ README.md                현재 사용법
-├─ SETUP.bat                설치 + 복구 진입점
-├─ RUN.bat                  통합 실행 진입점 (GUI + TUI)
-├─ STUDIO.bat               ┐
-├─ CHAT.bat                 ├ 같은 셸의 단독 실행 형태
-├─ INTERPRETER.bat          ┘
-├─ STUDIO.md                데스크톱 셸 사용법과 경계
+├─ STUDIO.md                데스크톱 셸의 화면·정책 문서
+├─ SETUP.bat                설치 + 관리 통합 진입점
+├─ RUN.bat                  실행 진입점 (기본 Studio, --tui 로 이전 런처)
+├─ STUDIO.bat / CHAT.bat / INTERPRETER.bat   단독 실행 진입점
 │
 ├─ src/
 │  ├─ project_paths.py      프로젝트/런타임/공용 모델 경로 정본 (유일)
 │  ├─ runtime_versions.py   외부 런타임 버전 정본 (Open Interpreter 등)
-│  ├─ apps/                 네 진입점과 공용 데스크톱 화면
-│  ├─ core/                 UI 비의존 계약 (이벤트·설정·네트워크 정책)
-│  ├─ services/             앱이 쓰는 단일 서비스 경계
-│  ├─ integrations/         기존 런처 구현으로 가는 전환 어댑터
+│  ├─ apps/                 데스크톱 셸 (studio / chat / interpreter / setup)
+│  ├─ services/             앱이 쓰는 서비스 경계 (network / chat / agent / models)
+│  ├─ core/                 UI·런타임에 의존하지 않는 계약 (경로·정책·저장)
+│  ├─ integrations/         구 런처 구현으로 가는 전환 어댑터
 │  ├─ launcher/             런처 / 서비스 / Agent runtime
 │  ├─ installer/            설치 / 관리 구현
 │  ├─ tools/                개발·평가 도구
@@ -211,8 +205,9 @@ Local_AI_Agent/
 └─ user_data/               사용자 영속 데이터
 ```
 
-계층은 `apps → services → integrations` 이고, `core` 는 UI에 의존하지 않는
-계약만 담습니다. 모든 경로는 `src/project_paths.py` 한 곳에서만 정해집니다.
+계층은 `apps → services → integrations` 이고, `core` 는 어느 쪽에도 의존하지
+않습니다. 새 계층은 구 `launcher` 구현을 어댑터 뒤에서 그대로 재사용합니다.
+모든 경로는 `src/project_paths.py` 한 곳에서만 정해집니다.
 
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
 설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
@@ -340,6 +335,29 @@ python -m tools.verify_block_egress
 `[OK] public raw-IP TCP and public DNS blocked: True` 를 찍고 exit 0 이었습니다.
 지금은 판정이 기대는 사실이 전부 있고 타입까지 맞아야 하며, 파서도 완전한 프로브
 결과가 아닌 JSON(예: 엉뚱한 로그 한 줄)은 건너뜁니다. 빠진 답은 `[FAIL]` 입니다.
+
+### Linux Docker 에서 실제로 확인된 것
+
+살아 있는 Docker 데몬(Linux, Docker 29.3.1)에서 이 진단을 끝까지 돌린 결과입니다.
+같은 프로브가 일반 bridge 에서는 공용 DNS 와 `1.1.1.1:443` 에 **닿는다**는 기준선을
+먼저 잡고 비교했습니다.
+
+| 항목 | 결과 |
+| --- | --- |
+| `llm_block_net` 속성 | `Internal=true` · `Driver=bridge` |
+| 공용 raw-IP TCP | 차단됨 |
+| 공용 DNS | 차단됨 |
+| 관리형 Host relay 포트(Tor/WARP/SearXNG) | 도달 불가 |
+| `host.docker.internal` 로컬 Ollama | **도달 불가 (Linux 한정)** |
+
+마지막 항목은 Linux 의 네트워크 구조 때문입니다. `--add-host
+host.docker.internal:host-gateway` 는 언제나 기본 bridge 의 게이트웨이(`172.17.0.1`)를
+가리키는데, `llm_block_net` 은 다른 서브넷(`172.18.0.0/16`)이고 internal 이라 그
+주소로 가는 경로가 없습니다. 호스트 자체는 **그 네트워크의 자기 게이트웨이**
+(`172.18.0.1`)로는 닿습니다 — 즉 격리는 의도대로 동작하고, 이름만 다른 곳을
+가리킵니다. Windows Docker Desktop 은 `host.docker.internal` 을 Desktop 이 직접
+제공하므로 동작이 다를 수 있고, 여기서는 확인할 수 없습니다. **Block 에서 로컬
+Ollama 가 필요하면 자기 PC 에서 위 진단을 한 번 돌려 보세요.**
 
 ## 모델 정책
 

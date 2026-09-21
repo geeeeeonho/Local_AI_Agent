@@ -40,6 +40,7 @@ class _FakeOllama:
         self.blobs = store / "blobs"
         self.manifests = store / "manifests" / "registry.ollama.ai"
         self.pulled = []
+        self.removed = []
 
     def installed(self):
         out = []
@@ -75,6 +76,14 @@ class _FakeOllama:
         }), encoding="utf-8")
         self.pulled.append(tag)
 
+    def _remove(self, tag: str) -> None:
+        """`ollama rm` 은 manifest 를 지운다. (진짜는 참조 없는 blob 도 함께
+        정리하지만, 여기서는 manifest 제거만으로 '설치됨' 판정이 바뀐다.)"""
+        name, _, version = tag.partition(":")
+        namespace, _, short = name.rpartition("/")
+        (self.manifests / (namespace or "library") / short / version).unlink(missing_ok=True)
+        self.removed.append(tag)
+
     def run(self, argv, **kwargs):
         """subprocess.run 대역. 설치기가 부르는 형태만 처리한다."""
         args = [str(a) for a in argv]
@@ -86,7 +95,7 @@ class _FakeOllama:
         elif verb == "pull":
             self._pull(args[2])
         elif verb == "rm":
-            pass
+            self._remove(args[2])
         else:
             return subprocess.CompletedProcess(args, 1, "", "unknown command")
         return subprocess.CompletedProcess(args, 0, stdout, "")
@@ -112,22 +121,21 @@ class ModelPipelineTests(unittest.TestCase):
         self.addCleanup(setattr, installer_model.subprocess, "run", real_run)
         installer_model.subprocess.run = self.ollama.run
 
-        # The selection dialog is a real modal window. Stand in for "the user
-        # opened it and accepted the pre-checked plan" so this pipeline test
-        # never depends on a display and never blocks in mainloop().
+        # 선택 GUI 는 진짜 Tk 창을 띄우고 mainloop 로 사용자를 기다린다.
+        # 테스트는 창을 띄우지 않고 어느 분기를 지나는지 매번 명시한다.
+        # (기본값은 "Tk 사용 불가 -> 권장 세트 자동 설치" 계약.)
         from installer.steps import model_select_gui
         real_select = model_select_gui.select_models
         self.addCleanup(setattr, model_select_gui, "select_models", real_select)
-        self.selected = None
-        model_select_gui.select_models = self._select
-        self.select_calls = []
+        self.selection_calls = []
 
-    def _select(self, entries, installed, lang="ko", budget_gb=None):
-        self.select_calls.append((len(entries), set(installed), budget_gb))
-        if self.selected is not None:
-            return self.selected
-        return set(installed) | catalog.recommended_for(
-            catalog.MEMORY_BUDGET_GB if budget_gb is None else budget_gb)
+        def unavailable(entries, installed, **kwargs):
+            self.selection_calls.append((entries, set(installed), kwargs))
+            raise ModuleNotFoundError("No module named 'tkinter'")
+
+        self.select = unavailable
+        model_select_gui.select_models = (
+            lambda *a, **kw: self.select(*a, **kw))
 
     # ── 설치 ────────────────────────────────────────────────────
     def _install(self):
@@ -149,6 +157,51 @@ class ModelPipelineTests(unittest.TestCase):
         self._install()          # 두 번째 실행은 전부 건너뛰어야 한다
         after = sorted(p.name for p in (self.store / "blobs").iterdir())
         self.assertEqual(before, after)
+
+    def test_the_selection_window_receives_the_catalog_and_the_memory_budget(self):
+        self._install()
+        entries, installed, kwargs = self.selection_calls[0]
+        assert {e.tag for e in entries} == set(catalog.catalog_tags())
+        assert installed == set()
+        assert kwargs["budget_gb"] == catalog.MEMORY_BUDGET_GB
+
+    def test_an_explicit_selection_installs_and_removes_exactly_what_was_checked(self):
+        self._install()                       # 권장 세트를 먼저 받아 둔다
+        keep, drop = sorted(self.ollama.pulled)[0], sorted(self.ollama.pulled)[-1]
+        extra = next(t for t in catalog.catalog_tags() if t not in self.ollama.pulled)
+        self.select = lambda *a, **kw: {keep, extra}
+        self.ollama.pulled.clear()
+
+        self._install()
+        self.assertEqual(self.ollama.pulled, [extra],
+                         "체크한 미설치 모델만 받아야 한다")
+        self.assertNotIn(drop, self.ollama.installed(),
+                         "체크 해제한 설치 모델이 지워지지 않았다")
+        self.assertIn(keep, self.ollama.installed())
+
+    def test_a_broken_selection_window_is_reported_loudly_not_swallowed(self):
+        """Tk 부재는 예상된 폴백이지만, 코드 결함은 크게 알려야 한다.
+
+        실제로 NameError 하나가 이 except 절에 삼켜져, 선택 창이 한 번도 뜨지
+        않은 채 매 설치가 권장 세트를 통째로 받았다.
+        """
+        from installer import utils
+        said = []
+        self.addCleanup(setattr, utils, "err", utils.err)
+        utils.err = lambda message: said.append(str(message))
+
+        def broken(*a, **kw):
+            raise NameError("name 'free_gb' is not defined")
+
+        self.select = broken
+        planned = self._install()
+        self.assertTrue(planned, "권장 세트로는 계속 진행해야 한다")
+        self.assertTrue(any("free_gb" in line for line in said), said)
+
+    def test_cancelling_the_selection_window_downloads_nothing(self):
+        self.select = lambda *a, **kw: None
+        self.assertEqual(self._install(), [])
+        self.assertEqual(self.ollama.pulled, [])
 
     # ── 파일 대응표 ─────────────────────────────────────────────
     def test_the_csv_lands_next_to_the_models_and_names_every_weight_file(self):
