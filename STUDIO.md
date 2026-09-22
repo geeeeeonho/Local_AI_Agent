@@ -2,10 +2,15 @@
 
 ## Run
 
-- `RUN.bat` or `STUDIO.bat`: LocalAI Studio.
-- `CHAT.bat` or `RUN.bat --app chat`: LocalAI Chat.
-- `INTERPRETER.bat` or `RUN.bat --app interpreter`: LocalAI Interpreter.
-- `SETUP.bat` or `RUN.bat --app setup`: LocalAI Setup.
+The project root exposes one launcher:
+
+- `RUN.bat`: LocalAI Studio (default).
+- `RUN.bat --app chat`: LocalAI Chat.
+- `RUN.bat --app interpreter`: LocalAI Interpreter.
+- `RUN.bat --app setup`: LocalAI Setup.
+- `RUN.bat --install`: explicit installer flow.
+- `RUN.bat --manage`: retained maintenance interface.
+- `RUN.bat --tui`: retained legacy terminal launcher.
 
 With `PYTHONPATH=src`, the equivalent modules are `apps.studio`, `apps.chat`,
 `apps.interpreter` and `apps.setup`. They use one parser, shared views and one
@@ -14,15 +19,13 @@ required for the desktop. The current copy contains both Korean and English
 labels; `--lang` initializes the retained installer/runtime language preference,
 not a complete translation of the new shell.
 
-`RUN.bat --tui` retains the legacy terminal launcher. `SETUP.bat --install`
-(and the existing `--skip-model`, `--skip-sandbox`, `--skip-build`, `--skip-search`
-flags) runs the retained installer explicitly. `SETUP.bat --manage` opens the
-retained maintenance interface. Those installation flags select Setup from any
-launcher, so `RUN.bat --install` does the same thing as `SETUP.bat --install`;
-naming a different application alongside them (`--app chat --install`) is still
-rejected rather than guessed. The old Python modules remain compatibility
-entrypoints, not copies of a new backend. Launching Studio on an uninstalled PC
-opens the shell and Setup guidance, rather than silently downloading programs.
+The existing `--skip-model`, `--skip-sandbox`, `--skip-build`, and
+`--skip-search` flags also select Setup when passed through `RUN.bat`. Naming a
+different application alongside installation flags (`--app chat --install`) is
+still rejected rather than guessed. The Python application modules remain
+compatibility entrypoints, not copies of a new backend. Launching Studio on an
+uninstalled PC opens the shell and Setup guidance, rather than silently
+downloading programs.
 
 ## Appearance and navigation
 
