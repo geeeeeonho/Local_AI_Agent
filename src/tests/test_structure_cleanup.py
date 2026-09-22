@@ -123,27 +123,24 @@ class RepositoryStructureTests(unittest.TestCase):
             self.assertFalse((REPO_ROOT / name).exists(), name)
         self.assertTrue((REPO_ROOT / "user_data").is_dir())
 
-    def test_only_unified_batch_entrypoints_remain(self):
-        self.assertTrue((REPO_ROOT / "SETUP.bat").is_file())
+    def test_run_is_the_only_root_batch_entrypoint(self):
         self.assertTrue((REPO_ROOT / "RUN.bat").is_file())
-        self.assertFalse((REPO_ROOT / "INSTALL.bat").exists())
-        self.assertFalse((REPO_ROOT / "MANAGE.bat").exists())
-        self.assertFalse((REPO_ROOT / "RUN_TUI.bat").exists())
+        self.assertEqual(
+            [path.name for path in sorted(REPO_ROOT.glob("*.bat"))],
+            ["RUN.bat"],
+        )
 
-    def test_batch_entrypoints_load_src_and_forward_arguments(self):
-        setup = self._text("SETUP.bat")
+    def test_run_entrypoint_loads_src_and_forwards_arguments(self):
         run = self._text("RUN.bat")
-
-        for text in (setup, run):
-            self.assertIn("PYTHONPATH", text)
-            self.assertIn("%~dp0src", text)
-            self.assertIn("%*", text)
+        self.assertIn("PYTHONPATH", run)
+        self.assertIn("%~dp0src", run)
+        self.assertIn("%*", run)
 
         managed_python = "llm_environment\\venv\\Scripts\\python.exe"
-        self.assertIn(managed_python, setup)
         self.assertIn(managed_python, run)
-        self.assertIn("-m apps.setup", setup)
         self.assertIn("-m apps.studio", run)
+        self.assertIn("--install", run)
+        self.assertIn("--manage", run)
 
     def test_project_paths_keep_runtime_data_at_repository_root(self):
         path_module = REPO_ROOT / "src" / "project_paths.py"
@@ -198,11 +195,12 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertNotIn("ensure_legacy_bridges", init_text)
         self.assertNotIn("settings_store", init_text)
 
-    def test_launcher_install_guidance_references_setup_entrypoint(self):
+    def test_launcher_install_guidance_references_single_entrypoint(self):
         launcher_main = self._text("src/launcher/__main__.py")
         self.assertNotIn("INSTALL.bat", launcher_main)
         self.assertNotIn("MANAGE.bat", launcher_main)
-        self.assertIn("SETUP.bat", launcher_main)
+        self.assertNotIn("SETUP.bat", launcher_main)
+        self.assertIn("RUN.bat --install", launcher_main)
 
     def test_legacy_agent_config_is_not_tracked_as_source(self):
         self.assertFalse(

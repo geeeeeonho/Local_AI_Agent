@@ -2,13 +2,10 @@
 
 Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한 자기완결형 프로젝트입니다.
 
-사용자 관점에서 프로젝트 루트에서 알아야 할 진입점입니다.
+사용자 관점에서 프로젝트 루트의 **유일한 실행 진입점은 `RUN.bat`** 입니다.
 
-- `SETUP.bat` — 최초 설치 + 이후 환경/모델 관리
-- `RUN.bat` — 프로그램 실행(기본: LocalAI Studio)
-- `STUDIO.bat` / `CHAT.bat` / `INTERPRETER.bat` — Studio 와 같은 셸을, 필요한 화면만 띄우는 단독 실행
-
-네 화면은 같은 서비스·설정·모델을 공유합니다. 화면 구성과 정책은 [STUDIO.md](STUDIO.md) 를 보세요.
+`RUN.bat` 하나에서 Studio, Chat, Interpreter, Setup, 설치/관리, TUI를 모두 선택합니다.
+각 화면은 같은 서비스·설정·모델을 공유합니다. 화면 구성과 정책은 [STUDIO.md](STUDIO.md) 를 보세요.
 
 사용자 설정·로그·세션 같은 영속 데이터는 루트의 `user_data/`에 유지되고, 프로그램 소스와 개발용 파일은 `src/` 아래에 모여 있습니다.
 대용량 Ollama 모델은 Ollama 설치 폴더 밑의 기계 공용 저장소 `C:\Ollama\models`에 저장됩니다.
@@ -19,10 +16,11 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 ### 1. 설치 또는 관리
 
 ```bat
-SETUP.bat
+RUN.bat --install
+RUN.bat --manage
 ```
 
-기본 동작은 현재 상태를 자동으로 판단합니다.
+설치기는 현재 상태를 판단해 필요한 설치/관리 흐름으로 연결됩니다.
 
 - `llm_environment/`가 없으면 → 최초 설치
 - 이전 `llm_environment/llm_models` 또는 중단된 모델 이전 작업이 남아 있으면 → 마이그레이션을 포함한 설치/업데이트 흐름
@@ -31,11 +29,11 @@ SETUP.bat
 필요하면 모드를 명시할 수 있습니다.
 
 ```bat
-SETUP.bat --install
-SETUP.bat --manage
+RUN.bat --install
+RUN.bat --manage
 ```
 
-기존 `INSTALL.bat`과 `MANAGE.bat`은 더 이상 사용하지 않습니다.
+기존 `INSTALL.bat`, `MANAGE.bat`, `SETUP.bat`은 더 이상 루트 실행기로 사용하지 않습니다.
 
 ### 2. 실행
 
@@ -46,24 +44,24 @@ RUN.bat
 기본은 LocalAI Studio(GUI)입니다. 필요한 화면만 띄우려면:
 
 ```bat
-STUDIO.bat            :: RUN.bat --app studio 와 같음
-CHAT.bat              :: 대화 · 문서 · Workspace
-INTERPRETER.bat       :: Agent · 명령 · 승인
-RUN.bat --tui         :: 이전 터미널 런처
+RUN.bat --app studio       :: Studio
+RUN.bat --app chat         :: 대화 · 문서 · Workspace
+RUN.bat --app interpreter  :: Agent · 명령 · 승인
+RUN.bat --app setup        :: Setup 화면
+RUN.bat --tui              :: 이전 터미널 런처
 ```
 
 Studio 는 Tk 가 있는 Python 3.11+ 를 씁니다. GUI를 사용할 수 없는 환경에서는
 `RUN.bat --tui` 로 이전 터미널 런처를 쓸 수 있습니다.
 
-설치 플래그는 어느 런처에 주더라도 설치기로 연결됩니다.
+설치/관리 플래그도 같은 진입점에서 처리합니다.
 
 ```bat
-SETUP.bat --install
-SETUP.bat --manage
-RUN.bat --install     :: SETUP.bat --install 과 같습니다
+RUN.bat --install
+RUN.bat --manage
 ```
 
-기존 `RUN_TUI.bat`은 제거되었으며 `RUN.bat --tui`로 통합되었습니다.
+기존 개별 실행기와 `RUN_TUI.bat`은 제거되었으며 모두 `RUN.bat` 옵션으로 통합되었습니다.
 
 ### 첫 실행
 
@@ -185,9 +183,7 @@ Local_AI_Agent/
 ├─ .gitignore
 ├─ README.md                현재 사용법
 ├─ STUDIO.md                데스크톱 셸의 화면·정책 문서
-├─ SETUP.bat                설치 + 관리 통합 진입점
-├─ RUN.bat                  실행 진입점 (기본 Studio, --tui 로 이전 런처)
-├─ STUDIO.bat / CHAT.bat / INTERPRETER.bat   단독 실행 진입점
+├─ RUN.bat                  유일한 루트 실행 진입점
 │
 ├─ src/
 │  ├─ project_paths.py      프로젝트/런타임/공용 모델 경로 정본 (유일)
@@ -212,9 +208,9 @@ Local_AI_Agent/
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
 설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
 
-예전 저장소(`C:\LLM_Models`, `llm_environment/llm_models`)에 모델이 있고 공용 저장소가 비어 있으면 설치 과정에서 자동 이동합니다. 다른 드라이브에서 이동하는 도중 중단되어도 최종 저장소에 부분 복사본이 노출되지 않도록 `C:\Ollama\models.migrating`을 임시 staging으로 사용하고 완료 marker로 복사 완료 여부를 구분합니다. 다음 `SETUP.bat` 실행은 완료된 staging을 승격하거나 부분 staging을 버리고 원본에서 다시 시작합니다. 두 위치에 모두 모델이 이미 있으면 데이터 충돌을 피하기 위해 자동 병합하지 않고 경고만 표시합니다.
+예전 저장소(`C:\LLM_Models`, `llm_environment/llm_models`)에 모델이 있고 공용 저장소가 비어 있으면 설치 과정에서 자동 이동합니다. 다른 드라이브에서 이동하는 도중 중단되어도 최종 저장소에 부분 복사본이 노출되지 않도록 `C:\Ollama\models.migrating`을 임시 staging으로 사용하고 완료 marker로 복사 완료 여부를 구분합니다. 다음 `RUN.bat --install` 실행은 완료된 staging을 승격하거나 부분 staging을 버리고 원본에서 다시 시작합니다. 두 위치에 모두 모델이 이미 있으면 데이터 충돌을 피하기 위해 자동 병합하지 않고 경고만 표시합니다.
 
-업데이트 직후 이전 모델 또는 staging이 남은 상태에서 `RUN.bat`을 먼저 실행하면 Ollama를 빈 공용 저장소로 시작하지 않고 실행을 중단하며 `SETUP.bat`으로 이전/복구를 먼저 완료하도록 안내합니다.
+업데이트 직후 이전 모델 또는 staging이 남은 상태에서 `RUN.bat`을 먼저 실행하면 Ollama를 빈 공용 저장소로 시작하지 않고 실행을 중단하며 `RUN.bat --install`로 이전/복구를 먼저 완료하도록 안내합니다.
 
 ## 경로 정책
 
@@ -364,7 +360,7 @@ Ollama 가 필요하면 자기 PC 에서 위 진단을 한 번 돌려 보세요.
 받을 수 있는 모델(`src/launcher/models/model_catalog.py`)과 런타임이 고를 수 있는
 모델(`src/launcher/models/model_roles.py` 의 `TIERS`)은 **서로의 거울**이어야 합니다.
 
-- `TIERS` 에만 있는 태그 → 사다리가 1순위로 고르지만 `SETUP.bat` 어디에서도 받을 수 없습니다.
+- `TIERS` 에만 있는 태그 → 사다리가 1순위로 고르지만 `RUN.bat --install` 흐름 어디에서도 받을 수 없습니다.
 - 카탈로그에만 있는 태그 → 받아서 디스크를 써도 런타임이 한 번도 고르지 않습니다.
 
 둘 다 예외도 경고도 없이 지나가므로 `src/tests/test_model_catalog_tiers.py` 가 양방향을
@@ -414,7 +410,7 @@ MAX_MODEL_GB     = 18.4      # 예산 × 0.92 (나머지는 KV 캐시·버퍼 �
 ```
 
 예전에는 설치도 `detect_free_memory_gb()` 를 썼습니다. 브라우저를 켜 둔 채
-`SETUP.bat` 을 돌리면 여유가 8GB 로 잡혀 **하 등급만 받고 상·중은 영영 못 받는**
+`RUN.bat --install` 을 돌리면 여유가 8GB 로 잡혀 **하 등급만 받고 상·중은 영영 못 받는**
 상태가 됐습니다.
 
 ### 크기는 두 가지입니다
