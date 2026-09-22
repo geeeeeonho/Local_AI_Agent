@@ -196,7 +196,7 @@ def main():
     _trace("설치 폴더 확인 직전 ENV=" + str(ENV))
     if not ENV.exists():
         print(f"[FAIL] 설치 폴더가 없습니다: {ENV}", file=sys.stderr)
-        print("[INFO] SETUP.bat --install 을 실행하세요", file=sys.stderr)
+        print("[INFO] RUN.bat --install 을 실행하세요", file=sys.stderr)
         # pythonw 환경에선 콘솔이 안 보이므로 fatal_log 에도 남김
         with open(_fatal_log_path(), "a", encoding="utf-8") as f:
             f.write(f"\n[FAIL] 설치 폴더 없음: {ENV}\n")
