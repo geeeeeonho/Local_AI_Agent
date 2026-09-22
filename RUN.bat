@@ -1,5 +1,6 @@
 @echo off
 setlocal
+rem Single public entrypoint for Studio, Chat, Interpreter, Setup, and legacy TUI.
 chcp 65001 >nul 2>&1
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
@@ -8,10 +9,10 @@ cd /d "%~dp0"
 
 set "MANAGED_PYW=%~dp0llm_environment\venv\Scripts\pythonw.exe"
 set "MANAGED_PY=%~dp0llm_environment\venv\Scripts\python.exe"
-set "FORCE_TUI="
-echo %* | findstr /I /C:"--tui" /C:"--install" /C:"--manage" /C:"--skip-" /C:"--help" >nul 2>&1 && set "FORCE_TUI=1"
+set "FORCE_CONSOLE="
+echo %* | findstr /I /C:"--tui" /C:"--install" /C:"--manage" /C:"--skip-" /C:"--help" >nul 2>&1 && set "FORCE_CONSOLE=1"
 
-if defined FORCE_TUI goto RUN_TUI
+if defined FORCE_CONSOLE goto RUN_CONSOLE
 if exist "%MANAGED_PYW%" goto RUN_MANAGED_GUI
 if exist "%MANAGED_PY%" goto RUN_MANAGED_CONSOLE
 
@@ -23,7 +24,7 @@ py -3 -V >nul 2>&1
 if not errorlevel 1 goto RUN_PY
 goto NOPY
 
-:RUN_TUI
+:RUN_CONSOLE
 if exist "%MANAGED_PY%" (
   "%MANAGED_PY%" -m apps.studio %*
   goto CHECK
@@ -71,6 +72,6 @@ pause
 exit /b 1
 
 :NOPY
-echo [ERROR] Python not found. Install Python 3.11+ or run SETUP.bat.
+echo [ERROR] Python not found. Install Python 3.11+ and run RUN.bat --install.
 pause
 exit /b 1
