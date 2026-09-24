@@ -260,6 +260,34 @@ class LegacyBackend:
     # The retained package re-exports two of these under *_action aliases, so a
     # module path built from the key alone raised ModuleNotFoundError the first
     # time a user pressed those buttons. Name the real modules here instead.
+    def prepare_model_runtime(self):
+        """Make Ollama usable for explicit model management.
+
+        Model selection is itself an explicit install action, so it may acquire
+        the Ollama binary when the machine has none. A healthy existing server
+        is reused. Otherwise we stop only a recognized Ollama, migrate legacy
+        model data through the installer's guarded filesystem path, install the
+        official binary (portable fallback), and start it against the resolved
+        store.
+        """
+        service_cls = self.load('launcher.services.ollama').OllamaService
+        service = service_cls(self.env, model_dir=self.model_dir)
+        if service.ensure_running():
+            return self.inference.endpoint
+
+        ollama = self.load('installer.steps.ollama')
+        utils = self.load('installer.utils')
+        project_paths = self.load('project_paths')
+
+        ollama.prepare_install(self.env, self.model_dir)
+        if Path(self.model_dir) == Path(project_paths.MODEL_STORAGE_DIR):
+            paths = utils.create_environment(self.env)
+        else:
+            paths = utils.create_environment(self.env, model_dir=self.model_dir)
+        ollama.install(paths)
+        ollama.start_service(paths)
+        return self.inference.endpoint
+
     MAINTENANCE_MODULES = {
         'docker_image': 'launcher.actions.docker_image',
         'docker_clean': 'launcher.actions.docker_clean',
