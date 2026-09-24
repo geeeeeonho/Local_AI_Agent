@@ -84,9 +84,33 @@ def user_default_models_dir(environ=None) -> Path:
     return home(environ) / '.ollama' / 'models'
 
 
+def is_legacy_forced_store(path) -> bool:
+    """True for the exact store older Local AI Agent releases forced.
+
+    That value is migration input, not a lasting user preference. Older releases
+    could leave OLLAMA_MODELS=C:\\LLM_Models in the inherited environment; treating
+    it like a deliberate override prevents the installer from ever moving those
+    models into the current shared Ollama store.
+    """
+    if path is None:
+        return False
+    import ntpath
+    left = ntpath.normcase(ntpath.normpath(str(path).strip().strip('"\'')))
+    right = ntpath.normcase(ntpath.normpath(str(LEGACY_FORCED_STORE)))
+    return left == right
+
+
 def models_dir(environ=None) -> Path:
-    """The store this machine should use: the user's choice, else the shared one."""
-    return configured_models_dir(environ) or SHARED_MODELS_DIR
+    """The active store: a real user choice, otherwise the shared Ollama store.
+
+    The one exception is the exact C:\\LLM_Models value forced by old releases.
+    It is deliberately ignored here so setup can see that directory as legacy
+    input and migrate it to C:\\Ollama\\models.
+    """
+    configured = configured_models_dir(environ)
+    if configured is not None and not is_legacy_forced_store(configured):
+        return configured
+    return SHARED_MODELS_DIR
 
 
 def models_dir_is_shared(environ=None) -> bool:

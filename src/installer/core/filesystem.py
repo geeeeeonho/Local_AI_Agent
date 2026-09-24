@@ -189,8 +189,10 @@ def _migrate_legacy_models(env: Path, models: Path) -> None:
 def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str, Path]:
     """관리 환경 트리와 공용 모델 저장소를 생성해 경로 dict를 반환한다.
 
-    모델은 프로젝트 체크아웃과 분리된 ``C:\\LLM_Models`` 를 기본으로 사용한다.
-    테스트나 관리형 배포에서는 ``model_dir`` 로 명시적으로 재정의할 수 있다.
+    모델은 프로젝트 체크아웃과 분리된 Ollama 공용 저장소
+    ``C:\\Ollama\\models`` 를 기본으로 사용한다. 예전 ``C:\\LLM_Models``
+    저장소는 비어 있는 공용 저장소로 안전하게 이전한다. 테스트나 관리형
+    배포에서는 ``model_dir`` 로 명시적으로 재정의할 수 있다.
     """
     try:
         from ..i18n import t
@@ -224,7 +226,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str,
             if name == "models":
                 raise RuntimeError(
                     f"공용 모델 저장소를 만들 권한이 없습니다: {p}. "
-                    "관리자 계정에서 SETUP.bat을 한 번 실행하거나 폴더 권한을 확인하세요."
+                    "관리자 계정에서 RUN.bat --install을 한 번 실행하거나 폴더 권한을 확인하세요."
                 ) from exc
             raise
         ok(f"  {name:<20} → {p}")
@@ -269,7 +271,7 @@ def write_install_manifest(
         "components": list(components),
         "installed_at": installed_at,
         "updated_at": now,
-        "note": "This directory is managed by Local AI Agent SETUP.bat.",
+        "note": "This directory is managed by Local AI Agent RUN.bat --install.",
     }
     manifest.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",

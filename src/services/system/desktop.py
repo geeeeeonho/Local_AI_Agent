@@ -40,17 +40,22 @@ class SetupService:
         if self.active():
             raise RuntimeError("Stop active sessions before maintenance or model changes.")
 
-    def install_model(self, name):
+    def ensure_model_runtime(self, *, download=False):
+        """Prepare Ollama once before an explicit model mutation."""
         self.require_idle()
-        selected = self.settings.network_mode(app='setup')
-        if selected is NetworkMode.BLOCK or self.network.mode is NetworkMode.BLOCK:
-            raise RuntimeError('Downloads are disabled in Block. Change Setup network intent explicitly.')
+        if download:
+            selected = self.settings.network_mode(app='setup')
+            if selected is NetworkMode.BLOCK or self.network.mode is NetworkMode.BLOCK:
+                raise RuntimeError('Downloads are disabled in Block. Change Setup network intent explicitly.')
         self.network.owner.acquire()
+        return self.backend.prepare_model_runtime()
+
+    def install_model(self, name):
+        self.ensure_model_runtime(download=True)
         return self.models.install_model(name)
 
     def remove_model(self, name):
-        self.require_idle()
-        self.network.owner.acquire()
+        self.ensure_model_runtime(download=False)
         return self.models.remove_model(name)
 
     def repair(self):

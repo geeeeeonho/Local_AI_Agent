@@ -62,6 +62,7 @@ class OllamaService:
         self.runtime_state_file = self.env / "logs" / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
+        self.last_error = ""
 
     # ── 상태 확인 ──
     @staticmethod
@@ -323,7 +324,7 @@ class OllamaService:
                 "포트 %s에서 다른 Ollama가 실행 중입니다: %s"
                 % (config.OLLAMA_PORT, shown)
             )
-            self._err("해당 Ollama를 종료한 뒤 SETUP.bat을 다시 실행하세요.")
+            self._err("해당 Ollama를 종료한 뒤 RUN.bat --install을 다시 실행하세요.")
             return False
 
         self._info("모델 저장소 정리를 위해 관리형 Ollama를 잠시 종료합니다.")
@@ -387,6 +388,7 @@ class OllamaService:
 
     def ensure_running(self, boot_timeout: Optional[int] = None) -> bool:
         """공용 모델 경로를 쓰는 관리형 Ollama만 재사용/기동한다."""
+        self.last_error = ""
         if self.is_running():
             pid = self._listener_pid()
             executable = self._process_executable(pid) if pid is not None else None
@@ -442,12 +444,12 @@ class OllamaService:
 
         if not self.is_installed():
             self._err(f"Ollama 미설치: {self.exe}")
-            self._err("SETUP.bat --install 을 다시 실행하세요.")
+            self._err("RUN.bat --install --install 을 다시 실행하세요.")
             return False
 
         if self._migration_pending():
             self._err("이전 버전의 모델 저장소 마이그레이션이 아직 완료되지 않았습니다.")
-            self._err("SETUP.bat을 실행해 C:\\LLM_Models 이전/복구를 먼저 완료하세요.")
+            self._err("RUN.bat --install을 실행해 C:\\LLM_Models 이전/복구를 먼저 완료하세요.")
             return False
 
         self._info("Ollama 가 응답 없음 — 관리형 서비스 시작 시도…")
@@ -497,5 +499,7 @@ class OllamaService:
             self._log.warn(m)
 
     def _err(self, m: str):
+        message = str(m)
+        self.last_error = (self.last_error + "\n" + message).strip()
         if self._log:
-            self._log.error(m)
+            self._log.error(message)

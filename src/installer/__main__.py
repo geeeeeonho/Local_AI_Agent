@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""설치/관리 통합 진입점 — `SETUP.bat` 또는 `python -m installer` 로 실행."""
+"""설치/관리 통합 진입점 — `RUN.bat --install` 또는 `python -m installer` 로 실행."""
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-from project_paths import ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
+from project_paths import ENV_DIR, LEGACY_FORCED_MODEL_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
 from installer.steps import model
@@ -87,13 +87,15 @@ def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
 
 def _needs_model_storage_migration() -> bool:
     """기존/중단된 모델 저장소가 공용 경로로 수렴해야 하는지 확인."""
-    legacy = ENV / "llm_models"
     shared = Path(MODEL_STORAGE_DIR)
     staging = shared.with_name(shared.name + ".migrating")
+    legacy = [Path(LEGACY_FORCED_MODEL_DIR), ENV / "llm_models"]
 
     if _dir_has_entries(shared):
         return False
-    return _dir_has_entries(legacy) or staging.exists()
+    return staging.exists() or any(
+        source != shared and _dir_has_entries(source) for source in legacy
+    )
 
 
 def _should_manage(args) -> bool:
@@ -171,12 +173,12 @@ def _run_install(args) -> int:
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")
     else:
-        utils.warn("AnythingLLM 설치가 완료되지 않았습니다. SETUP.bat에서 다시 시도할 수 있습니다.")
+        utils.warn("AnythingLLM 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
     if python_tools.install_open_interpreter(paths, profile):
         components.append("open_interpreter")
     else:
-        utils.warn("Open Interpreter 설치가 완료되지 않았습니다. SETUP.bat에서 다시 시도할 수 있습니다.")
+        utils.warn("Open Interpreter 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
     if not args.skip_sandbox:
         try:

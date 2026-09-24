@@ -559,6 +559,14 @@ class DesktopWindow:
         if not messagebox.askyesno('모델 적용','\n'.join(lines),parent=self.root):return
         def work():
             done={'install':[],'remove':[],'failed':[]}
+            # Model operations all depend on the same Ollama/store precondition.
+            # Check/bootstrap it once so one machine-level problem is not printed
+            # again for every selected model.
+            try:
+                self.services.setup.ensure_model_runtime(download=bool(plan['install']))
+            except Exception as exc:
+                done['failed'].append(('prepare','Ollama',str(exc)))
+                return done
             for tag in plan['remove']:
                 try:self.services.setup.remove_model(tag);done['remove'].append(tag)
                 except Exception as exc:done['failed'].append(('remove',tag,str(exc)))

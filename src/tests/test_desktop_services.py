@@ -26,6 +26,9 @@ class Backend:
     def prepare_network(self, mode, log):
         self.calls.append(('prepare', mode)); self.mode = mode; return self.ready
     def current_mode(self): return self.mode
+    def prepare_model_runtime(self):
+        self.calls.append(('ollama_prepare',))
+        return 'http://127.0.0.1:11434'
     def search_start(self, mode, log): self.calls.append(('search', mode)); return True
     def search_stop(self): self.calls.append(('search_stop',)); return True
     def chat_image_exists(self): return self.images
@@ -130,6 +133,15 @@ def test_setup_is_only_entry_for_explicit_model_downloads(tmp_path):
     result = svc.setup.install_model('test:latest')
     assert ('pull', 'test:latest') in backend.calls
     assert result['model'] == 'test:latest'
+    svc.close()
+
+
+def test_model_removal_stays_available_in_block(tmp_path):
+    svc, backend = make(tmp_path)
+    svc.settings.set_network_mode('block')
+    result = svc.setup.remove_model('test:latest')
+    assert ('remove', 'test:latest') in backend.calls
+    assert result['operation'] == 'remove'
     svc.close()
 
 
