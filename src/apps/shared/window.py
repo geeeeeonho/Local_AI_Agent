@@ -563,7 +563,7 @@ class DesktopWindow:
             # Check/bootstrap it once so one machine-level problem is not printed
             # again for every selected model.
             try:
-                self.services.setup.ensure_model_runtime()
+                self.services.setup.ensure_model_runtime(download=bool(plan['install']))
             except Exception as exc:
                 done['failed'].append(('prepare','Ollama',str(exc)))
                 return done
