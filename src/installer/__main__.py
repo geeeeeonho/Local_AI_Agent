@@ -12,6 +12,7 @@ from installer.steps import model
 from installer.steps import python_tools
 from installer.steps import sandbox
 from installer.steps import searxng
+from installer.steps import warp
 from installer.i18n import t
 
 HERE = PROJECT_ROOT
@@ -138,6 +139,18 @@ def _run_install(args) -> int:
     else:
         failed_components.append("open_interpreter")
         utils.warn("Open Interpreter 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
+
+    # WARP is the product's default network mode. The runtime deliberately
+    # refuses to download images implicitly, so a fresh install must prepare it.
+    try:
+        if warp.install(paths):
+            components.append("warp")
+        else:
+            failed_components.append("warp")
+            utils.warn("기본 WARP 네트워크 이미지를 준비하지 못했습니다. Direct/Block은 사용할 수 있지만 WARP는 복구가 필요합니다.")
+    except Exception as exc:
+        failed_components.append("warp")
+        utils.warn("WARP 설치 중 오류: " + repr(exc))
 
     if not args.skip_sandbox:
         try:
