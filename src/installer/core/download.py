@@ -35,11 +35,15 @@ def download_with_progress(url: str, dest: Path, label: str = ""):
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        urllib.request.urlretrieve(url, dest, reporthook=report)
-        stream.write("\n")
+        urllib.request.urlretrieve(
+            url, dest, reporthook=report if stream is not None else None
+        )
+        if stream is not None:
+            stream.write("\n")
         ok(f"완료 ({dest.stat().st_size / (1024 ** 2):.1f} MB)")
     except Exception as e:
-        stream.write("\n")
+        if stream is not None:
+            stream.write("\n")
         if dest.exists():
             dest.unlink()
         raise RuntimeError(f"다운로드 실패: {e}")
