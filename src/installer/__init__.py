@@ -11,5 +11,5 @@
     installer.steps.model — 역할별 모델 다운로드 (model_catalog 기반, 멱등)
     installer.steps.python_tools — AnythingLLM 이미지 + Open Interpreter 런타임
     installer.steps.sandbox — Docker 에이전트 이미지 빌드 (멱등)
-    installer.steps.searxng — SearXNG 설정 + 이미지 (멱등)
+    installer.steps.searxng — SearXNG 설정 + 이미지 (멱등)\n    installer.steps.warp    — 기본 WARP 네트워크 이미지 준비\n    installer.steps.tor     — 선택형 Tor 네트워크 이미지 준비
 """
