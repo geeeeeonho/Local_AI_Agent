@@ -194,7 +194,7 @@ Local_AI_Agent/
 모든 경로는 `src/project_paths.py` 한 곳에서만 정해집니다.
 
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
-설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
+설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다. 필수 구성요소 일부가 실패하면 `status`는 `partial`이 되고, `failed_components` / `skipped_components`에 복구 대상과 명시적 건너뜀 항목이 남습니다.
 
 예전 저장소(`C:\LLM_Models`, `llm_environment/llm_models`)에 모델이 있고 공용 저장소가 비어 있으면 설치 과정에서 자동 이동합니다. 다른 드라이브에서 이동하는 도중 중단되어도 최종 저장소에 부분 복사본이 노출되지 않도록 `C:\Ollama\models.migrating`을 임시 staging으로 사용하고 완료 marker로 복사 완료 여부를 구분합니다. 다음 `RUN.bat --install` 실행은 완료된 staging을 승격하거나 부분 staging을 버리고 원본에서 다시 시작합니다. 두 위치에 모두 모델이 이미 있으면 데이터 충돌을 피하기 위해 자동 병합하지 않고 경고만 표시합니다.
 
