@@ -13,7 +13,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from core.network.policy import NetworkMode, NetworkPolicy
-from integrations.ollama.client import OllamaClient
+from integrations.ollama.client import OllamaClient, is_cloud_tag
 from core.urls import local_url
 from core.agent import AgentBinding
 
@@ -138,6 +138,68 @@ class LegacyBackend:
     def chat_active_model(self):
         return str(self.load('launcher.anythingllm_runtime').configured_model() or '')
 
+    def _resolve_chat_model(self, requested='', log=None):
+        """Return an actually installed local Ollama tag for AnythingLLM.
+
+        Project Chat model is optional. Falling back to config.MODEL_TAG made
+        Chat fail on machines that correctly installed a lighter model. Ollama
+        can also return the same tag with different casing, so preserve the
+        spelling reported by /api/tags instead of comparing case-sensitively.
+        """
+        try:
+            rows = self.inference.client.list_models()
+        except Exception as exc:
+            raise RuntimeError('Ollama model list could not be read: ' + str(exc)) from exc
+
+        installed = []
+        for row in rows or ():
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get('name') or row.get('model') or '').strip()
+            if name and not is_cloud_tag(name):
+                installed.append(name)
+
+        wanted = str(requested or '').strip()
+        if wanted:
+            if is_cloud_tag(wanted):
+                raise RuntimeError('Chat cannot use an Ollama cloud tag under the local network policy: ' + wanted)
+            wanted_lower = wanted.lower()
+            for name in installed:
+                if name.lower() == wanted_lower:
+                    if log and name != wanted:
+                        log('Chat 모델 태그 정규화: ' + wanted + ' -> ' + name)
+                    return name
+            shown = ', '.join(installed[:8]) if installed else '(없음)'
+            raise RuntimeError(
+                '선택한 Chat 모델이 Ollama에 설치되어 있지 않습니다: ' + wanted +
+                ' · 설치된 로컬 모델: ' + shown
+            )
+
+        if not installed:
+            raise RuntimeError(
+                'Chat에 사용할 로컬 Ollama 모델이 없습니다. 모델 화면에서 모델을 먼저 설치하세요.'
+            )
+
+        # Prefer the existing balanced role ladder, but only if that candidate is
+        # truly installed. If the user installed a custom local model, keep Chat
+        # usable by selecting the first real local tag instead of a static default.
+        try:
+            roles = self.load('launcher.models.model_roles')
+            catalog = self.load('launcher.models.model_catalog')
+            chosen = roles.resolve_ladder('balanced', installed=set(installed))
+            matched = catalog.find_installed(chosen, installed) if chosen else None
+            if matched:
+                if log:
+                    log('Chat 모델 자동 선택: ' + str(matched))
+                return str(matched)
+        except Exception:
+            pass
+
+        chosen = installed[0]
+        if log:
+            log('Chat 모델 자동 선택: ' + chosen)
+        return chosen
+
     def _chat_id(self):
         runtime = self.load('launcher.anythingllm_runtime')
         result = self.load('launcher.services.docker').DockerService.run(
@@ -160,12 +222,17 @@ class LegacyBackend:
             raise RuntimeError('Docker is unavailable. Open Setup / Repair.')
         before = self._chat_id()
         self._chat_probe_failed = False
+        # Resolve against the live Ollama inventory before writing AnythingLLM
+        # settings. This avoids both a missing static default and case-only tag
+        # mismatches between the catalogue and Ollama /api/tags.
+        model = self._resolve_chat_model(model, log=log)
+
         # launcher.config.CHAT_CONTEXT_WINDOW (TOKEN_LIMITS_v1) is the one context
         # source. The previous pair named two attributes that never existed, so the
         # fallback raised AttributeError and Chat could not start at all.
         context = int(cfg.CHAT_CONTEXT_WINDOW)
         try:
-            if not runtime.start(log=log, model_tag=model or cfg.MODEL_TAG,
+            if not runtime.start(log=log, model_tag=model,
                                  token_limit=context, cancel_check=cancel):
                 raise RuntimeError('AnythingLLM failed to start with the selected network policy.')
         finally:
