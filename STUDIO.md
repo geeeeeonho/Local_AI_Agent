@@ -16,7 +16,7 @@ With `PYTHONPATH=src`, the equivalent modules are `apps.studio`, `apps.chat`,
 `apps.interpreter` and `apps.setup`. They use one parser, shared views and one
 service composition. `--help` does not load a runtime. Python 3.11+ with Tk is
 required for the desktop. The current copy contains both Korean and English
-labels; `--lang` initializes the retained installer/runtime language preference,
+labels; `--lang` initializes the shared installer/runtime language preference,
 not a complete translation of the new shell.
 
 The existing `--skip-model`, `--skip-sandbox`, `--skip-build`, and
