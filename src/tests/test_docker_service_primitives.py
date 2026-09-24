@@ -29,6 +29,8 @@ def test_generic_run_prefixes_docker_and_preserves_common_options(monkeypatch):
     assert kwargs["timeout"] == 7
     assert kwargs["capture_output"] is True
     assert kwargs["text"] is True
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
     assert kwargs["check"] is False
 
 
