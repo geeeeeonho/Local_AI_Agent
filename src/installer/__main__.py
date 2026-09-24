@@ -12,6 +12,7 @@ from installer.steps import model
 from installer.steps import python_tools
 from installer.steps import sandbox
 from installer.steps import searxng
+from installer.steps import tor
 from installer.steps import warp
 from installer.i18n import t
 
@@ -151,6 +152,18 @@ def _run_install(args) -> int:
     except Exception as exc:
         failed_components.append("warp")
         utils.warn("WARP 설치 중 오류: " + repr(exc))
+
+    # Tor is optional, but it is a user-selectable network mode. Prepare the
+    # image here so selecting Tor never leads to a dead-end manual docker pull.
+    try:
+        if tor.install(paths):
+            components.append("tor")
+        else:
+            skipped_components.append("tor")
+            utils.warn("Tor 이미지는 준비되지 않았습니다. 다른 네트워크 모드는 계속 사용할 수 있습니다.")
+    except Exception as exc:
+        skipped_components.append("tor")
+        utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
 
     if not args.skip_sandbox:
         try:
