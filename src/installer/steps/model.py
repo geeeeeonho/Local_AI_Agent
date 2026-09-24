@@ -183,6 +183,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         _entries = _cat.all_entries()
     except Exception:
         _entries = None
+    already_selected: List[str] = []
     if _entries:
         try:
             from installer.steps import model_select_gui as _msg_gui
@@ -206,6 +207,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         if _picked != "AUTO":
             _desired = set(_picked)
             _role = {e.tag: e.role for e in _entries}
+            already_selected = sorted(_desired & installed)
             models = [(_role.get(_t, _t), _t) for _t in sorted(_desired - installed)]
             for _dt in sorted(installed - _desired):
                 utils.info("삭제: " + _dt)
@@ -215,7 +217,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
                     utils.warn("삭제 실패: " + _dt + " (" + repr(_de) + ")")
 
     pulled = skipped = failed = 0
-    ok_tags: List[str] = []
+    ok_tags: List[str] = list(already_selected)
     for label, tag in models:
         if tag in installed:
             utils.ok(_m("skip", label=label, tag=tag))
