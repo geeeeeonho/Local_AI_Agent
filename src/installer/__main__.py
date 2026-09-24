@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""설치/관리 통합 진입점 — `RUN.bat --install` 또는 `python -m installer` 로 실행."""
+"""설치/복구 전용 진입점 — `RUN.bat --install` 또는 `python -m installer`."""
 from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
-
 from project_paths import ENV_DIR, LEGACY_FORCED_MODEL_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
@@ -20,107 +18,18 @@ HERE = PROJECT_ROOT
 ENV = ENV_DIR
 
 
-def _parse_args():
-    p = argparse.ArgumentParser(description="LLM Integrated Environment Setup (Windows)")
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--install", action="store_true",
-                      help="설치/재설치 흐름을 강제로 실행")
-    mode.add_argument("--manage", action="store_true",
-                      help="설치된 환경 관리 화면을 강제로 실행")
+def _parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Local AI Agent install / repair (Windows)")
+    p.add_argument("--install", action="store_true",
+                   help="설치/복구 실행 (생략해도 동일)")
     p.add_argument("--skip-model",   action="store_true")
     p.add_argument("--skip-sandbox", action="store_true")
     p.add_argument("--skip-build",   action="store_true")
     p.add_argument("--skip-search",  action="store_true")
     p.add_argument("--lang",         default=None,
                    help="ko or en (default: ask user / use saved)")
-    return p.parse_args()
+    return p.parse_args(argv)
 
-
-def _dir_has_entries(path: Path) -> bool:
-    try:
-        return path.is_dir() and any(path.iterdir())
-    except OSError:
-        return False
-
-
-# ── 디스크 예산 ────────────────────────────────────────────────────
-_RUNTIME_GB = 5.0        # Ollama / Python 도구 / 샌드박스 이미지 등 모델 외 용량
-_FALLBACK_FLOOR_GB = 20  # 카탈로그를 못 읽을 때의 보수적 하한
-
-
-def _model_disk_budget(skip_model: bool):
-    """(하드 최소 GB, 이 PC 의 권장 세트까지 담는 데 필요한 GB).
-
-    하드 최소는 '최저사양 세트' 기준이다. 그보다 적으면 어떤 조합으로도 설치가
-    끝나지 않으므로 중단한다. 권장 세트가 더 크면 중단 대신 경고만 하고,
-    사용자가 모델 선택 창에서 빼도록 둔다.
-    """
-    if skip_model:
-        return int(_RUNTIME_GB), 0.0
-    try:
-        from launcher.models import model_catalog as cat
-    except Exception:
-        return _FALLBACK_FLOOR_GB, 0.0
-    try:
-        floor = cat.download_gb(cat.plan_by_level().get("low") or ())
-        plan = cat.download_gb(cat.recommended_for(cat.MEMORY_BUDGET_GB))
-    except Exception:
-        return _FALLBACK_FLOOR_GB, 0.0
-    return int(_RUNTIME_GB + floor) + 1, _RUNTIME_GB + plan
-
-
-def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
-    if not plan_gb:
-        return
-    import shutil
-    target = MODEL_STORAGE_DIR if MODEL_STORAGE_DIR.exists() else MODEL_STORAGE_DIR.parent
-    try:
-        free = shutil.disk_usage(target).free / (1024 ** 3)
-    except OSError:
-        return
-    if free < plan_gb:
-        utils.warn(
-            "권장 모델 세트는 약 %.0fGB 인데 %s 의 여유는 %.0fGB 입니다. "
-            "모델 선택 창에서 일부를 빼거나, 다 받은 뒤 [모델 관리]에서 정리하세요."
-            % (plan_gb, target, free))
-
-
-def _needs_model_storage_migration() -> bool:
-    """기존/중단된 모델 저장소가 공용 경로로 수렴해야 하는지 확인."""
-    shared = Path(MODEL_STORAGE_DIR)
-    staging = shared.with_name(shared.name + ".migrating")
-    legacy = [Path(LEGACY_FORCED_MODEL_DIR), ENV / "llm_models"]
-
-    if _dir_has_entries(shared):
-        return False
-    return staging.exists() or any(
-        source != shared and _dir_has_entries(source) for source in legacy
-    )
-
-
-def _should_manage(args) -> bool:
-    """기본(auto) 모드에서 관리 화면으로 갈지 결정한다."""
-    if args.manage:
-        return True
-    if args.install:
-        return False
-    install_flags = (
-        args.skip_model,
-        args.skip_sandbox,
-        args.skip_build,
-        args.skip_search,
-    )
-    if any(install_flags):
-        return False
-    if ENV.exists() and _needs_model_storage_migration():
-        return False
-    return ENV.exists()
-
-
-def _run_manage(args) -> int:
-    lang_setup.initialize_language(HERE, override=args.lang)
-    from installer import manage_gui
-    return int(manage_gui.main([]) or 0)
 
 
 def _run_install(args) -> int:
@@ -210,11 +119,10 @@ def _run_install(args) -> int:
     return 0
 
 
-def main() -> int:
-    args = _parse_args()
-    if _should_manage(args):
-        return _run_manage(args)
-    return _run_install(args)
+def main(argv=None) -> int:
+    # Management belongs to the shared Setup desktop app. This module has one
+    # responsibility: install or repair the managed environment.
+    return _run_install(_parse_args(argv))
 
 
 if __name__ == "__main__":
