@@ -1,8 +1,10 @@
 name: tests
 
+# Automatic runs are intentionally disabled while this private repository's
+# hosted runners are being refused before assignment. Keep CI available for
+# deliberate checks without accumulating meaningless red push/PR failures.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   # Windows is the product's target platform, so this stays the acceptance job
