@@ -138,6 +138,7 @@ class RepositoryStructureTests(unittest.TestCase):
 
         self.assertIn("-m apps.studio", run)
         self.assertIn("--install", run)
+        self.assertIn("sys.version_info >= (3,11)", run)
         self.assertNotIn("llm_environment\\venv\\Scripts", run)
 
     def test_retired_installer_manager_is_gone(self):
