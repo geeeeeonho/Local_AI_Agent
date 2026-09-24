@@ -26,7 +26,7 @@ from typing import Dict
 SUPPORTED_LANGUAGES = ("en", "ko")
 DEFAULT_LANGUAGE = "en"
 
-# 환경변수로 강제 설정 가능 (RUN.bat / SETUP.bat 가 사용)
+# 환경변수로 강제 설정 가능 (RUN.bat / installer 공용)
 ENV_VAR = "LLM_LOCAL_SETUP_LANG"
 
 _current_lang = os.environ.get(ENV_VAR, DEFAULT_LANGUAGE)
@@ -73,7 +73,7 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     "lang.option_ko": "한국어 (Korean)",
     "lang.prompt": "Choice [1/2]: ",
     "lang.saved": "Language set to {lang}. You can change this later in Settings.",
-    "install.title": "LLM Integrated Environment Installer (Windows / Portable)",
+    "install.title": "Local AI Agent Installer / Repair (Windows)",
     "install.location": "Install location: {path}",
     "install.python_ver": "Python: {ver}",
     "install.preflight_windows_ok": "Windows verified",
@@ -88,10 +88,10 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     "install.cant_run_full": "System below recommended specs — some features may not work properly",
     "install.proceeding_in_5": "Continuing in 5 seconds...",
     "install.create_dirs": "Creating role-based folders",
-    "install.ollama_section": "Ollama Portable Installation",
+    "install.ollama_section": "Ollama installation",
     "install.ollama_already": "Already installed: {path}",
     "install.ollama_extracting": "Extracting...",
-    "install.ollama_done": "Portable install complete: {path}",
+    "install.ollama_done": "Ollama ready: {path}",
     "install.ollama_service_section": "Starting Ollama service",
     "install.ollama_running": "Already running on port 11434",
     "install.ollama_starting_bg": "Starting in background (log: {path})",
@@ -312,7 +312,7 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     "lang.option_ko": "한국어 (Korean)",
     "lang.prompt": "선택 [1/2]: ",
     "lang.saved": "언어가 {lang}으로 설정되었습니다. 설정 메뉴에서 변경 가능합니다.",
-    "install.title": "LLM 통합 환경 설치 (Windows / Portable)",
+    "install.title": "Local AI Agent 설치 / 복구 (Windows)",
     "install.location": "설치 위치: {path}",
     "install.python_ver": "Python: {ver}",
     "install.preflight_windows_ok": "Windows 확인",
@@ -327,10 +327,10 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
     "install.cant_run_full": "시스템 사양이 권장 최소치 미달 — 일부 기능이 제대로 동작하지 않을 수 있습니다",
     "install.proceeding_in_5": "5초 후 계속 진행합니다...",
     "install.create_dirs": "역할별 폴더 생성",
-    "install.ollama_section": "Ollama 포터블 설치",
+    "install.ollama_section": "Ollama 설치",
     "install.ollama_already": "이미 설치됨: {path}",
     "install.ollama_extracting": "압축 해제 중...",
-    "install.ollama_done": "포터블 설치: {path}",
+    "install.ollama_done": "Ollama 준비 완료: {path}",
     "install.ollama_service_section": "Ollama 서비스 시작",
     "install.ollama_running": "이미 11434에서 가동 중",
     "install.ollama_starting_bg": "백그라운드 시작 (로그: {path})",
