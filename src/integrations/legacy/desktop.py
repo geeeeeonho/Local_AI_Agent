@@ -71,7 +71,8 @@ class LegacyBackend:
             'ollama': lambda: self.load('launcher.services.ollama').OllamaService(
                 self.env, model_dir=self.model_dir).is_managed_running(),
             'docker': lambda: self.load('launcher.services.docker').DockerService.daemon_alive(),
-            'chat': lambda: self.load('launcher.anythingllm_runtime').is_running(),
+            'chat_image': lambda: self.load('launcher.anythingllm_runtime').image_exists(),
+            'chat': lambda: self.load('launcher.anythingllm_runtime').is_ready(),
             'search': lambda: self.load('launcher.services.docker').DockerService.container_running(
                 self.load('launcher.config').SEARXNG_CONTAINER),
         }
@@ -123,6 +124,9 @@ class LegacyBackend:
 
     def chat_image_exists(self):
         return bool(self.load('launcher.anythingllm_runtime').image_exists())
+
+    def chat_active_model(self):
+        return str(self.load('launcher.anythingllm_runtime').configured_model() or '')
 
     def _chat_id(self):
         runtime = self.load('launcher.anythingllm_runtime')
