@@ -136,6 +136,15 @@ def test_setup_is_only_entry_for_explicit_model_downloads(tmp_path):
     svc.close()
 
 
+def test_model_removal_stays_available_in_block(tmp_path):
+    svc, backend = make(tmp_path)
+    svc.settings.set_network_mode('block')
+    result = svc.setup.remove_model('test:latest')
+    assert ('remove', 'test:latest') in backend.calls
+    assert result['operation'] == 'remove'
+    svc.close()
+
+
 def test_failed_shutdown_keeps_runtime_owner_until_success(tmp_path):
     first, backend = make(tmp_path); second, _ = make(tmp_path)
     first.chat.start('warp')
