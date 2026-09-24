@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem Single public entrypoint for Studio, Chat, Interpreter, Setup, and legacy TUI.
+rem Single public entrypoint for Studio, Chat, Interpreter, Setup, install/repair, and TUI.
 chcp 65001 >nul 2>&1
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
