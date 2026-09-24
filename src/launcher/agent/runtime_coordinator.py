@@ -33,6 +33,15 @@ def _ensure_ollama(env: Path, presenter) -> bool:
     return False
 
 
+def _cancelled(cancel) -> bool:
+    if cancel is None:
+        return False
+    try:
+        return bool(cancel())
+    except Exception:
+        return False
+
+
 def _docker_required(mode: str, selected: network_policy.NetworkMode) -> bool:
     return mode == "sandbox" or selected in (
         network_policy.NetworkMode.WARP,
@@ -45,6 +54,7 @@ def prepare_runtime(
     presenter,
     mode: str,
     selected: network_policy.NetworkMode,
+    cancel=None,
 ) -> bool:
     """Prepare required services for one canonical execution/network mode.
 
@@ -59,13 +69,19 @@ def prepare_runtime(
         presenter.error("Host 차단 모드는 OS 수준 hard-egress 경계가 없어 사용할 수 없습니다.")
         return False
 
+    if _cancelled(cancel):
+        return False
+
     if not _ensure_ollama(env, presenter):
         return False
 
     docker_ready = False
     if _docker_required(mode, selected):
         try:
-            docker_ready = DockerService.ensure_daemon(logger=presenter, timeout=90)
+            # Ninety seconds of Docker Desktop boot used to be uninterruptible,
+            # so closing the window during Agent start had to sit through it.
+            docker_ready = DockerService.ensure_daemon(
+                logger=presenter, timeout=90, cancel_check=cancel)
         except Exception:
             docker_ready = False
         if not docker_ready:
@@ -77,12 +93,16 @@ def prepare_runtime(
         except Exception:
             docker_ready = False
 
+    if _cancelled(cancel):
+        return False
+
     if selected is network_policy.NetworkMode.BLOCK:
         if not network_policy.ensure_block_network(log=presenter.info):
             presenter.error("Block internal network를 안전하게 준비하지 못했습니다.")
             return False
     elif selected in (network_policy.NetworkMode.WARP, network_policy.NetworkMode.TOR):
-        if not network_policy.prepare_runtime(selected, env_path=env, log=presenter.info):
+        if not network_policy.prepare_runtime(selected, env_path=env,
+                                              log=presenter.info, cancel=cancel):
             presenter.error(
                 network_policy.display_label(selected)
                 + " 준비 실패 — 직접 연결로 우회하지 않습니다."
@@ -95,7 +115,11 @@ def prepare_runtime(
 
             if not searxng_runtime.is_running():
                 presenter.info("로컬 검색엔진(SearXNG) 준비 중...")
-                if not searxng_runtime.start(env):
+                # Without log/cancel this was a silent sixty-second wait whose
+                # failure reason (missing image, missing settings.yml, docker
+                # error) was written to a file nobody passed and then dropped.
+                if not searxng_runtime.start(env, log=presenter.info,
+                                             cancel_check=cancel):
                     presenter.warn(
                         "SearXNG를 시작하지 못했습니다. 검색 기능은 사용할 수 없을 수 있습니다."
                     )

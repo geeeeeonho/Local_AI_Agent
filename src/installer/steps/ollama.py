@@ -60,6 +60,16 @@ def find_existing(paths: Dict[str, Path]) -> Optional[Path]:
     return ollama_paths.find_executable(fallback=(paths["ollama"],))
 
 
+def _is_windows() -> bool:
+    """One seam for the platform test.
+
+    Patching ``os.name`` itself is not a substitute: ``pathlib`` reads it on
+    every ``Path()``, so a test that flips it globally makes the rest of this
+    function raise on any other OS instead of exercising it.
+    """
+    return os.name == "nt"
+
+
 def install_official(target: Optional[Path] = None) -> Optional[Path]:
     """공식 설치기를 /DIR 로 돌려 Ollama 를 설치하고 실행 파일을 돌려준다.
 
@@ -67,7 +77,7 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
     Program Files 로는 넣지 않는다. 공식 설치기가 per-machine 파일과 per-user
     레지스트리가 섞인 상태를 만든다고 보고돼 있다.
     """
-    if os.name != "nt":
+    if not _is_windows():
         utils.warn("공식 Ollama 설치기는 Windows 전용입니다.")
         return None
     target = Path(target or ollama_paths.PROJECT_INSTALL_DIR)

@@ -72,12 +72,70 @@ def _run(args, timeout=25, capture=True):
         return None
 
 
-def _log(log_path, level, msg):
-    if not log_path:
+def _log(log_path, level, msg, log=None):
+    """Record one line to the log file and to the caller's progress callback.
+
+    Every caller passes ``log_path=None``, so this used to return immediately
+    and throw the message away - including the ones that say exactly why search
+    did not start (image missing, settings.yml missing, docker run failed). The
+    Agent screen showed "검색 준비 중..." and then a generic warning with the
+    reason discarded.
+    """
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("[%s] SearXNG: %s\n" % (level, msg))
+        except Exception:
+            pass
+    if log is not None:
+        try:
+            log("SearXNG: " + str(msg))
+        except Exception:
+            pass
+
+
+def _cancelled(cancel_check) -> bool:
+    if cancel_check is None:
+        return False
+    try:
+        return bool(cancel_check())
+    except Exception:
+        return False
+
+
+_CLEANUP_REGISTERED = False
+
+
+def _register_exit_cleanup() -> None:
+    """Stop this container when the program exits.
+
+    Every other container runtime in the product registers one; this one never
+    did. The Agent path starts SearXNG through this module, so opening an Agent
+    once left llm_searxng running after the window closed. The desktop Chat path
+    goes through integrations.searxng.runtime, which services.close() owns, so
+    the leak only showed up via Agent and the terminal launcher.
+    """
+    global _CLEANUP_REGISTERED
+    if _CLEANUP_REGISTERED:
         return
     try:
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write("[%s] SearXNG: %s\n" % (level, msg))
+        try:
+            from .core import lifelog as _ll
+        except Exception:  # pragma: no cover - package fallback
+            from launcher.core import lifelog as _ll
+
+        def _do():
+            try:
+                _ll.log("CLEANUP", "SearXNG 컨테이너 정리: %s" % CONTAINER)
+            except Exception:
+                pass
+            try:
+                stop()
+            except Exception:
+                pass
+
+        _ll.register_cleanup(_do)
+        _CLEANUP_REGISTERED = True
     except Exception:
         pass
 
@@ -144,20 +202,28 @@ def is_running() -> bool:
     return bool(r and r.returncode == 0 and CONTAINER in (r.stdout or ""))
 
 
-def _wait_ready(timeout=BOOT_TIMEOUT) -> bool:
+def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None, log=None, cancel_check=None) -> bool:
     import socket
     end = time.time() + timeout
+    waited = 0
     while time.time() < end:
+        if _cancelled(cancel_check):
+            _log(log_path, "WARN", "사용자가 취소했습니다 — 기동 대기 중단", log)
+            return False
         try:
             with socket.create_connection(("127.0.0.1", int(HOST_PORT)), timeout=2):
                 return True
         except Exception:
             time.sleep(1)
+            waited += 1
+            if waited % 5 == 0:
+                _log(log_path, "INFO", "기동 대기 중... %d/%d초" % (waited, timeout), log)
     return False
 
 
-def start(env, log_path=None, with_tor=True) -> bool:
+def start(env, log_path=None, with_tor=True, log=None, cancel_check=None) -> bool:
     """SearXNG 기동. 이미 떠 있으면 True. 이미지/설정 없으면 False."""
+    _register_exit_cleanup()
     if is_running():
         return True
     _ensure_net()
@@ -170,12 +236,13 @@ def start(env, log_path=None, with_tor=True) -> bool:
             warp_runtime = None
         if warp_runtime is not None:
             try:
-                if not warp_runtime.start(env, log_path=log_path):
+                if not warp_runtime.start(env, log_path=log_path, log=log,
+                                          cancel_check=cancel_check):
                     _log(log_path, "WARN",
                          "WARP 미기동 - 검색이 실패할 수 있습니다. "
-                         "NET_MODE=tor 로 전환하거나 WARP 를 설치하세요.")
+                         "NET_MODE=tor 로 전환하거나 WARP 를 설치하세요.", log)
             except Exception as _e:
-                _log(log_path, "WARN", "WARP 기동 예외: " + str(_e)[:120])
+                _log(log_path, "WARN", "WARP 기동 예외: " + str(_e)[:120], log)
 
     if with_tor and _net_mode == "tor":
         try:
@@ -184,20 +251,21 @@ def start(env, log_path=None, with_tor=True) -> bool:
             tor_runtime = None
         if tor_runtime is not None:
             try:
-                if not tor_runtime.start(env, log=lambda m: _log(log_path, "INFO", "Tor: " + str(m))):
+                if not tor_runtime.start(
+                        env, log=lambda m: _log(log_path, "INFO", "Tor: " + str(m), log)):
                     _log(log_path, "WARN",
                          "Tor 미기동 (이미지 없음 등) — 검색이 실패할 수 있습니다. "
-                         "docker pull %s 후 재시도" % getattr(tor_runtime, "TOR_IMAGE", "tor"))
+                         "docker pull %s 후 재시도" % getattr(tor_runtime, "TOR_IMAGE", "tor"), log)
             except Exception as e:
-                _log(log_path, "WARN", "Tor 기동 예외: %r" % e)
+                _log(log_path, "WARN", "Tor 기동 예외: %r" % e, log)
 
     if not image_exists():
-        _log(log_path, "WARN", "SearXNG 이미지 없음: %s (MANAGE/INSTALL 에서 pull 필요)" % IMAGE)
+        _log(log_path, "WARN", "이미지 없음: %s (Setup / Repair 에서 받으세요)" % IMAGE, log)
         return False
 
     cfg = _cfg_dir(env)
     if not (cfg / "settings.yml").exists():
-        _log(log_path, "WARN", "settings.yml 없음: %s (INSTALL 필요)" % str(cfg / "settings.yml"))
+        _log(log_path, "WARN", "settings.yml 없음: %s (Setup / Repair 필요)" % str(cfg / "settings.yml"), log)
         return False
 
     _harden_settings(cfg, log_path)
@@ -215,12 +283,13 @@ def start(env, log_path=None, with_tor=True) -> bool:
         IMAGE,
     ], timeout=45)
     if not (r and r.returncode == 0):
-        _log(log_path, "ERROR", "docker run 실패: %s" % ((r.stderr or "").strip() if r else "no docker"))
+        _log(log_path, "ERROR", "docker run 실패: %s"
+             % ((r.stderr or "").strip()[:160] if r else "docker 응답 없음"), log)
         return False
 
-    ok = _wait_ready()
+    ok = _wait_ready(log_path=log_path, log=log, cancel_check=cancel_check)
     _log(log_path, "INFO" if ok else "WARN",
-         "기동 %s (port %s)" % ("완료" if ok else "타임아웃", HOST_PORT))
+         "기동 %s (port %s)" % ("완료" if ok else "타임아웃", HOST_PORT), log)
     return ok or is_running()
 
 

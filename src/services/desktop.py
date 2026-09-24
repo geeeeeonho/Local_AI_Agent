@@ -49,13 +49,25 @@ class DesktopServices:
             project=getattr(project, 'network_mode', None), session=session,
             fallback=self.backend.current_mode())
 
+    def _stop(self, name, service):
+        """One service's teardown. An exception here is 'not verified', not a
+        crash: raising out of close() left the window with no way to shut down
+        and no way to say why."""
+        try:
+            return bool(service.stop())
+        except Exception as exc:
+            self.events.emit('runtime.error', {'service': name, 'detail': str(exc)})
+            return False
+
     def close(self):
         # Keep ownership if shutdown is not verified. The OS releases it if the
         # process terminates; no stale lock-file deletion or PID guessing.
         with self._close_lock:
-            agent_ok = self.agent.stop()
-            chat_ok = self.chat.stop()
-            search_ok = self.search.stop()
+            # Every service is asked, even after one refuses: a failure to stop
+            # Chat is no reason to leave the Agent and search running too.
+            agent_ok = self._stop('agent', self.agent)
+            chat_ok = self._stop('chat', self.chat)
+            search_ok = self._stop('search', self.search)
             if not agent_ok or not chat_ok or not search_ok:
                 return False
             self.network.mode = None

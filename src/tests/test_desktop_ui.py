@@ -165,3 +165,54 @@ def test_selected_project_is_reloaded_before_start(ui,tmp_path):
     w.load_projects();w.project_id.set('demo')
     svc.projects.save(Project(id='demo',name='Demo',workspace_path=str(tmp_path),network_mode='tor'))
     assert w.selected_mode('chat')=='tor'
+
+
+# ── what the Chat page says while it is starting ─────────────────────────
+# Ollama and Docker come up as part of Chat start, and both can take a long
+# time. The readiness box only ever showed messages tagged service='chat', so
+# a ninety-second Docker Desktop boot and every Ollama message went to the
+# activity log instead, and the page sat on one unchanging line.
+
+def test_chat_readiness_shows_the_whole_preparation_trail(ui):
+    w,svc,backend=ui
+    def prepare(mode,log,cancel=None):
+        log('Docker 데몬이 응답하지 않습니다 — 자동 시작 시도')
+        backend.mode=mode
+        return True
+    backend.prepare_network=prepare
+    backend.inference.ensure_running=lambda log=None:(log and log('Ollama 가동 확인 (3초)')) or 'http://x'
+    w.session_mode.set('block');w.start_chat()
+    pump(w,lambda:svc.chat.started)
+    # The box carries the success summary once Chat is up; the trail it showed
+    # on the way there is what these two messages had to reach.
+    trail='\n'.join(w._chat_progress)
+    assert 'Docker 데몬이 응답하지 않습니다' in trail
+    assert 'Ollama 가동 확인' in trail
+
+
+def test_a_failed_chat_start_leaves_the_reason_on_the_page(ui):
+    w,svc,backend=ui
+    backend.images=False
+    w.session_mode.set('block');w.start_chat()
+    pump(w,lambda:'실패' in w.chat_text.get('1.0','end-1c'))
+    shown=w.chat_text.get('1.0','end-1c')
+    assert '[3/5]' in shown or 'Setup' in shown, shown
+    # The page must not keep claiming a start is in progress afterwards.
+    assert w._chat_starting is False
+
+
+def test_closing_interrupts_an_agent_turn_instead_of_waiting_it_out(ui):
+    """A model turn can run for minutes, and shutdown queued behind it with no
+    way for the user to get the window to close."""
+    import threading
+    from test_desktop_session import binding
+    w,svc,backend=ui
+    b,state=binding()
+    interrupted=threading.Event()
+    b.coordinator.stop_service=lambda:interrupted.set() or 'cancelled'
+    backend.agent_open=lambda presenter,network,project,**kw:b
+    w.session_mode.set('direct');w.start_agent()
+    pump(w,lambda:svc.agent.opened)
+    w.request_close()
+    pump(w,interrupted.is_set)
+    assert interrupted.is_set()

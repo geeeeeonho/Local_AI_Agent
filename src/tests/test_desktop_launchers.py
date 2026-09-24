@@ -76,7 +76,7 @@ def test_module_entry_restores_argv_on_exception(monkeypatch,tmp_path):
     assert sys.argv is original
 
 
-def chat_backend(tmp_path,ids):
+def chat_backend(tmp_path,ids,monkeypatch=None,installed=('chosen:latest',)):
     from test_desktop_integration import fixture
     b,m,c=fixture(tmp_path)
     started=[]
@@ -86,43 +86,58 @@ def chat_backend(tmp_path,ids):
     sequence=iter(ids)
     m['launcher.services.docker'].DockerService.stop_container=lambda identifier,timeout:c.append('stopped') or True
     m['launcher.services.docker'].DockerService.run=lambda *a,**k: NS(returncode=0,stdout=next(sequence))
+    # Chat resolves its model against the live inventory now, so the stubbed
+    # backend needs a stubbed router too — otherwise these reach 127.0.0.1.
+    if monkeypatch is not None:
+        import model_router_stub as router
+        router.serve(monkeypatch,list(installed))
     return b,m,c
 
 
-def test_chat_recreated_container_is_stopped_on_close(tmp_path):
-    b,m,c=chat_backend(tmp_path,['old\n','new\n','new\n',''])
+def test_chat_recreated_container_is_stopped_on_close(tmp_path,monkeypatch):
+    b,m,c=chat_backend(tmp_path,['old\n','new\n','new\n',''],monkeypatch)
     assert b.chat_start('',print,None)=='http://localhost:3001'
     assert b.chat_stop()
     assert c==['stopped']
 
 
-def test_chat_start_passes_the_canonical_token_limit_and_model(tmp_path):
+def test_chat_start_passes_the_canonical_token_limit_and_model(tmp_path,monkeypatch):
     """컨텍스트 한도는 config 한 곳에서만 온다. 예전 코드는 존재하지 않는
     이름 두 개를 거쳐 AttributeError 로 Chat 시작 자체를 막았다."""
     from launcher import config
-    b,m,c=chat_backend(tmp_path,['','id\n'])
+    b,m,c=chat_backend(tmp_path,['','id\n'],monkeypatch,installed=('picked:tag',))
     b.chat_start('picked:tag',print,None)
     started,=m['launcher.anythingllm_runtime'].started
     assert started['token_limit']==config.CHAT_CONTEXT_WINDOW
     assert started['model_tag']=='picked:tag'
 
 
-def test_chat_start_falls_back_to_the_catalog_default_model(tmp_path):
-    b,m,c=chat_backend(tmp_path,['','id\n'])
+def test_chat_start_picks_an_installed_model_not_a_static_default(tmp_path,monkeypatch):
+    """config.MODEL_TAG is a catalogue entry, not proof of an install. Falling
+    back to it made Chat ask AnythingLLM for a model Ollama does not have."""
+    b,m,c=chat_backend(tmp_path,['','id\n'],monkeypatch,installed=('lighter:3b',))
     b.chat_start('',print,None)
     started,=m['launcher.anythingllm_runtime'].started
-    assert started['model_tag']==m['launcher.config'].MODEL_TAG
+    assert started['model_tag']=='lighter:3b'
+    assert started['model_tag']!=m['launcher.config'].MODEL_TAG
 
 
-def test_chat_reused_container_is_not_stopped(tmp_path):
-    b,m,c=chat_backend(tmp_path,['old\n','old\n'])
+def test_chat_refuses_to_start_with_no_local_model_installed(tmp_path,monkeypatch):
+    b,m,c=chat_backend(tmp_path,[''],monkeypatch,installed=())
+    with pytest.raises(RuntimeError):
+        b.chat_start('',print,None)
+    assert not m['launcher.anythingllm_runtime'].started
+
+
+def test_chat_reused_container_is_not_stopped(tmp_path,monkeypatch):
+    b,m,c=chat_backend(tmp_path,['old\n','old\n'],monkeypatch)
     b.chat_start('',print,None)
     assert b.chat_stop()
     assert not c
 
 
-def test_chat_replaced_by_another_process_is_not_stopped(tmp_path):
-    b,m,c=chat_backend(tmp_path,['','mine\n','someone-else\n'])
+def test_chat_replaced_by_another_process_is_not_stopped(tmp_path,monkeypatch):
+    b,m,c=chat_backend(tmp_path,['','mine\n','someone-else\n'],monkeypatch)
     b.chat_start('',print,None)
     assert not b.chat_stop()
     assert not c

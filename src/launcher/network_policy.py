@@ -14,6 +14,8 @@ import os
 from enum import Enum
 from typing import Callable
 
+from core.calls import invoke
+
 
 class NetworkMode(str, Enum):
     WARP = "warp"
@@ -324,7 +326,8 @@ def container_proxy_env(value) -> dict[str, str]:
     return {"LOCAL_AI_NETWORK_MODE": mode.value}
 
 
-def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None = None) -> bool:
+def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None = None,
+                    cancel: Callable[[], bool] | None = None) -> bool:
     """Ensure the selected protected proxy runtime is ready.
 
     The selected product mode is persisted separately through :func:`set_mode`.
@@ -340,15 +343,14 @@ def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None =
                 from . import warp_runtime as runtime
             except Exception:  # pragma: no cover
                 from launcher import warp_runtime as runtime
+        else:
             try:
-                return bool(runtime.start(env_path, log_path=None))
-            except TypeError:
-                return bool(runtime.start(env_path))
-        try:
-            from . import tor_runtime as runtime
-        except Exception:  # pragma: no cover
-            from launcher import tor_runtime as runtime
-        return bool(runtime.start(env_path, log=log))
+                from . import tor_runtime as runtime
+            except Exception:  # pragma: no cover
+                from launcher import tor_runtime as runtime
+        # WARP used to be called without ``log`` and the TypeError fallback hid
+        # that its progress never reached the caller at all.
+        return bool(invoke(runtime.start, env_path, log=log, cancel_check=cancel))
     except Exception as exc:
         if log is not None:
             try:

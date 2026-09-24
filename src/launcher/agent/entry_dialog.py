@@ -40,7 +40,19 @@ def _resolve(mr, role_key, free):
     return {"tag": tag, "reason": reason, "label": getattr(role, "label", role_key)}
 
 
-def agent_setup(env=None, presenter=None):
+def _active_network_mode():
+    """The mode the desktop already prepared, or the canonical default."""
+    try:
+        try:
+            from .. import network_policy
+        except Exception:
+            from launcher import network_policy  # type: ignore
+        return network_policy.current_mode().value
+    except Exception:
+        return "warp"
+
+
+def agent_setup(env=None, presenter=None, active_network=None):
     del env
     try:
         mr = _model_roles()
@@ -67,6 +79,13 @@ def agent_setup(env=None, presenter=None):
     result = {"value": False}
     done = threading.Event()
     free_txt = ("여유 메모리 %.1fGB" % free) if free is not None else "여유 메모리 탐지 실패"
+    # 이 창은 이미 한 가지 네트워크 모드를 준비해 두고 열린다. 그런데 기본값이
+    # 늘 "warp" 로 고정돼 있어서, Network 화면에서 direct/tor/block 을 고른
+    # 사용자는 아무것도 바꾸지 않고 [시작] 을 눌러도 "활성 네트워크가 ...로
+    # 고정되어 있습니다" 로 거절당했다. 준비된 모드를 그대로 보여 준다.
+    active = str(active_network or _active_network_mode()).strip().lower()
+    if active not in ("warp", "tor", "direct", "block"):
+        active = "warp"
 
     def build_setup(parent):
         base = tk.Frame(parent, bg=_BG)
@@ -90,7 +109,7 @@ def agent_setup(env=None, presenter=None):
 
             role_var = tk.StringVar(value=(roles[0].key if roles else "5"))
             mode_var = tk.StringVar(value="sandbox")
-            net_var = tk.StringVar(value="warp")
+            net_var = tk.StringVar(value=active)
 
             def _section(title, desc):
                 card = tk.Frame(base, bg=_CARD)
@@ -160,20 +179,28 @@ def agent_setup(env=None, presenter=None):
             _radio(sec2, mode_var, "host", "호스트 직접 (위험)", "PC 에 직접 영향 — 주의", danger=True)
             tk.Label(sec2, text="", bg=_CARD).pack(pady=(0, 4))
 
-            sec3 = _section("인터넷", "Host와 샌드박스 모두 동일한 제품 정책을 사용")
+            sec3 = _section(
+                "인터넷",
+                "현재 준비된 모드: " + active
+                + " · 다른 모드로 바꾸려면 Network 화면에서 먼저 변경하세요",
+            )
+            def _net_label(value, text):
+                return text + (" ★현재" if active == value else "")
+
             _radio(
                 sec3,
                 net_var,
                 "warp",
-                "WARP 경유 (빠름·기본)",
+                _net_label("warp", "WARP 경유 (빠름)"),
                 "Cloudflare WARP + HTTP 브리지로 IP 보호",
             )
-            _radio(sec3, net_var, "tor", "Tor 경유 (최고 익명)", "가장 익명적이나 느림")
+            _radio(sec3, net_var, "tor", _net_label("tor", "Tor 경유 (최고 익명)"),
+                   "가장 익명적이나 느림")
             _radio(
                 sec3,
                 net_var,
                 "direct",
-                "직접 연결",
+                _net_label("direct", "직접 연결"),
                 "프록시 없이 외부 연결 — 실제 IP가 노출될 수 있음",
                 danger=True,
             )
@@ -181,7 +208,7 @@ def agent_setup(env=None, presenter=None):
                 sec3,
                 net_var,
                 "block",
-                "차단",
+                _net_label("block", "차단"),
                 "샌드박스의 관리형 웹 접근 차단. Host는 아직 강제 경계가 없어 선택 불가",
             )
             tk.Label(sec3, text="", bg=_CARD).pack(pady=(0, 4))

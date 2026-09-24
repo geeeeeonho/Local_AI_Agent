@@ -180,7 +180,7 @@ def test_searxng_published_port_binds_only_to_loopback(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(searxng_runtime, "_ensure_net", lambda: None)
     monkeypatch.setattr(searxng_runtime, "image_exists", lambda: True)
     monkeypatch.setattr(searxng_runtime, "container_exists", lambda: False)
-    monkeypatch.setattr(searxng_runtime, "_wait_ready", lambda timeout=60: True)
+    monkeypatch.setattr(searxng_runtime, "_wait_ready", lambda **_kw: True)
     monkeypatch.setattr(searxng_runtime, "_cfg_dir", lambda env: cfg)
     monkeypatch.setattr(warp_runtime, "start", lambda *args, **kwargs: False)
     monkeypatch.setattr(

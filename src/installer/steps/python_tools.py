@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, Optional
 
+from core.progress import LogAdapter
 from installer import utils
 from installer.i18n import t
 from installer.resources import SafetyProfile
@@ -52,7 +53,10 @@ def install_anythingllm(
         "Chat preparation 1/3: checking Docker Desktop",
     ))
     try:
-        docker_ready = DockerService.ensure_daemon(timeout=90)
+        # Without a logger this is up to ninety silent seconds in a console the
+        # user is watching, and then a bare failure line.
+        docker_ready = DockerService.ensure_daemon(
+            logger=LogAdapter(utils.info), timeout=90)
     except Exception as exc:
         utils.err(_anyllm_msg(
             "Docker Desktop 준비 중 오류: ",

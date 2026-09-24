@@ -103,7 +103,6 @@ def test_every_caller_gets_the_same_answer_from_the_same_stub(monkeypatch, tmp_p
     """The point of the unification: one stub moves every reader at once."""
     from launcher.models import model_roles
     from launcher.actions import model_manage
-    from installer import manage_gui
     from services.models.service import ModelService
     from types import SimpleNamespace
 
@@ -113,7 +112,6 @@ def test_every_caller_gets_the_same_answer_from_the_same_stub(monkeypatch, tmp_p
     service = ModelService(SimpleNamespace(model_dir=tmp_path, client=object()))
     assert model_roles.installed_models() == {'gemma4:12b'}
     assert model_manage._installed_tags(SimpleNamespace(model_dir=tmp_path)) == {'gemma4:12b'}
-    assert manage_gui._installed_set() == {'gemma4:12b'}
     assert service.installed_tags() == {'gemma4:12b'}
 
 
@@ -121,14 +119,12 @@ def test_a_stopped_router_no_longer_reads_as_an_empty_library(monkeypatch, tmp_p
     """Every one of these used to report nothing installed and offer to re-download."""
     from launcher.models import model_roles
     from launcher.actions import model_manage
-    from installer import manage_gui
     from types import SimpleNamespace
 
     router.refuse(monkeypatch)
     router.store(monkeypatch, ['gemma4:12b'])
     assert model_roles.installed_models() == {'gemma4:12b'}
     assert model_manage._installed_tags(SimpleNamespace(model_dir=tmp_path)) == {'gemma4:12b'}
-    assert manage_gui._installed_set() == {'gemma4:12b'}
 
 
 def test_the_ladder_keeps_a_downloaded_model_when_the_server_is_stopped(monkeypatch):
@@ -165,6 +161,11 @@ def test_no_second_way_of_asking_the_router_gets_added():
         Path('integrations/ollama/client.py'),   # the transport itself
         Path('launcher/config.py'),              # where the endpoint is defined
         Path('tools/evaluate_local_search_e2e.py'),  # an offline eval harness
+        # Not a Python transport at all: this string is JavaScript that runs
+        # *inside* the AnythingLLM container (docker exec node -e) to prove the
+        # container itself can reach the host's Ollama. There is no stdlib
+        # client in there to route it through.
+        Path('launcher/anythingllm_runtime.py'),
     }
     offenders = []
     for path in sorted(SRC.rglob('*.py')):

@@ -38,10 +38,12 @@ def fixture(tmp_path):
 
 
 def test_block_calls_canonical_quiescence_without_injected_run(tmp_path):
+    """Quiescence first, then publish. A mode that failed to prepare is not the
+    active mode, so ``set_mode`` may only follow a successful preparation."""
     b,m,c=fixture(tmp_path)
     assert b.prepare_network('block', print)
-    assert c[0] == ('mode','block')
-    assert c[1][0] == 'block' and 'run' not in c[1][1]
+    assert c[0][0] == 'block' and 'run' not in c[0][1]
+    assert c[1] == ('mode','block')
 
 
 def test_warp_failure_is_not_converted_to_direct(tmp_path):

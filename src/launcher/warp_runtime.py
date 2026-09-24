@@ -54,7 +54,15 @@ def _run(args, timeout=60):
         return None
 
 
-def _log(log_path, level, message):
+def _log(log_path, level, message, log=None):
+    """Write one progress line to the file, the console and the caller.
+
+    The caller was missing. WARP is the default network mode and its startup
+    can run past two minutes (docker run, SOCKS5 registration, HTTP bridge),
+    and every word of that went to a log file and to ``print`` - which reaches
+    nobody under ``pythonw.exe``, where the desktop app actually runs. The
+    Chat/Agent progress view showed one unchanging line the entire time.
+    """
     line = "[%s] %s %s" % (time.strftime("%H:%M:%S"), level, message)
     try:
         if log_path:
@@ -66,6 +74,11 @@ def _log(log_path, level, message):
         print(line)
     except Exception:
         pass
+    if log is not None:
+        try:
+            log(str(message))
+        except Exception:
+            pass
 
 
 def proxy_url(inside_net: bool = True) -> str:
@@ -133,20 +146,34 @@ def _socks5_alive(host, port, timeout=3) -> bool:
             pass
 
 
-def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None) -> bool:
+def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None, log=None, cancel_check=None) -> bool:
     end = time.time() + timeout
     waited = 0
     while time.time() < end:
+        if _cancelled(cancel_check):
+            _log(log_path, "WARN", "사용자가 취소했습니다 — WARP 대기 중단", log)
+            return False
         if _socks5_alive("127.0.0.1", PROXY_PORT):
             if waited:
-                _log(log_path, "INFO", "WARP SOCKS5 응답 확인 (%d초 대기)" % waited)
+                _log(log_path, "INFO", "WARP SOCKS5 응답 확인 (%d초 대기)" % waited, log)
             return True
         time.sleep(1)
         waited += 1
-        if waited % 10 == 0:
-            _log(log_path, "INFO", "WARP 등록 대기 중... %d/%d초" % (waited, timeout))
-    _log(log_path, "WARN", "WARP SOCKS5 가 %d초 안에 응답하지 않았습니다." % timeout)
+        # Every ten seconds was the file's cadence; on screen, silence for ten
+        # seconds is already long enough to look stuck.
+        if waited % 5 == 0:
+            _log(log_path, "INFO", "WARP 등록 대기 중... %d/%d초" % (waited, timeout), log)
+    _log(log_path, "WARN", "WARP SOCKS5 가 %d초 안에 응답하지 않았습니다." % timeout, log)
     return False
+
+
+def _cancelled(cancel_check) -> bool:
+    if cancel_check is None:
+        return False
+    try:
+        return bool(cancel_check())
+    except Exception:
+        return False
 
 
 _CLEANUP_REGISTERED = False
@@ -179,7 +206,7 @@ def _register_exit_cleanup():
         pass
 
 
-def _ensure_bridge(log_path=None) -> bool:
+def _ensure_bridge(log_path=None, log=None) -> bool:
     try:
         try:
             from . import http_bridge
@@ -190,27 +217,34 @@ def _ensure_bridge(log_path=None) -> bool:
     try:
         if http_bridge.is_running():
             return True
-        ok = bool(http_bridge.start(log=lambda message: _log(log_path, "INFO", str(message))))
+        _log(log_path, "INFO", "HTTP 브리지 준비 중...", log)
+        ok = bool(http_bridge.start(
+            log=lambda message: _log(log_path, "INFO", str(message), log)))
         if not ok:
-            _log(log_path, "WARN", "HTTP 브리지 미기동 — 보호 모드를 시작하지 않습니다.")
+            _log(log_path, "WARN", "HTTP 브리지 미기동 — 보호 모드를 시작하지 않습니다.", log)
         return ok
     except Exception as exc:
-        _log(log_path, "WARN", "HTTP 브리지 예외: %s" % type(exc).__name__)
+        _log(log_path, "WARN", "HTTP 브리지 예외: %s" % type(exc).__name__, log)
         return False
 
 
-def start(env=None, log_path=None) -> bool:
+def start(env=None, log_path=None, log=None, cancel_check=None) -> bool:
     """Start the complete WARP path and fail closed on bridge failure."""
     del env  # kept for the historic runtime API
     _register_exit_cleanup()
 
     if is_running():
-        return _ensure_bridge(log_path)
+        _log(log_path, "INFO", "WARP 컨테이너 이미 실행 중 — 브리지만 확인합니다.", log)
+        return _ensure_bridge(log_path, log)
 
     if not image_exists():
-        _log(log_path, "WARN", "WARP 이미지 없음(%s)" % IMAGE)
+        _log(log_path, "WARN", "WARP 이미지 없음(%s) — Setup / Repair 에서 받으세요." % IMAGE, log)
         return False
 
+    if _cancelled(cancel_check):
+        return False
+
+    _log(log_path, "INFO", "WARP 컨테이너 시작 중... (최대 %d초)" % BOOT_TIMEOUT, log)
     _ensure_net()
     _remove_stale()
     args = [
@@ -226,18 +260,20 @@ def start(env=None, log_path=None) -> bool:
 
     result = _run(args, timeout=90)
     if not (result and result.returncode == 0):
+        _log(log_path, "INFO", "WARP 컨테이너 재생성 후 다시 시도합니다.", log)
         _run(["rm", "-f", CONTAINER], timeout=30)
         result = _run(args, timeout=90)
         if not (result and result.returncode == 0):
-            _log(log_path, "WARN", "WARP 기동 실패")
+            detail = ((result.stderr or "").strip()[:160] if result else "docker 응답 없음")
+            _log(log_path, "WARN", "WARP 기동 실패: " + detail, log)
             return False
 
-    if not _wait_ready(log_path=log_path):
-        _log(log_path, "WARN", "WARP SOCKS5 준비 실패 — 보호 모드를 시작하지 않습니다.")
+    if not _wait_ready(log_path=log_path, log=log, cancel_check=cancel_check):
+        _log(log_path, "WARN", "WARP SOCKS5 준비 실패 — 보호 모드를 시작하지 않습니다.", log)
         return False
 
-    _log(log_path, "INFO", "WARP SOCKS5 준비됨 (%s:%d)" % (CONTAINER, PROXY_PORT))
-    if not _ensure_bridge(log_path):
+    _log(log_path, "INFO", "WARP SOCKS5 준비됨 (%s:%d)" % (CONTAINER, PROXY_PORT), log)
+    if not _ensure_bridge(log_path, log):
         return False
     return True
 

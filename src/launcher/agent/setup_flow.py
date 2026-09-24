@@ -199,10 +199,16 @@ def select_internet_mode(p: Presenter) -> bool:
         ),
         MenuItem(key="b", title="취소", separator_above=True),
     ]
+    # Open on the mode that is already prepared. Starting somewhere else meant
+    # a user who changed nothing still picked a different mode than the window
+    # had pinned, and the Agent was refused before anything ran.
+    active = network_policy.current_mode().value
     choice = p.show_menu(
         title="에이전트 인터넷 설정",
-        subtitle="WARP/Tor/직접/차단 중 하나의 네트워크 정책을 선택합니다.",
+        subtitle="현재 준비된 모드: " + active
+                 + " · 다른 모드는 Network 화면에서 먼저 바꾸세요.",
         items=items,
+        last_choice=active,
     )
     if choice not in {mode.value for mode in network_policy.NetworkMode}:
         return False
