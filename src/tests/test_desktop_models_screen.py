@@ -128,7 +128,7 @@ def test_apply_stops_once_when_ollama_preflight_fails(ui, monkeypatch):
     monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: True)
     monkeypatch.setattr(
         svc.setup, 'ensure_model_runtime',
-        lambda: (_ for _ in ()).throw(RuntimeError('Ollama bootstrap failed')),
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError('Ollama bootstrap failed')),
     )
     w.apply_selection()
     pump(w, lambda: not w.runner.busy())
