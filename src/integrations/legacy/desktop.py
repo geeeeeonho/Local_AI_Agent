@@ -11,6 +11,7 @@ import secrets
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from core.network.policy import NetworkMode, NetworkPolicy
 from integrations.ollama.client import OllamaClient
 from core.urls import local_url
@@ -67,6 +68,9 @@ class LegacyBackend:
 
     def _probe_health(self):
         # None is unknown/error, not a falsely reported stopped or ready service.
+        # These probes are independent and several shell out to Docker/PowerShell.
+        # Running them serially made a harmless status refresh look like a stalled
+        # connection on Windows.
         checks = {
             'ollama': lambda: self.load('launcher.services.ollama').OllamaService(
                 self.env, model_dir=self.model_dir).is_managed_running(),
@@ -76,12 +80,18 @@ class LegacyBackend:
             'search': lambda: self.load('launcher.services.docker').DockerService.container_running(
                 self.load('launcher.config').SEARXNG_CONTAINER),
         }
-        result = {}
-        for name, check in checks.items():
+        started = time.monotonic()
+
+        def run(check):
             try:
-                result[name] = bool(check())
+                return bool(check())
             except Exception:
-                result[name] = None
+                return None
+
+        with ThreadPoolExecutor(max_workers=len(checks), thread_name_prefix='health') as pool:
+            futures = {name: pool.submit(run, check) for name, check in checks.items()}
+            result = {name: future.result() for name, future in futures.items()}
+        result['probe_seconds'] = round(time.monotonic() - started, 3)
         return result
 
     def prepare_network(self, mode, log):

@@ -457,6 +457,10 @@ class OpenInterpreterBackend:
             else:
                 self._trace_record("tool_started", item, turn_id=current_turn_id, detailed=True)
             content = str(item.get("command") or item.get("tool") or item_type)
+            # App Server internal heartbeat items are implementation detail. Showing
+            # them as user work produces repeated "health" start/completed noise.
+            if item_type.strip().lower() == "health" or content.strip().lower() == "health":
+                return None
             return AgentEvent(AgentEventType.TOOL_STARTED, content, "system", data=params)
         if method == "item/completed":
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
@@ -470,6 +474,8 @@ class OpenInterpreterBackend:
             if item_type == "agentMessage":
                 return None
             content = str(item.get("command") or item.get("tool") or item_type)
+            if item_type.strip().lower() == "health" or content.strip().lower() == "health":
+                return None
             return AgentEvent(AgentEventType.TOOL_COMPLETED, content, "system", data=params)
         if method in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval"):
             kind = "command" if "commandExecution" in method else "file_change"
