@@ -51,7 +51,7 @@ def prepare_install(env: Path, model_dir: Path) -> None:
     """레거시 모델 이동 전에 관리형 Ollama를 멈추고 외부 충돌을 차단."""
     svc = _service(Path(env), Path(model_dir))
     if not svc.prepare_install():
-        raise RuntimeError("Another Ollama service is using the configured port")
+        raise RuntimeError(svc.last_error or "Another Ollama service is using the configured port")
 
 
 def find_existing(paths: Dict[str, Path]) -> Optional[Path]:
@@ -151,4 +151,4 @@ def start_service(paths: Dict[str, Path]):
     utils.section(t("install.ollama_service_section"))
     svc = _service(paths["env"], paths["models"])
     if not svc.ensure_running(boot_timeout=30):
-        raise RuntimeError("Managed Ollama service start failed")
+        raise RuntimeError(svc.last_error or "Managed Ollama service start failed")
