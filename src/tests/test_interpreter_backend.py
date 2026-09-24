@@ -190,6 +190,22 @@ def test_notifications_map_to_agent_events(tmp_path, monkeypatch):
     assert approval.data["kind"] == "command"
 
 
+def test_internal_health_items_do_not_become_user_visible_events(tmp_path, monkeypatch):
+    backend, made = _backend(tmp_path, monkeypatch)
+    config = _config(tmp_path / "work")
+    config.workspace.mkdir()
+    assert backend.start(config)
+    backend.poll_events(10)
+    client = made[0]
+    client.messages.extend([
+        {"method": "item/started", "params": {"item": {"type": "health"}}},
+        {"method": "item/completed", "params": {"item": {"type": "health"}}},
+        {"method": "item/started", "params": {"item": {"type": "mcpToolCall", "tool": "health"}}},
+        {"method": "item/completed", "params": {"item": {"type": "mcpToolCall", "tool": "health"}}},
+    ])
+    assert backend.poll_events(10) == []
+
+
 def test_restart_reregisters_active_lifecycle_without_duplicate_global_cleanup(tmp_path, monkeypatch):
     backend, _ = _backend(tmp_path, monkeypatch)
     config = _config(tmp_path / "work")
