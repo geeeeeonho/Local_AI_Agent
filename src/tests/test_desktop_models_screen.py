@@ -121,6 +121,21 @@ def test_apply_pulls_and_removes_through_the_guarded_setup_service(ui, monkeypat
     assert backend.calls.index(('remove', tag)) < backend.calls.index(('pull', wanted))
 
 
+def test_apply_stops_once_when_ollama_preflight_fails(ui, monkeypatch):
+    w, svc, backend = ui
+    open_models(w)
+    w.set_selection('recommended')
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: True)
+    monkeypatch.setattr(
+        svc.setup, 'ensure_model_runtime',
+        lambda: (_ for _ in ()).throw(RuntimeError('Ollama bootstrap failed')),
+    )
+    w.apply_selection()
+    pump(w, lambda: not w.runner.busy())
+    assert not any(call[0] in ('pull', 'remove') for call in backend.calls)
+    assert 'Ollama bootstrap failed' in w.log_box.get('1.0', 'end')
+
+
 def test_apply_asks_before_touching_anything_and_honours_a_refusal(ui, monkeypatch):
     w, svc, backend = ui
     store_model(svc)
