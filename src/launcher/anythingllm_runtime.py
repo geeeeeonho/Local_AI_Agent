@@ -749,6 +749,7 @@ def build_run_cmd(memory=None, cpus=None):
         "docker", "run", "-d",
         "--name", CONTAINER,
         "--network", network_for_mode(_mode),
+        "--add-host", "host.docker.internal:host-gateway",
         "-p", "127.0.0.1:%d:%d" % (HOST_PORT, CONTAINER_PORT),
     ]
     for cap in CAP_ADD:
