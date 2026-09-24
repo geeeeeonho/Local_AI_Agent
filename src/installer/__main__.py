@@ -104,6 +104,8 @@ def _run_install(args) -> int:
 
     paths = utils.create_environment(ENV)
     components = []
+    failed_components = []
+    skipped_components = []
     utils.write_install_manifest(paths, HERE, "installing", components)
 
     ollama.install(paths)
@@ -111,19 +113,26 @@ def _run_install(args) -> int:
     components.append("ollama")
 
     if not args.skip_model:
-        model.download(paths)
-        components.append("models")
+        prepared_models = model.download(paths)
+        if prepared_models:
+            components.append("models")
+        else:
+            failed_components.append("models")
+            utils.warn("로컬 모델 준비가 완료되지 않았습니다. Setup의 모델 화면에서 다시 적용할 수 있습니다.")
     else:
+        skipped_components.append("models")
         utils.warn("Model download skipped (--skip-model)")
 
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")
     else:
+        failed_components.append("anythingllm")
         utils.warn("AnythingLLM 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
     if python_tools.install_open_interpreter(paths, profile):
         components.append("open_interpreter")
     else:
+        failed_components.append("open_interpreter")
         utils.warn("Open Interpreter 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
     if not args.skip_sandbox:
@@ -131,9 +140,11 @@ def _run_install(args) -> int:
             sandbox.install(paths, profile=profile, build_image=not args.skip_build)
             components.append("sandbox")
         except sandbox.DockerNotAvailable as e:
+            skipped_components.append("sandbox")
             utils.warn(t("install.sandbox_skip", reason=str(e)))
             utils.warn(t("install.sandbox_skip_later"))
     else:
+        skipped_components.append("sandbox")
         utils.warn(t("install.sandbox_skip", reason="--skip-sandbox"))
 
     if not args.skip_search:
@@ -142,11 +153,21 @@ def _run_install(args) -> int:
             searxng.install(paths)
             components.append("searxng")
         except sandbox.DockerNotAvailable as e:
+            skipped_components.append("searxng")
             utils.warn(t("install.searxng_skip", reason=str(e)))
     else:
+        skipped_components.append("searxng")
         utils.warn(t("install.searxng_skip_optional"))
 
-    utils.write_install_manifest(paths, HERE, "installed", components)
+    status = "partial" if failed_components else "installed"
+    utils.write_install_manifest(
+        paths, HERE, status, components,
+        failed_components=failed_components,
+        skipped_components=skipped_components,
+    )
+    if failed_components:
+        utils.warn("일부 필수 구성요소가 준비되지 않았습니다: " + ", ".join(failed_components))
+        utils.warn("RUN.bat --manage 에서 상태를 확인하거나 RUN.bat --install 로 복구하세요.")
     utils.finalize_summary(paths, HERE)
 
     try:
