@@ -262,6 +262,42 @@ def _ensure_net():
         _docker(["network", "create", NET], 20)
 
 
+_CLEANUP_REGISTERED = False
+
+
+def _register_exit_cleanup() -> None:
+    """Own this container's teardown here rather than relying on WARP's.
+
+    The bridge is started only from ``warp_runtime``, whose cleanup happens to
+    stop it as well - an invariant that holds only as long as nobody starts the
+    bridge from anywhere else. Registering here costs one idempotent extra stop
+    and stops the leak from depending on the caller.
+    """
+    global _CLEANUP_REGISTERED
+    if _CLEANUP_REGISTERED:
+        return
+    try:
+        try:
+            from .core import lifelog as _ll
+        except Exception:  # pragma: no cover - package fallback
+            from launcher.core import lifelog as _ll
+
+        def _do():
+            try:
+                _ll.log("CLEANUP", "HTTP 브리지 정리: %s" % CONTAINER)
+            except Exception:
+                pass
+            try:
+                stop()
+            except Exception:
+                pass
+
+        _ll.register_cleanup(_do)
+        _CLEANUP_REGISTERED = True
+    except Exception:
+        pass
+
+
 def start(log=None) -> bool:
     """브리지 컨테이너 기동. 이미 떠 있으면 True."""
     def _l(m):
@@ -271,6 +307,7 @@ def start(log=None) -> bool:
             except Exception:
                 pass
 
+    _register_exit_cleanup()
     if is_running():
         return True
     _ensure_net()

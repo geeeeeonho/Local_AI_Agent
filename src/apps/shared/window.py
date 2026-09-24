@@ -697,7 +697,14 @@ class DesktopWindow:
     def request_close(self):
         if self.closing:return
         self.closing=True;self.runner.cancel.set();self._polling=False
-        if self.services.agent.session is not None:self.services.agent.session.closing.set()
+        session=self.services.agent.session
+        if session is not None:
+            session.closing.set()
+            # An Agent turn already running keeps shutdown queued behind it, and
+            # a model turn can last minutes. Interrupt it the way the Stop button
+            # does, on the read pool so it does not queue behind that same turn.
+            self.runner.submit('agent.interrupt',session.stop_turn,lambda _:None,
+                lambda exc:self.log('agent.interrupt: '+str(exc),level='error'),mutate=False)
         for p in self.presenters.values():
             fn=getattr(p,'_on_user_cancel',None)
             if callable(fn):fn()

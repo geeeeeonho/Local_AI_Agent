@@ -1,5 +1,5 @@
 """Application-facing inference readiness with shared observations and events."""
-import inspect
+from core.calls import invoke
 from core.events import EventBus
 from core.runtime_state import RuntimeState
 
@@ -35,13 +35,9 @@ class InferenceService:
         return endpoint
 
     def _start(self, log):
-        """Forward the progress callback only to a runtime that accepts one."""
-        if log is None:
-            return self.runtime.ensure_running()
-        try:
-            parameters = inspect.signature(self.runtime.ensure_running).parameters
-        except (TypeError, ValueError):
-            parameters = {}
-        accepts = 'log' in parameters or any(
-            value.kind is value.VAR_KEYWORD for value in parameters.values())
-        return self.runtime.ensure_running(log=log) if accepts else self.runtime.ensure_running()
+        """Forward the progress callback only to a runtime that accepts one.
+
+        A thirty-second Ollama boot with no output is indistinguishable from a
+        hang, and the retained runtimes did not all take a callback.
+        """
+        return invoke(self.runtime.ensure_running, log=log)

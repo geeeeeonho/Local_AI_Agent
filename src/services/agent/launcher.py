@@ -1,4 +1,5 @@
 """Desktop facade for the existing Interpreter coordinator and approval flow."""
+from core.calls import invoke
 from .session import AgentSession
 
 
@@ -18,7 +19,11 @@ class AgentLauncher:
             return None
         network_was_prepared = self.network.mode is not None
         selected = self.network.prepare(mode, cancel=cancel)
-        binding = self.backend.agent_open(presenter, selected.value, project)
+        # Agent preparation starts Docker, Ollama and SearXNG; each of those
+        # waits was uninterruptible, so a window close during the wizard had to
+        # sit through all three.
+        binding = invoke(self.backend.agent_open, presenter, selected.value, project,
+                         cancel=cancel)
         if binding is None or (cancel is not None and cancel()):
             if not network_was_prepared:
                 self.network.reset()

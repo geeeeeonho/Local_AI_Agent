@@ -174,7 +174,7 @@ def test_running_warp_is_not_ready_when_http_bridge_cannot_be_prepared(monkeypat
     from launcher import warp_runtime
 
     monkeypatch.setattr(warp_runtime, "is_running", lambda: True)
-    monkeypatch.setattr(warp_runtime, "_ensure_bridge", lambda log_path=None: False)
+    monkeypatch.setattr(warp_runtime, "_ensure_bridge", lambda log_path=None, log=None: False)
 
     assert warp_runtime.start() is False
 

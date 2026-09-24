@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict
 
+from core.progress import LogAdapter
 from installer import utils
 
 
@@ -19,7 +20,7 @@ def install(paths: Dict[str, Path]) -> bool:
 
     image = str(config.TOR_IMAGE)
     try:
-        if not DockerService.ensure_daemon(timeout=90):
+        if not DockerService.ensure_daemon(logger=LogAdapter(utils.info), timeout=90):
             utils.warn("Docker Desktop 미준비 - Tor 이미지 설치를 건너뜁니다.")
             return False
         if DockerService.image_exists(image):

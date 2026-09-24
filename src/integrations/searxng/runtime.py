@@ -99,6 +99,17 @@ class SearchRuntime:
 
     def stop(self):
         if not self.owned:return True
+        # A container cannot outlive its daemon. Docker Desktop being stopped
+        # while the window was open made every `ps` fail, this report False and
+        # the shutdown that depends on it refuse forever - for a container that
+        # had already died with the daemon.
+        alive=getattr(self.docker,'daemon_alive',None)
+        if callable(alive):
+            try:
+                if not alive():
+                    self.owned=False
+                    return True
+            except Exception:pass
         # `docker stop` 의 종료 코드는 판정에 쓰지 않는다. 이미 사라진 컨테이너에는
         # 실패로 돌아오기 때문에, 아래 `ps` 관찰만을 정본으로 삼는다.
         self.docker.run(['stop',self.container],timeout=25)

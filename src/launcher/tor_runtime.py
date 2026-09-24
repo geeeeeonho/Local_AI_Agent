@@ -101,12 +101,32 @@ def _socks5_handshake_ok(host, port, timeout=3) -> bool:
             pass
 
 
-def _wait_port(timeout=BOOT_TIMEOUT) -> bool:
+def _wait_port(timeout=BOOT_TIMEOUT, log=None, cancel_check=None) -> bool:
+    def _say(message):
+        if log:
+            try:
+                log(str(message))
+            except Exception:
+                pass
+
     end = time.time() + timeout
+    waited = 0
     while time.time() < end:
+        if cancel_check is not None:
+            try:
+                if cancel_check():
+                    _say("사용자가 취소했습니다 — Tor 대기 중단")
+                    return False
+            except Exception:
+                pass
         if _socks5_handshake_ok("127.0.0.1", TOR_HOST_PORT, timeout=2):
             return True
         time.sleep(1)
+        waited += 1
+        # Tor circuit building is the slowest step in the product and it used
+        # to report nothing at all until it was over.
+        if waited % 5 == 0:
+            _say("Tor 회로 구축 대기 중... %d/%d초" % (waited, timeout))
     return False
 
 
@@ -199,7 +219,7 @@ def _register_exit_cleanup():
         pass
 
 
-def start(env=None, log=None) -> bool:
+def start(env=None, log=None, cancel_check=None) -> bool:
     def _p(m):
         if log:
             try:
@@ -238,7 +258,7 @@ def start(env=None, log=None) -> bool:
     if torrc:
         _p("Tor 기동 시도 (회로격리 torrc): %s" % torrc)
         r = _run_container(["-v", "%s:/etc/tor/torrc:ro" % torrc])
-        if r and r.returncode == 0 and _wait_port():
+        if r and r.returncode == 0 and _wait_port(log=_p, cancel_check=cancel_check):
             _p("Tor 기동 완료 — 회로격리 활성 (포트 %d)" % TOR_HOST_PORT)
             _register_exit_cleanup()
             return True
@@ -251,7 +271,7 @@ def start(env=None, log=None) -> bool:
     if not (r and r.returncode == 0):
         _p("Tor docker run 실패: %s" % ((r.stderr or "").strip()[:160] if r else "docker 응답 없음"))
         return False
-    ok = _wait_port()
+    ok = _wait_port(log=_p, cancel_check=cancel_check)
     _p("Tor 기동 %s (포트 %d)" % ("완료" if ok else "타임아웃 — 포트 응답 없음", TOR_HOST_PORT))
     if ok:
         _register_exit_cleanup()

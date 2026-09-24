@@ -388,3 +388,190 @@ def test_the_chat_action_gives_searxng_the_environment_it_requires():
     for call in starts:
         supplied = len(call.args) + len({keyword.arg for keyword in call.keywords})
         assert supplied >= len(required), 'searxng_runtime.start needs ' + ', '.join(required)
+
+
+# ── a container cannot outlive its daemon ────────────────────────────────
+# Stopping Docker Desktop while the window is open used to make shutdown
+# impossible: chat_stop raised out of close() and the search runtime reported
+# "not stopped" forever, both about containers that had already died with it.
+
+def dead_docker(tmp_path):
+    from test_desktop_integration import fixture
+    backend, modules, calls = fixture(tmp_path)
+    modules['launcher.anythingllm_runtime'] = NS(CONTAINER='chat', URL='http://localhost:3001')
+    docker = modules['launcher.services.docker'].DockerService
+    docker.run = staticmethod(lambda *a, **k: None)
+    docker.daemon_alive = staticmethod(lambda: False)
+    return backend, modules, calls
+
+
+def test_chat_stops_cleanly_when_docker_itself_has_gone(tmp_path):
+    backend, modules, calls = dead_docker(tmp_path)
+    backend._chat_owned_id = 'abc123'
+    assert backend.chat_stop() is True
+    assert backend._chat_owned_id is None
+
+
+def test_chat_stop_reports_failure_instead_of_raising_out_of_shutdown(tmp_path):
+    """Docker is up but its answers are unusable: unverified, not an exception."""
+    from test_desktop_integration import fixture
+    backend, modules, calls = fixture(tmp_path)
+    modules['launcher.anythingllm_runtime'] = NS(CONTAINER='chat', URL='http://localhost:3001')
+    docker = modules['launcher.services.docker'].DockerService
+    docker.run = staticmethod(lambda *a, **k: None)
+    docker.daemon_alive = staticmethod(lambda: True)
+    backend._chat_owned_id = 'abc123'
+    assert backend.chat_stop() is False
+
+
+def test_search_stops_cleanly_when_docker_itself_has_gone(tmp_path):
+    from integrations.searxng.runtime import SearchRuntime
+    backend, modules, calls = dead_docker(tmp_path)
+    runtime = SearchRuntime(tmp_path / 's.yml', tmp_path / 'cache',
+                            modules['launcher.services.docker'].DockerService,
+                            image='i', container='llm_searxng', network='n',
+                            host_port=8888, container_port=8080)
+    runtime.owned = True
+    assert runtime.stop() is True
+    assert runtime.owned is False
+
+
+def test_a_service_that_raises_on_stop_is_unverified_not_a_crash(tmp_path):
+    from test_desktop_services import make
+    services, backend = make(tmp_path)
+    services.chat.start('direct', search=False)
+    backend.chat_stop = lambda: (_ for _ in ()).throw(RuntimeError('docker exploded'))
+    seen = []
+    services.events.subscribe('runtime.error', lambda event: seen.append(event.payload))
+    assert services.close() is False, 'ownership is kept when a stop cannot be verified'
+    assert any(item.get('service') == 'chat' for item in seen), 'and the reason is reported'
+    backend.chat_stop = lambda: True
+    assert services.close() is True
+
+
+def test_every_service_is_asked_to_stop_even_after_one_refuses(tmp_path):
+    from test_desktop_services import make
+    services, backend = make(tmp_path)
+    services.chat.start('warp')
+    backend.chat_stop = lambda: False
+    services.close()
+    assert ('search_stop',) in backend.calls, \
+        'a Chat that will not stop is no reason to leave search running'
+
+
+# ── the default network mode prepares out loud ───────────────────────────
+
+def test_warp_preparation_reports_progress_and_takes_a_cancel(tmp_path):
+    """WARP is the default mode and its start can run past two minutes. Every
+    word of it went to a log file and to print(), which reaches nobody under
+    pythonw.exe - which is how the desktop app actually runs."""
+    import inspect
+    from launcher import warp_runtime
+    parameters = inspect.signature(warp_runtime.start).parameters
+    assert 'log' in parameters and 'cancel_check' in parameters
+    said = []
+    warp_runtime._log(None, 'INFO', 'WARP 등록 대기 중... 5/45초', said.append)
+    assert said == ['WARP 등록 대기 중... 5/45초']
+
+
+def test_searxng_reports_why_it_did_not_start(tmp_path, monkeypatch):
+    """_log returned immediately unless a log_path was given, and every caller
+    passed None - so the reason search failed was computed and then dropped."""
+    from launcher import searxng_runtime
+    said = []
+    monkeypatch.setattr(searxng_runtime, 'is_running', lambda: False)
+    monkeypatch.setattr(searxng_runtime, '_ensure_net', lambda: None)
+    monkeypatch.setattr(searxng_runtime, 'image_exists', lambda: False)
+    monkeypatch.setenv('NET_MODE', 'block')
+    assert searxng_runtime.start(tmp_path, log=said.append) is False
+    assert any('이미지 없음' in message for message in said), said
+
+
+def test_searxng_registers_the_teardown_every_other_runtime_had(monkeypatch, tmp_path):
+    """The Agent path starts this module directly, and nothing stopped it."""
+    from launcher import searxng_runtime
+    from launcher.core import lifelog
+    monkeypatch.setattr(searxng_runtime, '_CLEANUP_REGISTERED', False)
+    monkeypatch.setattr(searxng_runtime, 'is_running', lambda: True)
+    registered = []
+    monkeypatch.setattr(lifelog, 'register_cleanup', lambda fn, **kw: registered.append(fn))
+    assert searxng_runtime.start(tmp_path) is True
+    assert len(registered) == 1
+
+
+# ── preparation the user can interrupt ───────────────────────────────────
+
+def test_agent_preparation_stops_at_a_cancel_instead_of_finishing_every_wait(tmp_path):
+    from launcher.agent import runtime_coordinator
+    from launcher import network_policy
+    presenter = NS(info=lambda m: None, warn=lambda m: None, error=lambda m: None,
+                   ok=lambda m: None)
+    reached = []
+    original = runtime_coordinator._ensure_ollama
+    try:
+        runtime_coordinator._ensure_ollama = lambda env, p: reached.append('ollama') or True
+        assert runtime_coordinator.prepare_runtime(
+            tmp_path, presenter, 'sandbox', network_policy.NetworkMode.DIRECT,
+            cancel=lambda: True) is False
+    finally:
+        runtime_coordinator._ensure_ollama = original
+    assert reached == [], 'a cancelled Agent start must not begin a ninety-second wait'
+
+
+def test_optional_arguments_reach_only_the_callees_that_take_them():
+    from core.calls import invoke, accepts
+    seen = {}
+    def old_style(mode, log):
+        seen['old'] = (mode, log); return 'old'
+    def new_style(mode, log, cancel=None):
+        seen['new'] = (mode, log, cancel); return 'new'
+    assert invoke(old_style, 'warp', print, cancel=lambda: True) == 'old'
+    assert invoke(new_style, 'warp', print, cancel='c') == 'new'
+    assert seen['new'][2] == 'c'
+    assert accepts(new_style, 'cancel') and not accepts(old_style, 'cancel')
+
+
+# ── every container this program starts is somebody's to stop ────────────
+
+def test_every_module_that_starts_a_container_registers_its_teardown():
+    """launcher.searxng_runtime started llm_searxng and registered nothing, so
+    opening an Agent once left it running after the window closed. This is a
+    structural rule, not a fact about one module."""
+    def detached_run(node):
+        """A ``docker run -d`` argument list, built anywhere in this module.
+
+        Only detached containers can outlive the process that made them; a
+        ``--rm -i`` foreground container dies with its own command, and a list
+        that is only compared against or validated is not a start at all.
+        """
+        if not isinstance(node, ast.List):
+            return False
+        words = [item.value for item in node.elts
+                 if isinstance(item, ast.Constant) and isinstance(item.value, str)]
+        if len(words) < 3 or '-d' not in words:
+            return False
+        return words[:1] == ['run'] or words[:2] == ['docker', 'run']
+
+    offenders = []
+    for path in sorted(SRC.rglob('*.py')):
+        relative = path.relative_to(SRC)
+        if relative.parts[0] == 'tests':
+            continue
+        source = path.read_text(encoding='utf-8')
+        if not any(detached_run(node) for node in ast.walk(ast.parse(source))):
+            continue
+        if 'register_cleanup' not in source:
+            offenders.append(str(relative))
+    # integrations/searxng/runtime.py is the exception the rule allows: that
+    # instance is owned by DesktopServices.close(), which stops it directly.
+    offenders = [name for name in offenders if name != 'integrations/searxng/runtime.py']
+    assert offenders == [], \
+        '종료 정리를 등록하지 않고 컨테이너를 띄우는 모듈: ' + ', '.join(offenders)
+
+
+def test_the_owned_search_runtime_is_stopped_by_the_services_that_own_it(tmp_path):
+    from test_desktop_services import make
+    services, backend = make(tmp_path)
+    services.chat.start('warp')
+    assert services.close() is True
+    assert ('search_stop',) in backend.calls

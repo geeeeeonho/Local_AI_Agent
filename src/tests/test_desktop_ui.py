@@ -199,3 +199,20 @@ def test_a_failed_chat_start_leaves_the_reason_on_the_page(ui):
     assert '[3/5]' in shown or 'Setup' in shown, shown
     # The page must not keep claiming a start is in progress afterwards.
     assert w._chat_starting is False
+
+
+def test_closing_interrupts_an_agent_turn_instead_of_waiting_it_out(ui):
+    """A model turn can run for minutes, and shutdown queued behind it with no
+    way for the user to get the window to close."""
+    import threading
+    from test_desktop_session import binding
+    w,svc,backend=ui
+    b,state=binding()
+    interrupted=threading.Event()
+    b.coordinator.stop_service=lambda:interrupted.set() or 'cancelled'
+    backend.agent_open=lambda presenter,network,project,**kw:b
+    w.session_mode.set('direct');w.start_agent()
+    pump(w,lambda:svc.agent.opened)
+    w.request_close()
+    pump(w,interrupted.is_set)
+    assert interrupted.is_set()

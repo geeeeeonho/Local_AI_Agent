@@ -1,5 +1,5 @@
 """Strict network intent -> existing, fail-closed runtime preparation."""
-import inspect
+from core.calls import invoke
 from core.network.policy import NetworkMode
 from .ownership import RuntimeOwner
 
@@ -8,26 +8,6 @@ class NetworkManager:
     def __init__(self, backend, owner: RuntimeOwner, events):
         self.backend, self.owner, self.events = backend, owner, events
         self.mode = None
-
-    def _prepare_backend(self, mode, log, cancel):
-        """Pass the cancel check only to a backend that accepts one.
-
-        Starting Docker Desktop for WARP/Tor/Block can take a minute and a half.
-        Without this the window close the user already asked for had to wait it
-        out, and older backends would break on an unexpected argument.
-        """
-        prepare = self.backend.prepare_network
-        if cancel is None:
-            return prepare(mode, log)
-        try:
-            parameters = inspect.signature(prepare).parameters
-        except (TypeError, ValueError):
-            parameters = {}
-        accepts = 'cancel' in parameters or any(
-            value.kind is value.VAR_KEYWORD for value in parameters.values())
-        if accepts:
-            return prepare(mode, log, cancel=cancel)
-        return prepare(mode, log)
 
     def prepare(self, mode, cancel=None):
         selected = NetworkMode(mode)
@@ -38,7 +18,10 @@ class NetworkManager:
         log = lambda message: self.events.emit('runtime.progress',
                         {'service': 'network', 'message': str(message)})
         try:
-            if not self._prepare_backend(selected.value, log, cancel):
+            # Starting Docker Desktop for WARP/Tor/Block takes up to a minute
+            # and a half; a close the user already asked for must not wait it
+            # out. Backends without a cancel parameter simply do not get one.
+            if not invoke(self.backend.prepare_network, selected.value, log, cancel=cancel):
                 raise RuntimeError('Network preparation failed; no direct fallback is allowed.')
         except Exception:
             # A failed preparation is not an active session. Keeping the OS lock

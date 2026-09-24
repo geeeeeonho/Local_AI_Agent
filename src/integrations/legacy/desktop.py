@@ -12,37 +12,12 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from core.calls import invoke
 from core.network.policy import NetworkMode, NetworkPolicy
+from core.progress import LogAdapter
 from integrations.ollama.client import OllamaClient, is_cloud_tag
 from core.urls import local_url
 from core.agent import AgentBinding
-
-
-class _LogAdapter:
-    """progress 콜백 하나를 logger 프로토콜(info/ok/warn/error)로 감싼다."""
-
-    __slots__ = ('_log',)
-
-    def __init__(self, log):
-        self._log = log if callable(log) else (lambda message: None)
-
-    def _say(self, prefix, message):
-        try:
-            self._log(prefix + str(message))
-        except Exception:
-            pass
-
-    def info(self, message):
-        self._say('', message)
-
-    def ok(self, message):
-        self._say('', message)
-
-    def warn(self, message):
-        self._say('주의: ', message)
-
-    def error(self, message):
-        self._say('오류: ', message)
 
 
 class ManagedInference:
@@ -56,7 +31,7 @@ class ManagedInference:
         cls = self.load('launcher.services.ollama').OllamaService
         # 로거를 주지 않으면 최대 30초의 기동이 통째로 침묵한다. Chat 준비창이
         # [2/5] 에서 멈춘 것처럼 보이던 원인이다.
-        service = cls(self.env, logger=_LogAdapter(log) if log else None,
+        service = cls(self.env, logger=LogAdapter(log) if log else None,
                       model_dir=self.model_dir)
         if not service.ensure_running():
             detail = getattr(service, 'last_error', '') or 'Ollama ownership/store validation failed.'
@@ -134,7 +109,7 @@ class LegacyBackend:
         docker = self.load('launcher.services.docker').DockerService
         # 로거 없이 부르면 Docker Desktop 자동 시작이 최대 90초 동안 아무 말도
         # 하지 않고, 취소도 되지 않는다. 사용자가 보던 것은 멈춘 창뿐이었다.
-        if not docker.ensure_daemon(logger=_LogAdapter(log), timeout=90,
+        if not docker.ensure_daemon(logger=LogAdapter(log), timeout=90,
                                     cancel_check=cancel):
             return False
         if selected is NetworkMode.BLOCK:
@@ -144,10 +119,9 @@ class LegacyBackend:
             if not runtime.image_exists():
                 log('Network runtime image is missing. Use Setup / Repair.')
                 return False
-            if selected is NetworkMode.WARP:
-                ok = bool(runtime.start(env=self.env))
-            else:
-                ok = bool(runtime.start(env=self.env, log=log))
+            # Both runtimes take a progress callback now. WARP not taking one
+            # was why the default network mode prepared in total silence.
+            ok = bool(invoke(runtime.start, env=self.env, log=log, cancel_check=cancel))
         # Do not publish a mode that failed to prepare. AnythingLLM reads the
         # canonical mode later, so a failed WARP/Tor/Block attempt must not poison
         # the next retry.
@@ -180,7 +154,7 @@ class LegacyBackend:
         if docker.daemon_alive():
             return True
         log('Docker Desktop 준비 중...')
-        if not docker.ensure_daemon(logger=_LogAdapter(log), timeout=90, cancel_check=cancel):
+        if not docker.ensure_daemon(logger=LogAdapter(log), timeout=90, cancel_check=cancel):
             raise RuntimeError('Docker is unavailable. Start Docker Desktop or use Setup / Repair.')
         log('Docker Desktop 준비 완료')
         return True
@@ -271,7 +245,7 @@ class LegacyBackend:
         runtime = self.load('launcher.anythingllm_runtime')
         cfg = self.load('launcher.config')
         if not self.load('launcher.services.docker').DockerService.ensure_daemon(
-                logger=_LogAdapter(log), timeout=90, cancel_check=cancel):
+                logger=LogAdapter(log), timeout=90, cancel_check=cancel):
             raise RuntimeError('Docker is unavailable. Open Setup / Repair.')
         self._chat_before_id = None
         before = self._chat_id()
@@ -300,6 +274,15 @@ class LegacyBackend:
         return local_url(runtime.URL)
 
     def chat_stop(self):
+        # A container cannot outlive its daemon. If Docker Desktop was stopped
+        # or crashed while this window was open, asking it to identify our
+        # container raised out of close() and the window could never be closed
+        # again - for a container that had already died with the daemon.
+        if self._chat_probe_failed or self._chat_owned_id is not None:
+            if not self._daemon_alive():
+                self._chat_probe_failed = False
+                self._chat_owned_id = None
+                return True
         # Reused containers belong to their original owner. A container recreated
         # by start() has a new ID and must not escape this window's cleanup.
         if self._chat_probe_failed:
@@ -320,7 +303,12 @@ class LegacyBackend:
                 self._chat_owned_id = recovered
         if self._chat_owned_id is None:
             return True
-        current = self._chat_id()
+        try:
+            current = self._chat_id()
+        except Exception:
+            # Unverified is not stopped, but it is also not a reason to raise
+            # out of shutdown: report it and let the user retry.
+            return False
         if current is None:
             self._chat_owned_id = None
             return True
@@ -330,12 +318,22 @@ class LegacyBackend:
         # Use the immutable ID, not a name that an external process can replace.
         if not docker.stop_container(self._chat_owned_id, timeout=3):
             return False
-        if self._chat_id() is not None:
+        try:
+            if self._chat_id() is not None:
+                return False
+        except Exception:
             return False
         self._chat_owned_id = None
         return True
 
-    def agent_open(self, presenter, network, project):
+    def _daemon_alive(self):
+        """``False`` only when Docker provably is not there. Errors are unknown."""
+        try:
+            return bool(self.load('launcher.services.docker').DockerService.daemon_alive())
+        except Exception:
+            return True
+
+    def agent_open(self, presenter, network, project, cancel=None):
         old = self.load('launcher.actions.agent_chat')
         if not old._ensure_gui(presenter):
             return None
@@ -353,7 +351,8 @@ class LegacyBackend:
                             'Choose the same mode in the Agent wizard, or close active sessions first.')
             return None
         coordinator = self.load('launcher.agent.runtime_coordinator')
-        if not coordinator.prepare_runtime(self.env, presenter, mode, chosen_network):
+        if not invoke(coordinator.prepare_runtime, self.env, presenter, mode,
+                      chosen_network, cancel=cancel):
             return None
         cfg = self.load('launcher.config')
         tag = old._match_installed_model(str(model_selection.get('tag') or cfg.MODEL_TAG), presenter)
