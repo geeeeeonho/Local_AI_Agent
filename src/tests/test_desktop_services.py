@@ -82,6 +82,8 @@ def test_block_prepare_failure_prevents_chat_start(tmp_path):
     svc, backend = make(tmp_path); backend.ready = False
     with pytest.raises(RuntimeError): svc.chat.start('block')
     assert backend.calls == [('prepare', 'block')]
+    assert svc.network.mode is None
+    assert svc.owner.owned is False
     svc.close()
 
 
@@ -90,6 +92,36 @@ def test_chat_requires_installed_image_not_implicit_download(tmp_path):
     with pytest.raises(RuntimeError, match='Setup'):
         svc.chat.start('direct')
     assert not any(call[0] in ('chat', 'pull') for call in backend.calls)
+    svc.close()
+
+
+def test_chat_failure_before_container_releases_network_for_retry(tmp_path):
+    svc, backend = make(tmp_path); backend.images = False
+    with pytest.raises(RuntimeError):
+        svc.chat.start('direct')
+    assert svc.network.mode is None
+    assert svc.owner.owned is False
+    assert svc.chat.attempted is False
+    svc.close()
+
+
+def test_direct_chat_prepares_docker_before_image_inspection(tmp_path):
+    svc, backend = make(tmp_path)
+    seen = []
+    backend.chat_prepare = lambda log, cancel=None: seen.append('docker-ready') or True
+    original = backend.chat_image_exists
+    backend.chat_image_exists = lambda: seen.append('image-check') or original()
+    assert svc.chat.start('direct', search=False)
+    assert seen[:2] == ['docker-ready', 'image-check']
+    svc.close()
+
+
+def test_cancelled_agent_setup_releases_fresh_network_lease(tmp_path):
+    svc, backend = make(tmp_path)
+    backend.agent_open = lambda presenter, network, project: None
+    assert svc.agent.open(object(), 'direct') is None
+    assert svc.network.mode is None
+    assert svc.owner.owned is False
     svc.close()
 
 

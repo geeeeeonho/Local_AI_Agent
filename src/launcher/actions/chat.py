@@ -126,10 +126,29 @@ def run(env: Path, p: Presenter):
         # 하드코딩된 4096 이 늘 쓰였다.
         ctx = int(config.CHAT_CONTEXT_WINDOW)
 
+        # Legacy/TUI entrypoints must resolve against the same live Ollama
+        # inventory as the desktop Chat path. A static default that is not
+        # installed otherwise makes a healthy AnythingLLM connection fail.
+        from ..models import model_roles
+        from integrations.ollama.client import is_cloud_tag
+        model, note = model_roles.auto_match_installed(
+            getattr(config, "MODEL_TAG", ""), role_name="balanced"
+        )
+        if not model or is_cloud_tag(model):
+            installed = model_roles.installed_models() or set()
+            local = sorted(tag for tag in installed if not is_cloud_tag(tag))
+            model = local[0] if local else None
+            note = ("로컬 모델 자동 선택: " + model) if model else note
+        if not model:
+            p.error(note or "설치된 로컬 Ollama 모델이 없습니다.")
+            return
+        if note:
+            p.info(note)
+
         p.info("AnythingLLM 시작 중...")
         ok = runtime.start(
             log=p.progress_callback() if hasattr(p, "progress_callback") else p.info,
-            model_tag=getattr(config, "MODEL_TAG", ""),
+            model_tag=model,
             token_limit=ctx,
             cancel_check=p.is_cancelled if hasattr(p, "is_cancelled") else None,
         )
@@ -140,9 +159,11 @@ def run(env: Path, p: Presenter):
         p.ok("AnythingLLM 준비 완료: " + runtime.URL)
         p.info("처음 실행이면 브라우저에서 관리자 계정/워크스페이스를 생성하세요.")
         try:
-            webbrowser.open(runtime.URL)
-        except Exception:
-            pass
+            opened = webbrowser.open(runtime.URL)
+            if opened is False:
+                p.warn("브라우저 자동 열기에 실패했습니다. 직접 여세요: " + runtime.URL)
+        except Exception as exc:
+            p.warn("브라우저 자동 열기 실패: %s · 직접 여세요: %s" % (exc, runtime.URL))
         p.pause("브라우저를 닫아도 서비스는 이 메뉴가 열려 있는 동안 유지됩니다. 종료하려면 Enter")
     finally:
         if not keep:

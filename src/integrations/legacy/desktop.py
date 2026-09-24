@@ -97,21 +97,29 @@ class LegacyBackend:
     def prepare_network(self, mode, log):
         selected = NetworkMode(mode)
         policy = self.load('launcher.network_policy')
-        policy.set_mode(selected.value)
         if selected is NetworkMode.DIRECT:
+            policy.set_mode(selected.value)
             return True
         docker = self.load('launcher.services.docker').DockerService
         if not docker.ensure_daemon(timeout=90):
             return False
         if selected is NetworkMode.BLOCK:
-            return bool(policy.ensure_block_network(log=log))
-        runtime = self.load('launcher.' + selected.value + '_runtime')
-        if not runtime.image_exists():
-            log('Network runtime image is missing. Use Setup / Repair.')
-            return False
-        if selected is NetworkMode.WARP:
-            return bool(runtime.start(env=self.env))
-        return bool(runtime.start(env=self.env, log=log))
+            ok = bool(policy.ensure_block_network(log=log))
+        else:
+            runtime = self.load('launcher.' + selected.value + '_runtime')
+            if not runtime.image_exists():
+                log('Network runtime image is missing. Use Setup / Repair.')
+                return False
+            if selected is NetworkMode.WARP:
+                ok = bool(runtime.start(env=self.env))
+            else:
+                ok = bool(runtime.start(env=self.env, log=log))
+        # Do not publish a mode that failed to prepare. AnythingLLM reads the
+        # canonical mode later, so a failed WARP/Tor/Block attempt must not poison
+        # the next retry.
+        if ok:
+            policy.set_mode(selected.value)
+        return ok
 
     def search_start(self, mode, log):
         if NetworkMode(mode) is NetworkMode.BLOCK:
@@ -131,6 +139,17 @@ class LegacyBackend:
 
     def search_stop(self):
         return self._search_runtime is None or self._search_runtime.stop()
+
+    def chat_prepare(self, log, cancel=None):
+        """Ensure Docker is actually usable before treating image state as fact."""
+        docker = self.load('launcher.services.docker').DockerService
+        if docker.daemon_alive():
+            return True
+        log('Docker Desktop 준비 중...')
+        if not docker.ensure_daemon(timeout=90, cancel_check=cancel):
+            raise RuntimeError('Docker is unavailable. Start Docker Desktop or use Setup / Repair.')
+        log('Docker Desktop 준비 완료')
+        return True
 
     def chat_image_exists(self):
         return bool(self.load('launcher.anythingllm_runtime').image_exists())

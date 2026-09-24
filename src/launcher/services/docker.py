@@ -50,6 +50,11 @@ class DockerService:
         options.setdefault("timeout", timeout)
         options.setdefault("capture_output", capture_output)
         options.setdefault("text", text)
+        if options.get("text"):
+            # Docker emits UTF-8 even on Windows; relying on cp949 can turn an
+            # otherwise successful connectivity command into UnicodeDecodeError.
+            options.setdefault("encoding", "utf-8")
+            options.setdefault("errors", "replace")
         options.setdefault("check", check)
         try:
             return subprocess.run(command, **options)

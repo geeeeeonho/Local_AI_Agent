@@ -109,7 +109,10 @@ def _emit(log, msg, kind="INFO"):
 
 
 def _run(args, timeout=60):
-    kw = {"capture_output": True, "text": True, "timeout": timeout}
+    kw = {
+        "capture_output": True, "text": True, "encoding": "utf-8",
+        "errors": "replace", "timeout": timeout,
+    }
     if _NOWIN:
         kw["creationflags"] = _NOWIN
     try:
@@ -433,7 +436,7 @@ def pull(log=None, cancel_check=None):
     if log is None and cancel_check is None:
         return _run(args, timeout=PULL_TIMEOUT).returncode == 0
     kw = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT,
-          "text": True, "bufsize": 1}
+          "text": True, "encoding": "utf-8", "errors": "replace", "bufsize": 1}
     if _NOWIN:
         kw["creationflags"] = _NOWIN
     try:
@@ -478,6 +481,15 @@ def exists():
     return _run(["docker", "inspect", CONTAINER], timeout=20).returncode == 0
 
 
+def container_image():
+    """Configured image name for the reserved Chat container, or None."""
+    r = _run(["docker", "inspect", "-f", "{{.Config.Image}}", CONTAINER], timeout=20)
+    if r.returncode != 0:
+        return None
+    value = (r.stdout or "").strip()
+    return value or None
+
+
 def _network_policy():
     try:
         from . import network_policy
@@ -510,8 +522,12 @@ def ensure_network(mode=None):
 
 
 def _remove_stale():
-    if exists() and not is_running():
-        _run(["docker", "rm", "-f", CONTAINER], timeout=40)
+    if not exists() or is_running():
+        return True
+    if container_image() != IMAGE:
+        return False
+    removed = _run(["docker", "rm", "-f", CONTAINER], timeout=40)
+    return removed.returncode == 0 and not exists()
 
 
 def net_mode_label(mode=None):
@@ -688,7 +704,7 @@ def config_signature(mode=None):
     )
     parts = [
         IMAGE, str(HOST_PORT), str(CONTAINER_PORT),
-        STORAGE_MOUNT, SERVER_ENV_MOUNT, network_for_mode(m),
+        _vol(storage_dir()), STORAGE_MOUNT, SERVER_ENV_MOUNT, network_for_mode(m),
         ",".join(CAP_ADD),
         "|".join("%s=%s" % (k, px[k]) for k in sorted(px)),
         chromium_args(m),
@@ -875,6 +891,11 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
     ))
 
     if is_running():
+        image = container_image()
+        if image != IMAGE:
+            _say("컨테이너 이름 충돌: %s 는 LocalAI Chat 이미지가 아닙니다 (%s)."
+                 % (CONTAINER, image or "확인 불가"), "FAIL")
+            return False
         _prev = running_netmode()
         _prevsig = running_cfgsig()
         _sig = config_signature(_mode)
@@ -887,20 +908,30 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
             _reason = "설정이 바뀜 (%s -> %s)" % (_prevsig, _sig)
         if _reason:
             _say("컨테이너를 다시 만듭니다 — " + _reason)
-            stop()
+            if not stop():
+                _say("기존 AnythingLLM 컨테이너를 안전하게 교체할 수 없습니다.", "FAIL")
+                return False
         else:
             _say("AnythingLLM 이 이미 실행 중입니다 (설정 동일 %s)." % _sig)
-            if not wait_ready(cancel_check=cancel_check, log=log):
+            ready = wait_ready(cancel_check=cancel_check, log=log)
+            connected, detail = (False, "UI readiness failed")
+            if ready:
+                connected, detail = probe_ollama_connection(model)
+                _say(("Ollama 연결 검증 완료: " if connected else "Ollama 연결 검증 실패: ") + detail,
+                     "OK" if connected else "FAIL")
+                if connected:
+                    return True
+            _say("기존 AnythingLLM 연결이 정상화되지 않아 컨테이너를 한 번 재생성합니다.", "WARN")
+            if not stop():
+                _say("기존 AnythingLLM 컨테이너를 정리하지 못했습니다.", "FAIL")
                 return False
-            connected, detail = probe_ollama_connection(model)
-            _say(("Ollama 연결 검증 완료: " if connected else "Ollama 연결 검증 실패: ") + detail,
-                 "OK" if connected else "FAIL")
-            return connected
 
     if not ensure_network(_mode):
         _say("Docker 네트워크를 준비할 수 없어 AnythingLLM 시작을 중단합니다.", "FAIL")
         return False
-    _remove_stale()
+    if not _remove_stale():
+        _say("중지된 컨테이너 이름 충돌 또는 정리 실패: " + CONTAINER, "FAIL")
+        return False
     _say("설정 파일 준비: %s" % env_file())
 
     cmd = build_run_cmd(memory=memory, cpus=cpus)
@@ -932,11 +963,16 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
 def stop(remove=True, grace=None):
     if not exists():
         return True
+    if container_image() != IMAGE:
+        return False
     g = STOP_GRACE if grace is None else int(grace)
-    _run(["docker", "stop", "-t", str(g), CONTAINER], timeout=g + 30)
+    stopped = _run(["docker", "stop", "-t", str(g), CONTAINER], timeout=g + 30)
+    if stopped.returncode != 0 and is_running():
+        return False
     if remove:
-        _run(["docker", "rm", "-f", CONTAINER], timeout=40)
-    return True
+        removed = _run(["docker", "rm", "-f", CONTAINER], timeout=40)
+        return removed.returncode == 0 and not exists()
+    return not is_running()
 
 
 def logs(tail=80):
@@ -970,7 +1006,7 @@ __all__ = [
     "storage_dir", "env_file", "ensure_env_file", "reseed_env",
     "configured_model", "sync_managed_llm_env", "probe_ollama_connection", "is_ready",
     "searxng_url_for_container", "image_exists", "pull",
-    "is_running", "exists", "ensure_network", "network_for_mode", "build_run_cmd",
+    "is_running", "exists", "container_image", "ensure_network", "network_for_mode", "build_run_cmd",
     "wait_ready", "start", "stop", "logs", "describe",
     "register_exit_cleanup", "resolve_memory", "resolve_cpus",
     "net_mode", "net_mode_label", "proxy_env_for_container", "no_proxy_hosts",

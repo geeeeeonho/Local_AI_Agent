@@ -15,6 +15,8 @@ class ChatService:
         log = lambda message: self.events.emit(
             'runtime.progress', {'service': 'chat', 'message': str(message)}
         )
+        network_was_prepared = self.network.mode is not None
+        search_was_attempted = self.search.attempted
         try:
             log('[1/5] Network preparation: ' + str(mode))
             selected = self.network.prepare(mode)
@@ -24,10 +26,13 @@ class ChatService:
             self.inference.ensure_ready()
             log('[2/5] Ollama ready')
 
-            log('[3/5] AnythingLLM image check')
+            log('[3/5] Docker / AnythingLLM image check')
+            prepare = getattr(self.backend, 'chat_prepare', None)
+            if callable(prepare):
+                prepare(log, cancel)
             if not self.backend.chat_image_exists():
                 raise RuntimeError('AnythingLLM is not installed. Run RUN.bat --install or Setup / Repair.')
-            log('[3/5] AnythingLLM image ready')
+            log('[3/5] Docker ready / AnythingLLM image ready')
 
             if cancel is not None and cancel():
                 raise RuntimeError('Chat startup cancelled.')
@@ -57,6 +62,28 @@ class ChatService:
             })
             return self.url
         except Exception as exc:
+            # If this attempt was the only owner of the runtime, clean up enough
+            # state to make the next click a genuinely fresh retry. Never tear
+            # down a network that was already serving another active session.
+            if not network_was_prepared:
+                cleanup_ok = True
+                if self.attempted:
+                    try:
+                        cleanup_ok = bool(self.backend.chat_stop())
+                    except Exception:
+                        cleanup_ok = False
+                    if cleanup_ok:
+                        self.started = False
+                        self.attempted = False
+                        self.url = None
+                        self.model = ''
+                if cleanup_ok and not search_was_attempted and self.search.attempted:
+                    try:
+                        cleanup_ok = bool(self.search.stop())
+                    except Exception:
+                        cleanup_ok = False
+                if cleanup_ok:
+                    self.network.reset()
             log('Chat preparation failed: ' + str(exc))
             raise
 

@@ -80,6 +80,36 @@ def test_foreign_container_is_not_removed(tmp_path):
     assert not any(c[0] in ('rm','stop','run') for c in d.calls)
 
 
+def test_running_but_unready_search_container_is_recreated(tmp_path):
+    r,d,_=runtime(tmp_path)
+    assert r.start('direct','')
+    run_cmd = next(c for c in d.calls if c[0] == 'run')
+    label = run_cmd[run_cmd.index('--label') + 1]
+    fingerprint = label.split('=', 1)[1]
+
+    original = d.run
+    d.calls.clear()
+    def existing(args, **kwargs):
+        d.calls.append(args)
+        if args[0] == 'inspect':
+            return NS(returncode=0, stdout='search-image|%s|true' % fingerprint)
+        if args[0] == 'rm':
+            d.active=False
+            return NS(returncode=0, stdout='')
+        if args[0] == 'run':
+            d.active=True
+            return NS(returncode=0, stdout='id')
+        return original(args, **kwargs)
+
+    d.run = existing
+    answers = iter([False, True])
+    r.ready = lambda: next(answers)
+
+    assert r.start('direct','') is True
+    assert any(c[0] == 'rm' for c in d.calls)
+    assert any(c[0] == 'run' for c in d.calls)
+
+
 def test_search_failure_after_run_is_still_owned_for_cleanup(tmp_path):
     r,d,_=runtime(tmp_path);r.ready=lambda:False
     assert not r.start('direct','')

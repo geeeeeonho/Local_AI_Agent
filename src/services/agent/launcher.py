@@ -16,14 +16,20 @@ class AgentLauncher:
             raise RuntimeError('An Agent view is already active. Close it before opening a new one.')
         if cancel is not None and cancel():
             return None
+        network_was_prepared = self.network.mode is not None
         selected = self.network.prepare(mode)
         binding = self.backend.agent_open(presenter, selected.value, project)
         if binding is None or (cancel is not None and cancel()):
+            if not network_was_prepared:
+                self.network.reset()
             return None
         self.session = AgentSession(binding, self.events)
         if not self.session.start():
-            if self.session.close():
+            closed = self.session.close()
+            if closed:
                 self.session = None
+                if not network_was_prepared:
+                    self.network.reset()
             raise RuntimeError('Interpreter startup failed. Check Setup / Repair.')
         self.events.emit('agent.started', {'mode': selected.value, 'session': self.session.id})
         return self.session

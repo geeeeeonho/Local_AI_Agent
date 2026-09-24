@@ -34,6 +34,41 @@ def test_managed_chat_env_updates_model_without_erasing_user_settings(monkeypatc
     assert before != after
 
 
+def test_config_signature_changes_with_host_storage_path(monkeypatch, tmp_path):
+    from launcher import anythingllm_runtime as runtime
+
+    first = tmp_path / "one"
+    second = tmp_path / "two"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.setattr(runtime, "_env_values", lambda: {})
+    monkeypatch.setattr(runtime, "proxy_env_for_container", lambda mode=None: {})
+    monkeypatch.setattr(runtime, "chromium_args", lambda mode=None: "")
+    monkeypatch.setattr(runtime, "node_options", lambda mode=None: "")
+
+    monkeypatch.setattr(runtime, "storage_dir", lambda: first)
+    one = runtime.config_signature("direct")
+    monkeypatch.setattr(runtime, "storage_dir", lambda: second)
+    two = runtime.config_signature("direct")
+
+    assert one != two
+
+
+def test_stop_refuses_foreign_container_name_collision(monkeypatch):
+    from launcher import anythingllm_runtime as runtime
+
+    monkeypatch.setattr(runtime, "exists", lambda: True)
+    monkeypatch.setattr(runtime, "container_image", lambda: "someone/else:latest")
+    monkeypatch.setattr(
+        runtime,
+        "_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("foreign container must not be stopped")
+        ),
+    )
+    assert runtime.stop() is False
+
+
 def test_container_ollama_probe_targets_host_gateway_and_selected_model(monkeypatch):
     from launcher import anythingllm_runtime as runtime
 
