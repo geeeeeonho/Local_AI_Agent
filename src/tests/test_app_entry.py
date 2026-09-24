@@ -19,10 +19,6 @@ def test_the_default_app_is_the_one_the_module_was_started_as():
 
 SETUP_FLAGS = ['--install', '--manage', '--skip-model',
                '--skip-sandbox', '--skip-build', '--skip-search']
-INSTALLER_FLAGS = ['--install', '--skip-model', '--skip-sandbox',
-                   '--skip-build', '--skip-search']
-
-
 @pytest.mark.parametrize('flag', SETUP_FLAGS)
 @pytest.mark.parametrize('app', ['studio', 'chat', 'interpreter'])
 def test_setup_flags_are_rejected_against_an_explicit_other_app(app, flag):
