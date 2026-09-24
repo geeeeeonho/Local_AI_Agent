@@ -225,11 +225,12 @@ def test_install_manifest_identifies_product_and_external_model_storage(tmp_path
         paths,
         project_root=project_root,
         status="installed",
-        components=["ollama", "open_webui", "open_interpreter"],
+        components=["ollama", "anythingllm", "open_interpreter"],
     )
 
     data = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest == env / "LOCAL_AI_AGENT_INSTALL.json"
+    assert data["schema_version"] == 2
     assert data["product"] == "Local AI Agent"
     assert data["repository"] == "geeeeeonho/Local_AI_Agent"
     assert data["status"] == "installed"
@@ -238,7 +239,9 @@ def test_install_manifest_identifies_product_and_external_model_storage(tmp_path
     assert data["model_storage_access"] == (
         "builtin-users-read-execute-requested; existing-acl-preserved"
     )
-    assert data["components"] == ["ollama", "open_webui", "open_interpreter"]
+    assert data["components"] == ["ollama", "anythingllm", "open_interpreter"]
+    assert data["failed_components"] == []
+    assert data["skipped_components"] == []
 
 
 # ── moving the old forced store into Ollama's ────────────────────────────

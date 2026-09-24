@@ -7,9 +7,11 @@
     installer.i18n       — 다국어 메시지 (ko/en)
     installer.lang_setup — 언어 초기화
     installer.resources  — 시스템 사양 감지 + 안전 프로필
-    installer.ollama     — 포터블 Ollama 설치 + serve
-    installer.model      — 역할별 모델 다운로드 (model_roles 기반, 멱등)
-    installer.python_tools — AnythingLLM 이미지 + Open Interpreter 런타임
-    installer.sandbox    — Docker 에이전트 이미지 빌드 (멱등)
-    installer.searxng    — SearXNG 설정 + 이미지 (멱등)
+    installer.steps.ollama — 기존/공식 Ollama 우선 + 포터블 폴백 + serve
+    installer.steps.model — 역할별 모델 다운로드 (model_catalog 기반, 멱등)
+    installer.steps.python_tools — AnythingLLM 이미지 + Open Interpreter 런타임
+    installer.steps.sandbox — Docker 에이전트 이미지 빌드 (멱등)
+    installer.steps.searxng — SearXNG 설정 + 이미지 (멱등)
+    installer.steps.tor     — 선택형 Tor 네트워크 이미지 준비
+    installer.steps.warp    — 기본 WARP 이미지 + HTTP 브리지 선행조건 확인
 """

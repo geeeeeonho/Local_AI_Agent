@@ -9,21 +9,20 @@ The project root exposes one launcher:
 - `RUN.bat --app interpreter`: LocalAI Interpreter.
 - `RUN.bat --app setup`: LocalAI Setup.
 - `RUN.bat --install`: explicit installer flow.
-- `RUN.bat --manage`: retained maintenance interface.
+- `RUN.bat --manage`: current LocalAI Setup management app (same management UI as `--app setup`).
 - `RUN.bat --tui`: retained legacy terminal launcher.
 
 With `PYTHONPATH=src`, the equivalent modules are `apps.studio`, `apps.chat`,
 `apps.interpreter` and `apps.setup`. They use one parser, shared views and one
 service composition. `--help` does not load a runtime. Python 3.11+ with Tk is
 required for the desktop. The current copy contains both Korean and English
-labels; `--lang` initializes the retained installer/runtime language preference,
+labels; `--lang` initializes the shared installer/runtime language preference,
 not a complete translation of the new shell.
 
 The existing `--skip-model`, `--skip-sandbox`, `--skip-build`, and
-`--skip-search` flags also select Setup when passed through `RUN.bat`. Naming a
+`--skip-search` flags select the explicit install/repair flow when passed through `RUN.bat`. Naming a
 different application alongside installation flags (`--app chat --install`) is
-still rejected rather than guessed. The Python application modules remain
-compatibility entrypoints, not copies of a new backend. Launching Studio on an
+still rejected rather than guessed. The Python application modules are direct entrypoints into the same shared application composition. Launching Studio on an
 uninstalled PC opens the shell and Setup guidance, rather than silently
 downloading programs.
 

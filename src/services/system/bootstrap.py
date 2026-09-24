@@ -1,4 +1,4 @@
-"""Compatibility entrypoints and initialization outside the application layer."""
+"""Shared module entrypoints and process initialization outside the app layer."""
 from pathlib import Path
 import runpy
 import sys
@@ -10,7 +10,7 @@ def initialize_language(project_root, language=None):
 
 
 def install_exit_hooks(project_root):
-    """Install the process-wide shutdown hooks the legacy runtimes rely on.
+    """Install the process-wide shutdown hooks used by retained runtimes.
 
     WARP, Tor and the sandbox register their container teardown through
     ``lifelog.register_cleanup``. Those callbacks are only ever run by the
@@ -43,9 +43,9 @@ def run_exit_cleanups():
     return True
 
 
-def legacy_entry(module, arguments):
+def run_module_entry(module, arguments):
     if module not in ('launcher', 'installer'):
-        raise ValueError('unsupported legacy entrypoint')
+        raise ValueError('unsupported module entrypoint')
     from project_paths import USER_DATA_DIR
     from services.network.ownership import RuntimeOwner
     owner = RuntimeOwner(USER_DATA_DIR / 'cache' / 'desktop-runtime.lock')
@@ -60,7 +60,7 @@ def legacy_entry(module, arguments):
         return 0
     finally:
         try:
-            # Legacy cleanup must finish before another app may change the network.
+            # Module cleanup must finish before another app may change the network.
             lifelog = sys.modules.get('launcher.core.lifelog')
             if module == 'launcher' and lifelog is not None:
                 lifelog.shutdown_then_exit()

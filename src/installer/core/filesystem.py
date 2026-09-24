@@ -244,6 +244,8 @@ def write_install_manifest(
     project_root: Path,
     status: str,
     components: Iterable[str] = (),
+    failed_components: Iterable[str] = (),
+    skipped_components: Iterable[str] = (),
 ) -> Path:
     """설치 루트에 사람이 읽을 수 있는 설치 식별 JSON을 기록한다."""
     manifest = paths["env"] / INSTALL_MANIFEST
@@ -258,6 +260,7 @@ def write_install_manifest(
             pass
 
     data = {
+        "schema_version": 2,
         "product": "Local AI Agent",
         "repository": "geeeeeonho/Local_AI_Agent",
         "managed_environment": True,
@@ -269,6 +272,8 @@ def write_install_manifest(
             "builtin-users-read-execute-requested; existing-acl-preserved"
         ),
         "components": list(components),
+        "failed_components": list(failed_components),
+        "skipped_components": list(skipped_components),
         "installed_at": installed_at,
         "updated_at": now,
         "note": "This directory is managed by Local AI Agent RUN.bat --install.",

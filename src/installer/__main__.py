@@ -1,46 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""설치/관리 통합 진입점 — `RUN.bat --install` 또는 `python -m installer` 로 실행."""
+"""설치/복구 전용 진입점 — `RUN.bat --install` 또는 `python -m installer`."""
 from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
-
-from project_paths import ENV_DIR, LEGACY_FORCED_MODEL_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
+from project_paths import ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
 from installer.steps import model
 from installer.steps import python_tools
 from installer.steps import sandbox
 from installer.steps import searxng
+from installer.steps import tor
+from installer.steps import warp
 from installer.i18n import t
 
 HERE = PROJECT_ROOT
 ENV = ENV_DIR
 
 
-def _parse_args():
-    p = argparse.ArgumentParser(description="LLM Integrated Environment Setup (Windows)")
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--install", action="store_true",
-                      help="설치/재설치 흐름을 강제로 실행")
-    mode.add_argument("--manage", action="store_true",
-                      help="설치된 환경 관리 화면을 강제로 실행")
+def _parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Local AI Agent install / repair (Windows)")
+    p.add_argument("--install", action="store_true",
+                   help="설치/복구 실행 (생략해도 동일)")
     p.add_argument("--skip-model",   action="store_true")
     p.add_argument("--skip-sandbox", action="store_true")
     p.add_argument("--skip-build",   action="store_true")
     p.add_argument("--skip-search",  action="store_true")
     p.add_argument("--lang",         default=None,
                    help="ko or en (default: ask user / use saved)")
-    return p.parse_args()
-
-
-def _dir_has_entries(path: Path) -> bool:
-    try:
-        return path.is_dir() and any(path.iterdir())
-    except OSError:
-        return False
+    return p.parse_args(argv)
 
 
 # ── 디스크 예산 ────────────────────────────────────────────────────
@@ -49,12 +39,7 @@ _FALLBACK_FLOOR_GB = 20  # 카탈로그를 못 읽을 때의 보수적 하한
 
 
 def _model_disk_budget(skip_model: bool):
-    """(하드 최소 GB, 이 PC 의 권장 세트까지 담는 데 필요한 GB).
-
-    하드 최소는 '최저사양 세트' 기준이다. 그보다 적으면 어떤 조합으로도 설치가
-    끝나지 않으므로 중단한다. 권장 세트가 더 크면 중단 대신 경고만 하고,
-    사용자가 모델 선택 창에서 빼도록 둔다.
-    """
+    """(하드 최소 GB, 이 PC 의 권장 세트까지 담는 데 필요한 GB)."""
     if skip_model:
         return int(_RUNTIME_GB), 0.0
     try:
@@ -82,45 +67,8 @@ def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
         utils.warn(
             "권장 모델 세트는 약 %.0fGB 인데 %s 의 여유는 %.0fGB 입니다. "
             "모델 선택 창에서 일부를 빼거나, 다 받은 뒤 [모델 관리]에서 정리하세요."
-            % (plan_gb, target, free))
-
-
-def _needs_model_storage_migration() -> bool:
-    """기존/중단된 모델 저장소가 공용 경로로 수렴해야 하는지 확인."""
-    shared = Path(MODEL_STORAGE_DIR)
-    staging = shared.with_name(shared.name + ".migrating")
-    legacy = [Path(LEGACY_FORCED_MODEL_DIR), ENV / "llm_models"]
-
-    if _dir_has_entries(shared):
-        return False
-    return staging.exists() or any(
-        source != shared and _dir_has_entries(source) for source in legacy
-    )
-
-
-def _should_manage(args) -> bool:
-    """기본(auto) 모드에서 관리 화면으로 갈지 결정한다."""
-    if args.manage:
-        return True
-    if args.install:
-        return False
-    install_flags = (
-        args.skip_model,
-        args.skip_sandbox,
-        args.skip_build,
-        args.skip_search,
-    )
-    if any(install_flags):
-        return False
-    if ENV.exists() and _needs_model_storage_migration():
-        return False
-    return ENV.exists()
-
-
-def _run_manage(args) -> int:
-    lang_setup.initialize_language(HERE, override=args.lang)
-    from installer import manage_gui
-    return int(manage_gui.main([]) or 0)
+            % (plan_gb, target, free)
+        )
 
 
 def _run_install(args) -> int:
@@ -158,6 +106,8 @@ def _run_install(args) -> int:
 
     paths = utils.create_environment(ENV)
     components = []
+    failed_components = []
+    skipped_components = []
     utils.write_install_manifest(paths, HERE, "installing", components)
 
     ollama.install(paths)
@@ -165,19 +115,30 @@ def _run_install(args) -> int:
     components.append("ollama")
 
     if not args.skip_model:
-        model.download(paths)
-        components.append("models")
+        prepared_models = model.download(paths)
+        if prepared_models is None:
+            failed_components.append("models")
+            utils.warn("로컬 모델 준비가 완료되지 않았습니다. Setup의 모델 화면에서 다시 적용할 수 있습니다.")
+        elif prepared_models:
+            components.append("models")
+        else:
+            # The user explicitly chose no models/cancelled the selection.
+            # That is not an installation failure.
+            skipped_components.append("models")
     else:
+        skipped_components.append("models")
         utils.warn("Model download skipped (--skip-model)")
 
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")
     else:
+        failed_components.append("anythingllm")
         utils.warn("AnythingLLM 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
     if python_tools.install_open_interpreter(paths, profile):
         components.append("open_interpreter")
     else:
+        failed_components.append("open_interpreter")
         utils.warn("Open Interpreter 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
     if not args.skip_sandbox:
@@ -185,22 +146,68 @@ def _run_install(args) -> int:
             sandbox.install(paths, profile=profile, build_image=not args.skip_build)
             components.append("sandbox")
         except sandbox.DockerNotAvailable as e:
+            skipped_components.append("sandbox")
             utils.warn(t("install.sandbox_skip", reason=str(e)))
             utils.warn(t("install.sandbox_skip_later"))
     else:
+        skipped_components.append("sandbox")
         utils.warn(t("install.sandbox_skip", reason="--skip-sandbox"))
 
     if not args.skip_search:
         try:
             sandbox._check_docker()
-            searxng.install(paths)
-            components.append("searxng")
+            if searxng.install(paths):
+                components.append("searxng")
+            else:
+                failed_components.append("searxng")
+                utils.warn("SearXNG 이미지를 준비하지 못했습니다. RUN.bat --install 로 다시 시도할 수 있습니다.")
         except sandbox.DockerNotAvailable as e:
+            skipped_components.append("searxng")
             utils.warn(t("install.searxng_skip", reason=str(e)))
     else:
+        skipped_components.append("searxng")
         utils.warn(t("install.searxng_skip_optional"))
 
-    utils.write_install_manifest(paths, HERE, "installed", components)
+    # Tor is optional but user-selectable. Prepare it explicitly rather than
+    # hiding its pull inside the SearXNG installer.
+    try:
+        if tor.install(paths):
+            components.append("tor")
+        elif not args.skip_search:
+            # SearXNG settings route all outbound search through llm_tor:9050,
+            # so Tor is required when search was requested.
+            failed_components.append("tor")
+            utils.warn("Tor 이미지를 준비하지 못해 SearXNG 검색 경로가 완전하지 않습니다.")
+        else:
+            skipped_components.append("tor")
+            utils.warn("Tor 이미지는 준비되지 않았습니다. 다른 네트워크 모드는 계속 사용할 수 있습니다.")
+    except Exception as exc:
+        target = failed_components if not args.skip_search else skipped_components
+        target.append("tor")
+        utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
+
+    # WARP is the default network mode and its HTTP bridge reuses either the
+    # sandbox image or the SearXNG image. Run this after both image-producing
+    # steps so 'warp' means the complete path can actually start.
+    try:
+        if warp.install(paths):
+            components.append("warp")
+        else:
+            failed_components.append("warp")
+            utils.warn("기본 WARP 네트워크 경로를 준비하지 못했습니다. Direct/Block은 사용할 수 있지만 WARP는 복구가 필요합니다.")
+    except Exception as exc:
+        failed_components.append("warp")
+        utils.warn("WARP 설치 중 오류: " + repr(exc))
+
+    status = "partial" if failed_components else "installed"
+    utils.write_install_manifest(
+        paths, HERE, status, components,
+        failed_components=failed_components,
+        skipped_components=skipped_components,
+    )
+    if failed_components:
+        utils.warn("일부 필수 구성요소가 준비되지 않았습니다: " + ", ".join(failed_components))
+        utils.warn("RUN.bat --manage 에서 상태를 확인하거나 RUN.bat --install 로 복구하세요.")
     utils.finalize_summary(paths, HERE)
 
     try:
@@ -210,11 +217,10 @@ def _run_install(args) -> int:
     return 0
 
 
-def main() -> int:
-    args = _parse_args()
-    if _should_manage(args):
-        return _run_manage(args)
-    return _run_install(args)
+def main(argv=None) -> int:
+    # Management belongs to the shared Setup desktop app. This module has one
+    # responsibility: install or repair the managed environment.
+    return _run_install(_parse_args(argv))
 
 
 if __name__ == "__main__":

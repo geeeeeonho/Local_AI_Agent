@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""model_select_gui — 모델 관리 통합 창 (설치 + 삭제, 독립 Tkinter, stdlib).
+"""model_select_gui — 설치 시 모델 선택 창 (설치 + 삭제, Tkinter, stdlib).
 
-MODEL_MANAGE_GUI_v2.
 체크 = "있어야 함":
   - 미설치 + 체크   → 설치(pull)
   - 설치됨 + 체크   → 유지
   - 설치됨 + 체크해제 → 삭제(rm, 확인 후)
   - 미설치 + 체크해제 → 무시
 
-installer.model.download() 와 MANAGE(installer.manage) 가 함께 호출.
+installer.steps.model.download() 의 설치 단계에서 호출.
 반환:
   set[str] : "있어야 할" 최종 태그 집합 (호출부가 installed 와 비교해 install/delete 계산)
   None     : 취소

@@ -66,7 +66,7 @@ def _download_flow(env, p) -> None:
     cat = _catalog()
     svc = OllamaService(env, logger=p)
     if not svc.is_installed():
-        p.error("Ollama 가 설치되어 있지 않습니다. 먼저 INSTALL 을 실행하세요.")
+        p.error("Ollama 가 설치되어 있지 않습니다. RUN.bat --install 을 실행하세요.")
         p.pause()
         return
     if not svc.ensure_running():

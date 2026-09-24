@@ -6,22 +6,13 @@ import pytest
 
 ROOT=Path(__file__).resolve().parents[2]
 
-def test_run_and_setup_forward_to_one_application_parser():
+def test_run_is_the_only_batch_entrypoint_and_uses_the_shared_parser():
     run=(ROOT/'RUN.bat').read_text()
-    setup=(ROOT/'SETUP.bat').read_text()
+    assert sorted(path.name for path in ROOT.glob('*.bat')) == ['RUN.bat']
     assert '-m apps.studio %*' in run
-    assert '-m apps.setup %*' in setup
     assert '-m launcher %*' not in run
-    assert '-m installer %*' not in setup
-    for flag in ('--tui','--install','--manage','--skip-','--help'):
-        assert flag in run
-
-
-def test_every_standalone_batch_file_opens_its_own_application():
-    for name, app in (('STUDIO.bat','studio'),('CHAT.bat','chat'),('INTERPRETER.bat','interpreter')):
-        text=(ROOT/name).read_text()
-        assert 'RUN.bat" --app '+app in text, name
-        assert 'exit /b %errorlevel%' in text, name   # 실패를 삼키지 않는다
+    assert '-m installer %*' not in run
+    assert 'llm_environment\\venv\\Scripts' not in run
 
 
 def test_readme_names_every_entrypoint_a_user_can_double_click():
@@ -58,7 +49,7 @@ def test_default_inference_does_not_activate_official_migration(monkeypatch,tmp_
     assert got==[(tmp_path/'env',tmp_path/'models')]
 
 
-def test_legacy_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
+def test_module_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
     from services.system import bootstrap
     from services.network.ownership import RuntimeOwner
     import project_paths
@@ -70,18 +61,18 @@ def test_legacy_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
         observed.append('locked')
     monkeypatch.setattr(bootstrap.runpy,'run_module',check_locked)
     monkeypatch.setitem(sys.modules,'launcher.core.lifelog',NS(shutdown_then_exit=check_locked))
-    assert bootstrap.legacy_entry('launcher',['--tui'])==0
+    assert bootstrap.run_module_entry('launcher',['--tui'])==0
     assert observed==['locked','locked']
     competing.acquire();competing.release()
 
 
-def test_legacy_entry_restores_argv_on_exception(monkeypatch,tmp_path):
+def test_module_entry_restores_argv_on_exception(monkeypatch,tmp_path):
     from services.system import bootstrap
     import project_paths
     monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
     original=sys.argv
     monkeypatch.setattr(bootstrap.runpy,'run_module',lambda *a,**k:(_ for _ in ()).throw(ValueError('bad')))
-    with pytest.raises(ValueError):bootstrap.legacy_entry('installer',[])
+    with pytest.raises(ValueError):bootstrap.run_module_entry('installer',[])
     assert sys.argv is original
 
 
@@ -142,9 +133,9 @@ def parse(app, argv):
     return parse_args(app, argv)
 
 
-def test_installation_flags_select_setup_from_any_launcher():
-    # RUN.bat detects these flags and routes them to a console. Rejecting them
-    # there left the launcher advertising a command the application refused.
+def test_setup_flags_select_setup_from_any_launcher():
+    # The shared parser owns routing. Install/skip flags use the installer,
+    # while --manage opens the current Setup desktop app.
     for argv in (['--install'], ['--manage'], ['--skip-model'], ['--skip-search']):
         assert parse('studio', argv).app == 'setup', argv
     assert parse('studio', ['--install']).install
@@ -158,7 +149,9 @@ def test_naming_a_different_application_with_installation_flags_is_refused():
             parse('studio', ['--app', app, '--install'])
 
 
-def test_run_bat_console_path_covers_every_flag_the_parser_reroutes():
+def test_run_bat_only_forces_console_for_console_flows():
     run = (ROOT / 'RUN.bat').read_text()
-    for flag in ('--install', '--manage', '--skip-', '--help', '--tui'):
-        assert flag in run, flag
+    force_line = next(line for line in run.splitlines() if 'findstr' in line.lower())
+    for flag in ('--install', '--skip-', '--help', '--tui'):
+        assert flag in force_line, flag
+    assert '--manage' not in force_line

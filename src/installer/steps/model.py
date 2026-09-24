@@ -163,8 +163,12 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     utils.section(_m("section"))
     utils.info(_m("intro"))
 
-    exe = paths["ollama"] / "ollama.exe"
-    if not exe.exists():
+    # Official Ollama is preferred and normally lives outside
+    # llm_environment. The portable copy under paths["ollama"] is only a
+    # fallback, so asking that directory directly skips model downloads after
+    # a perfectly successful official install.
+    exe = ollama.find_existing(paths)
+    if exe is None:
         utils.warn(_m("no_exe"))
         return None
 
@@ -179,6 +183,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         _entries = _cat.all_entries()
     except Exception:
         _entries = None
+    already_selected: List[str] = []
     if _entries:
         try:
             from installer.steps import model_select_gui as _msg_gui
@@ -202,6 +207,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
         if _picked != "AUTO":
             _desired = set(_picked)
             _role = {e.tag: e.role for e in _entries}
+            already_selected = sorted(_desired & installed)
             models = [(_role.get(_t, _t), _t) for _t in sorted(_desired - installed)]
             for _dt in sorted(installed - _desired):
                 utils.info("삭제: " + _dt)
@@ -211,7 +217,7 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
                     utils.warn("삭제 실패: " + _dt + " (" + repr(_de) + ")")
 
     pulled = skipped = failed = 0
-    ok_tags: List[str] = []
+    ok_tags: List[str] = list(already_selected)
     for label, tag in models:
         if tag in installed:
             utils.ok(_m("skip", label=label, tag=tag))
@@ -245,6 +251,9 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     utils.info(_m("summary", pulled=pulled, skipped=skipped, failed=failed))
     if failed == 0:
         utils.ok(_m("all_ok"))
-    else:
-        utils.warn(_m("some_fail"))
-    return ok_tags
+        return ok_tags
+    utils.warn(_m("some_fail"))
+    # None means the selected model set was not fully prepared. The installer
+    # records that as a partial installation instead of claiming models ready
+    # because one of several pulls happened to succeed.
+    return None

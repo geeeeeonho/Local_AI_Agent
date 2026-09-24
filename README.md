@@ -16,22 +16,15 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 ### 1. 설치 또는 관리
 
 ```bat
-RUN.bat --install
-RUN.bat --manage
+RUN.bat --install   :: 설치 / 복구
+RUN.bat --manage    :: 현재 Setup 관리 화면
 ```
 
-설치기는 현재 상태를 판단해 필요한 설치/관리 흐름으로 연결됩니다.
+두 경로의 역할은 분리되어 있습니다.
 
-- `llm_environment/`가 없으면 → 최초 설치
-- 이전 `llm_environment/llm_models` 또는 중단된 모델 이전 작업이 남아 있으면 → 마이그레이션을 포함한 설치/업데이트 흐름
-- 그 외 이미 설치되어 있으면 → 관리 화면
-
-필요하면 모드를 명시할 수 있습니다.
-
-```bat
-RUN.bat --install
-RUN.bat --manage
-```
+- `--install` → 설치·복구 전용 흐름. 기존 설치가 있어도 멱등하게 필요한 항목을 확인하고, 예전 모델 저장소나 중단된 이전 작업이 있으면 복구/마이그레이션합니다.
+- `--manage` → 현재 데스크톱 Setup 화면. 모델·공용 저장소·네트워크·런타임 유지보수를 관리합니다. `RUN.bat --app setup`과 같은 관리 화면입니다.
+- 설치기 자체가 예전 별도 관리 GUI로 자동 전환하지 않습니다.
 
 기존 `INSTALL.bat`, `MANAGE.bat`, `SETUP.bat`은 더 이상 루트 실행기로 사용하지 않습니다.
 
@@ -54,18 +47,11 @@ RUN.bat --tui              :: 이전 터미널 런처
 Studio 는 Tk 가 있는 Python 3.11+ 를 씁니다. GUI를 사용할 수 없는 환경에서는
 `RUN.bat --tui` 로 이전 터미널 런처를 쓸 수 있습니다.
 
-설치/관리 플래그도 같은 진입점에서 처리합니다.
-
-```bat
-RUN.bat --install
-RUN.bat --manage
-```
-
-기존 개별 실행기와 `RUN_TUI.bat`은 제거되었으며 모두 `RUN.bat` 옵션으로 통합되었습니다.
+설치와 관리는 같은 `RUN.bat`에서 선택하지만, 설치/복구와 관리 UI는 서로 다른 책임으로 유지합니다. 기존 개별 실행기와 `RUN_TUI.bat`은 제거되었습니다.
 
 ### 첫 실행
 
-`RUN.bat` 은 창 모드에서 `pythonw.exe` 를 씁니다. 그 프로세스에는 콘솔이 없어
+`RUN.bat` 은 별도 프로젝트 venv를 가정하지 않고 시스템 Python 3.11+를 사용하며, 창 모드에서는 가능한 경우 `pythonw.exe`/`pyw.exe`를 씁니다. 그 프로세스에는 콘솔이 없어
 `sys.stdin` 이 `None` 이고, 그때 `input()` 은 `EOFError` 가 아니라
 `RuntimeError("input(): lost sys.stdin")` 를 냅니다. 언어 선택 프롬프트가 `EOFError`
 만 잡고 있어서, **저장된 언어가 없는 첫 실행이 창 대신 오류 상자로 끝났습니다.**
@@ -208,7 +194,7 @@ Local_AI_Agent/
 모든 경로는 `src/project_paths.py` 한 곳에서만 정해집니다.
 
 설치 후 생성되는 `llm_environment/`도 프로젝트 루트에 위치합니다. 이 폴더는 소스가 아니라 관리되는 런타임 환경입니다.
-설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다.
+설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다. 필수 구성요소 일부가 실패하면 `status`는 `partial`이 되고, `failed_components` / `skipped_components`에 복구 대상과 명시적 건너뜀 항목이 남습니다. 기본 네트워크인 WARP는 단순 이미지 존재만으로 완료 처리하지 않고 실제 HTTP 브리지용 Sandbox/SearXNG 이미지까지 확인합니다. Tor와 SearXNG도 각각 별도 설치 단계로 기록해 중복 pull과 숨은 의존성을 피합니다.
 
 예전 저장소(`C:\LLM_Models`, `llm_environment/llm_models`)에 모델이 있고 공용 저장소가 비어 있으면 설치 과정에서 자동 이동합니다. 다른 드라이브에서 이동하는 도중 중단되어도 최종 저장소에 부분 복사본이 노출되지 않도록 `C:\Ollama\models.migrating`을 임시 staging으로 사용하고 완료 marker로 복사 완료 여부를 구분합니다. 다음 `RUN.bat --install` 실행은 완료된 staging을 승격하거나 부분 staging을 버리고 원본에서 다시 시작합니다. 두 위치에 모두 모델이 이미 있으면 데이터 충돌을 피하기 위해 자동 병합하지 않고 경고만 표시합니다.
 
