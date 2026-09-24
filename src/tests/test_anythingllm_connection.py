@@ -66,3 +66,20 @@ def test_strong_chat_readiness_requires_ollama_model_probe(monkeypatch):
     )
 
     assert runtime.is_ready("expected:tag") is False
+
+
+
+def test_anythingllm_run_command_exposes_host_ollama_gateway(monkeypatch, tmp_path):
+    from launcher import anythingllm_runtime as runtime
+
+    monkeypatch.setattr(runtime, "storage_dir", lambda: tmp_path)
+    monkeypatch.setattr(runtime, "write_node_proxy_bootstrap", lambda mode=None: None)
+    monkeypatch.setattr(runtime, "proxy_env_for_container", lambda mode=None: {})
+    monkeypatch.setattr(runtime, "chromium_args", lambda mode=None: "")
+    monkeypatch.setattr(runtime, "node_options", lambda mode=None: "")
+    monkeypatch.setattr(runtime, "config_signature", lambda mode=None: "sig")
+
+    command = runtime.build_run_cmd(memory=None, cpus=None)
+
+    idx = command.index("--add-host")
+    assert command[idx + 1] == "host.docker.internal:host-gateway"
