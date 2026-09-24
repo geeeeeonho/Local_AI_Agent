@@ -23,7 +23,27 @@ def install_exit_hooks(project_root):
         lifelog.install_global_hooks(Path(project_root))
     except Exception:
         return False
+    install_docker_sweep(project_root)
     return True
+
+
+def install_docker_sweep(project_root):
+    """Register the Docker leftover sweep the desktop shell never ran.
+
+    ``register_auto_prune`` existed but was called only from the terminal
+    launcher's entrypoint, so the toggle in the [도커 정리] screen did nothing
+    for anyone using the desktop app - and the exited containers and dangling
+    images from every Chat/Agent session and every image pull simply piled up.
+    """
+    try:
+        from project_paths import ENV_DIR
+        from launcher.core import docker_maint
+    except Exception:
+        return False
+    try:
+        return bool(docker_maint.register_exit_sweep(ENV_DIR))
+    except Exception:
+        return False
 
 
 def run_exit_cleanups():

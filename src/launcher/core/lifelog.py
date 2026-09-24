@@ -65,6 +65,7 @@ from typing import Callable, List, Optional, TextIO
 __all__ = [
     "install_global_hooks",
     "register_cleanup",
+    "CLEANUP_STAGES",
     "log",
     "log_session",
     "open_session_log",
@@ -82,9 +83,13 @@ _installed = False
 _project_root: Optional[Path] = None
 _log_dir: Optional[Path] = None
 _main_log_fh: Optional[TextIO] = None
+# 종료 정리는 순서가 의미를 가진다. 등록 시각이 아니라 의도로 순서를 정한다:
+#   runtime — 우리가 띄운 컨테이너/서버를 멈춘다
+#   sweep   — 그렇게 남은 찌꺼기를 치운다 (멈춘 뒤라야 치울 게 보인다)
+#   daemon  — Docker 데몬 자체를 내린다 (앞의 둘이 전부 데몬을 필요로 한다)
+CLEANUP_STAGES = ("runtime", "sweep", "daemon")
 _cleanup_callbacks: List[Callable[[], None]] = []
-# 마지막에 돌아야 하는 정리 (예: Docker Desktop 종료). 컨테이너 정리보다 먼저
-# 데몬을 내리면 남은 cleanup 이 전부 실패하므로 별도 목록으로 분리한다.
+_sweep_cleanup_callbacks: List[Callable[[], None]] = []
 _final_cleanup_callbacks: List[Callable[[], None]] = []
 _cleanups_ran = False
 
@@ -278,18 +283,24 @@ def log_session(fh: Optional[TextIO], level: str, msg: str) -> None:
 # ─────────────────────────────────────────────
 #  정리 콜백 관리
 # ─────────────────────────────────────────────
-def register_cleanup(fn: Callable[[], None], *, last: bool = False) -> None:
-    """종료 정리 콜백 등록. ``last`` 는 모든 정리 뒤에 실행한다.
+def register_cleanup(fn: Callable[[], None], *, stage: str = "runtime",
+                     last: bool = False) -> None:
+    """종료 정리 콜백을 단계와 함께 등록한다 (:data:`CLEANUP_STAGES` 참고).
 
-    컨테이너를 멈추는 콜백은 Docker 데몬이 살아 있어야 성공한다. 데몬 자체를
-    내리는 콜백만 ``last=True`` 로 등록해 순서를 보장한다.
+    순서를 등록 시각에 맡기면, 정리를 하나 추가하는 것만으로 조용히 깨진다.
+    찌꺼기 청소는 컨테이너가 멈춘 뒤에, 데몬 종료는 그 둘 다 끝난 뒤에 돌아야
+    한다. ``last=True`` 는 ``stage="daemon"`` 의 예전 이름이다.
     """
+    if last:
+        stage = "daemon"
+    if stage not in CLEANUP_STAGES:
+        raise ValueError("unknown cleanup stage: " + str(stage))
+    buckets = {"runtime": _cleanup_callbacks, "sweep": _sweep_cleanup_callbacks,
+               "daemon": _final_cleanup_callbacks}
     with _lock:
-        target = _final_cleanup_callbacks if last else _cleanup_callbacks
-        target.append(fn)
-        log("INFO", "cleanup 콜백 등록 (총 "
-            + str(len(_cleanup_callbacks) + len(_final_cleanup_callbacks)) + "개"
-            + (", 마지막 단계" if last else "") + ")")
+        buckets[stage].append(fn)
+        total = sum(len(bucket) for bucket in buckets.values())
+        log("INFO", "cleanup 콜백 등록 (총 " + str(total) + "개, 단계=" + stage + ")")
 
 
 def _run_all_cleanups(reason: str = "?") -> None:
@@ -298,7 +309,8 @@ def _run_all_cleanups(reason: str = "?") -> None:
         if _cleanups_ran:
             return
         _cleanups_ran = True
-        callbacks = list(_cleanup_callbacks) + list(_final_cleanup_callbacks)
+        callbacks = (list(_cleanup_callbacks) + list(_sweep_cleanup_callbacks)
+                     + list(_final_cleanup_callbacks))
 
     log("CLEANUP", "=== 종료 정리 시작 (사유: " + reason + ") ===")
     log("CLEANUP", "콜백 " + str(len(callbacks)) + "개 실행")

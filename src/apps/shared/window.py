@@ -10,7 +10,7 @@ from core.projects.model import Project
 from core.urls import local_url
 from .specs import SPECS, LABELS, navigation_groups, nav_style
 from .tasks import TaskRunner
-from .widgets import set_text, theme
+from .widgets import set_text, theme, wrap_to_parent
 from .themes import themed
 from . import views
 
@@ -80,20 +80,50 @@ class DesktopWindow:
         ttk.Label(header,textvariable=self.health,style='Muted.TLabel').pack(side='right')
         ttk.Separator(content).pack(fill='x')
         footer=ttk.Frame(content,padding=(18,8));footer.pack(side='bottom',fill='x')
+        # The toggle sits with the status line, not above the log, so the log's
+        # own height is never what you have to click through to get it back.
+        self.activity_button=ttk.Button(footer,width=12,command=self.toggle_activity)
+        self.activity_button.pack(side='right',padx=(12,0))
         self.message_label=ttk.Label(footer,textvariable=self.message,style='Muted.TLabel',wraplength=900)
-        self.message_label.pack(anchor='w')
+        self.message_label.pack(anchor='w',side='left',fill='x',expand=True)
+        wrap_to_parent(self.message_label,inset=180)
         # Keep operational progress visible. The previous 3-line Text widget hid
         # useful Chat/Agent startup stages behind periodic health task messages.
+        # Eight lines is a quarter of the window at its own minimum size, though,
+        # so it can be folded away and the choice is remembered.
         self.activity=themed(scrolledtext.ScrolledText(content,height=8,relief='flat',
                               font=('Consolas',9),padx=14,pady=8,state='disabled',wrap='word'),
                               background='surface',foreground='muted',highlightbackground='border',highlightcolor='chat',
                               selectbackground='selected',selectforeground='fg')
-        self.activity.pack(side='bottom',fill='x',padx=24,pady=(4,0))
         self.activity.tag_configure('alert',foreground=self.theme.palette.danger)
+        try:self._activity_visible=self.services.settings.activity_visible()
+        except (OSError,ValueError):self._activity_visible=True
+        self._apply_activity_visibility()
         self.page_area=ttk.Frame(content);self.page_area.pack(fill='both',expand=True)
+        self._apply_activity_visibility()
         self.page_area.columnconfigure(0,weight=1);self.page_area.rowconfigure(0,weight=1)
         for key in self.spec.pages:
             page=views.build(self.page_area,key,self);page.grid(row=0,column=0,sticky='nsew');self.pages[key]=page
+
+    def _apply_activity_visibility(self):
+        if self._activity_visible:
+            # `before` matters: pack serves its children in order, and the page
+            # area claims the remaining space with expand=True. Re-packed after
+            # it, the log came back with nothing left to occupy and stayed
+            # invisible - folding it was a one-way door.
+            options={'side':'bottom','fill':'x','padx':24,'pady':(4,0)}
+            if getattr(self,'page_area',None) is not None:options['before']=self.page_area
+            self.activity.pack(**options)
+        elif self.activity.winfo_ismapped():
+            self.activity.pack_forget()
+        self.activity_button.configure(text='기록 접기' if self._activity_visible else '기록 펼치기')
+
+    def toggle_activity(self):
+        self._activity_visible=not self._activity_visible
+        self._apply_activity_visibility()
+        self.runner.submit('activity.save',
+            lambda:self.services.settings.set_activity_visible(self._activity_visible),
+            lambda _:None,lambda exc:self.log('Activity log: '+str(exc),level='error'),mutate=False)
 
     def navigate(self,key):
         if key=='projects':

@@ -11,12 +11,86 @@ here deletes blob files directly; Ollama still owns the store.
 import tkinter as tk
 from tkinter import ttk
 
-from .widgets import PanelHost, ScrollArea, note, set_text, text_box
+from .widgets import PanelHost, ScrollArea, note, set_text, text_box, wrap_to_parent
 
 
-def _row(parent):
+class Stack:
+    """Rows stacked top to bottom, where exactly one of them takes the slack.
+
+    ``pack`` distributes what is left over, and when there is nothing left over
+    it takes it from whatever it packed last. That is how a button bar ended up
+    one pixel tall while still answering clicks from nowhere near where it was
+    drawn. ``grid`` with a weight on one row and a floor under every other row
+    gives the fixed parts their height first, and only then hands the remainder
+    to the content.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.row = 0
+        parent.columnconfigure(0, weight=1)
+
+    def fixed(self, build, *, pad=(0, 10)):
+        """One row that keeps the height it asks for, whatever else happens."""
+        widget = build(self.parent)
+        widget.grid(row=self.row, column=0, sticky='ew', pady=pad)
+        self.parent.update_idletasks()
+        self.parent.rowconfigure(self.row, weight=0,
+                                 minsize=widget.winfo_reqheight() + pad[0] + pad[1])
+        self.row += 1
+        return widget
+
+    def grows(self, build, *, pad=(0, 8)):
+        """The one row that absorbs and gives up space."""
+        widget = build(self.parent)
+        widget.grid(row=self.row, column=0, sticky='nsew', pady=pad)
+        self.parent.rowconfigure(self.row, weight=1, minsize=80)
+        self.row += 1
+        return widget
+
+    def host(self):
+        """A PanelHost row that takes no space until something is put in it."""
+        row = self.row
+        self.row += 1
+        def show(frame):
+            frame.grid(row=row, column=0, sticky='nsew', pady=(12, 0))
+            self.parent.rowconfigure(row, weight=1, minsize=120)
+        def hide(frame):
+            frame.grid_remove()
+            self.parent.rowconfigure(row, weight=0, minsize=0)
+        return PanelHost(self.parent, show=show, hide=hide)
+
+
+def _bar(parent, buttons):
     frame = ttk.Frame(parent)
-    frame.pack(fill='x', pady=(0, 10))
+    for text, command, kind, accent in buttons:
+        _button(frame, text, command, kind=kind, accent=accent)
+    return frame
+
+
+def _label(parent, variable, style='Muted.TLabel'):
+    label = ttk.Label(parent, textvariable=variable, style=style,
+                      wraplength=780, justify='left')
+    return wrap_to_parent(label)
+
+
+def _note(parent, text):
+    label = ttk.Label(parent, text=text, style='Muted.TLabel',
+                      wraplength=780, justify='left')
+    return wrap_to_parent(label)
+
+
+def _row(parent, *, side='top'):
+    """A bar of controls.
+
+    ``side='bottom'`` reserves the bar's height before the expanding content
+    gets any: packed after a tree or a text box that asks to expand, the bar is
+    the first thing the layout starves, and at the window's own minimum size
+    these buttons shrank to four pixels - still there, still "clickable", but
+    nowhere near where they looked.
+    """
+    frame = ttk.Frame(parent)
+    frame.pack(fill='x', pady=(0, 10), side=side)
     return frame
 
 
@@ -27,9 +101,9 @@ def _button(parent, text, command, kind=None, accent=False):
     return widget
 
 
-def _tree(parent, columns, headings, widths, height):
+def _tree_frame(parent, columns, headings, widths, height):
+    """The tree plus its scrollbar, as one row for :class:`Stack` to place."""
     wrapper = ttk.Frame(parent)
-    wrapper.pack(fill='both', expand=True)
     tree = ttk.Treeview(wrapper, columns=columns, show='headings', height=height)
     for key, title, width in zip(columns, headings, widths):
         tree.heading(key, text=title)
@@ -38,7 +112,17 @@ def _tree(parent, columns, headings, widths, height):
     tree.configure(yscrollcommand=scroll.set)
     scroll.pack(side='right', fill='y')
     tree.pack(fill='both', expand=True)
-    return tree
+    # Stack places the frame; the caller wants the tree it contains.
+    wrapper.tree = tree
+    return wrapper
+
+
+def _scroll_frame(parent, w):
+    scroller = ScrollArea(parent, place=False)
+    w.page_scrolls['models.choose'] = scroller
+    w.choice_body = scroller.body
+    scroller.frame.scroller = scroller
+    return scroller.frame
 
 
 def build(parent, w):
@@ -56,79 +140,74 @@ def build(parent, w):
 
 
 def _stack(parent, w):
-    w.stack_summary = tk.StringVar(master=w.root, value='메모리와 설치 상태를 아직 확인하지 않았습니다.')
-    ttk.Label(parent, textvariable=w.stack_summary, style='Muted.TLabel',
-              wraplength=780, justify='left').pack(anchor='w', pady=(0, 12))
-    w.stack_tree = _tree(parent, ('role', 'model', 'need', 'disk'),
-                         ('역할', '지금 선택될 모델', '필요 메모리', '디스크'),
-                         (170, 430, 110, 90), 6)
+    layout = Stack(parent)
+    layout.fixed(lambda box: _bar(box, (
+        ('상태 새로고침', w.refresh_stack, 'Manage', False),
+        ('Ollama 시작 / 확인', w.ensure_ollama, None, False),
+        ('받으러 가기', lambda: w.model_tabs.select(w.model_pages['choose']), None, False))))
+    w.stack_summary = tk.StringVar(master=w.root,
+                                   value='메모리와 설치 상태를 아직 확인하지 않았습니다.')
+    layout.fixed(lambda box: _label(box, w.stack_summary))
+    w.stack_tree = layout.grows(lambda box: _tree_frame(
+        box, ('role', 'model', 'need', 'disk'),
+        ('역할', '지금 선택될 모델', '필요 메모리', '디스크'), (170, 430, 110, 90), 6)).tree
     w.stack_tree.bind('<<TreeviewSelect>>', lambda event: w.show_stack_detail())
-    w.stack_detail = text_box(parent, height=6)
+    w.stack_detail = layout.fixed(lambda box: text_box(box, height=5, place=False))
     set_text(w.stack_detail, '역할을 선택하면 그 역할의 전체 사다리와 각 단계의 설치 여부를 보여 줍니다.')
-    bar = _row(parent)
-    _button(bar, '상태 새로고침', w.refresh_stack, kind='Manage')
-    _button(bar, 'Ollama 시작 / 확인', w.ensure_ollama)
-    _button(bar, '받으러 가기', lambda: w.model_tabs.select(w.model_pages['choose']))
-    w.hosts['models'] = PanelHost(parent)
-    note(parent, '선택 모델은 지금 여유 메모리를 기준으로 기존 실행 사다리가 정합니다. 이 화면은 그 결과를 '
-                 '보여줄 뿐, 별도의 선택 규칙을 두지 않습니다.\n'
-                 '디스크에 없는 모델이 선택되어 있으면 실행 시 더 가벼운 단계로 내려갑니다. '
-                 '"모델 고르기"에서 받아 두면 그 단계가 실제로 쓰입니다.')
+    w.hosts['models'] = layout.host()
+    layout.fixed(lambda box: _note(box,
+        '선택 모델은 지금 여유 메모리를 기준으로 기존 실행 사다리가 정합니다. '
+        '"모델 고르기"에서 받아 두면 그 단계가 실제로 쓰입니다.'))
 
 
 def _choose(parent, w):
+    layout = Stack(parent)
+    layout.fixed(lambda box: _bar(box, (
+        ('권장 세트', lambda: w.set_selection('recommended'), 'Manage', False),
+        ('전체 선택', lambda: w.set_selection('all'), None, False),
+        ('전체 해제', lambda: w.set_selection('none'), None, False),
+        ('목록 새로고침', w.load_catalog, None, False))))
     w.choice_summary = tk.StringVar(master=w.root, value='카탈로그를 아직 읽지 않았습니다.')
-    ttk.Label(parent, textvariable=w.choice_summary, style='Section.TLabel',
-              wraplength=780, justify='left').pack(anchor='w', pady=(0, 6))
+    layout.fixed(lambda box: _label(box, w.choice_summary, 'Section.TLabel'), pad=(0, 4))
     w.choice_storage = tk.StringVar(master=w.root, value='')
-    w.choice_storage_label = ttk.Label(parent, textvariable=w.choice_storage,
-                                       style='Muted.TLabel', wraplength=780, justify='left')
-    w.choice_storage_label.pack(anchor='w', pady=(0, 10))
-    w.choice_plan = tk.StringVar(master=w.root, value='')
-    ttk.Label(parent, textvariable=w.choice_plan, style='Muted.TLabel',
-              wraplength=780, justify='left').pack(anchor='w', pady=(0, 12))
-    bar = _row(parent)
-    _button(bar, '권장 세트', lambda: w.set_selection('recommended'), kind='Manage')
-    _button(bar, '전체 선택', lambda: w.set_selection('all'))
-    _button(bar, '전체 해제', lambda: w.set_selection('none'))
-    _button(bar, '목록 새로고침', w.load_catalog)
-    scroller = ScrollArea(parent)
-    w.page_scrolls['models.choose'] = scroller
-    w.choice_body = scroller.body
-    w.choice_scroller = scroller
+    w.choice_storage_label = layout.fixed(
+        lambda box: _label(box, w.choice_storage), pad=(0, 8))
+    w.choice_scroller = layout.grows(lambda box: _scroll_frame(box, w)).scroller
     w.choice_vars = {}
     ttk.Label(w.choice_body, text='카탈로그를 읽는 중...', style='Muted.TLabel').pack(anchor='w')
-    apply_bar = _row(parent)
-    w.apply_button = _button(apply_bar, '선택대로 적용', w.apply_selection, accent=True)
-    note(parent, '체크 = 있어야 함. 체크하면 설치하고, 설치된 모델의 체크를 풀면 삭제합니다.\n'
-                 '용량은 최대치입니다 — Ollama가 모델 간에 같은 계층을 공유하면 실제로는 더 적게 받습니다.\n'
-                 '다운로드는 로컬 Ollama 서버의 호스트 네트워크를 씁니다. WARP/Tor 우회는 보장되지 않고, '
-                 'Block에서는 거부합니다.')
+    # The action this whole screen exists for. It is a fixed row, so it cannot
+    # be the thing the layout gives up when the window is small.
+    w.apply_button = layout.fixed(lambda box: _bar(box, (
+        ('선택대로 적용', w.apply_selection, None, True),)))
+    w.choice_plan = tk.StringVar(master=w.root, value='')
+    layout.fixed(lambda box: _label(box, w.choice_plan), pad=(0, 6))
+    layout.fixed(lambda box: _note(box,
+        '체크 = 있어야 함. 체크하면 설치하고, 설치된 모델의 체크를 풀면 삭제합니다. '
+        '용량은 최대치이며, 같은 계층을 공유하면 실제로는 더 적게 받습니다. '
+        '다운로드는 로컬 Ollama 서버의 호스트 네트워크를 쓰고, Block 에서는 거부합니다.'))
 
 
 def _disk(parent, w):
-    bar = _row(parent)
-    _button(bar, '인덱스 갱신', w.refresh_models, kind='Manage')
-    _button(bar, '모델 고르기', lambda: w.model_tabs.select(w.model_pages['choose']))
-    w.sharing_button = _button(bar, '모든 계정 공용으로 고치기', w.repair_sharing,
-                               kind='Manage')
+    layout = Stack(parent)
+    layout.fixed(lambda box: _bar(box, (
+        ('인덱스 갱신', w.refresh_models, 'Manage', False),
+        ('모델 고르기', lambda: w.model_tabs.select(w.model_pages['choose']), None, False),
+        ('모든 계정 공용으로 고치기', w.repair_sharing, 'Manage', False))))
     w.model_summary = tk.StringVar(master=w.root, value=str(w.services.model_dir))
-    ttk.Label(parent, textvariable=w.model_summary, style='Muted.TLabel',
-              wraplength=780, justify='left').pack(anchor='w', pady=(0, 4))
+    layout.fixed(lambda box: _label(box, w.model_summary), pad=(0, 4))
     # Whether every Windows account can really use this store is a fact about
     # the machine, not about the path, so it gets its own line and can say it
     # does not know.
     w.sharing_summary = tk.StringVar(master=w.root, value='공용 상태 확인 중...')
-    ttk.Label(parent, textvariable=w.sharing_summary, style='Muted.TLabel',
-              wraplength=780, justify='left').pack(anchor='w', pady=(0, 8))
-    w.model_tree = _tree(parent, ('name', 'size', 'shared', 'exclusive', 'status'),
-                         ('Model', 'Size (GiB)', 'Shared', 'Exclusive', 'Files'),
-                         (330, 100, 100, 100, 140), 7)
+    layout.fixed(lambda box: _label(box, w.sharing_summary), pad=(0, 8))
+    w.model_tree = layout.grows(lambda box: _tree_frame(
+        box, ('name', 'size', 'shared', 'exclusive', 'status'),
+        ('Model', 'Size (GiB)', 'Shared', 'Exclusive', 'Files'),
+        (330, 100, 100, 100, 140), 7)).tree
     w.model_tree.bind('<<TreeviewSelect>>', lambda event: w.show_model_details())
-    w.model_details = text_box(parent, height=7)
+    w.model_details = layout.fixed(lambda box: text_box(box, height=6, place=False))
     set_text(w.model_details, '모델을 선택하면 manifest와 blob 구성을 보여 줍니다.\n'
                               '참조 없는 파일은 관찰 결과일 뿐, 삭제 허가가 아닙니다.')
-    note(parent, '모든 모델은 이 한 곳에 모입니다. 프로젝트 폴더가 아니라 기계 공용 저장소라, '
-                 '프로젝트를 다시 받아도 모델을 다시 받지 않습니다.\n'
-                 '파일을 직접 지우지 마세요 — 여러 모델이 같은 계층을 공유합니다. "모델 고르기"에서 '
-                 '체크를 풀면 Ollama가 안전하게 정리합니다.')
+    layout.fixed(lambda box: _note(box,
+        '모든 모델은 이 한 곳에 모입니다. 파일을 직접 지우지 마세요 — '
+        '여러 모델이 같은 계층을 공유합니다.'))

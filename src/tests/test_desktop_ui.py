@@ -182,12 +182,14 @@ def test_chat_readiness_shows_the_whole_preparation_trail(ui):
     backend.prepare_network=prepare
     backend.inference.ensure_running=lambda log=None:(log and log('Ollama 가동 확인 (3초)')) or 'http://x'
     w.session_mode.set('block');w.start_chat()
-    pump(w,lambda:svc.chat.started)
+    # Wait for the trail itself, not for the worker: the service finishing and
+    # the Tk timer draining what it emitted are two different moments.
+    pump(w,lambda:svc.chat.started and len(w._chat_progress)>3)
     # The box carries the success summary once Chat is up; the trail it showed
     # on the way there is what these two messages had to reach.
     trail='\n'.join(w._chat_progress)
-    assert 'Docker 데몬이 응답하지 않습니다' in trail
-    assert 'Ollama 가동 확인' in trail
+    assert 'Docker 데몬이 응답하지 않습니다' in trail, trail
+    assert 'Ollama 가동 확인' in trail, trail
 
 
 def test_a_failed_chat_start_leaves_the_reason_on_the_page(ui):
@@ -216,3 +218,107 @@ def test_closing_interrupts_an_agent_turn_instead_of_waiting_it_out(ui):
     w.request_close()
     pump(w,interrupted.is_set)
     assert interrupted.is_set()
+
+
+# ── the layout must not starve the controls ──────────────────────────────
+# pack hands out what is left over, and when nothing is left it takes it from
+# whatever it placed last. That put the primary action of the model screen -
+# "선택대로 적용" - at one pixel tall: still present, still answering a click,
+# but nowhere near where it was drawn. This walks every page at the window's
+# own documented minimum size and insists the controls are still controls.
+
+CONTROLS = ('TButton', 'TCheckbutton', 'TRadiobutton', 'TCombobox', 'TEntry')
+
+
+def every_widget(node, out):
+    out.append(node)
+    for child in node.winfo_children():
+        every_widget(child, out)
+
+
+def on_a_hidden_tab(widget, notebooks):
+    node, child = widget, None
+    while node is not None:
+        if str(node) in notebooks and child is not None:
+            if str(child) != notebooks[str(node)].select():
+                return True
+        child, node = node, getattr(node, 'master', None)
+    return False
+
+
+def test_no_control_is_squeezed_to_nothing_at_the_minimum_window_size(ui):
+    w,svc,backend=ui
+    w.root.update();w.root.wm_geometry('880x560')
+    pump(w,lambda:w.root.winfo_height()<=560)
+    starved=[]
+    for key in w.spec.pages:
+        w.navigate(key);pump(w)
+        book={'chat':getattr(w,'chat_tabs',None),'models':getattr(w,'model_tabs',None)}.get(key)
+        for tab in (list(book.tabs()) if book is not None else [None]):
+            if tab is not None:book.select(tab);pump(w)
+            nodes=[];every_widget(w.pages[key],nodes)
+            notebooks={str(n):n for n in nodes if n.winfo_class()=='TNotebook'}
+            for node in nodes:
+                if node.winfo_class() not in CONTROLS:continue
+                if on_a_hidden_tab(node,notebooks) or not node.winfo_ismapped():continue
+                if node.winfo_height()<18:
+                    label=node.cget('text') if node.winfo_class()!='TEntry' else ''
+                    starved.append('%s %s(%s) %dpx' % (key,node.winfo_class(),label,node.winfo_height()))
+    assert starved==[],'쓸 수 없을 만큼 눌린 컨트롤:\n  '+'\n  '.join(starved)
+
+
+def test_the_wheel_handler_is_not_stacked_again_on_every_refresh(ui):
+    """The catalogue rebinds after each redraw; add='+' used to keep the old
+    handler too, so one notch eventually scrolled several pages at once."""
+    w,svc,backend=ui
+    w.navigate('models');pump(w)
+    area=w.page_scrolls['models.choose']
+    for _ in range(4):area.bind_content()
+    handlers=[line for line in area.canvas.bind('<MouseWheel>').split('\n') if line.strip()]
+    assert len(handlers)<=1,handlers
+
+
+def test_a_tree_keeps_its_own_wheel_instead_of_scrolling_the_page(ui):
+    w,svc,backend=ui
+    w.navigate('models');pump(w)
+    w.model_tabs.select(w.model_pages['disk']);pump(w)
+    bound=[line for line in w.model_tree.bind('<MouseWheel>').split('\n') if line.strip()]
+    assert bound==[],'the page must not take the wheel from a widget that scrolls itself'
+
+
+def test_the_activity_log_folds_away_and_comes_back(ui):
+    """Eight lines of log is a quarter of the window at its minimum size."""
+    w,svc,backend=ui
+    w.root.update();w.root.wm_geometry('880x560')
+    pump(w,lambda:w.root.winfo_height()<=560)
+    w.navigate('models');pump(w)
+    opened=w.page_area.winfo_height()
+    w.toggle_activity();pump(w)
+    folded=w.page_area.winfo_height()
+    assert folded>opened,'folding the log has to give its space to the page'
+    w.toggle_activity();pump(w)
+    assert w.page_area.winfo_height()==opened,'and unfolding has to give it back'
+
+
+def test_the_folded_choice_is_remembered(ui):
+    w,svc,backend=ui
+    w.toggle_activity()
+    pump(w,lambda:not w.runner.busy())
+    assert svc.settings.activity_visible() is False
+
+
+def test_explanations_rewrap_to_the_width_they_actually_have(ui):
+    """Every wraplength was a pixel count picked for a wide window; narrower
+    than that and the sentence explaining a button was simply cut off."""
+    w,svc,backend=ui
+    w.navigate('models')
+    # A notebook pane that has never been shown is one pixel wide, so ask the
+    # tab the user is actually looking at.
+    w.model_tabs.select(w.model_pages['choose']);pump(w)
+    w.root.wm_geometry('1280x860')
+    pump(w,lambda:w.model_pages['choose'].winfo_width()>900)
+    wide=int(w.choice_storage_label.cget('wraplength'))
+    w.root.wm_geometry('880x560')
+    pump(w,lambda:w.model_pages['choose'].winfo_width()<800)
+    narrow=int(w.choice_storage_label.cget('wraplength'))
+    assert narrow<wide,'the label kept a width the window no longer has: %s/%s'%(narrow,wide)
