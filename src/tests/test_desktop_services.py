@@ -26,6 +26,9 @@ class Backend:
     def prepare_network(self, mode, log):
         self.calls.append(('prepare', mode)); self.mode = mode; return self.ready
     def current_mode(self): return self.mode
+    def prepare_model_runtime(self):
+        self.calls.append(('ollama_prepare',))
+        return 'http://127.0.0.1:11434'
     def search_start(self, mode, log): self.calls.append(('search', mode)); return True
     def search_stop(self): self.calls.append(('search_stop',)); return True
     def chat_image_exists(self): return self.images
