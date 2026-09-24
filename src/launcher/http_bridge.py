@@ -252,6 +252,11 @@ def _image_ok(img) -> bool:
     return _ok(_docker(["image", "inspect", img], 25))
 
 
+def support_image_exists() -> bool:
+    """Whether the WARP HTTP bridge has a Python-capable image to run in."""
+    return _image_ok(IMAGE) or _image_ok(FALLBACK_IMAGE)
+
+
 def _ensure_net():
     if not _ok(_docker(["network", "inspect", NET], 15)):
         _docker(["network", "create", NET], 20)
