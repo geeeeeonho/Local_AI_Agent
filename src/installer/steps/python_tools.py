@@ -47,6 +47,10 @@ def install_anythingllm(
         ) + repr(exc))
         return False
 
+    utils.info(_anyllm_msg(
+        "Chat 준비 1/3: Docker Desktop 확인",
+        "Chat preparation 1/3: checking Docker Desktop",
+    ))
     try:
         docker_ready = DockerService.ensure_daemon(timeout=90)
     except Exception as exc:
@@ -62,11 +66,19 @@ def install_anythingllm(
         ))
         return False
 
+    utils.info(_anyllm_msg(
+        "Chat 준비 2/3: AnythingLLM 이미지 확인",
+        "Chat preparation 2/3: checking AnythingLLM image",
+    ))
     if runtime.image_exists():
         utils.ok(_anyllm_msg(
             "이미 설치됨 — 건너뜀: ",
             "Already installed - skipping: ",
         ) + runtime.IMAGE)
+        utils.info(_anyllm_msg(
+            "Chat 준비 3/3: 이미지 준비 완료. 실제 Ollama/모델 연결은 Chat 시작 시 검증합니다.",
+            "Chat preparation 3/3: image ready. Ollama/model connectivity is verified when Chat starts.",
+        ))
         return True
 
     utils.warn(_anyllm_msg(
@@ -75,6 +87,10 @@ def install_anythingllm(
     ))
     if runtime.pull(log=utils.info):
         utils.ok(_anyllm_msg("이미지 준비 완료: ", "Image ready: ") + runtime.IMAGE)
+        utils.info(_anyllm_msg(
+            "Chat 준비 3/3: 이미지 준비 완료. 실제 Ollama/모델 연결은 Chat 시작 시 검증합니다.",
+            "Chat preparation 3/3: image ready. Ollama/model connectivity is verified when Chat starts.",
+        ))
         return True
 
     utils.err(_anyllm_msg("이미지 pull 실패", "Image pull failed"))
