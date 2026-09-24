@@ -173,11 +173,17 @@ def _run_install(args) -> int:
     try:
         if tor.install(paths):
             components.append("tor")
+        elif not args.skip_search:
+            # SearXNG settings route all outbound search through llm_tor:9050,
+            # so Tor is required when search was requested.
+            failed_components.append("tor")
+            utils.warn("Tor 이미지를 준비하지 못해 SearXNG 검색 경로가 완전하지 않습니다.")
         else:
             skipped_components.append("tor")
             utils.warn("Tor 이미지는 준비되지 않았습니다. 다른 네트워크 모드는 계속 사용할 수 있습니다.")
     except Exception as exc:
-        skipped_components.append("tor")
+        target = failed_components if not args.skip_search else skipped_components
+        target.append("tor")
         utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
 
     # WARP is the default network mode and its HTTP bridge reuses either the
