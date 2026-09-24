@@ -133,7 +133,7 @@ def test_apply_stops_once_when_ollama_preflight_fails(ui, monkeypatch):
     w.apply_selection()
     pump(w, lambda: not w.runner.busy())
     assert not any(call[0] in ('pull', 'remove') for call in backend.calls)
-    assert 'Ollama bootstrap failed' in w.log_box.get('1.0', 'end')
+    assert 'Ollama bootstrap failed' in w.activity.get('1.0', 'end')
 
 
 def test_apply_asks_before_touching_anything_and_honours_a_refusal(ui, monkeypatch):
