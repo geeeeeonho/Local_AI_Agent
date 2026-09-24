@@ -136,11 +136,20 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertIn("%~dp0src", run)
         self.assertIn("%*", run)
 
-        managed_python = "llm_environment\\venv\\Scripts\\python.exe"
-        self.assertIn(managed_python, run)
         self.assertIn("-m apps.studio", run)
         self.assertIn("--install", run)
-        self.assertIn("--manage", run)
+        self.assertNotIn("llm_environment\\venv\\Scripts", run)
+
+    def test_retired_installer_manager_is_gone(self):
+        self.assertFalse((REPO_ROOT / "src" / "installer" / "manage_gui.py").exists())
+        installer_main = self._text("src/installer/__main__.py")
+        self.assertNotIn("manage_gui", installer_main)
+        self.assertNotIn('add_argument("--manage"', installer_main)
+
+    def test_installer_uses_official_or_detected_ollama_not_only_portable_slot(self):
+        model = self._text("src/installer/steps/model.py")
+        self.assertIn("ollama.find_existing(paths)", model)
+        self.assertNotIn('exe = paths["ollama"] / "ollama.exe"', model)
 
     def test_project_paths_keep_runtime_data_at_repository_root(self):
         path_module = REPO_ROOT / "src" / "project_paths.py"
