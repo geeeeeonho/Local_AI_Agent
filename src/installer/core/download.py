@@ -17,8 +17,10 @@ def download_with_progress(url: str, dest: Path, label: str = ""):
     info(f"다운로드: {label or dest.name}")
     info(f"  → {dest}")
 
+    stream = sys.stdout
+
     def report(blocknum, blocksize, totalsize):
-        if totalsize <= 0:
+        if stream is None or totalsize <= 0:
             return
         d = blocknum * blocksize
         pct = min(100, d * 100 / totalsize)
@@ -26,18 +28,18 @@ def download_with_progress(url: str, dest: Path, label: str = ""):
         mb_t = totalsize / (1024 ** 2)
         filled = int(30 * pct / 100)
         bar = "█" * filled + "░" * (30 - filled)
-        sys.stdout.write(
+        stream.write(
             f"\r  [{bar}] {pct:5.1f}%  {mb_n:7.1f}/{mb_t:7.1f} MB"
         )
-        sys.stdout.flush()
+        stream.flush()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         urllib.request.urlretrieve(url, dest, reporthook=report)
-        sys.stdout.write("\n")
+        stream.write("\n")
         ok(f"완료 ({dest.stat().st_size / (1024 ** 2):.1f} MB)")
     except Exception as e:
-        sys.stdout.write("\n")
+        stream.write("\n")
         if dest.exists():
             dest.unlink()
         raise RuntimeError(f"다운로드 실패: {e}")
