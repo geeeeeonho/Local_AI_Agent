@@ -305,7 +305,10 @@ class DesktopWindow:
 
     def open_chat(self):
         try:
-            if self.services.chat.url:webbrowser.open(local_url(self.services.chat.url))
+            if self.services.chat.url:
+                url=local_url(self.services.chat.url)
+                if webbrowser.open(url) is False:
+                    self.log('브라우저 자동 열기에 실패했습니다. 직접 여세요: '+url,level='error')
         except Exception as exc:self.log(str(exc),level='error')
 
     def presenter(self,key):
