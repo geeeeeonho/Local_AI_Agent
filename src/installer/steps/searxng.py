@@ -100,7 +100,7 @@ pass_searx_org = false
 """
 
 
-def install(paths: Dict[str, Path]):
+def install(paths: Dict[str, Path]) -> bool:
     """SearXNG 설정 파일 생성 + 이미지 pull. 컨테이너는 만들지 않음."""
     from installer.i18n import t
 
