@@ -54,6 +54,16 @@ def test_manage_and_tui_cannot_be_requested_together():
         parse_args('studio', ['--manage', '--tui'])
 
 
+def test_manage_and_install_skip_flags_cannot_be_mixed():
+    with pytest.raises(SystemExit):
+        parse_args('studio', ['--manage', '--skip-model'])
+
+
+def test_tui_and_install_repair_flags_cannot_be_mixed():
+    with pytest.raises(SystemExit):
+        parse_args('studio', ['--tui', '--install'])
+
+
 class _Bootstrap:
     """services.system.bootstrap 대역. 내부 모듈 호출만 기록한다."""
 
