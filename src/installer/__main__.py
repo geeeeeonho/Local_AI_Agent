@@ -31,6 +31,43 @@ def _parse_args(argv=None):
     return p.parse_args(argv)
 
 
+# ── 디스크 예산 ────────────────────────────────────────────────────
+_RUNTIME_GB = 5.0        # Ollama / Python 도구 / 샌드박스 이미지 등 모델 외 용량
+_FALLBACK_FLOOR_GB = 20  # 카탈로그를 못 읽을 때의 보수적 하한
+
+
+def _model_disk_budget(skip_model: bool):
+    """(하드 최소 GB, 이 PC 의 권장 세트까지 담는 데 필요한 GB)."""
+    if skip_model:
+        return int(_RUNTIME_GB), 0.0
+    try:
+        from launcher.models import model_catalog as cat
+    except Exception:
+        return _FALLBACK_FLOOR_GB, 0.0
+    try:
+        floor = cat.download_gb(cat.plan_by_level().get("low") or ())
+        plan = cat.download_gb(cat.recommended_for(cat.MEMORY_BUDGET_GB))
+    except Exception:
+        return _FALLBACK_FLOOR_GB, 0.0
+    return int(_RUNTIME_GB + floor) + 1, _RUNTIME_GB + plan
+
+
+def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
+    if not plan_gb:
+        return
+    import shutil
+    target = MODEL_STORAGE_DIR if MODEL_STORAGE_DIR.exists() else MODEL_STORAGE_DIR.parent
+    try:
+        free = shutil.disk_usage(target).free / (1024 ** 3)
+    except OSError:
+        return
+    if free < plan_gb:
+        utils.warn(
+            "권장 모델 세트는 약 %.0fGB 인데 %s 의 여유는 %.0fGB 입니다. "
+            "모델 선택 창에서 일부를 빼거나, 다 받은 뒤 [모델 관리]에서 정리하세요."
+            % (plan_gb, target, free)
+        )
+
 
 def _run_install(args) -> int:
     lang_setup.initialize_language(HERE, override=args.lang)
