@@ -13,8 +13,9 @@ searxng_runtime / warp_runtime 과 같은 모양이며, 같은 규약을 따른�
   SearXNG  : llm_searxng:8080             (컨테이너끼리는 llm_net + 이름으로만)
   브라우저 : http://localhost:3001
 
-설정은 storage/.env 에 '한 번만' 심는다(seed). AnythingLLM 이 UI 설정을 이 파일에
-되쓰기 때문에, 매번 덮어쓰면 사용자가 UI 에서 바꾼 값이 날아간다.
+설정은 storage/.env 에 보존한다. AnythingLLM 이 UI 설정을 이 파일에 되쓰기 때문에
+전체 파일은 덮어쓰지 않는다. Local AI가 소유하는 Ollama 연결 필드만 Chat 시작 전에
+선택 모델/토큰 한도에 맞춰 동기화하며, 나머지 UI 설정은 그대로 보존한다.
 """
 from __future__ import annotations
 
