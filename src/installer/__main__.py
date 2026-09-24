@@ -141,30 +141,6 @@ def _run_install(args) -> int:
         failed_components.append("open_interpreter")
         utils.warn("Open Interpreter 설치가 완료되지 않았습니다. RUN.bat --install에서 다시 시도할 수 있습니다.")
 
-    # WARP is the product's default network mode. The runtime deliberately
-    # refuses to download images implicitly, so a fresh install must prepare it.
-    try:
-        if warp.install(paths):
-            components.append("warp")
-        else:
-            failed_components.append("warp")
-            utils.warn("기본 WARP 네트워크 이미지를 준비하지 못했습니다. Direct/Block은 사용할 수 있지만 WARP는 복구가 필요합니다.")
-    except Exception as exc:
-        failed_components.append("warp")
-        utils.warn("WARP 설치 중 오류: " + repr(exc))
-
-    # Tor is optional, but it is a user-selectable network mode. Prepare the
-    # image here so selecting Tor never leads to a dead-end manual docker pull.
-    try:
-        if tor.install(paths):
-            components.append("tor")
-        else:
-            skipped_components.append("tor")
-            utils.warn("Tor 이미지는 준비되지 않았습니다. 다른 네트워크 모드는 계속 사용할 수 있습니다.")
-    except Exception as exc:
-        skipped_components.append("tor")
-        utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
-
     if not args.skip_sandbox:
         try:
             sandbox.install(paths, profile=profile, build_image=not args.skip_build)
@@ -180,14 +156,42 @@ def _run_install(args) -> int:
     if not args.skip_search:
         try:
             sandbox._check_docker()
-            searxng.install(paths)
-            components.append("searxng")
+            if searxng.install(paths):
+                components.append("searxng")
+            else:
+                failed_components.append("searxng")
+                utils.warn("SearXNG 이미지를 준비하지 못했습니다. RUN.bat --install 로 다시 시도할 수 있습니다.")
         except sandbox.DockerNotAvailable as e:
             skipped_components.append("searxng")
             utils.warn(t("install.searxng_skip", reason=str(e)))
     else:
         skipped_components.append("searxng")
         utils.warn(t("install.searxng_skip_optional"))
+
+    # Tor is optional but user-selectable. Prepare it explicitly rather than
+    # hiding its pull inside the SearXNG installer.
+    try:
+        if tor.install(paths):
+            components.append("tor")
+        else:
+            skipped_components.append("tor")
+            utils.warn("Tor 이미지는 준비되지 않았습니다. 다른 네트워크 모드는 계속 사용할 수 있습니다.")
+    except Exception as exc:
+        skipped_components.append("tor")
+        utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
+
+    # WARP is the default network mode and its HTTP bridge reuses either the
+    # sandbox image or the SearXNG image. Run this after both image-producing
+    # steps so 'warp' means the complete path can actually start.
+    try:
+        if warp.install(paths):
+            components.append("warp")
+        else:
+            failed_components.append("warp")
+            utils.warn("기본 WARP 네트워크 경로를 준비하지 못했습니다. Direct/Block은 사용할 수 있지만 WARP는 복구가 필요합니다.")
+    except Exception as exc:
+        failed_components.append("warp")
+        utils.warn("WARP 설치 중 오류: " + repr(exc))
 
     status = "partial" if failed_components else "installed"
     utils.write_install_manifest(
