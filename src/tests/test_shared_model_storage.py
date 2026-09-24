@@ -52,6 +52,15 @@ def test_a_store_the_user_configured_wins_over_the_shared_default():
     assert ollama_paths.configured_models_dir(dict(home, OLLAMA_MODELS="   ")) is None
 
 
+def test_the_old_forced_environment_value_is_migration_input_not_a_user_choice():
+    from core import ollama_paths
+    environ = {"OLLAMA_MODELS": r"C:\\LLM_Models"}
+    # We still remember the raw configured value so migration/diagnostics can
+    # identify it, but the active target is the new shared Ollama store.
+    assert ollama_paths.configured_models_dir(environ) == ollama_paths.LEGACY_FORCED_STORE
+    assert ollama_paths.models_dir(environ) == ollama_paths.SHARED_MODELS_DIR
+
+
 def test_the_store_this_project_used_to_force_is_still_known():
     """The installer has to find models left there before it can move them."""
     from project_paths import LEGACY_FORCED_MODEL_DIR
