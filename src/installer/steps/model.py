@@ -163,8 +163,12 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     utils.section(_m("section"))
     utils.info(_m("intro"))
 
-    exe = paths["ollama"] / "ollama.exe"
-    if not exe.exists():
+    # Official Ollama is preferred and normally lives outside
+    # llm_environment. The portable copy under paths["ollama"] is only a
+    # fallback, so asking that directory directly skips model downloads after
+    # a perfectly successful official install.
+    exe = ollama.find_existing(paths)
+    if exe is None:
         utils.warn(_m("no_exe"))
         return None
 
