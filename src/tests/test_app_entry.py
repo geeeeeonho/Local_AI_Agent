@@ -17,24 +17,25 @@ def test_the_default_app_is_the_one_the_module_was_started_as():
     assert parse_args('chat', ['--app', 'interpreter']).app == 'interpreter'
 
 
-INSTALLER_FLAGS = ['--install', '--manage', '--skip-model',
-                   '--skip-sandbox', '--skip-build', '--skip-search']
+SETUP_FLAGS = ['--install', '--manage', '--skip-model',
+               '--skip-sandbox', '--skip-build', '--skip-search']
+INSTALLER_FLAGS = ['--install', '--skip-model', '--skip-sandbox',
+                   '--skip-build', '--skip-search']
 
 
-@pytest.mark.parametrize('flag', INSTALLER_FLAGS)
+@pytest.mark.parametrize('flag', SETUP_FLAGS)
 @pytest.mark.parametrize('app', ['studio', 'chat', 'interpreter'])
-def test_installer_flags_are_rejected_against_an_explicit_other_app(app, flag):
+def test_setup_flags_are_rejected_against_an_explicit_other_app(app, flag):
     """`--app chat --install` asks for two different programs at once."""
     with pytest.raises(SystemExit):
         parse_args('studio', ['--app', app, flag])
 
 
-@pytest.mark.parametrize('flag', INSTALLER_FLAGS)
+@pytest.mark.parametrize('flag', SETUP_FLAGS)
 @pytest.mark.parametrize('app', ['studio', 'chat', 'interpreter'])
-def test_installer_flags_alone_name_the_installer(app, flag):
-    """RUN.bat forwards these to apps.studio, so rejecting them here killed a
-    documented path - and under pythonw, with no console, it died in silence.
-    A flag nobody contradicted names the program the user asked for."""
+def test_setup_flags_alone_select_setup(app, flag):
+    """RUN.bat forwards these to apps.studio; each one selects Setup unless
+    the user explicitly selected a different application."""
     assert parse_args(app, [flag]).app == 'setup'
 
 
@@ -48,13 +49,18 @@ def test_gui_and_tui_cannot_be_requested_together():
         parse_args('studio', ['--gui', '--tui'])
 
 
+def test_manage_and_tui_cannot_be_requested_together():
+    with pytest.raises(SystemExit):
+        parse_args('studio', ['--manage', '--tui'])
+
+
 class _Bootstrap:
-    """services.system.bootstrap 대역. 어느 구 진입점으로 갔는지만 기록한다."""
+    """services.system.bootstrap 대역. 내부 모듈 호출만 기록한다."""
 
     def __init__(self):
         self.calls = []
 
-    def legacy_entry(self, module, arguments):
+    def run_module_entry(self, module, arguments):
         self.calls.append((module, list(arguments)))
         return 0
 
@@ -66,18 +72,18 @@ class _Bootstrap:
 def bootstrap(monkeypatch):
     from services.system import bootstrap as real
     fake = _Bootstrap()
-    monkeypatch.setattr(real, 'legacy_entry', fake.legacy_entry)
+    monkeypatch.setattr(real, 'run_module_entry', fake.run_module_entry)
     monkeypatch.setattr(real, 'initialize_language', fake.initialize_language)
     return fake
 
 
-def test_setup_flags_reach_the_retained_installer_with_dashed_names(bootstrap):
+def test_install_flags_reach_the_installer_with_dashed_names(bootstrap):
     assert main('setup', ['--install', '--skip-model', '--lang', 'en']) == 0
     assert bootstrap.calls == [
         ('installer', ['--install', '--skip-model', '--lang', 'en'])]
 
 
-def test_tui_reaches_the_retained_launcher_from_any_app(bootstrap):
+def test_tui_reaches_the_terminal_launcher_from_any_app(bootstrap):
     assert main('chat', ['--tui']) == 0
     assert bootstrap.calls == [('launcher', ['--tui'])]
 
@@ -106,6 +112,24 @@ def _services(monkeypatch, tmp_path):
 
     monkeypatch.setattr(desktop_services, 'create_services', Services)
     return state
+
+
+def test_manage_opens_the_current_setup_app(monkeypatch, bootstrap, tmp_path):
+    state = _services(monkeypatch, tmp_path)
+    opened = []
+
+    class Window:
+        def __init__(self, app, services):
+            opened.append(app)
+
+        def run(self):
+            pass
+
+    _window_module(monkeypatch, Window)
+    assert main('studio', ['--manage']) == 0
+    assert opened == ['setup']
+    assert not any(call and call[0] == 'installer' for call in bootstrap.calls)
+    assert state['closed'] == 1
 
 
 def test_a_failed_window_still_closes_the_services(monkeypatch, bootstrap, tmp_path):
