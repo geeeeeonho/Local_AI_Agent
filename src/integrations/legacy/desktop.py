@@ -26,8 +26,10 @@ class ManagedInference:
 
     def ensure_running(self):
         cls = self.load('launcher.services.ollama').OllamaService
-        if not cls(self.env, model_dir=self.model_dir).ensure_running():
-            raise RuntimeError('Ollama ownership/store validation failed. Open Setup / Repair.')
+        service = cls(self.env, model_dir=self.model_dir)
+        if not service.ensure_running():
+            detail = service.last_error or 'Ollama ownership/store validation failed.'
+            raise RuntimeError(detail + ' Open Setup / Repair.')
         return self.endpoint
 
 
