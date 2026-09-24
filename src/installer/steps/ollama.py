@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Dict, Optional
@@ -70,29 +71,45 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
         utils.warn("공식 Ollama 설치기는 Windows 전용입니다.")
         return None
     target = Path(target or ollama_paths.PROJECT_INSTALL_DIR)
-    installer = target.parent / "OllamaSetup.exe"
-    installer.parent.mkdir(parents=True, exist_ok=True)
-    utils.download_with_progress(ollama_paths.SETUP_URL, installer, "Ollama")
-    utils.info("공식 Ollama 를 설치합니다: " + str(target))
+
+    # Do not stage the installer beside C:\\Ollama. A normal desktop process
+    # may not be allowed to create files at the drive root even though the
+    # official installer itself can negotiate what it needs. A closed temporary
+    # file also works under pythonw.exe, where there is no console.
+    handle = tempfile.NamedTemporaryFile(
+        prefix="LocalAI-OllamaSetup-", suffix=".exe", delete=False
+    )
+    installer = Path(handle.name)
+    handle.close()
+
     try:
-        result = subprocess.run(
-            ollama_paths.setup_command(installer, target),
-            check=False, creationflags=config.WIN_CREATE_NO_WINDOW)
-    except OSError as exc:
-        utils.warn("공식 설치기 실행 실패: " + str(exc))
-        return None
+        try:
+            utils.download_with_progress(ollama_paths.SETUP_URL, installer, "Ollama")
+        except (OSError, RuntimeError) as exc:
+            utils.warn("공식 Ollama 설치기 다운로드 실패: " + str(exc))
+            return None
+
+        utils.info("공식 Ollama 를 설치합니다: " + str(target))
+        try:
+            result = subprocess.run(
+                ollama_paths.setup_command(installer, target),
+                check=False, creationflags=config.WIN_CREATE_NO_WINDOW)
+        except OSError as exc:
+            utils.warn("공식 설치기 실행 실패: " + str(exc))
+            return None
+
+        if result.returncode != 0:
+            utils.warn("공식 설치기가 코드 %s 로 끝났습니다." % result.returncode)
+            return None
+        found = ollama_paths.find_executable(extra=(target,))
+        if found is None:
+            utils.warn("설치 후에도 ollama 실행 파일을 찾지 못했습니다.")
+        return found
     finally:
         try:
             installer.unlink(missing_ok=True)
         except OSError:
             pass
-    if result.returncode != 0:
-        utils.warn("공식 설치기가 코드 %s 로 끝났습니다." % result.returncode)
-        return None
-    found = ollama_paths.find_executable(extra=(target,))
-    if found is None:
-        utils.warn("설치 후에도 ollama 실행 파일을 찾지 못했습니다.")
-    return found
 
 
 def install(paths: Dict[str, Path]) -> Path:
