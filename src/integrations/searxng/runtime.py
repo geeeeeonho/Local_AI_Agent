@@ -69,7 +69,11 @@ class SearchRuntime:
         if existing:
             parts=(inspected.stdout or '').strip().split('|')
             if len(parts)!=3 or parts[0]!=self.image:raise RuntimeError('Search container name belongs to another configuration')
-            if parts[1]==fingerprint and parts[2]=='true':return bool(self.ready())
+            if parts[1]==fingerprint and parts[2]=='true':
+                if self.ready():
+                    return True
+                # A running container that never becomes reachable is not useful.
+                # Recreate it once instead of returning False forever on retries.
         # Immutable, private, derived config; the installed original is retained.
         folder=self.cache/fingerprint;folder.mkdir(parents=True,exist_ok=True,mode=0o700)
         target=folder/'settings.yml'
