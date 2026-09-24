@@ -81,8 +81,9 @@ def chat(parent,w):
     ttk.Button(card,text='프로젝트 만들기 / 관리',style='Chat.TButton',command=w.manage_chat_projects).pack(anchor='w')
     note(main,'프로젝트 연결은 필수가 아닙니다. AnythingLLM의 대화와 문서 데이터는 복제하지 않습니다.\n'
          'AnythingLLM은 브라우저로 열리며, 테마는 그 화면의 설정을 따릅니다.')
-    w.chat_text=text_box(main,height=5)
-    set_text(w.chat_text,'Ready to connect\n\nChat works without a LocalAI connection record.\nBlock: local Chat/RAG only; public search stays disabled.')
+    w.chat_text=text_box(main,height=10)
+    set_text(w.chat_text,'Chat 준비 상태 확인 중...\n\n'
+             'Chat 시작 시 Network → Ollama → AnythingLLM → 선택 모델 연결을 순서대로 검증합니다.')
     content.bind_content()
     projects(w.chat_links_page,w)
 

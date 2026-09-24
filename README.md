@@ -264,7 +264,14 @@ Open Interpreter 버전은 `src/runtime_versions.py` 한 곳에서만 정의합�
 
 ```text
 Chat / RAG
-  AnythingLLM -> Ollama
+  LocalAI Chat 준비
+    -> Network 정책 준비
+    -> Ollama + 공용 모델 저장소 확인
+    -> AnythingLLM 이미지/컨테이너 확인
+    -> 선택 모델을 AnythingLLM Ollama 설정에 동기화
+    -> AnythingLLM 컨테이너 내부에서 host.docker.internal:11434/api/tags 확인
+    -> 선택 모델 존재 확인
+    -> 위 단계가 모두 통과해야 Chat ready
 
 Automation Agent
   Local_AI_Agent GUI
@@ -279,6 +286,8 @@ Web search
     -> SearXNG
     -> Direct / WARP / Tor
 ```
+
+Chat의 상단 `Chat: ready`는 단순히 3001 포트가 열렸다는 뜻이 아닙니다. AnythingLLM UI 응답과 함께 컨테이너에서 Host Ollama API에 실제로 접근하고, 현재 Chat에 지정된 모델이 Ollama 모델 목록에 존재하는지까지 확인한 상태입니다. 모델 선택이 바뀌면 Local AI가 관리하는 Ollama 관련 `.env` 필드만 갱신하고 설정 서명을 바꿔 AnythingLLM 컨테이너를 재생성하므로, 사용자 AnythingLLM 설정을 통째로 덮어쓰지 않습니다.
 
 Open Interpreter App Server와의 전송은 **JSONL over stdio**를 유지합니다. 현재 경계가 이미 프로세스 수명주기와 승인·세션 이벤트를 안정적으로 전달하므로, 단순히 계층을 바꾸기 위해 별도 SDK 전송으로 재작성하지 않습니다. App Server 메서드명과 초기화 payload는 `src/launcher/agent/app_server_protocol.py`, Host/Sandbox 승인 정책은 `src/launcher/agent/execution_policy.py`가 각각 정본입니다.
 
