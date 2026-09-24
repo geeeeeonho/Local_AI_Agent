@@ -43,6 +43,7 @@ class DesktopWindow:
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
+        self._chat_progress = []
         self.session_mode = tk.StringVar(master=self.root,value='inherit')
         self.project_id = tk.StringVar(master=self.root,value='(none)')
         self.message = tk.StringVar(master=self.root,value='Ready')
@@ -137,6 +138,14 @@ class DesktopWindow:
                     (self.agent_panel.enable_send if data.get('ready') else self.agent_panel.disable_send)()
                     self.agent_panel.set_current_model(data.get('model',''))
         text=data.get('message') or data.get('detail') or data.get('status')
+        if text and event.topic == 'runtime.progress' and data.get('service') == 'chat':
+            self._chat_progress.append(str(text))
+            self._chat_progress = self._chat_progress[-12:]
+            if hasattr(self, 'chat_text') and not self.services.chat.started:
+                set_text(
+                    self.chat_text,
+                    'Chat 준비 중...\n\n' + '\n'.join(self._chat_progress),
+                )
         if text:self.log(event.topic+': '+str(text))
 
     def run_task(self,key,fn,done=None,*,mutate=True):
@@ -272,13 +281,25 @@ class DesktopWindow:
         try:project=self.current_project();mode=self.selected_mode('chat')
         except Exception as exc:self.log(str(exc),level='error');return
         model=project.chat_model if project else ''
+        self._chat_progress = ['요청 접수 · Network → Ollama → AnythingLLM → model 연결 순으로 확인합니다.']
+        set_text(self.chat_text,'Chat 준비 시작\n\n'+self._chat_progress[0])
+        def work():
+            try:
+                return self.services.chat.start(mode,model=model,cancel=self.runner.cancel.is_set)
+            except Exception as exc:
+                self.services.events.emit('runtime.progress',{
+                    'service':'chat','message':'준비 실패: '+str(exc)})
+                raise
         def ready(url):
             self.chat_open_button.configure(state='normal')
-            set_text(self.chat_text,'AnythingLLM is ready\n\n'+str(url)+'\nNetwork: '+mode+
+            active_model=self.services.chat.model or model or '(default)'
+            set_text(self.chat_text,'Chat 연결 검증 완료\n\n'+str(url)+'\nNetwork: '+mode+
+                '\nOllama model: '+active_model+
+                '\nContainer → host Ollama → model: verified'+
                 '\nWorkspace linkage: '+(project.anythingllm_workspace if project else '(none)')+
-                '\n\nOpen AnythingLLM to use Chat, files, documents and RAG.\nUse Session stop when finished.')
+                '\n\nAnythingLLM에서 Chat, 파일, 문서, RAG를 사용할 수 있습니다.\n종료 시 세션 종료를 사용하세요.')
             if open_when_ready:self.open_chat()
-        self.run_task('chat.start',lambda:self.services.chat.start(mode,model=model,cancel=self.runner.cancel.is_set),ready)
+        self.run_task('chat.start',work,ready)
 
     def open_chat(self):
         try:
@@ -588,7 +609,20 @@ class DesktopWindow:
     def refresh_health(self,*,fresh=False):
         def display(status):
             shown=lambda value:'ready' if value is True else 'stopped' if value is False else 'unknown'
-            self.health.set('    '.join(key.title()+': '+shown(value) for key,value in status.items()))
+            header_keys=('ollama','docker','chat','search')
+            self.health.set('    '.join(
+                key.title()+': '+shown(status.get(key)) for key in header_keys
+            ))
+            if hasattr(self,'chat_text') and not self.services.chat.attempted:
+                set_text(
+                    self.chat_text,
+                    'Chat 준비 상태\n\n'
+                    'AnythingLLM image: '+shown(status.get('chat_image'))+'\n'
+                    'AnythingLLM + Ollama/model connection: '+shown(status.get('chat'))+'\n'
+                    'Ollama: '+shown(status.get('ollama'))+'\n'
+                    'Docker: '+shown(status.get('docker'))+
+                    '\n\nChat 시작을 누르면 Network → Ollama → AnythingLLM → model 순으로 검증합니다.'
+                )
             active=self.services.network.mode
             if hasattr(self,'network_text'):set_text(self.network_text,'Pinned mode: '+(active.value if active else '(none)')+
                 '\nRuntime ownership in this window: '+str(self.services.owner.owned)+
