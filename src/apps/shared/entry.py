@@ -22,6 +22,10 @@ def parse_args(app,argv=None):
     args=parser.parse_args(argv)
     install_flags=args.install or any(getattr(args,'skip_'+key) for key in ('model','sandbox','build','search'))
     setup_flags=install_flags or args.manage
+    if args.manage and install_flags:
+        parser.error('--manage cannot be combined with install/skip flags.')
+    if args.tui and install_flags:
+        parser.error('--tui cannot be combined with install/repair flags.')
     if args.app is None:
         # RUN.bat forwards these flags to the shared parser. Install/skip flags
         # select install/repair; --manage selects the current Setup desktop app.
