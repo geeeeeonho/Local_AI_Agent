@@ -48,8 +48,16 @@ def _image_present() -> bool:
     return bool(r and r.returncode == 0)
 
 
+def _bridge_support_ready() -> bool:
+    try:
+        from launcher import http_bridge
+        return bool(http_bridge.support_image_exists())
+    except Exception:
+        return False
+
+
 def install(paths: Dict[str, Path]) -> bool:
-    """Prepare the WARP image used by the default network mode."""
+    """Prepare the WARP image and the bridge prerequisites for default mode."""
     probe = _docker("version", "--format", "{{.Server.Version}}", timeout=20)
     if not (probe and probe.returncode == 0):
         print("[warp] Docker 미준비 - WARP 설치 건너뜀 (Docker 설정 후 RUN.bat --install 재실행)")
@@ -57,6 +65,9 @@ def install(paths: Dict[str, Path]) -> bool:
 
     if _image_present():
         print("[warp] 이미지 이미 존재: %s" % IMAGE)
+        if not _bridge_support_ready():
+            print("[warp] HTTP 브리지용 이미지가 없습니다. 샌드박스 또는 SearXNG 준비가 필요합니다.")
+            return False
         print("[warp] WARP 준비 완료. 컨테이너: %s, 포트: %d" % (CONTAINER_NAME, HOST_PORT))
         return True
 
@@ -64,6 +75,9 @@ def install(paths: Dict[str, Path]) -> bool:
     r = _docker("pull", IMAGE, timeout=900)
     if r and r.returncode == 0:
         print("[warp] 이미지 pull 완료")
+        if not _bridge_support_ready():
+            print("[warp] HTTP 브리지용 이미지가 없습니다. 샌드박스 또는 SearXNG 준비가 필요합니다.")
+            return False
         print("[warp] WARP 준비 완료. 컨테이너: %s, 포트: %d" % (CONTAINER_NAME, HOST_PORT))
         return True
     else:
