@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from project_paths import ENV_DIR, LEGACY_FORCED_MODEL_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
+from project_paths import ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
 from installer.steps import model
