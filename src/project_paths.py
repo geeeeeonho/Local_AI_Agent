@@ -25,7 +25,9 @@ USER_DATA_DIR = PROJECT_ROOT / "user_data"
 ENV_DIR = PROJECT_ROOT / "llm_environment"
 
 # Models live inside Ollama's own install, shared by every account on the
-# machine: OLLAMA_MODELS when the user set one, otherwise C:\Ollama\models.
+# machine: a real user OLLAMA_MODELS override wins, otherwise C:\Ollama\models.
+# The exact legacy C:\LLM_Models value once forced by this project is migration
+# input, not a durable override, so it resolves to the shared target.
 # Ollama's own default lives in a user profile, so a second Windows account
 # would see an empty library and re-download everything.
 # LLM_MODEL_DIR remains for controlled deployments and tests.
