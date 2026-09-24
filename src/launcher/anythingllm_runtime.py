@@ -265,6 +265,128 @@ def reseed_env(model_tag=None, token_limit=4096):
         return False
 
 
+def _env_values():
+    """Read simple KEY=VALUE pairs from the persisted AnythingLLM env."""
+    values = {}
+    try:
+        lines = env_file().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        values[key] = value.strip().strip('"').strip("'")
+    return values
+
+
+def configured_model():
+    """The Ollama model AnythingLLM is currently configured to request."""
+    return _env_values().get("OLLAMA_MODEL_PREF", "").strip()
+
+
+def sync_managed_llm_env(model_tag=None, token_limit=4096):
+    """Synchronize only Local AI's Ollama contract and preserve user UI settings.
+
+    AnythingLLM writes other choices back into this file. Re-seeding the whole
+    file would erase those settings, while never touching it leaves a stale
+    OLLAMA_MODEL_PREF when the user chooses another Chat model.
+    """
+    model = str(model_tag or _c("MODEL_TAG", "")).strip()
+    managed = {
+        "LLM_PROVIDER": "ollama",
+        "OLLAMA_BASE_PATH": "http://host.docker.internal:%d" % int(_c("OLLAMA_PORT", 11434)),
+        "OLLAMA_MODEL_PREF": model,
+        "OLLAMA_MODEL_TOKEN_LIMIT": str(int(token_limit)),
+        "OLLAMA_RESPONSE_TIMEOUT": str(OLLAMA_TIMEOUT_MS),
+    }
+    f = env_file()
+    try:
+        if not f.is_file() or f.stat().st_size <= 0:
+            return bool(reseed_env(model_tag=model, token_limit=token_limit))
+        lines = f.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+
+    seen = set()
+    changed = False
+    output = []
+    for raw in lines:
+        stripped = raw.strip()
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped and not stripped.startswith("#") else ""
+        if key in managed:
+            replacement = '%s="%s"' % (key, managed[key])
+            output.append(replacement)
+            seen.add(key)
+            if raw != replacement:
+                changed = True
+        else:
+            output.append(raw)
+    for key, value in managed.items():
+        if key not in seen:
+            output.append('%s="%s"' % (key, value))
+            changed = True
+    if not changed:
+        return False
+    try:
+        f.write_text("\n".join(output) + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def _host_http_ready():
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for url in probe_urls():
+        try:
+            opener.open(url, timeout=3)
+            return True
+        except urllib.error.HTTPError:
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def probe_ollama_connection(model_tag=None):
+    """Verify AnythingLLM container -> host Ollama and selected model visibility."""
+    if not is_running():
+        return False, "AnythingLLM container is not running."
+    target = str(model_tag or configured_model()).strip()
+    port = int(_c("OLLAMA_PORT", 11434))
+    script = (
+        "const http=require('http');"
+        "const target=" + json.dumps(target) + ";"
+        "const req=http.get({host:'host.docker.internal',port:" + str(port) + ",path:'/api/tags',timeout:5000},res=>{"
+        "let body='';res.on('data',c=>body+=c);res.on('end',()=>{"
+        "if(res.statusCode<200||res.statusCode>=300){console.error('ollama-http-'+res.statusCode);process.exitCode=2;return;}"
+        "let data;try{data=JSON.parse(body)}catch(e){console.error('ollama-json');process.exitCode=2;return;}"
+        "const names=(data.models||[]).flatMap(m=>[m.name||'',m.model||'']).filter(Boolean);"
+        "if(target&&!names.includes(target)){console.error('model-missing:'+target);process.exitCode=3;return;}"
+        "console.log('ollama-ok:'+(target||'(any)'));"
+        "});});"
+        "req.on('timeout',()=>{console.error('ollama-timeout');req.destroy();process.exitCode=4;});"
+        "req.on('error',e=>{console.error('ollama-error:'+e.message);process.exitCode=4;});"
+    )
+    result = _run(["docker", "exec", CONTAINER, "node", "-e", script], timeout=15)
+    detail = ((result.stdout or "") + " " + (result.stderr or "")).strip()
+    if result.returncode == 0:
+        return True, detail or ("Ollama connected: " + (target or "(any model)"))
+    return False, detail or "AnythingLLM cannot reach Ollama."
+
+
+def is_ready(model_tag=None):
+    """Strong Chat readiness: UI responds and container can use host Ollama/model."""
+    if not is_running() or not _host_http_ready():
+        return False
+    ok, _ = probe_ollama_connection(model_tag=model_tag)
+    return bool(ok)
+
+
 _CLEANUP_REGISTERED = False
 
 
@@ -554,6 +676,14 @@ def config_signature(mode=None):
     import hashlib
     m = mode or net_mode()
     px = proxy_env_for_container(m)
+    managed = _env_values()
+    managed_sig = "|".join(
+        "%s=%s" % (key, managed.get(key, ""))
+        for key in (
+            "LLM_PROVIDER", "OLLAMA_BASE_PATH", "OLLAMA_MODEL_PREF",
+            "OLLAMA_MODEL_TOKEN_LIMIT", "OLLAMA_RESPONSE_TIMEOUT",
+        )
+    )
     parts = [
         IMAGE, str(HOST_PORT), str(CONTAINER_PORT),
         STORAGE_MOUNT, SERVER_ENV_MOUNT, network_for_mode(m),
@@ -561,6 +691,7 @@ def config_signature(mode=None):
         "|".join("%s=%s" % (k, px[k]) for k in sorted(px)),
         chromium_args(m),
         node_options(m),
+        managed_sig,
     ]
     return hashlib.sha1("||".join(parts).encode("utf-8")).hexdigest()[:12]
 
@@ -727,6 +858,14 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
         _say("Block 네트워크 준비에 실패하여 AnythingLLM 시작을 중단합니다.", "FAIL")
         return False
 
+    model = str(model_tag or _c("MODEL_TAG", "")).strip()
+    changed = sync_managed_llm_env(model_tag=model, token_limit=token_limit)
+    _say("Chat LLM 설정 %s: model=%s · Ollama=host.docker.internal:%s" % (
+        "동기화" if changed else "확인",
+        model or "(default)",
+        int(_c("OLLAMA_PORT", 11434)),
+    ))
+
     if is_running():
         _prev = running_netmode()
         _prevsig = running_cfgsig()
@@ -743,14 +882,18 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
             stop()
         else:
             _say("AnythingLLM 이 이미 실행 중입니다 (설정 동일 %s)." % _sig)
-            return wait_ready(cancel_check=cancel_check, log=log)
+            if not wait_ready(cancel_check=cancel_check, log=log):
+                return False
+            connected, detail = probe_ollama_connection(model)
+            _say(("Ollama 연결 검증 완료: " if connected else "Ollama 연결 검증 실패: ") + detail,
+                 "OK" if connected else "FAIL")
+            return connected
 
     if not ensure_network(_mode):
         _say("Docker 네트워크를 준비할 수 없어 AnythingLLM 시작을 중단합니다.", "FAIL")
         return False
     _remove_stale()
-    seeded = ensure_env_file(model_tag=model_tag, token_limit=token_limit)
-    _say("설정 파일 %s: %s" % ("생성" if seeded else "기존 유지", env_file()))
+    _say("설정 파일 준비: %s" % env_file())
 
     cmd = build_run_cmd(memory=memory, cpus=cpus)
     _say("docker run 실행 (도커 데몬이 방금 켜졌다면 수십 초 걸릴 수 있습니다)")
@@ -771,7 +914,11 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
         else:
             _say("기동 대기 시간 초과 (컨테이너 상태=%s). 확인: docker logs %s"
                  % (_hs or "?", CONTAINER), "WARN")
-    return ok
+        return False
+    connected, detail = probe_ollama_connection(model)
+    _say(("Ollama 연결 검증 완료: " if connected else "Ollama 연결 검증 실패: ") + detail,
+         "OK" if connected else "FAIL")
+    return connected
 
 
 def stop(remove=True, grace=None):
@@ -813,6 +960,7 @@ def describe():
 __all__ = [
     "IMAGE", "CONTAINER", "HOST_PORT", "URL", "NETWORK",
     "storage_dir", "env_file", "ensure_env_file", "reseed_env",
+    "configured_model", "sync_managed_llm_env", "probe_ollama_connection", "is_ready",
     "searxng_url_for_container", "image_exists", "pull",
     "is_running", "exists", "ensure_network", "network_for_mode", "build_run_cmd",
     "wait_ready", "start", "stop", "logs", "describe",
