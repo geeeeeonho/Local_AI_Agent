@@ -40,6 +40,29 @@ class SettingsStore:
             raise ValueError('unsupported theme preference')
         return value
 
+    def activity_visible(self) -> bool:
+        """Is the shared activity log expanded? Defaults to yes."""
+        data = schema_one(self.store.read())
+        appearance = data.get('appearance', {})
+        if not isinstance(appearance, dict):
+            raise ValueError('appearance settings must be an object')
+        value = appearance.get('activity_log', True)
+        if not isinstance(value, bool):
+            raise ValueError('activity_log must be true or false')
+        return value
+
+    def set_activity_visible(self, visible: bool) -> None:
+        if not isinstance(visible, bool):
+            raise ValueError('activity_log must be true or false')
+        def change(data):
+            data = schema_one(data)
+            appearance = data.setdefault('appearance', {})
+            if not isinstance(appearance, dict):
+                raise ValueError('appearance settings must be an object')
+            appearance['activity_log'] = visible
+            return data
+        self.store.update(change)
+
     def set_theme(self, theme: str) -> None:
         if not isinstance(theme, str) or theme not in ('dark', 'light'):
             raise ValueError('theme must be dark or light')
