@@ -225,7 +225,7 @@ def test_install_manifest_identifies_product_and_external_model_storage(tmp_path
         paths,
         project_root=project_root,
         status="installed",
-        components=["ollama", "open_webui", "open_interpreter"],
+        components=["ollama", "anythingllm", "open_interpreter"],
     )
 
     data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -238,7 +238,7 @@ def test_install_manifest_identifies_product_and_external_model_storage(tmp_path
     assert data["model_storage_access"] == (
         "builtin-users-read-execute-requested; existing-acl-preserved"
     )
-    assert data["components"] == ["ollama", "open_webui", "open_interpreter"]
+    assert data["components"] == ["ollama", "anythingllm", "open_interpreter"]
 
 
 # ── moving the old forced store into Ollama's ────────────────────────────
