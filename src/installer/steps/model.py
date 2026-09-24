@@ -249,6 +249,9 @@ def download(paths: Dict[str, Path]) -> Optional[List[str]]:
     utils.info(_m("summary", pulled=pulled, skipped=skipped, failed=failed))
     if failed == 0:
         utils.ok(_m("all_ok"))
-    else:
-        utils.warn(_m("some_fail"))
-    return ok_tags
+        return ok_tags
+    utils.warn(_m("some_fail"))
+    # None means the selected model set was not fully prepared. The installer
+    # records that as a partial installation instead of claiming models ready
+    # because one of several pulls happened to succeed.
+    return None
