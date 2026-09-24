@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 from types import SimpleNamespace
 import webbrowser
 from core.projects.model import Project
@@ -82,8 +82,10 @@ class DesktopWindow:
         footer=ttk.Frame(content,padding=(18,8));footer.pack(side='bottom',fill='x')
         self.message_label=ttk.Label(footer,textvariable=self.message,style='Muted.TLabel',wraplength=900)
         self.message_label.pack(anchor='w')
-        self.activity=themed(tk.Text(content,height=3,relief='flat',
-                              font=('Consolas',9),padx=14,pady=8,state='disabled'),
+        # Keep operational progress visible. The previous 3-line Text widget hid
+        # useful Chat/Agent startup stages behind periodic health task messages.
+        self.activity=themed(scrolledtext.ScrolledText(content,height=8,relief='flat',
+                              font=('Consolas',9),padx=14,pady=8,state='disabled',wrap='word'),
                               background='surface',foreground='muted',highlightbackground='border',highlightcolor='chat',
                               selectbackground='selected',selectforeground='fg')
         self.activity.pack(side='bottom',fill='x',padx=24,pady=(4,0))
@@ -148,13 +150,13 @@ class DesktopWindow:
                 )
         if text:self.log(event.topic+': '+str(text))
 
-    def run_task(self,key,fn,done=None,*,mutate=True):
+    def run_task(self,key,fn,done=None,*,mutate=True,announce=True):
         if self.closing:return False
         def finish(value):
             if done and not self.closing:done(value)
-            self.log(key+' completed')
+            if announce:self.log(key+' completed')
         ok=self.runner.submit(key,fn,finish,lambda exc:self.log(key+': '+str(exc),level='error'),mutate=mutate)
-        if ok:self.log(key+' ...')
+        if ok and announce:self.log(key+' ...')
         return ok
 
     def current_project(self):
@@ -607,12 +609,19 @@ class DesktopWindow:
         self.run_task('models.apply',work,finished)
 
     def refresh_health(self,*,fresh=False):
+        if fresh:
+            self.log('상태 확인 중 · Ollama / Docker / Chat / Search')
         def display(status):
             shown=lambda value:'ready' if value is True else 'stopped' if value is False else 'unknown'
             header_keys=('ollama','docker','chat','search')
             self.health.set('    '.join(
                 key.title()+': '+shown(status.get(key)) for key in header_keys
             ))
+            if fresh:
+                summary=' · '.join(key.title()+'='+shown(status.get(key)) for key in header_keys)
+                elapsed=status.get('probe_seconds')
+                suffix=(' · %.1f초' % elapsed) if isinstance(elapsed,(int,float)) else ''
+                self.log('상태 확인 완료 · '+summary+suffix)
             if hasattr(self,'chat_text') and not self.services.chat.attempted:
                 set_text(
                     self.chat_text,
@@ -629,7 +638,9 @@ class DesktopWindow:
                 '\n\nPreferences apply to the next session. Block reuses canonical relay quiescence and internal-network verification.')
             if hasattr(self,'system_text'):set_text(self.system_text,json.dumps(status,indent=2)+
                 '\n\nEnvironment: '+str(self.services.env)+'\nModels: '+str(self.services.model_dir)+'\nUser data: '+str(self.services.data))
-        self.run_task('health',lambda:self.services.system.health(fresh=fresh),display,mutate=False)
+        # Health is background telemetry, not user work. Keep failures visible,
+        # but do not flood the shared activity log with "health .../completed".
+        self.run_task('health',lambda:self.services.system.health(fresh=fresh),display,mutate=False,announce=False)
 
     def repair(self):
         if self.services.chat.started or self.services.agent.opened:
@@ -675,7 +686,9 @@ class DesktopWindow:
         elif not self.closing and self._polling:
             self._ticks+=1
             if self._ticks%200==0:self.sync_theme()
-            if self._ticks==1 or self._ticks%200==0:self.refresh_health()
+            # Backend health is cached for 30 seconds; probing every 10 seconds
+            # only resubmitted the same check and obscured useful progress logs.
+            if self._ticks==1 or self._ticks%600==0:self.refresh_health()
             session=self.agent_session
             if session is not None and self._ticks%2==0:
                 self.runner.submit('agent.poll',session.poll_once,lambda _:None,lambda exc:self.log(str(exc),level='error'),mutate=False)
