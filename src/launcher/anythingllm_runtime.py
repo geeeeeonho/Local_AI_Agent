@@ -860,9 +860,14 @@ def start(log=None, memory=None, cpus=None, model_tag=None, token_limit=4096,
 
     model = str(model_tag or _c("MODEL_TAG", "")).strip()
     changed = sync_managed_llm_env(model_tag=model, token_limit=token_limit)
+    configured = configured_model()
+    if model and configured != model:
+        _say("Chat LLM 설정 저장 실패: requested=%s configured=%s" %
+             (model, configured or "(empty)"), "FAIL")
+        return False
     _say("Chat LLM 설정 %s: model=%s · Ollama=host.docker.internal:%s" % (
         "동기화" if changed else "확인",
-        model or "(default)",
+        configured or model or "(default)",
         int(_c("OLLAMA_PORT", 11434)),
     ))
 
