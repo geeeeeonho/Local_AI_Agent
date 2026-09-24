@@ -1,4 +1,7 @@
+import importlib
 from types import SimpleNamespace
+
+import pytest
 
 
 def test_managed_chat_env_updates_model_without_erasing_user_settings(monkeypatch, tmp_path):
@@ -53,6 +56,47 @@ def test_container_ollama_probe_targets_host_gateway_and_selected_model(monkeypa
     assert "host.docker.internal" in script
     assert "/api/tags" in script
     assert "picked:tag" in script
+    assert "toLowerCase" in script
+    assert ".some(" in script
+
+
+def _backend_with_models(*names):
+    from integrations.legacy.desktop import LegacyBackend
+
+    backend = object.__new__(LegacyBackend)
+    backend.inference = SimpleNamespace(
+        client=SimpleNamespace(list_models=lambda: [{"name": name} for name in names])
+    )
+    backend.load = importlib.import_module
+    return backend
+
+
+def test_chat_model_resolution_preserves_installed_ollama_spelling():
+    backend = _backend_with_models("PRUTSER/GEMMA-4-26B-A4B-IT-ARA-ABLITERATED:q4_k_s")
+    resolved = backend._resolve_chat_model(
+        "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"
+    )
+    assert resolved == "PRUTSER/GEMMA-4-26B-A4B-IT-ARA-ABLITERATED:q4_k_s"
+
+
+def test_chat_model_resolution_uses_an_installed_model_when_project_model_is_blank():
+    backend = _backend_with_models("gemma4:12b")
+    seen = []
+    resolved = backend._resolve_chat_model("", log=seen.append)
+    assert resolved == "gemma4:12b"
+    assert any("자동 선택" in message for message in seen)
+
+
+def test_chat_model_resolution_does_not_fall_back_to_an_uninstalled_static_default():
+    backend = _backend_with_models("qwen2.5-coder:7b")
+    resolved = backend._resolve_chat_model("")
+    assert resolved == "qwen2.5-coder:7b"
+
+
+def test_chat_model_resolution_fails_clearly_when_no_local_model_exists():
+    backend = _backend_with_models()
+    with pytest.raises(RuntimeError, match="모델을 먼저 설치"):
+        backend._resolve_chat_model("")
 
 
 def test_strong_chat_readiness_requires_ollama_model_probe(monkeypatch):
