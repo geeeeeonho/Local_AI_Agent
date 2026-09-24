@@ -133,9 +133,9 @@ def parse(app, argv):
     return parse_args(app, argv)
 
 
-def test_installation_flags_select_setup_from_any_launcher():
-    # RUN.bat detects these flags and routes them to a console. Rejecting them
-    # there left the launcher advertising a command the application refused.
+def test_setup_flags_select_setup_from_any_launcher():
+    # The shared parser owns routing. Install/skip flags use the installer,
+    # while --manage opens the current Setup desktop app.
     for argv in (['--install'], ['--manage'], ['--skip-model'], ['--skip-search']):
         assert parse('studio', argv).app == 'setup', argv
     assert parse('studio', ['--install']).install
