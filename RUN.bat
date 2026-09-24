@@ -13,22 +13,34 @@ echo %* | findstr /I /C:"--tui" /C:"--install" /C:"--skip-" /C:"--help" >nul 2>&
 if defined FORCE_CONSOLE goto RUN_CONSOLE
 
 where pythonw.exe >nul 2>&1
-if not errorlevel 1 goto RUN_SYSTEM_GUI
+if not errorlevel 1 (
+  pythonw.exe -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
+  if not errorlevel 1 goto RUN_SYSTEM_GUI
+)
 where pyw.exe >nul 2>&1
-if not errorlevel 1 goto RUN_PYW
+if not errorlevel 1 (
+  pyw -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
+  if not errorlevel 1 goto RUN_PYW
+)
 where python.exe >nul 2>&1
-if not errorlevel 1 goto RUN_SYSTEM_CONSOLE
-py -3 -V >nul 2>&1
+if not errorlevel 1 (
+  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
+  if not errorlevel 1 goto RUN_SYSTEM_CONSOLE
+)
+py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
 if not errorlevel 1 goto RUN_PY
 goto NOPY
 
 :RUN_CONSOLE
 where python.exe >nul 2>&1
 if not errorlevel 1 (
-  python -m apps.studio %*
-  goto CHECK
+  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
+  if not errorlevel 1 (
+    python -m apps.studio %*
+    goto CHECK
+  )
 )
-py -3 -V >nul 2>&1
+py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>&1
 if not errorlevel 1 (
   py -3 -m apps.studio %*
   goto CHECK
@@ -62,6 +74,6 @@ pause
 exit /b 1
 
 :NOPY
-echo [ERROR] Python not found. Install Python 3.11+ and run RUN.bat --install.
+echo [ERROR] Python 3.11+ not found. Install Python 3.11+ and run RUN.bat --install.
 pause
 exit /b 1
