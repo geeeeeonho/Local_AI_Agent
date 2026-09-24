@@ -130,9 +130,15 @@ def run(env: Path, p: Presenter):
         # inventory as the desktop Chat path. A static default that is not
         # installed otherwise makes a healthy AnythingLLM connection fail.
         from ..models import model_roles
+        from integrations.ollama.client import is_cloud_tag
         model, note = model_roles.auto_match_installed(
             getattr(config, "MODEL_TAG", ""), role_name="balanced"
         )
+        if not model or is_cloud_tag(model):
+            installed = model_roles.installed_models() or set()
+            local = sorted(tag for tag in installed if not is_cloud_tag(tag))
+            model = local[0] if local else None
+            note = ("로컬 모델 자동 선택: " + model) if model else note
         if not model:
             p.error(note or "설치된 로컬 Ollama 모델이 없습니다.")
             return
