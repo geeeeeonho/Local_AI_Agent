@@ -22,7 +22,7 @@ class Backend:
     def health(self, max_age=None):
         # Kept out of `calls`, which records side effects; health has none.
         self.health_calls.append(max_age)
-        return {'ollama': True, 'docker': False, 'chat': False, 'search': False}
+        return {'ollama': True, 'docker': False, 'chat_image': True, 'chat': False, 'search': False}
     def prepare_network(self, mode, log):
         self.calls.append(('prepare', mode)); self.mode = mode; return self.ready
     def current_mode(self): return self.mode
@@ -32,6 +32,9 @@ class Backend:
     def search_start(self, mode, log): self.calls.append(('search', mode)); return True
     def search_stop(self): self.calls.append(('search_stop',)); return True
     def chat_image_exists(self): return self.images
+    def chat_active_model(self):
+        chats=[call[1] for call in self.calls if call[0]=='chat']
+        return chats[-1] if chats else ''
     def chat_start(self, model, log, cancel): self.calls.append(('chat', model)); return 'http://127.0.0.1:3001'
     def agent_open(self, presenter, network, project):
         from test_desktop_session import binding
@@ -87,6 +90,27 @@ def test_chat_requires_installed_image_not_implicit_download(tmp_path):
     with pytest.raises(RuntimeError, match='Setup'):
         svc.chat.start('direct')
     assert not any(call[0] in ('chat', 'pull') for call in backend.calls)
+    svc.close()
+
+
+def test_chat_emits_visible_preparation_stages_and_selected_model(tmp_path):
+    svc, backend = make(tmp_path)
+    seen = []
+    unsubscribe = svc.events.subscribe('*', seen.append)
+    try:
+        assert svc.chat.start('direct', model='picked:tag') == 'http://127.0.0.1:3001'
+    finally:
+        unsubscribe()
+    progress = [
+        event.payload.get('message', '')
+        for event in seen
+        if event.topic == 'runtime.progress' and event.payload.get('service') == 'chat'
+    ]
+    assert any('[1/5]' in message and 'Network' in message for message in progress)
+    assert any('[2/5]' in message and 'Ollama' in message for message in progress)
+    assert any('[3/5]' in message and 'AnythingLLM' in message for message in progress)
+    assert any('[5/5]' in message and 'verified' in message for message in progress)
+    assert svc.chat.model == 'picked:tag'
     svc.close()
 
 
