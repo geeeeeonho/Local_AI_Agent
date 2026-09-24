@@ -91,6 +91,26 @@ def test_busy_duplicate_operation_is_not_scheduled(ui):
     done.set();pump(w,lambda:not w.runner.busy('example'))
 
 
+def test_health_refresh_is_quiet_and_activity_log_is_taller(ui):
+    w,_,_=ui
+    assert int(w.activity.cget('height')) >= 8
+    w.refresh_health()
+    pump(w,lambda:not w.runner.busy('health'))
+    contents=w.activity.get('1.0','end')
+    assert 'health ...' not in contents
+    assert 'health completed' not in contents
+
+
+def test_manual_health_refresh_reports_a_useful_summary(ui):
+    w,_,_=ui
+    w.refresh_health(fresh=True)
+    pump(w,lambda:not w.runner.busy('health'))
+    contents=w.activity.get('1.0','end')
+    assert '상태 확인 중' in contents
+    assert '상태 확인 완료' in contents
+    assert 'Ollama=' in contents and 'Docker=' in contents
+
+
 def test_shutdown_does_not_destroy_ui_before_workers_finish(ui):
     import threading
     w,_,_=ui;done=threading.Event()
