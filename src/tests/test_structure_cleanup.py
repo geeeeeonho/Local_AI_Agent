@@ -152,6 +152,15 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertIn("ollama.find_existing(paths)", model)
         self.assertNotIn('exe = paths["ollama"] / "ollama.exe"', model)
 
+    def test_network_images_have_explicit_install_ownership(self):
+        main = self._text("src/installer/__main__.py")
+        searx = self._text("src/installer/steps/searxng.py")
+        self.assertIn("from installer.steps import tor", main)
+        self.assertIn("from installer.steps import warp", main)
+        self.assertNotIn("from installer.steps import warp as _warp", searx)
+        self.assertNotIn("Tor 프록시 이미지 pull", searx)
+        self.assertLess(main.index("searxng.install(paths)"), main.index("warp.install(paths)"))
+
     def test_project_paths_keep_runtime_data_at_repository_root(self):
         path_module = REPO_ROOT / "src" / "project_paths.py"
         self.assertTrue(path_module.is_file())
