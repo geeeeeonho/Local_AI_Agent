@@ -651,7 +651,7 @@ $env:PYTHONPATH = "$PWD\src"
 python -m pytest -q src\tests
 ```
 
-GitHub Actions에서도 동일하게 저장소의 `src`를 `PYTHONPATH`로 사용합니다.
+GitHub Actions는 현재 자동 `push`/`pull_request` 실행을 끄고 수동 실행만 허용합니다. private repo의 hosted runner가 배정되기 전에 실패하는 상태라 불필요한 failure 누적을 막기 위한 조치이며, 실행할 때는 저장소의 `src`를 `PYTHONPATH`로 사용합니다.
 
 ## Agent 동작 보증
 
