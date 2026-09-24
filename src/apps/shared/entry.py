@@ -23,9 +23,8 @@ def parse_args(app,argv=None):
     install_flags=args.install or any(getattr(args,'skip_'+key) for key in ('model','sandbox','build','search'))
     setup_flags=install_flags or args.manage
     if args.app is None:
-        # RUN.bat forwards these flags too. They name the installer no matter
-        # which launcher was used, so treat them as the application choice
-        # rather than rejecting a command the launcher itself accepted.
+        # RUN.bat forwards these flags to the shared parser. Install/skip flags
+        # select install/repair; --manage selects the current Setup desktop app.
         args.app='setup' if setup_flags else app
     elif setup_flags and args.app!='setup':
         parser.error('Setup/install flags are valid only for --app setup.')
