@@ -9,30 +9,56 @@ class ChatService:
         self.started = False
         self.attempted = False
         self.url = None
+        self.model = ''
 
     def start(self, mode, *, model='', search=True, cancel=None):
-        selected = self.network.prepare(mode)
-        self.inference.ensure_ready()
-        if not self.backend.chat_image_exists():
-            raise RuntimeError('AnythingLLM is not installed. Open Setup / Repair; '
-                               'Chat does not download an image implicitly.')
-        log = lambda message: self.events.emit('runtime.progress',
-                                {'service': 'chat', 'message': str(message)})
-        if cancel is not None and cancel():
-            raise RuntimeError('Chat startup cancelled.')
-        if search and selected is not NetworkMode.BLOCK:
-            try:
-                if not self.search.start(selected.value):
-                    log('Search unavailable; local Chat/RAG remains available.')
-            except Exception as exc:
-                log('Search unavailable: ' + str(exc))
-        self.attempted = True
-        self.url = self.backend.chat_start(model, log, cancel)
-        if not self.url:
-            raise RuntimeError('AnythingLLM startup failed.')
-        self.started = True
-        self.events.emit('chat.ready', {'url': self.url, 'mode': selected.value})
-        return self.url
+        log = lambda message: self.events.emit(
+            'runtime.progress', {'service': 'chat', 'message': str(message)}
+        )
+        try:
+            log('[1/5] Network preparation: ' + str(mode))
+            selected = self.network.prepare(mode)
+            log('[1/5] Network ready: ' + selected.value)
+
+            log('[2/5] Ollama service and shared model store check')
+            self.inference.ensure_ready()
+            log('[2/5] Ollama ready')
+
+            log('[3/5] AnythingLLM image check')
+            if not self.backend.chat_image_exists():
+                raise RuntimeError('AnythingLLM is not installed. Run RUN.bat --install or Setup / Repair.')
+            log('[3/5] AnythingLLM image ready')
+
+            if cancel is not None and cancel():
+                raise RuntimeError('Chat startup cancelled.')
+
+            log('[4/5] Search preparation')
+            if search and selected is not NetworkMode.BLOCK:
+                try:
+                    if not self.search.start(selected.value):
+                        log('[4/5] Search unavailable; local Chat/RAG remains available.')
+                    else:
+                        log('[4/5] Search ready')
+                except Exception as exc:
+                    log('[4/5] Search unavailable: ' + str(exc))
+            else:
+                log('[4/5] Search skipped for Block/local-only mode')
+
+            log('[5/5] Starting AnythingLLM and verifying container -> Ollama -> selected model')
+            self.attempted = True
+            self.url = self.backend.chat_start(model, log, cancel)
+            if not self.url:
+                raise RuntimeError('AnythingLLM startup failed.')
+            self.model = str(getattr(self.backend, 'chat_active_model', lambda: model)() or model or '')
+            self.started = True
+            log('[5/5] Chat connection verified' + ((': ' + self.model) if self.model else ''))
+            self.events.emit('chat.ready', {
+                'url': self.url, 'mode': selected.value, 'model': self.model,
+            })
+            return self.url
+        except Exception as exc:
+            log('Chat preparation failed: ' + str(exc))
+            raise
 
     def stop(self):
         if not self.attempted:
@@ -42,4 +68,5 @@ class ChatService:
         self.started = False
         self.attempted = False
         self.url = None
+        self.model = ''
         return True
