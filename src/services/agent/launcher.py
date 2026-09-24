@@ -17,7 +17,7 @@ class AgentLauncher:
         if cancel is not None and cancel():
             return None
         network_was_prepared = self.network.mode is not None
-        selected = self.network.prepare(mode)
+        selected = self.network.prepare(mode, cancel=cancel)
         binding = self.backend.agent_open(presenter, selected.value, project)
         if binding is None or (cancel is not None and cancel()):
             if not network_was_prepared:

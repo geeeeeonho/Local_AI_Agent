@@ -40,7 +40,12 @@ def counting_importer(counter):
         if name == 'launcher.services.ollama':
             return types.SimpleNamespace(OllamaService=Ollama)
         if name == 'launcher.anythingllm_runtime':
-            return types.SimpleNamespace(is_running=lambda: counter.append('chat') or True)
+            # Mirror the real probe: image presence and readiness are separate
+            # questions, and a stub that answers neither made the pass look
+            # cheaper than it is.
+            return types.SimpleNamespace(
+                image_exists=lambda: counter.append('chat_image') or True,
+                is_ready=lambda: counter.append('chat') or True)
         return real(name)
     return importer
 

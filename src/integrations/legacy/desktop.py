@@ -18,6 +18,33 @@ from core.urls import local_url
 from core.agent import AgentBinding
 
 
+class _LogAdapter:
+    """progress 콜백 하나를 logger 프로토콜(info/ok/warn/error)로 감싼다."""
+
+    __slots__ = ('_log',)
+
+    def __init__(self, log):
+        self._log = log if callable(log) else (lambda message: None)
+
+    def _say(self, prefix, message):
+        try:
+            self._log(prefix + str(message))
+        except Exception:
+            pass
+
+    def info(self, message):
+        self._say('', message)
+
+    def ok(self, message):
+        self._say('', message)
+
+    def warn(self, message):
+        self._say('주의: ', message)
+
+    def error(self, message):
+        self._say('오류: ', message)
+
+
 class ManagedInference:
     def __init__(self, env, model_dir, importer):
         self.env, self.model_dir, self.load = env, model_dir, importer
@@ -25,9 +52,12 @@ class ManagedInference:
         self.endpoint = 'http://127.0.0.1:' + str(int(cfg.OLLAMA_PORT))
         self.client = OllamaClient(self.endpoint)
 
-    def ensure_running(self):
+    def ensure_running(self, log=None):
         cls = self.load('launcher.services.ollama').OllamaService
-        service = cls(self.env, model_dir=self.model_dir)
+        # 로거를 주지 않으면 최대 30초의 기동이 통째로 침묵한다. Chat 준비창이
+        # [2/5] 에서 멈춘 것처럼 보이던 원인이다.
+        service = cls(self.env, logger=_LogAdapter(log) if log else None,
+                      model_dir=self.model_dir)
         if not service.ensure_running():
             detail = getattr(service, 'last_error', '') or 'Ollama ownership/store validation failed.'
             raise RuntimeError(detail + ' Open Setup / Repair.')
@@ -40,6 +70,7 @@ class LegacyBackend:
         self.load = importer
         self.inference = ManagedInference(self.env, self.model_dir, self.load)
         self._chat_owned_id = None
+        self._chat_before_id = None
         self._chat_probe_failed = False
         self._search_runtime = None
         self._health = None          # (monotonic, result)
@@ -94,14 +125,17 @@ class LegacyBackend:
         result['probe_seconds'] = round(time.monotonic() - started, 3)
         return result
 
-    def prepare_network(self, mode, log):
+    def prepare_network(self, mode, log, cancel=None):
         selected = NetworkMode(mode)
         policy = self.load('launcher.network_policy')
         if selected is NetworkMode.DIRECT:
             policy.set_mode(selected.value)
             return True
         docker = self.load('launcher.services.docker').DockerService
-        if not docker.ensure_daemon(timeout=90):
+        # 로거 없이 부르면 Docker Desktop 자동 시작이 최대 90초 동안 아무 말도
+        # 하지 않고, 취소도 되지 않는다. 사용자가 보던 것은 멈춘 창뿐이었다.
+        if not docker.ensure_daemon(logger=_LogAdapter(log), timeout=90,
+                                    cancel_check=cancel):
             return False
         if selected is NetworkMode.BLOCK:
             ok = bool(policy.ensure_block_network(log=log))
@@ -146,7 +180,7 @@ class LegacyBackend:
         if docker.daemon_alive():
             return True
         log('Docker Desktop 준비 중...')
-        if not docker.ensure_daemon(timeout=90, cancel_check=cancel):
+        if not docker.ensure_daemon(logger=_LogAdapter(log), timeout=90, cancel_check=cancel):
             raise RuntimeError('Docker is unavailable. Start Docker Desktop or use Setup / Repair.')
         log('Docker Desktop 준비 완료')
         return True
@@ -237,9 +271,11 @@ class LegacyBackend:
         runtime = self.load('launcher.anythingllm_runtime')
         cfg = self.load('launcher.config')
         if not self.load('launcher.services.docker').DockerService.ensure_daemon(
-                timeout=90, cancel_check=cancel):
+                logger=_LogAdapter(log), timeout=90, cancel_check=cancel):
             raise RuntimeError('Docker is unavailable. Open Setup / Repair.')
+        self._chat_before_id = None
         before = self._chat_id()
+        self._chat_before_id = before
         self._chat_probe_failed = False
         # Resolve against the live Ollama inventory before writing AnythingLLM
         # settings. This avoids both a missing static default and case-only tag
@@ -267,7 +303,21 @@ class LegacyBackend:
         # Reused containers belong to their original owner. A container recreated
         # by start() has a new ID and must not escape this window's cleanup.
         if self._chat_probe_failed:
-            return False
+            # A Docker hiccup during start used to latch this flag forever, and
+            # nothing cleared it but another successful start. Shutdown then
+            # reported "could not be verified" on every attempt and the window
+            # could not be closed at all. Ask Docker again instead of refusing.
+            try:
+                recovered = self._chat_id()
+            except Exception:
+                return False
+            self._chat_probe_failed = False
+            if self._chat_owned_id is None and recovered is not None \
+                    and recovered != self._chat_before_id:
+                # The probe failed exactly when start() had already created the
+                # container, so ownership was never recorded. Claim it now
+                # instead of leaking it past the window that made it.
+                self._chat_owned_id = recovered
         if self._chat_owned_id is None:
             return True
         current = self._chat_id()

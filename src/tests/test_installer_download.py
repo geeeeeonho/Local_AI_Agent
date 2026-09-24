@@ -31,7 +31,7 @@ def test_official_ollama_download_failure_returns_to_portable_fallback(monkeypat
         def close(self):
             pass
 
-    monkeypatch.setattr(ollama.os, "name", "nt")
+    monkeypatch.setattr(ollama, "_is_windows", lambda: True)
     monkeypatch.setattr(ollama.tempfile, "NamedTemporaryFile", lambda **_kw: Temp())
     monkeypatch.setattr(
         ollama.utils, "download_with_progress",

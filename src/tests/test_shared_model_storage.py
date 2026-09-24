@@ -54,7 +54,9 @@ def test_a_store_the_user_configured_wins_over_the_shared_default():
 
 def test_the_old_forced_environment_value_is_migration_input_not_a_user_choice():
     from core import ollama_paths
-    environ = {"OLLAMA_MODELS": r"C:\\LLM_Models"}
+    # One backslash, not two: the doubled form only compared equal because
+    # Windows collapses it, so this test could not run anywhere else.
+    environ = {"OLLAMA_MODELS": r"C:\LLM_Models"}
     # We still remember the raw configured value so migration/diagnostics can
     # identify it, but the active target is the new shared Ollama store.
     assert ollama_paths.configured_models_dir(environ) == ollama_paths.LEGACY_FORCED_STORE

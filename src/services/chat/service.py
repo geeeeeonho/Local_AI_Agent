@@ -19,11 +19,14 @@ class ChatService:
         search_was_attempted = self.search.attempted
         try:
             log('[1/5] Network preparation: ' + str(mode))
-            selected = self.network.prepare(mode)
+            selected = self.network.prepare(mode, cancel=cancel)
             log('[1/5] Network ready: ' + selected.value)
 
+            if cancel is not None and cancel():
+                raise RuntimeError('Chat startup cancelled.')
+
             log('[2/5] Ollama service and shared model store check')
-            self.inference.ensure_ready()
+            self.inference.ensure_ready(log=log)
             log('[2/5] Ollama ready')
 
             log('[3/5] Docker / AnythingLLM image check')

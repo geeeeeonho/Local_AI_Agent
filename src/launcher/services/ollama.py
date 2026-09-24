@@ -46,6 +46,10 @@ def _dir_has_entries(path: Path) -> bool:
 class OllamaService:
     """프로젝트가 설치한 Ollama 포터블 서비스 제어."""
 
+    #: 종료 정리는 프로세스당 한 번만 등록한다. 등록된 콜백은 매번 runtime state
+    #: 파일을 다시 읽으므로, 그 사이에 재시작된 서버도 같은 콜백이 처리한다.
+    _cleanup_registered = False
+
     def __init__(
         self,
         env: Path,
@@ -91,10 +95,15 @@ class OllamaService:
             return False
         pid = self._listener_pid()
         if pid is None:
-            return False
+            # PowerShell 이 없거나 느려서(또는 Windows 가 아니라서) 포트 주인을
+            # 못 읽은 것이지, 서버가 죽은 것이 아니다. 응답 중인 서버를 "정지"로
+            # 보고하면 상태 화면이 거짓말을 한다. 저장소 일치 여부로 답한다.
+            return self.store_agrees() is not False
         if self._listener_is_managed(pid) and self._state_matches(pid):
             return True
         executable = self._process_executable(pid)
+        if executable is None:
+            return self.store_agrees() is not False
         if not self._is_known(executable):
             return False
         if _same_path(executable, self.portable_exe) and not self._state_matches(pid):
@@ -176,6 +185,28 @@ class OllamaService:
         except Exception:
             return None
 
+    def _accept_unidentified_server(self) -> bool:
+        """포트 주인을 식별하지 못했을 때, 신원 대신 저장소 일치로 판단한다.
+
+        "알려진 위치의 exe + 저장소 확인 불가" 를 이미 사용 가능으로 보고 있으므로,
+        "신원 확인 불가 + 저장소 일치" 를 거부할 이유는 없다. 저장소가 실제로 다른
+        경우에만 거부한다 — 그래야 빈 모델 목록을 보여 주는 일이 생기지 않는다.
+        """
+        agrees = self.store_agrees()
+        if agrees is False:
+            self._err("포트 %s의 Ollama 가 다른 모델 저장소를 쓰고 있습니다."
+                      % config.OLLAMA_PORT)
+            self._err("OLLAMA_MODELS 를 %s 로 맞추고 Ollama 를 재시작하세요."
+                      % self.model_dir)
+            return False
+        if agrees:
+            self._ok("실행 중인 Ollama 를 사용합니다 (모델 저장소 일치 확인됨).")
+        else:
+            self._warn("포트 %s 소유 프로세스를 확인하지 못했습니다 — 응답 중인 "
+                       "Ollama 를 그대로 사용합니다." % config.OLLAMA_PORT)
+        self._warn_if_cloud_enabled()
+        return True
+
     def cloud_status(self, timeout: float = 5) -> Optional[bool]:
         """Is remote inference disabled on the running server? None = unknown.
 
@@ -209,7 +240,10 @@ class OllamaService:
         kwargs = {
             "capture_output": True,
             "text": True,
-            "timeout": 5,
+            # 5초는 백신이 붙은 Windows 에서 PowerShell 이 처음 뜨는 시간보다
+            # 짧다. 시간 초과가 곧 "포트 주인을 모른다" 가 되어 멀쩡한 Ollama 를
+            # 낯선 서버로 오인하게 만들었다.
+            "timeout": 15,
             "check": False,
         }
         kwargs["creationflags"] = config.WIN_CREATE_NO_WINDOW
@@ -347,6 +381,10 @@ class OllamaService:
         if executable is None or not _same_path(executable, self.exe):
             self._err("Ollama 프로세스 소유권이 달라 종료하지 않았습니다.")
             return False
+        return self._kill(pid)
+
+    def _kill(self, pid: int) -> bool:
+        """소유권 확인이 끝난 pid 를 실제로 종료한다."""
         try:
             if os.name == "nt":
                 result = subprocess.run(
@@ -366,6 +404,96 @@ class OllamaService:
             self._err(f"관리형 Ollama 종료 실패: {exc}")
             return False
         self._remove_runtime_state()
+        return True
+
+    # ── 종료 ──
+    def _pid_alive(self, pid: int) -> Optional[bool]:
+        """POSIX 에서 기록된 pid 가 아직 살아 있는지. None = 알 수 없음."""
+        if os.name == "nt":
+            return None
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except (OSError, ValueError, TypeError):
+            return None
+        return True
+
+    def stop_managed(self, stop_timeout: int = 5) -> bool:
+        """이 프로그램이 띄운 Ollama 만 종료한다.
+
+        창을 닫으면 같이 꺼져야 하는 것은 우리가 켠 서버뿐이다. 사용자가 원래
+        쓰던 공식 Ollama 나 Windows 가 관리하는 서비스는 여기서 절대 건드리지
+        않는다. 판단 근거는 우리가 직접 남긴 runtime state 파일의 pid 이며,
+        포트를 실제로 그 pid 가 잡고 있는지 한 번 더 확인한다.
+        """
+        recorded = self._state_pid()
+        if recorded is None:
+            return True
+        if not self.is_running():
+            self._remove_runtime_state()
+            return True
+
+        pid = self._listener_pid()
+        if pid is None:
+            # 포트 주인을 못 읽었다. 기록한 pid 가 확실히 살아 있을 때만 종료한다.
+            # 죽어 있으면 기록만 지우고, 확인조차 못 하면 pid 재사용 위험을 감수하지
+            # 않고 그대로 둔다 — 남의 프로세스를 죽이는 쪽이 훨씬 나쁘다.
+            alive = self._pid_alive(recorded)
+            if alive is False:
+                self._remove_runtime_state()
+                return True
+            if alive is not True:
+                self._warn("포트 소유 프로세스를 확인하지 못해 Ollama 를 그대로 둡니다.")
+                return False
+        elif int(pid) != int(recorded):
+            # 포트 주인이 바뀌었다. 우리 서버는 이미 사라졌고 지금 응답하는
+            # 것은 남의 서버다. 기록만 지우고 끝낸다.
+            self._remove_runtime_state()
+            return True
+
+        self._info("이 창이 시작한 Ollama 를 종료합니다.")
+        if not self._kill(int(recorded)):
+            return False
+        deadline = time.monotonic() + max(1, stop_timeout)
+        while time.monotonic() < deadline:
+            if not self.is_running():
+                return True
+            time.sleep(0.1)
+        # 포트가 아직 응답한다면 우리가 아닌 다른 서버일 수도 있다. 실패로 보고만
+        # 하고 추가로 무언가를 더 죽이지는 않는다.
+        self._warn("Ollama 종료를 확인하지 못했습니다.")
+        return False
+
+    def register_exit_cleanup(self) -> bool:
+        """우리가 띄운 서버에 한해 종료 정리를 등록한다 (중복 등록 없음)."""
+        if OllamaService._cleanup_registered:
+            return True
+        try:
+            from ..core import lifelog
+        except Exception:
+            try:
+                from launcher.core import lifelog  # type: ignore
+            except Exception:
+                return False
+
+        def _do() -> None:
+            try:
+                lifelog.log("CLEANUP", "Ollama 서비스 정리 (이 창이 시작한 서버)")
+            except Exception:
+                pass
+            try:
+                self.stop_managed()
+            except Exception:
+                pass
+
+        try:
+            lifelog.register_cleanup(_do)
+        except Exception:
+            return False
+        OllamaService._cleanup_registered = True
         return True
 
     # ── 시작 ──
@@ -392,11 +520,17 @@ class OllamaService:
         if self.is_running():
             pid = self._listener_pid()
             executable = self._process_executable(pid) if pid is not None else None
-            if pid is None or not self._is_known(executable):
-                shown = str(executable) if executable is not None else "확인 불가"
+            if pid is None or executable is None:
+                # 여기서 실패하는 이유는 대부분 "낯선 Ollama" 가 아니다:
+                # PowerShell 이 느리거나(시간 초과), 권한이 없어 다른 계정의
+                # 프로세스 경로를 못 읽거나, 애초에 Windows 가 아니다. 그때마다
+                # Chat 과 Agent 를 통째로 막아 버렸다. 신원을 못 밝히면 신원 대신
+                # 증거를 본다 — 저장소가 일치하는지 서버에 직접 묻는다.
+                return self._accept_unidentified_server()
+            if not self._is_known(executable):
                 self._err(
                     "포트 %s가 알 수 없는 Ollama에 의해 사용 중입니다: %s"
-                    % (config.OLLAMA_PORT, shown)
+                    % (config.OLLAMA_PORT, executable)
                 )
                 self._err("해당 Ollama를 종료한 뒤 다시 실행하세요.")
                 return False
@@ -468,6 +602,7 @@ class OllamaService:
                     self._err("시작 도중 다른 Ollama가 포트를 선점했습니다.")
                     return False
                 self._write_runtime_state(listener_pid)
+                self.register_exit_cleanup()
                 self._ok(f"Ollama 가동 확인 ({i + 1}초)")
                 return True
             time.sleep(1)

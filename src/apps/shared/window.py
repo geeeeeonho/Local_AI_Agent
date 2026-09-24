@@ -43,7 +43,7 @@ class DesktopWindow:
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
-        self._chat_progress = []
+        self._chat_progress = [];self._chat_starting = False
         self.session_mode = tk.StringVar(master=self.root,value='inherit')
         self.project_id = tk.StringVar(master=self.root,value='(none)')
         self.message = tk.StringVar(master=self.root,value='Ready')
@@ -140,22 +140,33 @@ class DesktopWindow:
                     (self.agent_panel.enable_send if data.get('ready') else self.agent_panel.disable_send)()
                     self.agent_panel.set_current_model(data.get('model',''))
         text=data.get('message') or data.get('detail') or data.get('status')
-        if text and event.topic == 'runtime.progress' and data.get('service') == 'chat':
-            self._chat_progress.append(str(text))
+        # Network, Ollama and search progress belongs on the Chat page too while
+        # Chat is starting. Filtering on service=='chat' meant the readiness box
+        # sat on "[1/5] Network preparation" for the entire ninety seconds that
+        # Docker Desktop was booting, with the explanation in the activity log.
+        service=data.get('service')
+        if text and event.topic=='runtime.progress' and (
+                service=='chat' or self._chat_starting):
+            label=str(text) if service in (None,'chat') else str(service)+': '+str(text)
+            self._chat_progress.append(label)
             self._chat_progress = self._chat_progress[-12:]
             if hasattr(self, 'chat_text') and not self.services.chat.started:
                 set_text(
                     self.chat_text,
                     'Chat 준비 중...\n\n' + '\n'.join(self._chat_progress),
                 )
-        if text:self.log(event.topic+': '+str(text))
+        if text:self.log(event.topic+': '+str(text),
+                         level='error' if event.topic=='runtime.error' else 'info')
 
-    def run_task(self,key,fn,done=None,*,mutate=True,announce=True):
+    def run_task(self,key,fn,done=None,*,mutate=True,announce=True,error=None):
         if self.closing:return False
         def finish(value):
             if done and not self.closing:done(value)
             if announce:self.log(key+' completed')
-        ok=self.runner.submit(key,fn,finish,lambda exc:self.log(key+': '+str(exc),level='error'),mutate=mutate)
+        def failed(exc):
+            self.log(key+': '+str(exc),level='error')
+            if error is not None and not self.closing:error(exc)
+        ok=self.runner.submit(key,fn,finish,failed,mutate=mutate)
         if ok and announce:self.log(key+' ...')
         return ok
 
@@ -284,6 +295,10 @@ class DesktopWindow:
         except Exception as exc:self.log(str(exc),level='error');return
         model=project.chat_model if project else ''
         self._chat_progress = ['요청 접수 · Network → Ollama → AnythingLLM → model 연결 순으로 확인합니다.']
+        # Events are drained on the Tk timer, so they can arrive after the worker
+        # has already finished. A flag the worker does not race decides whether
+        # they still belong on the Chat readiness box.
+        self._chat_starting = True
         set_text(self.chat_text,'Chat 준비 시작\n\n'+self._chat_progress[0])
         def work():
             try:
@@ -293,6 +308,7 @@ class DesktopWindow:
                     'service':'chat','message':'준비 실패: '+str(exc)})
                 raise
         def ready(url):
+            self._chat_starting = False
             self.chat_open_button.configure(state='normal')
             active_model=self.services.chat.model or model or '(default)'
             set_text(self.chat_text,'Chat 연결 검증 완료\n\n'+str(url)+'\nNetwork: '+mode+
@@ -301,7 +317,14 @@ class DesktopWindow:
                 '\nWorkspace linkage: '+(project.anythingllm_workspace if project else '(none)')+
                 '\n\nAnythingLLM에서 Chat, 파일, 문서, RAG를 사용할 수 있습니다.\n종료 시 세션 종료를 사용하세요.')
             if open_when_ready:self.open_chat()
-        self.run_task('chat.start',work,ready)
+        def failed(exc):
+            # Keep the whole preparation trail on the page: the last line alone
+            # never said which of the five steps actually stopped.
+            self._chat_starting = False
+            if hasattr(self,'chat_text'):
+                set_text(self.chat_text,'Chat 준비 실패\n\n'+'\n'.join(self._chat_progress)+
+                    '\n\n'+str(exc))
+        self.run_task('chat.start',work,ready,error=failed)
 
     def open_chat(self):
         try:
@@ -327,7 +350,13 @@ class DesktopWindow:
         try:p=self.presenter('agent');mode=self.selected_mode('interpreter');project=self.current_project()
         except Exception as exc:self.log(str(exc),level='error');return
         def ready(session):
-            if session is None:return
+            if session is None:
+                # The wizard replaces this host with its own progress screen the
+                # moment [시작] is pressed. A cancel or a rejected selection has
+                # to take that screen back down, or the page keeps saying the
+                # Agent is starting when nothing is.
+                self.clear_agent_panel()
+                return
             self.agent_session=session
             callbacks={'input':lambda text:self.run_task('agent.input',lambda:session.handle_input(text)),
                 'stop':lambda:self.run_task('agent.stop_turn',session.stop),
@@ -337,7 +366,14 @@ class DesktopWindow:
             # Old setup log panels were replaced by a session view, not reused.
             p._current_log_panel=None;p._current_log_done=None
             self.agent_panel.enable_send()
-        self.run_task('agent.start',lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set),ready)
+        self.run_task('agent.start',
+            lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set),
+            ready,error=lambda exc:self.clear_agent_panel())
+
+    def clear_agent_panel(self):
+        self.agent_panel=None
+        try:self.hosts['agent'].clear()
+        except Exception as exc:self.log('Agent panel: '+str(exc),level='error')
 
     def stop_sessions(self):
         def stopped(ok):
@@ -670,12 +706,17 @@ class DesktopWindow:
 
     def _tick(self):
         if self.closed:return
-        self.runner.drain()
-        if self.closed:return
+        # Progress a worker emitted happened before that worker's result, so
+        # drain the events first. The other order printed the failure above the
+        # steps that led to it, and let a completion callback close the Chat
+        # trail before the very messages explaining it had been shown.
         for _ in range(100):
             try:event=self.events.get_nowait()
             except queue.Empty:break
             self._handle_event(event)
+        if self.closed:return
+        self.runner.drain()
+        if self.closed:return
         if self.closing and not self.runner.busy() and not self._shutdown_started:
             self._shutdown_started=True
             def done(ok):

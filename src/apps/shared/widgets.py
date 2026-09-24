@@ -62,6 +62,24 @@ class PanelHost:
             controller.refresh(self.frame)
         return panel
 
+    def clear(self):
+        """Drop the current panel and give the layout space back.
+
+        A cancelled or failed Agent start used to leave the wizard's own
+        "준비 중..." progress screen on the page with nothing left to finish it,
+        which is indistinguishable from a hang.
+        """
+        if self._current is not None:
+            hook=getattr(self._current,'on_destroy',None)
+            if callable(hook):
+                try: hook()
+                except Exception: pass
+            try: self._current.destroy()
+            except Exception: pass
+            self._current=None
+        if self.frame.winfo_ismapped():
+            self.frame.pack_forget()
+
 
 class ScrollArea:
     """Keep static forms/actions reachable on small screens and high-DPI text.

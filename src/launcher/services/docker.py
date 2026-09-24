@@ -267,6 +267,130 @@ class DockerService:
         except (OSError, FileNotFoundError):
             return False
 
+    # ── Docker Desktop 종료 (우리가 켠 경우에만) ──────────────────
+    # 우리가 켜지 않은 Docker 는 사용자의 것이다. 창을 닫았다고 남의 데몬을
+    # 내리면 사용자의 다른 컨테이너까지 함께 죽는다. 그래서 "이 프로세스가
+    # 실제로 시작시켰는가" 를 기억해 두고, 그 경우에만 되돌린다.
+    _started_by_us = False
+    _shutdown_registered = False
+
+    #: 우리 제품이 만드는 컨테이너 이름 접두사. 이 밖의 컨테이너가 돌고 있으면
+    #: Docker 를 내리지 않는다 — 사용자의 작업을 끊는 일이기 때문이다.
+    OWN_CONTAINER_PREFIXES = ("llm_", "ai_box_")
+
+    @staticmethod
+    def own_container_names() -> tuple:
+        """config 가 이름을 바꿔 둘 수 있으므로 실제 값도 함께 우리 것으로 본다."""
+        names = []
+        for key in ("SEARXNG_CONTAINER", "TOR_CONTAINER", "WARP_CONTAINER",
+                    "HTTP_BRIDGE_CONTAINER", "ANYTHINGLLM_CONTAINER"):
+            value = str(getattr(config, key, "") or "").strip()
+            if value:
+                names.append(value)
+        return tuple(names)
+
+    @staticmethod
+    def is_own_container(name: str) -> bool:
+        text = str(name or "")
+        prefixes = tuple(DockerService.OWN_CONTAINER_PREFIXES)
+        prefix = str(getattr(config, "SANDBOX_CONTAINER_PREFIX", "") or "").strip()
+        if prefix:
+            prefixes = prefixes + (prefix,)
+        return text.startswith(prefixes) or text in DockerService.own_container_names()
+
+    @staticmethod
+    def keep_desktop_running() -> bool:
+        value = os.environ.get("LOCAL_AI_KEEP_DOCKER", "").strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def foreign_containers() -> Optional[list]:
+        """우리 것이 아닌 실행 중 컨테이너 목록. ``None`` 이면 확인 실패."""
+        result = DockerService.run(
+            ["ps", "--format", "{{.Names}}"],
+            timeout=config.DOCKER_PROBE_TIMEOUT,
+        )
+        if result is None or result.returncode != 0:
+            return None
+        return [name for name in (result.stdout or "").split()
+                if not DockerService.is_own_container(name)]
+
+    @staticmethod
+    def shutdown_desktop(logger=None) -> bool:
+        """``Docker Desktop.exe -Shutdown`` 으로 데몬을 정상 종료한다."""
+        if os.name != "nt":
+            return False
+        exe = DockerService.find_desktop_executable()
+        if not exe:
+            return False
+        try:
+            subprocess.Popen(
+                [exe, "-Shutdown"],
+                creationflags=config.WIN_CREATE_NO_WINDOW,
+                close_fds=True,
+            )
+        except (OSError, FileNotFoundError) as exc:
+            if logger:
+                logger.warn("Docker Desktop 종료 요청 실패: " + str(exc))
+            return False
+        if logger:
+            logger.info("Docker Desktop 종료 요청됨 (이 창이 시작했습니다)")
+        return True
+
+    @staticmethod
+    def stop_desktop_if_started(logger=None) -> bool:
+        """이 프로세스가 켠 Docker Desktop 만 되돌린다."""
+        if not DockerService._started_by_us:
+            return True
+        if DockerService.keep_desktop_running():
+            return True
+        if not DockerService.daemon_alive():
+            DockerService._started_by_us = False
+            return True
+        remaining = DockerService.foreign_containers()
+        if remaining is None:
+            if logger:
+                logger.warn("Docker 컨테이너 상태를 확인하지 못해 데몬을 그대로 둡니다.")
+            return False
+        if remaining:
+            if logger:
+                logger.info("다른 컨테이너가 실행 중이라 Docker Desktop 을 유지합니다: "
+                            + ", ".join(remaining[:5]))
+            return False
+        ok = DockerService.shutdown_desktop(logger=logger)
+        if ok:
+            DockerService._started_by_us = False
+        return ok
+
+    @staticmethod
+    def _register_desktop_shutdown() -> None:
+        if DockerService._shutdown_registered:
+            return
+        try:
+            from ..core import lifelog
+        except Exception:
+            try:
+                from launcher.core import lifelog  # type: ignore
+            except Exception:
+                return
+
+        def _do() -> None:
+            try:
+                lifelog.log("CLEANUP", "Docker Desktop 정리 (이 창이 시작했습니다)")
+            except Exception:
+                pass
+            try:
+                DockerService.stop_desktop_if_started()
+            except Exception:
+                pass
+
+        try:
+            # 컨테이너를 멈추는 정리들이 모두 끝난 뒤에 데몬을 내려야 한다.
+            lifelog.register_cleanup(_do, last=True)
+        except Exception:
+            return
+        DockerService._shutdown_registered = True
+
     @staticmethod
     def wait_until_alive(
         timeout: int = 60,
@@ -320,6 +444,8 @@ class DockerService:
             cancel_check=cancel_check,
         )
         if ok:
+            DockerService._started_by_us = True
+            DockerService._register_desktop_shutdown()
             if logger:
                 logger.ok("Docker 데몬 응답 확인됨")
             return True

@@ -1,4 +1,5 @@
 """Strict network intent -> existing, fail-closed runtime preparation."""
+import inspect
 from core.network.policy import NetworkMode
 from .ownership import RuntimeOwner
 
@@ -8,7 +9,27 @@ class NetworkManager:
         self.backend, self.owner, self.events = backend, owner, events
         self.mode = None
 
-    def prepare(self, mode):
+    def _prepare_backend(self, mode, log, cancel):
+        """Pass the cancel check only to a backend that accepts one.
+
+        Starting Docker Desktop for WARP/Tor/Block can take a minute and a half.
+        Without this the window close the user already asked for had to wait it
+        out, and older backends would break on an unexpected argument.
+        """
+        prepare = self.backend.prepare_network
+        if cancel is None:
+            return prepare(mode, log)
+        try:
+            parameters = inspect.signature(prepare).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        accepts = 'cancel' in parameters or any(
+            value.kind is value.VAR_KEYWORD for value in parameters.values())
+        if accepts:
+            return prepare(mode, log, cancel=cancel)
+        return prepare(mode, log)
+
+    def prepare(self, mode, cancel=None):
         selected = NetworkMode(mode)
         if self.mode is not None and self.mode != selected:
             raise RuntimeError('An active session pins the network mode. Close that session first.')
@@ -17,7 +38,7 @@ class NetworkManager:
         log = lambda message: self.events.emit('runtime.progress',
                         {'service': 'network', 'message': str(message)})
         try:
-            if not self.backend.prepare_network(selected.value, log):
+            if not self._prepare_backend(selected.value, log, cancel):
                 raise RuntimeError('Network preparation failed; no direct fallback is allowed.')
         except Exception:
             # A failed preparation is not an active session. Keeping the OS lock

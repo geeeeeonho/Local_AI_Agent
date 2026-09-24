@@ -111,7 +111,10 @@ def run(env: Path, p: Presenter):
                 from .. import searxng_runtime
                 if searxng_runtime.image_exists():
                     p.info("SearXNG 검색 서비스 시작 중...")
-                    started_searxng = bool(searxng_runtime.start())
+                    # start(env, ...) 는 env 가 필수다. 인자 없이 부르면 TypeError 가
+                    # 나고 바로 아래 except 가 삼켜서, 검색이 조용히 꺼진 채로
+                    # Chat 이 시작됐다.
+                    started_searxng = bool(searxng_runtime.start(env))
                     if not started_searxng:
                         p.warn("SearXNG를 시작하지 못했습니다. 로컬 채팅/RAG는 계속 사용할 수 있습니다.")
                 else:

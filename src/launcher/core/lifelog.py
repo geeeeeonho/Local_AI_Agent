@@ -83,6 +83,9 @@ _project_root: Optional[Path] = None
 _log_dir: Optional[Path] = None
 _main_log_fh: Optional[TextIO] = None
 _cleanup_callbacks: List[Callable[[], None]] = []
+# 마지막에 돌아야 하는 정리 (예: Docker Desktop 종료). 컨테이너 정리보다 먼저
+# 데몬을 내리면 남은 cleanup 이 전부 실패하므로 별도 목록으로 분리한다.
+_final_cleanup_callbacks: List[Callable[[], None]] = []
 _cleanups_ran = False
 
 
@@ -275,10 +278,18 @@ def log_session(fh: Optional[TextIO], level: str, msg: str) -> None:
 # ─────────────────────────────────────────────
 #  정리 콜백 관리
 # ─────────────────────────────────────────────
-def register_cleanup(fn: Callable[[], None]) -> None:
+def register_cleanup(fn: Callable[[], None], *, last: bool = False) -> None:
+    """종료 정리 콜백 등록. ``last`` 는 모든 정리 뒤에 실행한다.
+
+    컨테이너를 멈추는 콜백은 Docker 데몬이 살아 있어야 성공한다. 데몬 자체를
+    내리는 콜백만 ``last=True`` 로 등록해 순서를 보장한다.
+    """
     with _lock:
-        _cleanup_callbacks.append(fn)
-        log("INFO", "cleanup 콜백 등록 (총 " + str(len(_cleanup_callbacks)) + "개)")
+        target = _final_cleanup_callbacks if last else _cleanup_callbacks
+        target.append(fn)
+        log("INFO", "cleanup 콜백 등록 (총 "
+            + str(len(_cleanup_callbacks) + len(_final_cleanup_callbacks)) + "개"
+            + (", 마지막 단계" if last else "") + ")")
 
 
 def _run_all_cleanups(reason: str = "?") -> None:
@@ -287,7 +298,7 @@ def _run_all_cleanups(reason: str = "?") -> None:
         if _cleanups_ran:
             return
         _cleanups_ran = True
-        callbacks = list(_cleanup_callbacks)
+        callbacks = list(_cleanup_callbacks) + list(_final_cleanup_callbacks)
 
     log("CLEANUP", "=== 종료 정리 시작 (사유: " + reason + ") ===")
     log("CLEANUP", "콜백 " + str(len(callbacks)) + "개 실행")
