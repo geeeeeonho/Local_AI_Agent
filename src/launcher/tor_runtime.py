@@ -54,6 +54,8 @@ def _run(args, timeout=25, capture=True):
     if capture:
         kw["capture_output"] = True
         kw["text"] = True
+        kw["encoding"] = "utf-8"
+        kw["errors"] = "replace"
     try:
         return subprocess.run(["docker"] + args, check=False, **kw)
     except Exception:
