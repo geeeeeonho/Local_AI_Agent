@@ -114,11 +114,15 @@ def _run_install(args) -> int:
 
     if not args.skip_model:
         prepared_models = model.download(paths)
-        if prepared_models:
-            components.append("models")
-        else:
+        if prepared_models is None:
             failed_components.append("models")
             utils.warn("로컬 모델 준비가 완료되지 않았습니다. Setup의 모델 화면에서 다시 적용할 수 있습니다.")
+        elif prepared_models:
+            components.append("models")
+        else:
+            # The user explicitly chose no models/cancelled the selection.
+            # That is not an installation failure.
+            skipped_components.append("models")
     else:
         skipped_components.append("models")
         utils.warn("Model download skipped (--skip-model)")
