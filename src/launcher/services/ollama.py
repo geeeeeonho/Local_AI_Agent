@@ -58,7 +58,9 @@ class OllamaService:
         state_dir: Optional[Path] = None,
     ):
         self.env = Path(env)
-        self.portable_exe = self.env / "ollama_runtime" / ollama_paths.PORTABLE_EXECUTABLE
+        # The broker is machine-shared under <runtime root>\ollama. Keep the
+        # old attribute name because lifecycle code treats it as "ours".
+        self.portable_exe = project_paths.OLLAMA_INSTALL_DIR / ollama_paths.PORTABLE_EXECUTABLE
         # Prefer an Ollama the machine already has. The portable copy this
         # project used to unzip into its own folder is now only a fallback.
         self.exe = ollama_paths.find_executable(
@@ -122,19 +124,7 @@ class OllamaService:
         return True
 
     def _migration_pending(self) -> bool:
-        """Ollama's store is empty while earlier/interrupted model data remains.
-
-        Starting here would show an empty model list next to tens of gigabytes
-        the user can still see on disk, so refuse and send them to Setup.
-        """
-        if _dir_has_entries(self.model_dir):
-            return False
-        staging = self.model_dir.with_name(self.model_dir.name + ".migrating")
-        if staging.exists():
-            return True
-        for source in self.legacy_stores():
-            if _dir_has_entries(source):
-                return True
+        """Fresh-install layout has no automatic legacy-store migration."""
         return False
 
     def known_executables(self) -> tuple:
@@ -365,11 +355,8 @@ class OllamaService:
         return bool(cloud["disabled"])
 
     def legacy_stores(self) -> tuple:
-        """Earlier locations this project kept models in, newest first."""
-        forced = project_paths.LEGACY_FORCED_MODEL_DIR
-        sources = [] if _same_path(forced, self.model_dir) else [forced]
-        sources.append(self.env / "llm_models")
-        return tuple(sources)
+        """Fresh installation does not inspect earlier model locations."""
+        return ()
 
     def _powershell(self, script: str) -> Optional[str]:
         """Windows 프로세스 소유권 확인용 PowerShell 한 줄 실행."""
@@ -847,11 +834,6 @@ class OllamaService:
         if not self.is_installed():
             self._err(f"Ollama 미설치: {self.exe}")
             self._err("RUN.bat --install --install 을 다시 실행하세요.")
-            return False
-
-        if self._migration_pending():
-            self._err("이전 버전의 모델 저장소 마이그레이션이 아직 완료되지 않았습니다.")
-            self._err("RUN.bat --install을 실행해 C:\\LLM_Models 이전/복구를 먼저 완료하세요.")
             return False
 
         self._info("Ollama 가 응답 없음 — 관리형 서비스 시작 시도…")
