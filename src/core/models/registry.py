@@ -56,6 +56,11 @@ class Inventory:
         return self.served is not None
 
     @property
+    def local_tags(self) -> FrozenSet[str]:
+        """Usable tags that run here. A cloud-only library is not a library."""
+        return frozenset(local_only(self.tags))
+
+    @property
     def known(self) -> bool:
         """False means nothing could be read, not that nothing is installed."""
         return self.source != UNKNOWN
@@ -75,7 +80,7 @@ class Inventory:
             # guess. Unknown sends the caller down the warn-and-continue path;
             # False would have it refuse over something it cannot see.
             return None
-        served = {name for name in self.served if not _is_remote(name)}
+        served = local_only(self.served)
         if not served:
             # A router with nothing local loaded contradicts no store.
             return True
@@ -96,14 +101,28 @@ class Inventory:
         return tag in self.tags
 
 
-def _is_remote(name) -> bool:
-    """A cloud tag is served without ever being on this disk.
+def is_cloud_tag(value) -> bool:
+    """A tag Ollama runs remotely rather than on this machine.
 
-    Ollama proxies these to its own servers, so requiring one to exist locally
-    turned "the user is signed in to Ollama cloud" into "this router is pointed
-    at a different store".
+    Ollama marks these with a ``cloud`` label (``gpt-oss:20b-cloud``,
+    ``gemma4:cloud``). They are served without ever being on this disk, so
+    requiring one to exist locally turned "signed in to Ollama cloud" into
+    "this router is pointed at a different store".
+
+    This is the definition. ``integrations.ollama.client`` re-exports it rather
+    than keeping a second one: the two drifted apart within a single release
+    and disagreed about ``gemma4:cloud``, which is the shorter of the two forms
+    Ollama actually emits.
     """
-    return str(name).strip().lower().endswith('-cloud') or '-cloud:' in str(name).lower()
+    if not isinstance(value, str):
+        return False
+    label = value.rpartition(':')[2].strip().lower()
+    return label == 'cloud' or label.endswith('-cloud')
+
+
+def local_only(names):
+    """The subset that this machine can serve without leaving it."""
+    return {name for name in names if not is_cloud_tag(name)}
 
 
 def _read(reader) -> Optional[set]:

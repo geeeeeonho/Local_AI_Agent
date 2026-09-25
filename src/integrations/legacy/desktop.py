@@ -27,6 +27,11 @@ class ManagedInference:
         self.endpoint = 'http://127.0.0.1:' + str(int(cfg.OLLAMA_PORT))
         self.client = OllamaClient(self.endpoint)
 
+    def local_models(self):
+        """Delegate to the Ollama service so there is one way of asking."""
+        cls = self.load('launcher.services.ollama').OllamaService
+        return cls(self.env, model_dir=self.model_dir).local_models()
+
     def ensure_running(self, log=None):
         cls = self.load('launcher.services.ollama').OllamaService
         # 로거를 주지 않으면 최대 30초의 기동이 통째로 침묵한다. Chat 준비창이
@@ -466,6 +471,26 @@ class LegacyBackend:
             executable = executable.with_name('python.exe')
         return [str(executable), '-m', 'installer', '--install']
 
+    #: Exit codes Windows produces for something other than "the work failed".
+    #: A raw 3221225786 in the activity log is not a diagnosis; it is 0xC000013A,
+    #: which is what closing the installer's console window looks like.
+    SETUP_EXIT_REASONS = {
+        3221225786: '설치 창이 닫혔습니다 (Ctrl+C 또는 창 닫기). 설치는 진행되지 않았습니다.',
+        3221225794: '설치기를 시작하지 못했습니다 (필요한 DLL 초기화 실패).',
+        1602: '설치를 사용자가 취소했습니다.',
+        1223: '설치를 사용자가 취소했습니다.',
+        740: '설치기에 관리자 권한이 필요합니다.',
+    }
+    #: Codes that mean the user stopped it, not that it went wrong.
+    SETUP_CANCELLED = (3221225786, 1602, 1223)
+
+    @classmethod
+    def setup_exit_message(cls, code):
+        known = cls.SETUP_EXIT_REASONS.get(int(code))
+        if known:
+            return known + ' (코드 %d)' % int(code)
+        return 'Setup 이 코드 %d (0x%08X) 로 끝났습니다.' % (int(code), int(code) & 0xFFFFFFFF)
+
     def run_setup(self):
         environment = os.environ.copy()
         environment['PYTHONPATH'] = str(self.root / 'src')
@@ -475,5 +500,5 @@ class LegacyBackend:
         # Explicit Setup action only. No shell and no detached untracked install.
         result = subprocess.run(self.setup_command(), **kwargs)
         if result.returncode:
-            raise RuntimeError('Setup exited with code ' + str(result.returncode))
+            raise RuntimeError(self.setup_exit_message(result.returncode))
         return result.returncode

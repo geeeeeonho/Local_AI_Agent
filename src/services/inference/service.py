@@ -34,6 +34,24 @@ class InferenceService:
         self._observe('ready')
         return endpoint
 
+    def local_models(self):
+        """Tags the running server can serve from this machine, or None.
+
+        ``None`` means the question could not be asked, which is not the same
+        as "none installed" and must not be reported as one.
+        """
+        reader = getattr(self.runtime, 'local_models', None)
+        if callable(reader):
+            return reader()
+        try:
+            from core.models.registry import local_only
+            rows = self.client.list_models() or ()
+        except Exception:
+            return None
+        names = {str(row.get('name') or row.get('model') or '').strip()
+                 for row in rows if isinstance(row, dict)}
+        return sorted(local_only(name for name in names if name))
+
     def _start(self, log):
         """Forward the progress callback only to a runtime that accepts one.
 

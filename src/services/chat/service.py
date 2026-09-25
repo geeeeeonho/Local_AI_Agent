@@ -18,6 +18,13 @@ class ChatService:
         network_was_prepared = self.network.mode is not None
         search_was_attempted = self.search.attempted
         try:
+            # Before any of it. If Ollama is already answering and has nothing
+            # local to serve, none of the five steps can end in a usable Chat -
+            # and the first of them brings WARP up, which is most of the wait.
+            # The check is skipped when Ollama is not answering yet, because
+            # then starting it is step 2's job and the answer is not knowable.
+            self._require_a_local_model(log)
+
             log('[1/5] Network preparation: ' + str(mode))
             selected = self.network.prepare(mode, cancel=cancel)
             log('[1/5] Network ready: ' + selected.value)
@@ -27,7 +34,12 @@ class ChatService:
 
             log('[2/5] Ollama service and shared model store check')
             self.inference.ensure_ready(log=log)
-            log('[2/5] Ollama ready')
+            # Whether a local model exists is knowable here, and it decides
+            # whether the rest is worth doing. Asking at the last step meant
+            # WARP, Docker, SearXNG and AnythingLLM all came up first, twice
+            # over, before saying there was nothing to run.
+            local = self._require_a_local_model(log)
+            log('[2/5] Ollama ready' + (' · 로컬 모델 %d개' % len(local) if local else ''))
 
             log('[3/5] Docker / AnythingLLM image check')
             prepare = getattr(self.backend, 'chat_prepare', None)
@@ -89,6 +101,22 @@ class ChatService:
                     self.network.reset()
             log('Chat preparation failed: ' + str(exc))
             raise
+
+    NO_LOCAL_MODEL = ('Chat에 사용할 로컬 Ollama 모델이 없습니다. '
+                      '모델 화면에서 모델을 먼저 받으세요. '
+                      '(Ollama 클라우드 모델은 선택한 네트워크 정책 밖으로 나가므로 쓰지 않습니다.)')
+
+    def _require_a_local_model(self, log):
+        """Stop early when there is nothing this machine could answer with.
+
+        ``None`` from the inference service means the question could not be
+        asked - Ollama may simply not be running yet - and that is not the same
+        as "none installed", so it is not treated as one.
+        """
+        local = self.inference.local_models()
+        if local is not None and not local:
+            raise RuntimeError(self.NO_LOCAL_MODEL)
+        return local
 
     def stop(self):
         if not self.attempted:
