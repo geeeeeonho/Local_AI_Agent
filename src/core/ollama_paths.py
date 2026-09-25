@@ -184,6 +184,19 @@ def executable_names() -> tuple:
     return ('ollama.exe', 'ollama') if os.name == 'nt' else ('ollama', 'ollama.exe')
 
 
+#: The Windows tray application that owns the server process. It is what the
+#: Startup entry launches at login, it spawns ``ollama.exe serve`` with its own
+#: environment, and it starts a replacement within milliseconds of that child
+#: being killed - so stopping only the listener changes nothing at all.
+SUPERVISOR_EXECUTABLE = 'ollama app.exe'
+SUPERVISOR_PROCESS = 'ollama app'
+
+
+def supervisor_beside(executable) -> Path:
+    """Where the tray application sits, given the server binary's path."""
+    return Path(executable).parent / SUPERVISOR_EXECUTABLE
+
+
 # Ollama's Windows installer is Inno Setup, so /DIR= chooses where the binaries
 # land and the silent switches make it scriptable. Installing into Program Files
 # is deliberately not attempted: it produces a mix of per-machine files and
