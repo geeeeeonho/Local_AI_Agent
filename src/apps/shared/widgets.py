@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from .themes import ThemeController, themed
+from core.window_size import (MINIMUM_SIZE, PREFERRED_SIZE,
+                              centred_geometry, fitted_size)
 
 
 def theme(root, name='dark'):
@@ -11,6 +13,13 @@ def theme(root, name='dark'):
         return ThemeController(root, name)
     controller.apply(name)
     return controller
+
+
+def opening_geometry(root, preferred=PREFERRED_SIZE):
+    """Where and how big to open, for the screen this root is on."""
+    screen = (root.winfo_screenwidth(), root.winfo_screenheight())
+    minimum = tuple(root.minsize()) or MINIMUM_SIZE
+    return centred_geometry(fitted_size(screen, preferred, minimum), screen)
 
 
 def wrap_to_parent(label, *, inset=40, minimum=280):

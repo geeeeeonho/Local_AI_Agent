@@ -7,17 +7,25 @@ on the machine could see them, an official Ollama installed later would look at
 an empty directory, and a user who had already set ``OLLAMA_MODELS`` to move
 models off C: had that choice silently overridden.
 
-Ollama is the intermediary now, and the store sits in this product's runtime
-root so every account on the machine can reach the same models:
+Ollama is the intermediary now, and the store sits inside Ollama's own install
+so every account on the machine reaches the same models by Ollama's own rule:
 
-    OLLAMA_MODELS if the user set it, otherwise C:\\LocalAI\\models
+    OLLAMA_MODELS if the user set it, otherwise C:\\Ollama\\models
 
-Two locations this project itself produced are read as migration input rather
-than as a user's choice: the old forced ``C:\\LLM_Models``, and
-``C:\\Ollama\\models`` - which sat inside Ollama's own install, where Ollama's
-uninstaller deletes it and takes the downloads with it. Anything else the user
-set wins, because overriding someone who had already moved their store off C:
-was the specific failure of the forced store.
+That folder is the one Ollama itself is pointed at, which is the whole reason
+to use it: any Ollama on this machine - ours, the tray app Windows starts at
+login, a user typing ``ollama serve`` - finds the same library without this
+project having to be running. A previous release moved the store to
+``C:\\LocalAI\\models`` to keep it clear of Ollama's uninstaller; that is a real
+risk only for someone uninstalling Ollama, and Ollama is this product's relay,
+so uninstalling it stops the product either way. Two spare copies of forty
+gigabytes is the larger cost, so the store stays where Ollama looks.
+
+Locations this project itself chose in earlier releases are read as migration
+input rather than as a user's choice: the forced ``C:\\LLM_Models`` and the
+runtime-root ``C:\\LocalAI\\models``. Anything else the user set wins, because
+overriding someone who had already moved their store off C: was the specific
+failure of the forced store.
 
 Ollama's own default, ``<home>/.ollama/models``, is per-user: a second Windows
 account on the same PC sees an empty library and re-downloads tens of gigabytes.
@@ -39,16 +47,14 @@ from core import runtime_root
 # state, so it is not a location we look in or install to.
 WINDOWS_DEFAULT_INSTALL = r'%LOCALAPPDATA%\Programs\Ollama'
 # Where this project installs Ollama when none is present, via OllamaSetup /DIR.
-# Binaries only: Ollama's uninstaller owns this folder, so nothing of ours -
-# least of all tens of gigabytes of downloads - is kept inside it.
 PROJECT_INSTALL_DIR = Path(r'C:\Ollama')
-# Models live in this product's runtime root, directly under the drive, so the
-# machine's other accounts share one copy instead of each holding their own.
-SHARED_MODELS_DIR = runtime_root.WINDOWS_ROOT / runtime_root.MODELS
+# The store, beside the install and directly under the drive: short, ASCII,
+# space-free, one copy for every account, and exactly where Ollama looks.
+SHARED_MODELS_DIR = PROJECT_INSTALL_DIR / 'models'
 # Stores this project itself created in earlier releases. Migration input.
 LEGACY_FORCED_STORE = Path(r'C:\LLM_Models')
-LEGACY_INSTALL_STORE = PROJECT_INSTALL_DIR / 'models'
-LEGACY_STORES = (LEGACY_FORCED_STORE, LEGACY_INSTALL_STORE)
+LEGACY_ROOT_STORE = runtime_root.WINDOWS_ROOT / 'models'
+LEGACY_STORES = (LEGACY_FORCED_STORE, LEGACY_ROOT_STORE)
 
 
 def _expanded(value: str) -> Path:
@@ -107,10 +113,10 @@ def is_legacy_forced_store(path) -> bool:
 
     Those values are migration input, not a lasting user preference. An older
     release could leave OLLAMA_MODELS=C:\\LLM_Models - or, after the release that
-    followed it, C:\\Ollama\\models - in the machine environment; treating either
-    like a deliberate override would stop the installer from ever moving those
-    models into the runtime root, and would leave the store inside a folder
-    Ollama's own uninstaller deletes.
+    followed it, C:\\LocalAI\\models - in the machine environment; treating
+    either like a deliberate override would stop the installer from ever
+    bringing those models back to the one place every Ollama on the machine
+    looks, and would leave a second copy nobody serves.
     """
     if path is None:
         return False
@@ -122,7 +128,7 @@ def models_dir(environ=None) -> Path:
 
     The exceptions are the values older releases of this project set for
     themselves. They are deliberately ignored here so setup can see those
-    directories as legacy input and migrate them into C:\\LocalAI\\models.
+    directories as legacy input and migrate them into C:\\Ollama\\models.
     """
     configured = configured_models_dir(environ)
     if configured is not None and not is_legacy_forced_store(configured):
@@ -155,7 +161,7 @@ def store_candidates(environ=None):
     treating the two as one is what made an ordinary machine unusable: install
     Ollama the official way, never set OLLAMA_MODELS, and its models sit in
     ``<home>/.ollama/models`` while this project resolves the shared
-    ``C:\\LocalAI\\models``. The two disagree, and the disagreement was read as
+    ``C:\\Ollama\\models``. The two disagree, and the disagreement was read as
     "that server is pointed somewhere else" - which it is, at its own default.
     """
     environ = os.environ if environ is None else environ

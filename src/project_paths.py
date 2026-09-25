@@ -17,12 +17,21 @@ Two roots, and they are not the same thing:
     tens of gigabytes, and what keeps Docker Desktop bind mounts off OneDrive
     paths with spaces in them.
 
-Inside that root, who a folder belongs to decides where it sits. ``models``
-and ``environment`` are shared: identical for everyone, a day to download, so
-one copy serves the whole machine. ``ACCOUNT_ROOT`` is this Windows account's
-own - settings, projects, chat, traces, logs - and the machine's other
-accounts are locked out of it, because sharing those between two signed-in
-users does not merely leak, it corrupts.
+Inside that root, who a folder belongs to decides where it sits.
+``environment`` is shared: the runtimes setup installed, identical for
+everyone. ``ACCOUNT_ROOT`` is this Windows account's own - settings, projects,
+chat, traces, logs - and the machine's other accounts are locked out of it,
+because sharing those between two signed-in users does not merely leak, it
+corrupts.
+
+``MODEL_STORAGE_DIR``
+    The exception, and deliberately so: the models belong to Ollama, which
+    finds them by its own rule, so they sit beside Ollama's install at
+    ``C:\\Ollama\\models``. That is the one place every Ollama on the machine
+    looks - ours, the tray app Windows starts at login, a user typing
+    ``ollama serve`` - and Ollama is this product's relay, so it is not going
+    anywhere. A root someone set explicitly still takes the store with it,
+    because that means "the whole product lives here".
 
 Off Windows there is no C: drive to install into, so a development checkout is
 its own runtime root and the same layout appears inside it.
@@ -87,14 +96,35 @@ def workspace_dir() -> Path:
     return account_dir() / runtime_root.WORKSPACE
 
 
+def _on_windows() -> bool:
+    """One seam for the platform test.
+
+    Patching ``os.name`` itself is not a substitute: ``pathlib`` reads it on
+    every ``Path()``, so a test that flips it globally breaks every other path
+    in the process instead of exercising this one branch.
+    """
+    return os.name == "nt"
+
+
 def model_dir() -> Path:
+    """Where models go, re-read each call.
+
+    ``LLM_MODEL_DIR`` wins, then a store the user configured for Ollama, then
+    the one place every Ollama on the machine looks. A root set explicitly -
+    a portable run, a test - takes the store with it, and so does a machine
+    with no C: drive to install into.
+    """
     value = os.environ.get("LLM_MODEL_DIR")
     if value:
         return Path(value).expanduser().resolve()
     configured = ollama_paths.configured_models_dir()
     if configured is not None and not ollama_paths.is_legacy_forced_store(configured):
         return configured
-    return runtime_dir() / runtime_root.MODELS
+    moved = os.environ.get(runtime_root.ROOT_VARIABLE) or \
+        os.environ.get(runtime_root.PORTABLE_VARIABLE)
+    if moved or not _on_windows():
+        return runtime_dir() / runtime_root.MODELS
+    return ollama_paths.SHARED_MODELS_DIR
 
 
 PROJECT_ROOT = project_root()
@@ -110,12 +140,12 @@ USER_DATA_DIR = user_data_dir()
 LOGS_DIR = logs_dir()
 WORKSPACE_DIR = workspace_dir()
 
-# A real user OLLAMA_MODELS override wins, otherwise the store lives in the
-# runtime root: C:\LocalAI\models. Ollama's own default sits in a user profile,
-# so a second Windows account would see an empty library and re-download
-# everything; the stores this project chose in earlier releases
-# (C:\LLM_Models, C:\Ollama\models) are migration input, not durable overrides.
-# LLM_MODEL_DIR remains for controlled deployments and tests.
+# A real user OLLAMA_MODELS override wins, otherwise the store sits beside
+# Ollama's install at C:\Ollama\models. Ollama's own default sits in a user
+# profile, so a second Windows account would see an empty library and
+# re-download everything; the stores this project chose for itself in earlier
+# releases (C:\LLM_Models, C:\LocalAI\models) are migration input, not durable
+# overrides. LLM_MODEL_DIR remains for controlled deployments and tests.
 MODEL_STORAGE_DIR = model_dir()
 
 # Stores earlier releases of this project created. Kept so the installer can

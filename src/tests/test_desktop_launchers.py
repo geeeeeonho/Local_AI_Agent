@@ -33,10 +33,11 @@ def test_paths_follow_ollama_and_still_remember_the_old_store(monkeypatch):
     from core import runtime_root
     from test_reform_core import _isolated_paths
     paths=_isolated_paths()
+    # No C: drive here, so the checkout is the root and takes the store.
     assert paths.MODEL_STORAGE_DIR==paths.RUNTIME_ROOT/runtime_root.MODELS
     assert str(paths.LEGACY_FORCED_MODEL_DIR)==r'C:\LLM_Models'
-    # The store Ollama's own uninstaller deletes is remembered too.
-    assert any(str(d)==str(Path(r'C:\Ollama')/'models') for d in paths.LEGACY_MODEL_DIRS)
+    # The store the release before this one used is remembered too.
+    assert any(str(d)==str(Path(r'C:\LocalAI')/'models') for d in paths.LEGACY_MODEL_DIRS)
 
 
 # Redirect the canonical module's attributes instead of replacing the module:

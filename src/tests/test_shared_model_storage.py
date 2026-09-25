@@ -26,14 +26,47 @@ def test_the_model_store_is_never_a_location_this_project_forced():
     assert not ollama_paths.is_legacy_forced_store(MODEL_STORAGE_DIR)
 
 
-def test_the_store_lives_in_the_runtime_root_with_everything_else():
-    """One folder holds the whole install, so the store is inside it."""
+def test_on_windows_the_store_is_ollamas_folder_not_the_products_root(monkeypatch):
+    """The actual install: models beside Ollama, records in our own root."""
+    from core import ollama_paths
+    monkeypatch.setattr(project_paths, '_on_windows', lambda: True)
+    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
+    monkeypatch.delenv('OLLAMA_MODELS', raising=False)
+    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
+    monkeypatch.delenv('LLM_PROJECT_ROOT', raising=False)
+    assert project_paths.model_dir() == ollama_paths.SHARED_MODELS_DIR
+    assert str(project_paths.model_dir()).startswith(str(Path(r"C:\Ollama")))
+
+
+def test_a_stale_pointer_to_the_previous_store_is_not_obeyed(monkeypatch):
+    """OLLAMA_MODELS=C:\\LocalAI\\models is our own leftover, not a user choice.
+
+    The release before this one wrote that value machine-wide. Reading it back
+    as a preference would pin every future run to a store nothing migrates out
+    of, and the models would stay split across two folders.
+    """
+    from core import ollama_paths
+    monkeypatch.setattr(project_paths, '_on_windows', lambda: True)
+    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
+    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
+    monkeypatch.delenv('LLM_PROJECT_ROOT', raising=False)
+    monkeypatch.setenv('OLLAMA_MODELS', str(ollama_paths.LEGACY_ROOT_STORE))
+    assert project_paths.model_dir() == ollama_paths.SHARED_MODELS_DIR
+    # A store the user really chose is still theirs.
+    monkeypatch.setenv('OLLAMA_MODELS', r'D:\ai-models')
+    assert str(project_paths.model_dir()) == r'D:\ai-models'
+
+
+def test_an_explicitly_moved_root_takes_the_store_with_it():
+    """"Put the whole product here" has to mean the whole product.
+
+    On an ordinary Windows install the store is Ollama's to place, but a
+    portable run, a test, or a machine with no C: drive says where everything
+    goes - and leaving forty gigabytes behind would make that a lie.
+    """
     from core import runtime_root
     assert MODEL_STORAGE_DIR == RUNTIME_ROOT / runtime_root.MODELS
     assert runtime_root.is_inside(MODEL_STORAGE_DIR)
-    # On Windows that root is the one directly under the drive.
-    assert (runtime_root.models_dir({}, windows=True)
-            == Path(r"C:\LocalAI") / "models")
 
 
 def test_the_default_store_is_shared_by_every_account_on_the_machine():
@@ -48,19 +81,21 @@ def test_the_default_store_is_shared_by_every_account_on_the_machine():
     assert ollama_paths.is_per_user_store(ollama_paths.user_default_models_dir(home), home)
 
 
-def test_the_store_is_not_inside_the_folder_ollamas_uninstaller_deletes():
-    """Models used to sit in C:\\Ollama\\models, which Ollama's uninstaller removes.
+def test_the_store_sits_where_every_ollama_on_the_machine_looks():
+    """Beside Ollama's install, because Ollama is what serves the models.
 
-    Uninstalling Ollama - to reinstall it, to try another version - took tens of
-    gigabytes of downloads with it. The store belongs to this product, so it
-    lives in this product's root and survives.
+    A store this product invents is a store only this product knows about: the
+    tray app Windows starts at login, and a user typing ``ollama serve``, read
+    Ollama's own rule. Keeping the library one folder from the binaries means
+    every one of them finds it, whether or not this program is running.
     """
-    from core import ollama_paths, runtime_root
-    assert ollama_paths.SHARED_MODELS_DIR.parent == runtime_root.WINDOWS_ROOT
-    assert ollama_paths.SHARED_MODELS_DIR.parent != ollama_paths.PROJECT_INSTALL_DIR
-    # The old location is still known, so setup can find models left there.
-    assert ollama_paths.LEGACY_INSTALL_STORE in ollama_paths.LEGACY_STORES
-    assert ollama_paths.is_legacy_forced_store(ollama_paths.LEGACY_INSTALL_STORE)
+    from core import ollama_paths
+    assert ollama_paths.SHARED_MODELS_DIR.parent == ollama_paths.PROJECT_INSTALL_DIR
+    # The location the release before this one used is still known, so setup
+    # can find models left there and bring them back.
+    assert ollama_paths.LEGACY_ROOT_STORE in ollama_paths.LEGACY_STORES
+    assert ollama_paths.is_legacy_forced_store(ollama_paths.LEGACY_ROOT_STORE)
+    assert not ollama_paths.is_legacy_forced_store(ollama_paths.SHARED_MODELS_DIR)
 
 
 def test_a_store_the_user_configured_wins_over_the_shared_default():

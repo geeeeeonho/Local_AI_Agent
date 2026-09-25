@@ -54,11 +54,10 @@ def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) ->
 def legacy_model_stores(env: Path, models: Path) -> list:
     """이 프로젝트가 예전에 모델을 두던 위치들. 최근 것부터.
 
-    ``C:\\Ollama\\models`` 는 바로 이전 릴리스가 쓰던 자리다. Ollama 자체
-    설치 폴더 안이라 Ollama 를 제거하면 받아 둔 모델까지 같이 지워졌다.
-    ``C:\\LLM_Models`` 는 그보다 앞선, Ollama 가 위치를 갖기 전에 강제하던
-    저장소다. 둘 다 설치기가 찾아서 옮겨 줘야 수십 GB 가 사라진 것처럼
-    보이지 않는다.
+    ``C:\\LocalAI\\models`` 는 바로 이전 릴리스가 쓰던 자리이고,
+    ``C:\\LLM_Models`` 는 Ollama 가 위치를 갖기 전에 강제하던 저장소다. 둘 다
+    Ollama 눈에는 안 보이므로, 설치기가 찾아서 옮겨 줘야 수십 GB 가 사라진
+    것처럼 보이지 않는다.
     """
     out = []
     for candidate in tuple(LEGACY_MODEL_DIRS) + (Path(env) / "llm_models",):
