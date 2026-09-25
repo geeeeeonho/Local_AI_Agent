@@ -109,11 +109,21 @@ def test_the_guard_above_can_actually_see_a_composed_path():
     assert composed_runtime_names(ast.parse('p = root / "somewhere_else"\n')) == []
 
 
-def test_the_store_is_not_where_ollamas_uninstaller_can_delete_it():
+def test_the_store_stays_with_ollama_and_the_records_do_not():
+    """The one folder this product does not own, and why that is right.
+
+    Ollama serves the models; a store only this program knows about is one the
+    tray app and a plain ``ollama serve`` cannot see. So the library sits beside
+    Ollama's install, and everything the product itself writes stays in its own
+    root - where a second Windows account cannot read it.
+    """
     from core import ollama_paths
-    assert ollama_paths.SHARED_MODELS_DIR.parent != ollama_paths.PROJECT_INSTALL_DIR
-    assert runtime_root.is_inside(ollama_paths.SHARED_MODELS_DIR,
-                                  {}, windows=True)
+    assert ollama_paths.SHARED_MODELS_DIR.parent == ollama_paths.PROJECT_INSTALL_DIR
+    assert not runtime_root.is_inside(ollama_paths.SHARED_MODELS_DIR,
+                                      {}, windows=True)
+    for path in (runtime_root.user_data_dir({'USERNAME': 'x'}, windows=True),
+                 runtime_root.env_dir({}, windows=True)):
+        assert runtime_root.is_inside(path, {'USERNAME': 'x'}, windows=True)
 
 
 def test_a_store_the_user_chose_is_still_theirs(monkeypatch, tmp_path):
@@ -270,10 +280,10 @@ def test_a_development_checkout_keeps_its_shared_environment_in_place(tmp_path):
     assert names_in(tmp_path / 'environment' / 'searxng') == ['settings.yml']
 
 
-def test_the_store_ollama_used_to_own_is_a_migration_source(tmp_path):
+def test_every_store_an_earlier_release_chose_is_a_migration_source(tmp_path):
     from core import ollama_paths
     sources = filesystem.legacy_model_stores(tmp_path / 'env', tmp_path / 'models')
-    assert ollama_paths.LEGACY_INSTALL_STORE in sources
+    assert ollama_paths.LEGACY_ROOT_STORE in sources
     assert ollama_paths.LEGACY_FORCED_STORE in sources
 
 

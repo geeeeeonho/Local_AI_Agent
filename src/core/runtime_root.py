@@ -10,26 +10,29 @@ real time:
   folder that syncs tens of gigabytes to the cloud, a path with spaces and
   non-ASCII characters that Docker Desktop refuses to bind-mount. Moving or
   renaming that folder silently orphaned the whole environment.
-* Models inside ``C:\\Ollama`` are deleted by Ollama's own uninstaller, taking
-  the downloads with them.
 * Nothing could answer "where is this installed" with a single path.
 
 So there is one runtime root, directly under the drive root, holding every
 piece of state this product owns - split by who it belongs to::
 
     C:\\LocalAI\\
-        models\\               shared: the Ollama store, one copy per machine
         environment\\          shared: managed runtimes, container config
         users\\<account>\\
             user_data\\        private: settings, projects, chat, traces
             logs\\             private: session logs
             workspace\\        private: the agent's default working folder
 
-The models are a machine asset: identical for everyone, a day to download, so
-every Windows account reads the same copy. What a person *does* with them is
-theirs, and a shared ``user_data`` does not merely leak it - two signed-in
-accounts write the same settings file and the same session state. ``core.
-accounts`` names the folders and says what makes one private.
+What a person *does* with the models is theirs, and a shared ``user_data`` does
+not merely leak it - two signed-in accounts write the same settings file and
+the same session state. ``core.accounts`` names those folders and says what
+makes one private.
+
+The model store itself is not here. It belongs to Ollama, which finds it by
+its own rule, so ``core.ollama_paths`` answers that question and puts it beside
+Ollama's install at ``C:\\Ollama\\models`` - the one place every Ollama on the
+machine looks, ours or not. The exception is a root someone set explicitly:
+that means "the whole product lives here", models included, which is how a
+portable run and the tests work.
 
 Ollama's own binaries stay where they are (``C:\\Ollama``); they belong to
 Ollama's installer, not to us, and keeping our data out of that folder is what
@@ -104,7 +107,12 @@ def root(environ=None, windows=None, fallback: Path | None = None) -> Path:
 
 
 def models_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
-    """Shared. One copy of the models for the whole machine."""
+    """The store when the root owns it: a portable run, a test, a dev checkout.
+
+    On an ordinary Windows install it does not, because Ollama decides where
+    its models are; ``core.ollama_paths`` answers that. ``project_paths``
+    picks between the two so no caller has to.
+    """
     return root(environ, windows, fallback) / MODELS
 
 
@@ -153,6 +161,8 @@ def layout(environ=None, windows=None, fallback: Path | None = None) -> dict:
 #: What each directory in the layout is, so a caller never has to guess which
 #: side of the split it is on. Shared is readable by every account on the PC.
 SHARED = ('root', 'models', 'env', 'accounts')
+# 'models' is in the layout because an explicitly overridden root takes the
+# store with it; on an ordinary install ollama_paths has the final word.
 PRIVATE = ('account', 'user_data', 'logs', 'workspace')
 
 

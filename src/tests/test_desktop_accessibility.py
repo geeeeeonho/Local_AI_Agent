@@ -175,3 +175,116 @@ def test_the_idle_poll_does_not_demand_a_fresh_answer(ui):
         time.sleep(.01)
     assert None in backend.health_calls
     assert 0 not in backend.health_calls
+
+
+# ── the window has to open where the user can reach it ────────────────────
+
+def test_the_window_never_opens_taller_than_the_screen_it_opens_on():
+    """It asked for 1280x860 whatever it was opening on.
+
+    A 1366x768 laptop - still the commonest screen this runs on - has about
+    730 usable pixels of height, so the bottom 130 went under the taskbar:
+    the readiness line, and on the models screen the button that applies the
+    whole selection. Nothing was broken, and nothing down there could be
+    clicked either, because it was not on the screen.
+    """
+    from core.window_size import fitted_size, centred_geometry
+    for screen in ((1366, 768), (1280, 720), (1440, 900), (1920, 1080),
+                   (2560, 1440), (1024, 640)):
+        width, height = fitted_size(screen)
+        assert width <= screen[0] and height <= screen[1], screen
+        geometry = centred_geometry((width, height), screen)
+        size, _, offset = geometry.partition('+')
+        x, _, y = offset.partition('+')
+        assert int(x) >= 0 and int(y) >= 0, geometry
+        assert int(x) + width <= screen[0] + 1, geometry
+
+
+def test_a_screen_smaller_than_the_minimum_still_gets_the_minimum():
+    """Tk would resize it back up anyway; clamping below only moves it badly."""
+    from core.window_size import fitted_size
+    assert fitted_size((640, 480), minimum=(880, 560)) == (880, 560)
+
+
+def test_a_big_screen_is_not_filled_edge_to_edge():
+    from core.window_size import fitted_size, PREFERRED_SIZE
+    assert fitted_size((3840, 2160)) == PREFERRED_SIZE
+
+
+def test_the_live_window_opens_at_the_size_its_display_allows(ui):
+    """Whatever the display under this test happens to be."""
+    from core.window_size import fitted_size
+    w, _, _ = ui
+    w.root.update_idletasks()
+    screen = (w.root.winfo_screenwidth(), w.root.winfo_screenheight())
+    assert (w.root.winfo_width(), w.root.winfo_height()) == fitted_size(
+        screen, minimum=tuple(w.root.minsize()))
+
+
+# ── and the page has to get more of it than the chrome around the page ────
+
+def test_the_activity_log_gives_its_space_back_on_a_short_window():
+    """Eight lines is a fifth of a desktop window and a third of a laptop one.
+
+    Left fixed, the log took so much of a 1366x768 screen that the list of
+    twenty-five models underneath it had four pixels to show them in.
+    """
+    from core.window_size import activity_lines, ACTIVITY_LINES
+    assert activity_lines(900) == ACTIVITY_LINES[1]
+    assert activity_lines(540) == ACTIVITY_LINES[0]
+    assert ACTIVITY_LINES[0] <= activity_lines(648) < ACTIVITY_LINES[1]
+    # Monotonic: a taller window never gets a shorter log.
+    heights = [activity_lines(h) for h in range(400, 1200, 20)]
+    assert heights == sorted(heights)
+
+
+def test_the_model_list_gets_more_of_its_page_than_the_text_around_it(ui):
+    """The screen exists to pick from a list; the list was the smallest thing on it.
+
+    Two header labels, a three-line download plan and a three-sentence note
+    sat between the user and twenty-five checkboxes, and the checkboxes got
+    what was left - ninety-nine pixels of it.
+    """
+    import time
+    w, _, _ = ui
+    w.root.geometry('1280x860')
+    w.navigate('models')
+    w.model_tabs.select(w.model_pages['choose'])
+    for _ in range(30):
+        w.root.update_idletasks(); w.root.update(); time.sleep(.01)
+    pane = w.model_pages['choose']
+    rows = {int(child.grid_info()['row']): child for child in pane.grid_slaves()}
+    growing = [index for index in rows
+               if (pane.grid_rowconfigure(index).get('weight') or 0)]
+    assert len(growing) == 1, 'exactly one row absorbs the slack'
+    listing = rows[growing[0]].winfo_height()
+    chrome = sum(rows[index].winfo_height()
+                 for index in rows if index != growing[0])
+    assert listing >= 160, 'the list is %d px tall' % listing
+    assert listing > chrome, 'text takes %d px, the list %d' % (chrome, listing)
+
+
+def test_a_fixed_row_hands_space_back_when_its_text_shrinks(ui):
+    """Those rows are labels driven by a StringVar: measured empty, filled
+    with a three-line plan, then cleared. A height reserved once is wrong
+    twice, and when it is wrong high the list is what pays."""
+    import time
+    w, _, _ = ui
+    w.navigate('models')
+    w.model_tabs.select(w.model_pages['choose'])
+
+    def settle():
+        for _ in range(20):
+            w.root.update_idletasks(); w.root.update(); time.sleep(.01)
+
+    settle()
+    pane = w.model_pages['choose']
+    rows = {int(c.grid_info()['row']): c for c in pane.grid_slaves()}
+    fixed = [i for i in rows if not (pane.grid_rowconfigure(i).get('weight') or 0)]
+    w.choice_storage.set('x' * 400)
+    settle()
+    swollen = sum(int(pane.grid_rowconfigure(i).get('minsize') or 0) for i in fixed)
+    w.choice_storage.set('')
+    settle()
+    shrunk = sum(int(pane.grid_rowconfigure(i).get('minsize') or 0) for i in fixed)
+    assert shrunk < swollen, 'the row kept %d px it no longer needs' % shrunk

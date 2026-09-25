@@ -10,7 +10,9 @@ from core.projects.model import Project
 from core.urls import local_url
 from .specs import SPECS, LABELS, navigation_groups, nav_style
 from .tasks import TaskRunner
-from .widgets import set_text, set_status, theme, wrap_to_parent
+from core.window_size import ACTIVITY_LINES, activity_lines
+from .widgets import (opening_geometry, set_text, set_status, theme,
+                      wrap_to_parent)
 from .themes import themed
 from . import views
 
@@ -29,10 +31,10 @@ class DesktopWindow:
         self._appearance_generation = 0
         self._appearance_error = None
         self.root.title(self.spec.title)
-        self.root.geometry('1280x860')
         # Fits a 1366x768 laptop with its title bar and taskbar; the static
         # pages scroll, so a smaller window loses no controls.
         self.root.minsize(880,560)
+        self.root.geometry(opening_geometry(self.root))
         self.runner = TaskRunner()
         self.events = queue.Queue(maxsize=2048)
         self._unsubscribe = services.events.subscribe('*', self._enqueue)
@@ -95,7 +97,7 @@ class DesktopWindow:
         # useful Chat/Agent startup stages behind periodic health task messages.
         # Eight lines is a quarter of the window at its own minimum size, though,
         # so it can be folded away and the choice is remembered.
-        self.activity=themed(scrolledtext.ScrolledText(content,height=8,relief='flat',
+        self.activity=themed(scrolledtext.ScrolledText(content,height=ACTIVITY_LINES[1],relief='flat',
                               font=('Consolas',9),padx=14,pady=8,state='disabled',wrap='word'),
                               background='surface',foreground='muted',highlightbackground='border',highlightcolor='chat',
                               selectbackground='selected',selectforeground='fg')
@@ -105,6 +107,11 @@ class DesktopWindow:
         self._apply_activity_visibility()
         self.page_area=ttk.Frame(content);self.page_area.pack(fill='both',expand=True)
         self._apply_activity_visibility()
+        # Eight lines is a fifth of a desktop window and a third of a laptop
+        # one. Left fixed, the log took so much of a 1366x768 screen that the
+        # model list below it had four pixels to show twenty-five models in.
+        self.root.bind('<Configure>',self._fit_activity,add='+')
+        self._fit_activity()
         self.page_area.columnconfigure(0,weight=1);self.page_area.rowconfigure(0,weight=1)
         for key in self.spec.pages:
             page=views.build(self.page_area,key,self);page.grid(row=0,column=0,sticky='nsew');self.pages[key]=page
@@ -121,6 +128,17 @@ class DesktopWindow:
         elif self.activity.winfo_ismapped():
             self.activity.pack_forget()
         self.activity_button.configure(text='기록 접기' if self._activity_visible else '기록 펼치기')
+
+    def _fit_activity(self,event=None):
+        """Keep the log to its share of the window, in whole lines."""
+        if event is not None and getattr(event,'widget',None) is not self.root:
+            return
+        height=self.root.winfo_height()
+        if height<=1:
+            return
+        wanted=activity_lines(height)
+        if int(self.activity.cget('height'))!=wanted:
+            self.activity.configure(height=wanted)
 
     def toggle_activity(self):
         self._activity_visible=not self._activity_visible
@@ -592,8 +610,17 @@ class DesktopWindow:
         plan=catalog['plan']
         parts=[f"[{label}] "+(', '.join(plan.get(key) or ()) or '없음')
                for key,label in catalog['levels']]
-        self.choice_plan.set(f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 3단계를 미리 체크했습니다 "
-                             '(여유 메모리는 오르내리므로 세 단계를 모두 둡니다).\n  '+'\n  '.join(parts))
+        # One line beside the apply button. The three tiers used to be three
+        # more lines above the list, which left the list of twenty-five models
+        # with less height than the explanation of it; the full breakdown goes
+        # to the activity log, where a long answer costs nothing.
+        counts=' · '.join(f"{label} {len(plan.get(key) or ())}개"
+                          for key,label in catalog['levels'])
+        self.choice_plan.set(f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 "
+                             f"3단계를 미리 체크했습니다 · {counts} · 자세한 목록은 기록에")
+        self.log('선택 계획 · 여유 메모리는 오르내리므로 세 단계를 모두 둡니다:')
+        for part in parts:
+            self.log('  '+part)
         self.choice_scroller.bind_content()
 
     def add_catalog_group(self,title):

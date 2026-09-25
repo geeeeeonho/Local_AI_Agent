@@ -31,12 +31,31 @@ class Stack:
         parent.columnconfigure(0, weight=1)
 
     def fixed(self, build, *, pad=(0, 10)):
-        """One row that keeps the height it asks for, whatever else happens."""
+        """One row that keeps the height it asks for, whatever else happens.
+
+        "Asks for" is re-read whenever the widget changes, not frozen at build
+        time. Several of these rows are labels driven by a ``StringVar``: they
+        are measured empty, then filled with a path or a three-line download
+        plan, then cleared again. A height reserved once is wrong twice - and
+        when it is wrong high, the row it steals from is the list this screen
+        exists to show.
+        """
         widget = build(self.parent)
-        widget.grid(row=self.row, column=0, sticky='ew', pady=pad)
+        row, extra = self.row, pad[0] + pad[1]
+        widget.grid(row=row, column=0, sticky='ew', pady=pad)
+
+        def remeasure(event=None):
+            wanted = widget.winfo_reqheight() + extra
+            current = self.parent.grid_rowconfigure(row).get('minsize') or 0
+            if abs(int(current) - wanted) > 1:
+                self.parent.rowconfigure(row, minsize=wanted)
+
         self.parent.update_idletasks()
-        self.parent.rowconfigure(self.row, weight=0,
-                                 minsize=widget.winfo_reqheight() + pad[0] + pad[1])
+        self.parent.rowconfigure(self.row, weight=0)
+        remeasure()
+        # Only when the widget itself resizes, so this settles instead of
+        # bouncing: the write is skipped once the two agree.
+        widget.bind('<Configure>', remeasure, add='+')
         self.row += 1
         return widget
 
@@ -108,6 +127,35 @@ def _button(parent, text, command, kind=None, accent=False):
     return widget
 
 
+def _apply_row(parent, w):
+    """The apply button, and beside it what applying would download."""
+    frame = _bar(parent, (('선택대로 적용', w.apply_selection, None, True),))
+    plan = ttk.Label(frame, textvariable=w.choice_plan, style='Muted.TLabel',
+                     wraplength=560, justify='left')
+    plan.pack(side='left', anchor='w', padx=(4, 0))
+    w.choice_plan_label = wrap_to_parent(plan, inset=260, minimum=200)
+    return frame
+
+
+def _summary_row(parent, w):
+    """What the catalog says, and where the store is, on one line.
+
+    Left is the count and total; right is the path. They are never both long,
+    and the screen below them is a list of twenty-five checkboxes that needs
+    every pixel it can get.
+    """
+    frame = ttk.Frame(parent)
+    ttk.Label(frame, textvariable=w.choice_summary,
+              style='Section.TLabel').pack(side='left', anchor='w')
+    storage = ttk.Label(frame, textvariable=w.choice_storage, style='Muted.TLabel',
+                        wraplength=520, justify='right')
+    storage.pack(side='right', anchor='e', padx=(12, 0))
+    # The path re-wraps with the window like every other explanation here, but
+    # to what is left beside the summary rather than to the whole row.
+    frame.storage = wrap_to_parent(storage, inset=380, minimum=160)
+    return frame
+
+
 def _tree_frame(parent, columns, headings, widths, height):
     """The tree plus its scrollbar, as one row for :class:`Stack` to place."""
     wrapper = ttk.Frame(parent)
@@ -174,24 +222,27 @@ def _choose(parent, w):
         ('전체 선택', lambda: w.set_selection('all'), None, False),
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
+    # Two lines that each said one short thing, stacked above the list. On a
+    # laptop that list had ninety-nine pixels to show twenty-five models in,
+    # so the header shares one row and gives the rest back.
     w.choice_summary = tk.StringVar(master=w.root, value='카탈로그를 아직 읽지 않았습니다.')
-    layout.fixed(lambda box: _label(box, w.choice_summary, 'Section.TLabel'), pad=(0, 4))
     w.choice_storage = tk.StringVar(master=w.root, value='')
-    w.choice_storage_label = layout.fixed(
-        lambda box: _label(box, w.choice_storage), pad=(0, 8))
+    header = layout.fixed(lambda box: _summary_row(box, w), pad=(0, 6))
+    w.choice_storage_label = header.storage
     w.choice_scroller = layout.grows(lambda box: _scroll_frame(box, w)).scroller
     w.choice_vars = {}
     ttk.Label(w.choice_body, text='카탈로그를 읽는 중...', style='Muted.TLabel').pack(anchor='w')
     # The action this whole screen exists for. It is a fixed row, so it cannot
-    # be the thing the layout gives up when the window is small.
-    w.apply_button = layout.fixed(lambda box: _bar(box, (
-        ('선택대로 적용', w.apply_selection, None, True),))).buttons[0]
+    # be the thing the layout gives up when the window is small - and the plan
+    # it is about to carry out rides beside it rather than on a row of its own,
+    # because that row was three lines tall and the list under it was one.
     w.choice_plan = tk.StringVar(master=w.root, value='')
-    layout.fixed(lambda box: _label(box, w.choice_plan), pad=(0, 6))
+    w.apply_button = layout.fixed(lambda box: _apply_row(box, w)).buttons[0]
+    # One line, not three. The rule is the whole explanation; the rest was
+    # detail that cost the list two more rows every time the screen opened.
     layout.fixed(lambda box: _note(box,
-        '체크 = 있어야 함. 체크하면 설치하고, 설치된 모델의 체크를 풀면 삭제합니다. '
-        '용량은 최대치이며, 같은 계층을 공유하면 실제로는 더 적게 받습니다. '
-        '다운로드는 로컬 Ollama 서버의 호스트 네트워크를 쓰고, Block 에서는 거부합니다.'))
+        '체크 = 있어야 함 · 체크하면 설치하고, 설치된 모델의 체크를 풀면 삭제합니다.'),
+        pad=(0, 4))
 
 
 def _disk(parent, w):
