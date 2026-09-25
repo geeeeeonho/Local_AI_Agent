@@ -15,13 +15,21 @@ real time:
 * Nothing could answer "where is this installed" with a single path.
 
 So there is one runtime root, directly under the drive root, holding every
-piece of state this product owns::
+piece of state this product owns - split by who it belongs to::
 
     C:\\LocalAI\\
-        models\\        the Ollama store (OLLAMA_MODELS points here)
-        environment\\   managed runtimes, containers' config, scripts
-        user_data\\     settings, projects, chat, traces
-        logs\\          session logs
+        models\\               shared: the Ollama store, one copy per machine
+        environment\\          shared: managed runtimes, container config
+        users\\<account>\\
+            user_data\\        private: settings, projects, chat, traces
+            logs\\             private: session logs
+            workspace\\        private: the agent's default working folder
+
+The models are a machine asset: identical for everyone, a day to download, so
+every Windows account reads the same copy. What a person *does* with them is
+theirs, and a shared ``user_data`` does not merely leak it - two signed-in
+accounts write the same settings file and the same session state. ``core.
+accounts`` names the folders and says what makes one private.
 
 Ollama's own binaries stay where they are (``C:\\Ollama``); they belong to
 Ollama's installer, not to us, and keeping our data out of that folder is what
@@ -35,6 +43,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
+from core import accounts
 
 #: This checkout, derived from where this file sits: core/ -> src/ -> root.
 #: Used off Windows, where there is no C: drive to install into. Deriving it
@@ -57,8 +67,10 @@ PORTABLE_VARIABLE = 'LLM_PROJECT_ROOT'
 #: Folder names under the root. One spelling, used by every component.
 MODELS = 'models'
 ENVIRONMENT = 'environment'
+USERS = 'users'
 USER_DATA = 'user_data'
 LOGS = 'logs'
+WORKSPACE = 'workspace'
 
 #: What earlier releases called the managed environment folder. Kept so setup
 #: can find one and move it, never to write to.
@@ -92,31 +104,56 @@ def root(environ=None, windows=None, fallback: Path | None = None) -> Path:
 
 
 def models_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
+    """Shared. One copy of the models for the whole machine."""
     return root(environ, windows, fallback) / MODELS
 
 
 def env_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
+    """Shared. The runtimes setup installed, not anybody's records."""
     return root(environ, windows, fallback) / ENVIRONMENT
 
 
+def accounts_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
+    return root(environ, windows, fallback) / USERS
+
+
+def account_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
+    """Private. Everything this Windows account did, and nobody else's."""
+    return accounts_dir(environ, windows, fallback) / accounts.current_slug(environ)
+
+
 def user_data_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
-    return root(environ, windows, fallback) / USER_DATA
+    return account_dir(environ, windows, fallback) / USER_DATA
 
 
 def logs_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
-    return root(environ, windows, fallback) / LOGS
+    return account_dir(environ, windows, fallback) / LOGS
+
+
+def workspace_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
+    return account_dir(environ, windows, fallback) / WORKSPACE
 
 
 def layout(environ=None, windows=None, fallback: Path | None = None) -> dict:
     """Every directory the root owns, by the name the rest of the code uses."""
     base = root(environ, windows, fallback)
+    account = account_dir(environ, windows, fallback)
     return {
         'root': base,
         'models': base / MODELS,
         'env': base / ENVIRONMENT,
-        'user_data': base / USER_DATA,
-        'logs': base / LOGS,
+        'accounts': base / USERS,
+        'account': account,
+        'user_data': account / USER_DATA,
+        'logs': account / LOGS,
+        'workspace': account / WORKSPACE,
     }
+
+
+#: What each directory in the layout is, so a caller never has to guess which
+#: side of the split it is on. Shared is readable by every account on the PC.
+SHARED = ('root', 'models', 'env', 'accounts')
+PRIVATE = ('account', 'user_data', 'logs', 'workspace')
 
 
 def is_inside(path, environ=None, windows=None, fallback: Path | None = None) -> bool:
@@ -130,7 +167,8 @@ def is_inside(path, environ=None, windows=None, fallback: Path | None = None) ->
 
 __all__ = [
     'CHECKOUT_ROOT', 'WINDOWS_ROOT', 'ROOT_VARIABLE', 'PORTABLE_VARIABLE',
-    'MODELS', 'ENVIRONMENT', 'USER_DATA', 'LOGS', 'LEGACY_ENVIRONMENT',
-    'root', 'models_dir', 'env_dir', 'user_data_dir', 'logs_dir',
-    'layout', 'is_inside',
+    'MODELS', 'ENVIRONMENT', 'USERS', 'USER_DATA', 'LOGS', 'WORKSPACE',
+    'LEGACY_ENVIRONMENT', 'SHARED', 'PRIVATE',
+    'root', 'models_dir', 'env_dir', 'accounts_dir', 'account_dir',
+    'user_data_dir', 'logs_dir', 'workspace_dir', 'layout', 'is_inside',
 ]

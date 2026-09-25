@@ -216,7 +216,7 @@ def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_
         calls.append((command, kwargs))
         return Result()
 
-    monkeypatch.setattr("integrations.ollama.sharing.subprocess.run", fake_run)
+    monkeypatch.setattr("integrations.windows.acl.subprocess.run", fake_run)
 
     assert ensure_shared_model_access(model_dir, windows=True) is True
     assert calls[0][0] == [

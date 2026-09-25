@@ -123,7 +123,7 @@ def install_fake_windows(monkeypatch, store, *, machine=None, user=None,
     """A machine whose shared store is ``store``, with a stub registry and ACL."""
     import sys
     from core import ollama_paths
-    from integrations.ollama import sharing
+    from integrations.windows import acl
     # This tmp directory stands in for C:\Ollama\models, so the reads under
     # test are about the machine's settings rather than the path's shape.
     monkeypatch.setattr(ollama_paths, 'SHARED_MODELS_DIR', store)
@@ -137,7 +137,9 @@ def install_fake_windows(monkeypatch, store, *, machine=None, user=None,
             target = Path(command[command.index('/save') + 1])
             target.write_text('models\n' + sddl + '\n', encoding='utf-16')
         return types.SimpleNamespace(returncode=returncode, stdout='', stderr='')
-    monkeypatch.setattr(sharing.subprocess, 'run', fake_run)
+    # One seam for both callers: the store's readability and the private
+    # records folder's ACL go through the same console plumbing.
+    monkeypatch.setattr(acl.subprocess, 'run', fake_run)
     return ran
 
 

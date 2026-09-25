@@ -172,14 +172,17 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertTrue(path_module.is_file())
         text = path_module.read_text(encoding="utf-8")
         for line in ('RUNTIME_ROOT = runtime_dir()',
+                     'ACCOUNT_ROOT = account_dir()',
                      'USER_DATA_DIR = user_data_dir()',
                      'ENV_DIR = env_dir()',
                      'LOGS_DIR = logs_dir()',
                      'MODEL_STORAGE_DIR = model_dir()'):
             self.assertIn(line, text)
-        for resolver in ('env_dir', 'user_data_dir', 'logs_dir'):
-            self.assertIn('def %s() -> Path:\n    return runtime_dir() / runtime_root.'
-                          % resolver, text)
+        # Shared folders hang off the root; private ones off the account.
+        self.assertIn('return runtime_dir() / runtime_root.ENVIRONMENT', text)
+        self.assertIn('return runtime_dir() / runtime_root.MODELS', text)
+        for name in ('USER_DATA', 'LOGS', 'WORKSPACE'):
+            self.assertIn('return account_dir() / runtime_root.%s' % name, text)
 
     def test_no_shadowed_gui_module(self):
         self.assertFalse((REPO_ROOT / "src" / "launcher" / "presenter" / "gui.py").exists())

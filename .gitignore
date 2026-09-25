@@ -15,6 +15,7 @@ llm_environment/
 /environment/
 /models/
 /logs/
+/users/
 
 # ─────────────────────────────────────────────
 #  개인 설정 / 레거시 호환 경로

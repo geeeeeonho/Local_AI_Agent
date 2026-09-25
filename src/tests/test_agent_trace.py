@@ -3,6 +3,16 @@ import json
 from launcher.agent.agent_trace import AgentTrace, redact
 
 
+def _trace_dir():
+    """Where traces land for the account running this test.
+
+    Traces are personal records, so they live under the account folder
+    rather than at the runtime root that the machine shares.
+    """
+    import project_paths
+    return project_paths.user_data_dir() / "logs"
+
+
 def test_redact_masks_nested_secrets_and_sensitive_text():
     payload = {
         "token": "top-secret-token",
@@ -51,7 +61,7 @@ def test_agent_trace_writes_flush_safe_jsonl_under_user_data_logs(tmp_path, monk
         },
     )
 
-    paths = list((tmp_path / "user_data" / "logs").glob("agent_trace_*.jsonl"))
+    paths = list(_trace_dir().glob("agent_trace_*.jsonl"))
     assert len(paths) == 1
     line = paths[0].read_text(encoding="utf-8").strip()
     row = json.loads(line)
@@ -141,7 +151,7 @@ def test_old_trace_files_are_pruned(tmp_path, monkeypatch):
 
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
     monkeypatch.setattr(module, "_KEEP_TRACE_FILES", 3)
-    logs = tmp_path / "user_data" / "logs"
+    logs = _trace_dir()
     logs.mkdir(parents=True)
     for i in range(6):
         (logs / f"agent_trace_old_{i}.jsonl").write_text("{}\n", encoding="utf-8")

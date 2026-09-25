@@ -204,7 +204,11 @@ def test_health_refresh_fills_the_network_and_system_panels(ui):
     w.refresh_health()
     settle(w, lambda: 'Ollama' in w.health.get())
     assert 'Pinned mode' in w.network_text.get('1.0', 'end')
-    assert 'User data' in w.system_text.get('1.0', 'end')
+    shown = w.system_text.get('1.0', 'end')
+    # The page says which side of the split each folder is on: a user who
+    # cannot tell shared from private cannot know who can read their chats.
+    assert 'Models' in shown and '공용' in shown
+    assert '내 계정 전용' in shown and str(_svc.data) in shown
 
 
 def test_a_burst_of_events_drops_history_instead_of_blocking(ui):

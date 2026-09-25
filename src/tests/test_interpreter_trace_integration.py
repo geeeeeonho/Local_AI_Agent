@@ -4,6 +4,16 @@ from launcher.agent.backend import AgentConfig
 from launcher.agent.interpreter_backend import OpenInterpreterBackend
 
 
+
+def _trace_dir():
+    """Where traces land for the account running this test.
+
+    Traces are personal records, so they live under the account folder
+    rather than at the runtime root that the machine shares.
+    """
+    import project_paths
+    return project_paths.user_data_dir() / "logs"
+
 class FakeClient:
     def __init__(self, command, env, cwd):
         self.running = False
@@ -87,7 +97,7 @@ def test_backend_traces_lifecycle_turn_and_completed_mcp(tmp_path, monkeypatch):
     backend.poll_events(20)
     backend.stop()
 
-    paths = list((tmp_path / "user_data" / "logs").glob("agent_trace_*.jsonl"))
+    paths = list(_trace_dir().glob("agent_trace_*.jsonl"))
     assert len(paths) == 1
     rows = [json.loads(line) for line in paths[0].read_text(encoding="utf-8").splitlines()]
     names = [row["event"] for row in rows]
@@ -144,7 +154,7 @@ def test_streaming_deltas_are_counted_not_traced_per_token(tmp_path, monkeypatch
     # Deltas still reach the UI.
     assert sum(1 for e in events if e.type.value == "text_delta") == 50
 
-    path = next((tmp_path / "user_data" / "logs").glob("agent_trace_*.jsonl"))
+    path = next(_trace_dir().glob("agent_trace_*.jsonl"))
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     notifications = [r for r in rows if r["event"] == "oi_notification"]
     assert all(
@@ -187,7 +197,7 @@ def test_trace_omits_payload_rows_when_logging_disabled(tmp_path, monkeypatch):
     backend.poll_events(20)
     backend.stop()
 
-    path = next((tmp_path / "user_data" / "logs").glob("agent_trace_*.jsonl"))
+    path = next(_trace_dir().glob("agent_trace_*.jsonl"))
     text = path.read_text(encoding="utf-8")
     assert "a very private prompt" not in text
 
