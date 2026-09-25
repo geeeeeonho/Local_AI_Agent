@@ -51,10 +51,6 @@ USER_DATA = 'user_data'
 LOGS = 'logs'
 WORKSPACE = 'workspace'
 
-#: What earlier releases called the managed environment folder. Kept so setup
-#: can find one and move it, never to write to.
-LEGACY_ENVIRONMENT = 'llm_environment'
-
 
 def _expanded(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(str(value))))
@@ -153,7 +149,7 @@ def is_inside(path, environ=None, windows=None, fallback: Path | None = None) ->
 __all__ = [
     'CHECKOUT_ROOT', 'WINDOWS_ROOT', 'ROOT_VARIABLE', 'PORTABLE_VARIABLE',
     'MODELS', 'OLLAMA', 'ENVIRONMENT', 'USERS', 'USER_DATA', 'LOGS', 'WORKSPACE',
-    'LEGACY_ENVIRONMENT', 'SHARED', 'PRIVATE',
+    'SHARED', 'PRIVATE',
     'root', 'models_dir', 'ollama_dir', 'env_dir', 'accounts_dir', 'account_dir',
     'user_data_dir', 'logs_dir', 'workspace_dir', 'layout', 'is_inside',
 ]
