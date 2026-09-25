@@ -19,7 +19,8 @@ from core.models import sharing as policy
 from core.models.sharing import Sharing, VARIABLE
 
 __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
-           'ensure_readable', 'publish_machine_variable', 'describe']
+           'ensure_readable', 'publish_machine_variable', 'publish_user_variable',
+           'publish_variable', 'describe']
 
 # The local Users group, by SID so it works on a non-English Windows.
 BUILTIN_USERS_SID = policy.USERS_SID
@@ -162,6 +163,35 @@ def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
         return True
     result = _run(['setx', VARIABLE, str(model_dir), '/M'])
     return result is not None and result.returncode == 0
+
+
+def publish_user_variable(model_dir: Path, *, windows=None) -> bool:
+    """Point this account's Ollama here. No administrator needed."""
+    if not ((os.name == 'nt') if windows is None else bool(windows)):
+        return True
+    result = _run(['setx', VARIABLE, str(model_dir)])
+    return result is not None and result.returncode == 0
+
+
+def publish_variable(model_dir: Path, *, windows=None) -> str:
+    """Make the store stick for every future Ollama start. Returns the scope.
+
+    ``'machine'``, ``'user'`` or ``''`` for neither. This is the step that was
+    missing everywhere: the installer only ever passed OLLAMA_MODELS to the
+    server it launched itself, as a child-process variable. Nothing else that
+    starts Ollama - the Startup entry Windows runs at login, the tray app, the
+    user typing ``ollama serve`` - inherits that, so after the first reboot the
+    server reads its own empty default and the whole library disappears from
+    view. Machine scope needs administrator; user scope does not and is enough
+    for the account actually using the program.
+    """
+    if not ((os.name == 'nt') if windows is None else bool(windows)):
+        return 'machine'
+    if publish_machine_variable(model_dir, windows=windows):
+        return 'machine'
+    if publish_user_variable(model_dir, windows=windows):
+        return 'user'
+    return ''
 
 
 def repair(model_dir=None, *, windows=None) -> dict:

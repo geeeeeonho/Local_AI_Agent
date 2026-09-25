@@ -174,8 +174,25 @@ def env_for(paths: Dict[str, Path]) -> dict:
     return _service(paths["env"], paths["models"]).env_vars()
 
 
+def persist_store(paths: Dict[str, Path]) -> str:
+    """Write the model path where Windows keeps it, not just into one child.
+
+    The installer used to hand OLLAMA_MODELS to the server it launched and stop
+    there. Nothing else that starts Ollama inherits a child-process variable -
+    least of all the Startup entry Windows runs at login - so the very first
+    reboot left the server reading its own empty default while the whole
+    library sat in the store this installer had just filled.
+    """
+    svc = _service(paths["env"], paths["models"])
+    scope = svc.persist_store_setting()
+    if not scope:
+        utils.warn('모델 경로를 Windows 설정에 저장하지 못했습니다: %s' % paths["models"])
+    return scope
+
+
 def start_service(paths: Dict[str, Path]):
     utils.section(t("install.ollama_service_section"))
+    persist_store(paths)
     svc = _service(paths["env"], paths["models"])
     if not svc.ensure_running(boot_timeout=30):
         raise RuntimeError(svc.last_error or "Managed Ollama service start failed")

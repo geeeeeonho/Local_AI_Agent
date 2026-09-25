@@ -410,6 +410,49 @@ class OllamaService:
         )
         return Path(value) if value else None
 
+    def supervisor_pids(self) -> list:
+        """Running Ollama tray applications we can place, newest listing order.
+
+        On Windows the tray application - not the CLI - owns the server. It is
+        what the Startup entry launches at login, it spawns ``ollama serve``
+        with its own environment, and it replaces that child within
+        milliseconds of it being killed. Stopping only the listener therefore
+        changes nothing: the replacement comes back reading the same directory
+        as before, which is exactly what "다시 시작 완료 · 로컬 모델 0개" was.
+        """
+        script = (
+            "Get-Process -Name '" + ollama_paths.SUPERVISOR_PROCESS + "' "
+            "-ErrorAction SilentlyContinue | ForEach-Object "
+            "{ [Console]::Out.WriteLine(\"$($_.Id)|$($_.Path)\") }"
+        )
+        value = self._powershell(script)
+        # Only a tray application sitting beside an Ollama we recognise.
+        # Anything else answering to that process name is not ours to end.
+        known = {os.path.normcase(os.path.abspath(str(
+            ollama_paths.supervisor_beside(candidate))))
+            for candidate in self.known_executables()}
+        found = []
+        for line in (value or "").splitlines():
+            pid, _, path = line.strip().partition("|")
+            if not pid.isdigit():
+                continue
+            if path and os.path.normcase(os.path.abspath(path)) not in known:
+                continue
+            found.append(int(pid))
+        return found
+
+    def stop_supervisor(self) -> bool:
+        """Stop the tray applications so a restarted server stays restarted."""
+        pids = self.supervisor_pids()
+        if not pids:
+            return True
+        ok = True
+        for pid in pids:
+            self._info("Ollama 트레이 앱 종료: pid %d" % pid)
+            if not self._kill(pid):
+                ok = False
+        return ok
+
     def _listener_is_managed(self, pid: Optional[int] = None) -> bool:
         pid = pid if pid is not None else self._listener_pid()
         if pid is None:
@@ -587,6 +630,10 @@ class OllamaService:
             return True
 
         self._info("이 창이 시작한 Ollama 를 종료합니다.")
+        # The tray application first. Kill the server while its supervisor is
+        # alive and the supervisor simply starts another one, so the program
+        # would exit leaving an Ollama running that it had itself started.
+        self.stop_supervisor()
         if not self._kill(int(recorded)):
             return False
         deadline = time.monotonic() + max(1, stop_timeout)
@@ -598,6 +645,32 @@ class OllamaService:
         # 하고 추가로 무언가를 더 죽이지는 않는다.
         self._warn("Ollama 종료를 확인하지 못했습니다.")
         return False
+
+    def persist_store_setting(self) -> str:
+        """Make this store the one every future Ollama start reads.
+
+        Passing OLLAMA_MODELS to the server we launch covers that one process
+        and nothing else. The Startup entry Windows runs at login does not
+        inherit it, so after a reboot the models stop being visible - which is
+        the whole failure, and it comes back every reboot until the value is
+        written somewhere Windows keeps.
+        """
+        try:
+            from integrations.ollama import sharing
+        except Exception:
+            return ''
+        try:
+            scope = sharing.publish_variable(self.model_dir)
+        except Exception:
+            return ''
+        if scope == 'machine':
+            self._ok("모델 경로를 시스템 설정에 저장했습니다: %s" % self.model_dir)
+        elif scope == 'user':
+            self._ok("모델 경로를 이 계정 설정에 저장했습니다: %s" % self.model_dir)
+        else:
+            self._warn("모델 경로를 Windows 설정에 저장하지 못했습니다. "
+                       "직접 %s 를 실행하세요." % self.store_fix_command())
+        return scope
 
     def restart_for_store(self, stop_timeout: int = 8) -> bool:
         """Restart the running Ollama so it reads the store we resolved.
@@ -629,6 +702,10 @@ class OllamaService:
             return False
 
         self._info("Ollama 를 %s 경로로 다시 시작합니다." % self.model_dir)
+        # The value first: whatever ends up running next has to read it, and if
+        # anything below fails the setting still fixes the next login.
+        self.persist_store_setting()
+        supervised = not self.stop_supervisor()
         if not self._kill(pid):
             return False
         deadline = time.monotonic() + max(1, stop_timeout)
@@ -639,11 +716,17 @@ class OllamaService:
         else:
             self._err("기존 Ollama 가 종료되지 않았습니다.")
             return False
+        if supervised:
+            self._warn("Ollama 트레이 앱을 종료하지 못했습니다. 다시 살아날 수 있습니다.")
         if not self.ensure_running():
             return False
         found = self.local_models()
-        self._ok("다시 시작 완료 · 로컬 모델 %d개" % len(found or ()))
-        return bool(found)
+        if not found:
+            self._err("다시 시작했지만 여전히 모델이 보이지 않습니다.")
+            self._info(self.describe_store())
+            return False
+        self._ok("다시 시작 완료 · 로컬 모델 %d개" % len(found))
+        return True
 
     def register_exit_cleanup(self) -> bool:
         """우리가 띄운 서버에 한해 종료 정리를 등록한다 (중복 등록 없음)."""
@@ -776,6 +859,10 @@ class OllamaService:
                     return False
                 self._write_runtime_state(listener_pid)
                 self.register_exit_cleanup()
+                # Our child got OLLAMA_MODELS through its environment. Writing
+                # it where Windows keeps it is what makes the next start - by
+                # the Startup entry, the tray app or the user - read it too.
+                self.persist_store_setting()
                 self._ok(f"Ollama 가동 확인 ({i + 1}초)")
                 return True
             time.sleep(1)
