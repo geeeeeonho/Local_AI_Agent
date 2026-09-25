@@ -29,12 +29,6 @@ PROJECT_INSTALL_DIR = runtime_root.WINDOWS_ROOT / 'ollama'
 # The store, beside the install and directly under the drive: short, ASCII,
 # space-free, one copy for every account, and exactly where Ollama looks.
 SHARED_MODELS_DIR = runtime_root.WINDOWS_ROOT / runtime_root.MODELS
-# Compatibility names retained for callers that still import them. Fresh
-# installation does not inspect or migrate these locations.
-LEGACY_FORCED_STORE = Path(r'C:\LLM_Models')
-LEGACY_ROOT_STORE = runtime_root.WINDOWS_ROOT / runtime_root.MODELS
-LEGACY_STORES = (LEGACY_FORCED_STORE,)
-
 
 def _expanded(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(value)))
@@ -86,20 +80,6 @@ def _same_windows_path(left, right) -> bool:
     b = ntpath.normcase(ntpath.normpath(str(right).strip().strip('"\'')))
     return a == b
 
-
-def is_legacy_forced_store(path) -> bool:
-    """True for a store an older Local AI Agent release chose on its own.
-
-    Those values are migration input, not a lasting user preference. An older
-    release could leave OLLAMA_MODELS=C:\\LLM_Models - or, after the release that
-    followed it, C:\\LocalAI\\models - in the machine environment; treating
-    either like a deliberate override would stop the installer from ever
-    bringing those models back to the one place every Ollama on the machine
-    looks, and would leave a second copy nobody serves.
-    """
-    if path is None:
-        return False
-    return any(_same_windows_path(path, legacy) for legacy in LEGACY_STORES)
 
 
 def models_dir(environ=None) -> Path:
