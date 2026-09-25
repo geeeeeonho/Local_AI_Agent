@@ -134,9 +134,6 @@ WORKSPACE_DIR = workspace_dir()
 # still wins, but a fresh install resolves to <runtime root>\models.
 MODEL_STORAGE_DIR = model_dir()
 
-# Compatibility exports only. Fresh installation does not migrate old stores.
-LEGACY_FORCED_MODEL_DIR = ollama_paths.LEGACY_FORCED_STORE
-LEGACY_MODEL_DIRS = ()
 
 # Folder names under the runtime root, for the callers that compose a path
 # from a root they were handed rather than asking for one.
@@ -145,8 +142,6 @@ USER_DATA_DIRNAME = runtime_root.USER_DATA
 LOGS_DIRNAME = runtime_root.LOGS
 ACCOUNTS_DIRNAME = runtime_root.USERS
 
-# The managed environment folder's name in releases before the runtime root.
-LEGACY_ENV_DIRNAME = runtime_root.LEGACY_ENVIRONMENT
 
 # Shared LocalAI-managed Ollama broker.
 OLLAMA_INSTALL_DIR = _override("LLM_OLLAMA_DIR", runtime_dir() / runtime_root.OLLAMA)
