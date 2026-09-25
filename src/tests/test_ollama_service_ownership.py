@@ -181,17 +181,32 @@ def test_an_official_server_sharing_our_store_is_used_not_killed(tmp_path, monke
     assert killed == [], "someone else's service must not be terminated"
 
 
-def test_an_official_server_on_a_different_store_is_refused_with_the_fix(tmp_path, monkeypatch):
+def test_an_official_server_on_a_different_store_is_used_and_explained(tmp_path, monkeypatch):
+    """This used to refuse, and refusing was the bug.
+
+    Install Ollama the official way and never set OLLAMA_MODELS, and it serves
+    from its own default store while this project resolves the shared one. That
+    is the ordinary case, not a misconfiguration, and treating it as fatal left
+    Chat and Agent unable to start against a perfectly good server. Ollama is
+    the router: what it lists is what a prompt reaches, wherever the files sit.
+    Where they sit decides where downloads go, so it is reported, not enforced.
+    """
     from core import ollama_paths
     exe = official(tmp_path)
+    elsewhere = tmp_path / "elsewhere" / "models"
+    elsewhere.mkdir(parents=True)
     monkeypatch.setattr(ollama_paths, "install_candidates", lambda environ=None: (exe.parent,))
+    monkeypatch.setattr(ollama_paths, "store_candidates", lambda environ=None: (elsewhere,))
     svc = _service(tmp_path)
     running_as(monkeypatch, svc, exe)
     monkeypatch.setattr(svc, "store_agrees", lambda timeout=5: False)
+    monkeypatch.setattr(svc, "locate_store", lambda timeout=5: elsewhere)
     said = []
-    monkeypatch.setattr(svc, "_err", lambda m: said.append(m))
-    assert svc.ensure_running(boot_timeout=1) is False
-    assert any("OLLAMA_MODELS" in m and str(svc.model_dir) in m for m in said)
+    for level in ("_ok", "_info", "_warn", "_err"):
+        monkeypatch.setattr(svc, level, lambda m, _l=level: said.append(m))
+    assert svc.ensure_running(boot_timeout=1) is True
+    assert any(str(exe) in message for message in said), said
+    assert any(str(elsewhere) in message for message in said), said
 
 
 def test_an_unverifiable_store_is_used_rather_than_blocking_the_user(tmp_path, monkeypatch):
@@ -226,8 +241,10 @@ def test_health_sees_an_official_server_we_did_not_launch(tmp_path, monkeypatch)
     monkeypatch.setattr(svc, "_state_matches", lambda _pid: False)
     monkeypatch.setattr(svc, "store_agrees", lambda timeout=5: True)
     assert svc.is_managed_running() is True
+    # A store mismatch is not the word "stopped". Folding the two together made
+    # the status page report a serving Ollama as absent.
     monkeypatch.setattr(svc, "store_agrees", lambda timeout=5: False)
-    assert svc.is_managed_running() is False
+    assert svc.is_managed_running() is True
 
 
 def test_store_agreement_compares_served_models_against_the_disk(tmp_path, monkeypatch):

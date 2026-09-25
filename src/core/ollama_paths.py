@@ -130,6 +130,30 @@ def is_per_user_store(path, environ=None) -> bool:
     return True
 
 
+def store_candidates(environ=None):
+    """Stores a running Ollama may actually be serving from, likeliest first.
+
+    ``models_dir`` answers "where would *we* put models". That is not the same
+    question as "where is the Ollama that is already running keeping them", and
+    treating the two as one is what made an ordinary machine unusable: install
+    Ollama the official way, never set OLLAMA_MODELS, and its models sit in
+    ``<home>/.ollama/models`` while this project resolves the shared
+    ``C:\\Ollama\\models``. The two disagree, and the disagreement was read as
+    "that server is pointed somewhere else" - which it is, at its own default.
+    """
+    environ = os.environ if environ is None else environ
+    seen, out = set(), []
+    for candidate in (configured_models_dir(environ), SHARED_MODELS_DIR,
+                      user_default_models_dir(environ), LEGACY_FORCED_STORE):
+        if candidate is None:
+            continue
+        key = os.path.normcase(os.path.abspath(str(candidate)))
+        if key not in seen:
+            seen.add(key)
+            out.append(Path(candidate))
+    return tuple(out)
+
+
 def install_candidates(environ=None):
     """Places an official Ollama may already be installed, most likely first."""
     environ = os.environ if environ is None else environ

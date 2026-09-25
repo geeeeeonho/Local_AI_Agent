@@ -71,7 +71,7 @@ def _from_router(endpoint, timeout):
     return read_router
 
 
-def _from_store(model_dir):
+def _from_store(model_dir, problems):
     """Names the store holds, or None if it cannot be read."""
     if model_dir is None:
         return None
@@ -80,7 +80,13 @@ def _from_store(model_dir):
         # Manifests only. The full index also stats every blob, which answers
         # a question nobody asked here and grows with the size of the store.
         from launcher.models import model_index
-        return set(model_index.read_manifests(model_dir))
+        names = set(model_index.read_manifests(model_dir, problems))
+        # A store that is not there yet holds nothing, and that is a fact, not
+        # a failed read - a fresh install must not report "I could not check".
+        # Only a tree that exists and cannot be walked makes absence a guess.
+        if problems and not (Path(model_dir) / 'manifests').exists():
+            problems.clear()
+        return names
     return read_store
 
 
@@ -97,11 +103,14 @@ def read(model_dir=None, *, endpoint=None, timeout=DEFAULT_TIMEOUT,
         from project_paths import MODEL_STORAGE_DIR
         model_dir = MODEL_STORAGE_DIR
     model_dir = Path(model_dir)
+    problems: list = []
     return registry.resolve(
         read_router=_from_router(_endpoint(endpoint), timeout) if router else None,
-        read_store=_from_store(model_dir) if store else None,
+        read_store=_from_store(model_dir, problems) if store else None,
         canonical=canonical,
         store_path=model_dir,
+        # Deferred: the list is filled while the store is being read.
+        store_complete=lambda: not problems,
     )
 
 

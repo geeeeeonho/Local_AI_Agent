@@ -45,6 +45,11 @@ class Inventory:
     served: Optional[FrozenSet[str]]
     on_disk: Optional[FrozenSet[str]]
     store_path: str = ''
+    #: False when the store was read but not all of it could be understood - a
+    #: half-finished download, a manifest from a newer Ollama, a directory we
+    #: may not enter. Those names are missing from ``on_disk`` without being
+    #: absent from the machine, so they cannot be used to prove disagreement.
+    on_disk_complete: bool = True
 
     @property
     def router_reachable(self) -> bool:
@@ -65,8 +70,14 @@ class Inventory:
         """
         if self.served is None or self.on_disk is None:
             return None
-        if not self.served:
-            # A router with nothing loaded contradicts no store.
+        if not self.on_disk_complete:
+            # Part of the store is unreadable, so "not on disk" would be a
+            # guess. Unknown sends the caller down the warn-and-continue path;
+            # False would have it refuse over something it cannot see.
+            return None
+        served = {name for name in self.served if not _is_remote(name)}
+        if not served:
+            # A router with nothing local loaded contradicts no store.
             return True
         # Folded, because neither side controls the spelling. Vendor tags mix
         # case (prutser/...:Q4_K_S), Ollama does not promise to echo a name
@@ -74,7 +85,7 @@ class Inventory:
         # catalogue knows. A raw comparison would read a case difference in a
         # model the user pulled themselves as "the router is pointed elsewhere".
         lowered = {name.lower() for name in self.on_disk}
-        return all(name.lower() in lowered for name in self.served)
+        return all(name.lower() in lowered for name in served)
 
     def has(self, tag, match: Callable[[str, FrozenSet[str]], object] | None = None) -> bool:
         """Is this tag usable? Unknown reads as not usable, never as usable."""
@@ -83,6 +94,16 @@ class Inventory:
         if match is not None:
             return bool(match(tag, self.tags))
         return tag in self.tags
+
+
+def _is_remote(name) -> bool:
+    """A cloud tag is served without ever being on this disk.
+
+    Ollama proxies these to its own servers, so requiring one to exist locally
+    turned "the user is signed in to Ollama cloud" into "this router is pointed
+    at a different store".
+    """
+    return str(name).strip().lower().endswith('-cloud') or '-cloud:' in str(name).lower()
 
 
 def _read(reader) -> Optional[set]:
@@ -101,7 +122,12 @@ def _read(reader) -> Optional[set]:
         return None
 
 
-def resolve(read_router=None, read_store=None, canonical=None, store_path='') -> Inventory:
+def resolve(read_router=None, read_store=None, canonical=None, store_path='',
+            store_complete=None) -> Inventory:
+    # ``store_complete`` may be a callable, because whether the store could be
+    # read in full is only known once it has been read - passing the value
+    # itself evaluated it before the reader had run, so an unreadable manifest
+    # always reported the scan as complete.
     """Ask the router first, fall back to the store, and canonicalize once.
 
     Both readers return an iterable of names, or ``None``/raise to mean the
@@ -128,8 +154,15 @@ def resolve(read_router=None, read_store=None, canonical=None, store_path='') ->
         tags, source = on_disk, STORE
     else:
         tags, source = frozenset(), UNKNOWN
+    if store_complete is None:
+        complete = True
+    elif callable(store_complete):
+        complete = bool(store_complete())
+    else:
+        complete = bool(store_complete)
     return Inventory(tags=tags, source=source, served=served,
-                     on_disk=on_disk, store_path=str(store_path))
+                     on_disk=on_disk, store_path=str(store_path),
+                     on_disk_complete=complete)
 
 
 EMPTY = Inventory(tags=frozenset(), source=UNKNOWN, served=None, on_disk=None)

@@ -322,3 +322,96 @@ def test_explanations_rewrap_to_the_width_they_actually_have(ui):
     pump(w,lambda:w.model_pages['choose'].winfo_width()<800)
     narrow=int(w.choice_storage_label.cget('wraplength'))
     assert narrow<wide,'the label kept a width the window no longer has: %s/%s'%(narrow,wide)
+
+
+# ── telling the user when it is ready ────────────────────────────────────
+# Readiness was signalled by one button losing its disabled look, and the
+# explanation lived in a log box further down the page. Nobody watches a button
+# for a change of shade, so the page now says the state in words, from the
+# moment it opens, next to the buttons it is talking about.
+
+def state_of(label):
+    return str(label.cget('style')).split('.')[0]
+
+
+def test_the_chat_page_says_what_to_do_before_anything_is_pressed(ui):
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    assert state_of(w.chat_status)=='Waiting'
+    assert 'Chat 시작' in w.chat_state.get(),w.chat_state.get()
+
+
+def test_becoming_ready_changes_the_words_and_the_button_together(ui):
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    w.session_mode.set('block');w.start_chat()
+    pump(w,lambda:svc.chat.started and state_of(w.chat_status)=='Ready')
+    assert str(w.chat_open_button.cget('state'))=='normal'
+    assert 'Chat' in str(w.chat_open_button.cget('style')),'the open button becomes the primary action'
+    assert '→' in str(w.chat_open_button.cget('text'))
+    assert '대화 화면 열기' in w.chat_state.get(),w.chat_state.get()
+
+
+def test_a_failure_puts_the_reason_on_the_line_not_only_in_the_log(ui):
+    w,svc,backend=ui
+    backend.images=False
+    w.navigate('chat');pump(w)
+    w.session_mode.set('block');w.start_chat()
+    pump(w,lambda:state_of(w.chat_status)=='Failed')
+    assert 'Setup' in w.chat_state.get() or '설치' in w.chat_state.get(),w.chat_state.get()
+    assert str(w.chat_open_button.cget('state'))=='disabled'
+
+
+def test_stopping_the_session_says_how_to_start_again(ui):
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    w.session_mode.set('block');w.start_chat()
+    pump(w,lambda:svc.chat.started and state_of(w.chat_status)=='Ready')
+    w.stop_sessions()
+    pump(w,lambda:state_of(w.chat_status)=='Waiting')
+    assert str(w.chat_open_button.cget('state'))=='disabled'
+    assert 'Chat 시작' in w.chat_state.get(),w.chat_state.get()
+
+
+def test_a_stopped_ollama_is_named_on_the_line_rather_than_left_to_guess(ui):
+    w,svc,backend=ui
+    backend.health=lambda max_age=None:{'ollama':False,'docker':True,'chat_image':True,
+                                        'chat':False,'search':False}
+    w.navigate('chat');w.refresh_health(fresh=True)
+    pump(w,lambda:'Ollama' in w.chat_state.get())
+    assert 'Ollama' in w.chat_state.get(),w.chat_state.get()
+
+
+def test_where_the_models_are_is_reported_next_to_the_status(ui):
+    w,svc,backend=ui
+    backend.health=lambda max_age=None:{'ollama':True,'docker':True,'chat_image':True,
+                                        'chat':False,'search':False,
+                                        'ollama_store':'실행 중인 Ollama 는 D:/models 를 씁니다'}
+    w.navigate('chat');w.refresh_health(fresh=True)
+    pump(w,lambda:'D:/models' in w.chat_state.get())
+    assert 'D:/models' in w.chat_text.get('1.0','end-1c')
+
+
+def test_the_agent_page_has_the_same_line(ui):
+    w,svc,backend=ui
+    w.navigate('agent');pump(w)
+    assert state_of(w.agent_status)=='Waiting'
+    assert 'Agent 시작' in w.agent_state.get(),w.agent_state.get()
+
+
+def test_the_apply_button_is_the_button_and_not_the_row_it_sits_in(ui):
+    """ttk accepts state() on a frame without complaint, so storing the row in
+    place of the button left "선택대로 적용" enabled with nothing to apply."""
+    w,svc,backend=ui
+    w.navigate('models');pump(w)
+    assert w.apply_button.winfo_class()=='TButton'
+    w._catalog={'models':[],'extra_installed':[],'recommended':[],'plan':{},'levels':(),
+                'budget_gb':8.0}
+    plan={'install':[],'remove':[],'download_gb':0.0,'fits':True,'free_gb':100.0,
+          'storage':{'path':str(svc.model_dir),'exists':True,'shared':True,'per_user':False}}
+    svc.models.plan_changes=lambda tags,installed=None:plan
+    w.update_choice_summary();pump(w)
+    assert 'disabled' in w.apply_button.state(),'nothing to apply, nothing to press'
+    plan['install']=['a:1'];plan['download_gb']=1.0
+    w.update_choice_summary();pump(w)
+    assert 'disabled' not in w.apply_button.state()

@@ -29,10 +29,18 @@ def refuse(monkeypatch, error=None):
                         list_models)
 
 
-def store(monkeypatch, tags):
-    """Make the on-disk store hold exactly ``tags``, without touching a disk."""
-    monkeypatch.setattr('launcher.models.model_index.read_manifests',
-                        lambda path: {tag: {} for tag in tags})
+def store(monkeypatch, tags, *, unreadable=()):
+    """Make the on-disk store hold exactly ``tags``, without touching a disk.
+
+    ``unreadable`` stands for manifests the scan could not parse: they are
+    reported through the ``errors`` list the real reader fills, which is how a
+    caller learns that "not on disk" is a guess rather than a fact.
+    """
+    def read_manifests(path, errors=None):
+        if errors is not None:
+            errors.extend({'path': str(name)} for name in unreadable)
+        return {tag: {} for tag in tags}
+    monkeypatch.setattr('launcher.models.model_index.read_manifests', read_manifests)
 
 
 def forbid_blob_walk(monkeypatch):

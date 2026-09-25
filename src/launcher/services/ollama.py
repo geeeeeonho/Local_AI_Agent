@@ -97,20 +97,23 @@ class OllamaService:
         if pid is None:
             # PowerShell 이 없거나 느려서(또는 Windows 가 아니라서) 포트 주인을
             # 못 읽은 것이지, 서버가 죽은 것이 아니다. 응답 중인 서버를 "정지"로
-            # 보고하면 상태 화면이 거짓말을 한다. 저장소 일치 여부로 답한다.
-            return self.store_agrees() is not False
+            # 보고하면 상태 화면이 거짓말을 한다.
+            return True
         if self._listener_is_managed(pid) and self._state_matches(pid):
             return True
         executable = self._process_executable(pid)
         if executable is None:
-            return self.store_agrees() is not False
+            return True
         if not self._is_known(executable):
             return False
         if _same_path(executable, self.portable_exe) and not self._state_matches(pid):
             # Our own portable server with settings we no longer track. It is
             # not ready to use until ensure_running restarts it.
             return False
-        return self.store_agrees() is not False
+        # A known Ollama that answers is running. Which store it reads is a
+        # separate question, reported next to the status rather than folded
+        # into it - "stopped" was the wrong word for "keeps its files elsewhere".
+        return True
 
     def _migration_pending(self) -> bool:
         """Ollama's store is empty while earlier/interrupted model data remains.
@@ -185,25 +188,81 @@ class OllamaService:
         except Exception:
             return None
 
-    def _accept_unidentified_server(self) -> bool:
-        """포트 주인을 식별하지 못했을 때, 신원 대신 저장소 일치로 판단한다.
+    def locate_store(self, timeout: float = 5) -> Optional[Path]:
+        """Where the running Ollama is actually keeping its models.
 
-        "알려진 위치의 exe + 저장소 확인 불가" 를 이미 사용 가능으로 보고 있으므로,
-        "신원 확인 불가 + 저장소 일치" 를 거부할 이유는 없다. 저장소가 실제로 다른
-        경우에만 거부한다 — 그래야 빈 모델 목록을 보여 주는 일이 생기지 않는다.
+        There is no API for it, so this compares what the router serves against
+        each store it could plausibly be using and returns the one that
+        accounts for them. ``None`` means no candidate does, or the router is
+        not answering.
+
+        The point is that our resolved store is a guess about where models
+        *would* go, not a fact about where this server keeps them. An Ollama
+        installed the official way, with OLLAMA_MODELS never set, serves from
+        ``<home>/.ollama/models`` - and reading that difference as "the server
+        is pointed somewhere else, refuse" made an ordinary machine unusable.
+        """
+        try:
+            from core import ollama_paths
+            from integrations.ollama import inventory
+        except Exception:
+            return None
+        for candidate in (self.model_dir,) + tuple(ollama_paths.store_candidates()):
+            try:
+                if inventory.read(Path(candidate), timeout=timeout).agreement:
+                    return Path(candidate)
+            except Exception:
+                continue
+        return None
+
+    def describe_store(self, timeout: float = 5) -> str:
+        """One line about which store the running server is serving from."""
+        agrees = self.store_agrees(timeout=timeout)
+        if agrees:
+            return "모델 저장소 일치: %s" % self.model_dir
+        if agrees is None:
+            return "모델 저장소를 확인하지 못했습니다: %s" % self.model_dir
+        found = self.locate_store(timeout=timeout)
+        if found is not None:
+            return ("실행 중인 Ollama 는 %s 를 씁니다 (이 프로그램의 기준 경로는 %s)"
+                    % (found, self.model_dir))
+        return ("실행 중인 Ollama 의 모델이 %s 에 없습니다 — 다른 경로를 쓰고 있습니다"
+                % self.model_dir)
+
+    def _report_store(self) -> None:
+        """Say where the models are. A mismatch is news, not a failure.
+
+        Refusing here stopped Chat and Agent over something that does not stop
+        either of them: Ollama is the router, and whatever directory it reads,
+        what it lists is what a prompt reaches. Where the files live matters
+        when downloading and when counting disk usage, so it is reported - and
+        the model screen says it again where it is actually actionable.
         """
         agrees = self.store_agrees()
-        if agrees is False:
-            self._err("포트 %s의 Ollama 가 다른 모델 저장소를 쓰고 있습니다."
-                      % config.OLLAMA_PORT)
-            self._err("OLLAMA_MODELS 를 %s 로 맞추고 Ollama 를 재시작하세요."
-                      % self.model_dir)
-            return False
         if agrees:
             self._ok("실행 중인 Ollama 를 사용합니다 (모델 저장소 일치 확인됨).")
+            return
+        if agrees is None:
+            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다. 그대로 사용합니다.")
+            return
+        found = self.locate_store()
+        if found is not None:
+            self._warn("실행 중인 Ollama 는 %s 를 씁니다. 그 모델을 그대로 사용합니다." % found)
+            self._info("이 프로그램이 새로 받을 위치는 %s 입니다. 한곳으로 모으려면 "
+                       "OLLAMA_MODELS 를 맞추고 Ollama 를 재시작하세요." % self.model_dir)
         else:
-            self._warn("포트 %s 소유 프로세스를 확인하지 못했습니다 — 응답 중인 "
-                       "Ollama 를 그대로 사용합니다." % config.OLLAMA_PORT)
+            self._warn("실행 중인 Ollama 의 모델이 %s 에서 보이지 않습니다. "
+                       "서버가 제공하는 모델을 그대로 사용합니다." % self.model_dir)
+
+    def _accept_unidentified_server(self) -> bool:
+        """포트 주인을 식별하지 못했을 때도 응답하는 서버는 쓸 수 있는 서버다.
+
+        신원을 못 밝히는 이유는 대부분 PowerShell 이 느리거나 권한이 없어서다.
+        저장소가 다르다는 것은 거부 사유가 아니라 알려 줄 사실이다.
+        """
+        self._warn("포트 %s 소유 프로세스를 확인하지 못했습니다 — 응답 중인 "
+                   "Ollama 를 그대로 사용합니다." % config.OLLAMA_PORT)
+        self._report_store()
         self._warn_if_cloud_enabled()
         return True
 
@@ -547,19 +606,14 @@ class OllamaService:
             ours = (self._launched_by_us(pid)
                     or _same_path(executable, self.portable_exe))
             if not ours:
-                agrees = self.store_agrees()
-                if agrees:
-                    self._ok("이미 실행 중인 Ollama 를 사용합니다: " + str(executable))
-                    self._warn_if_cloud_enabled()
-                    return True
-                if agrees is None:
-                    self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다.")
-                    self._warn_if_cloud_enabled()
-                    return True
-                self._err("실행 중인 Ollama 가 다른 모델 저장소를 쓰고 있습니다.")
-                self._err("OLLAMA_MODELS 를 %s 로 맞추고 Ollama 를 재시작하세요."
-                          % self.model_dir)
-                return False
+                # A server in a known location that is answering is a server we
+                # can use. Which directory it reads decides where downloads go,
+                # not whether Chat and Agent may run, and refusing over it left
+                # every officially installed Ollama unusable.
+                self._ok("이미 실행 중인 Ollama 를 사용합니다: " + str(executable))
+                self._report_store()
+                self._warn_if_cloud_enabled()
+                return True
 
             # 이전 버전이 같은 포터블 exe를 다른 OLLAMA_MODELS 값으로 실행했을 수
             # 있다. 환경변수는 실행 중 프로세스에 소급 적용되지 않으므로 한 번
