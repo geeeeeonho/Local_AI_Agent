@@ -73,15 +73,21 @@ def test_an_unverifiable_store_still_does_not_block_the_user(tmp_path, monkeypat
     assert svc.ensure_running(boot_timeout=1) is True
 
 
-def test_a_disagreeing_store_is_still_refused_without_process_identity(tmp_path, monkeypatch):
-    """Degrading gracefully is not the same as trusting anything that answers."""
+def test_a_disagreeing_store_is_reported_not_treated_as_a_dead_server(tmp_path, monkeypatch):
+    """Where the models sit does not decide whether the server can be used.
+
+    It decides where a download would land, so it is said out loud - and the
+    store the server really serves from is named when it can be found.
+    """
     svc = service(tmp_path)
     unidentified(monkeypatch, svc)
     monkeypatch.setattr(svc, 'store_agrees', lambda timeout=5: False)
+    monkeypatch.setattr(svc, 'locate_store', lambda timeout=5: tmp_path / 'real-store')
     said = []
-    monkeypatch.setattr(svc, '_err', lambda message: said.append(message))
-    assert svc.ensure_running(boot_timeout=1) is False
-    assert any('OLLAMA_MODELS' in message for message in said)
+    for level in ('_ok', '_info', '_warn', '_err'):
+        monkeypatch.setattr(svc, level, lambda message, _l=level: said.append(message))
+    assert svc.ensure_running(boot_timeout=1) is True
+    assert any('real-store' in message for message in said), said
 
 
 def test_a_known_executable_on_another_store_is_unaffected_by_the_fallback(tmp_path, monkeypatch):

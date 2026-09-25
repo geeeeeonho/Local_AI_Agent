@@ -62,9 +62,16 @@ class Stack:
 
 
 def _bar(parent, buttons):
+    """A row of buttons. ``frame.buttons`` is how a caller reaches them.
+
+    Stack places the row, so a builder can only hand back the frame - and a
+    caller that stored the return value as "the button" was then calling
+    ``state()`` on a frame, which ttk accepts in silence. The apply button
+    simply stopped being disabled when there was nothing to apply.
+    """
     frame = ttk.Frame(parent)
-    for text, command, kind, accent in buttons:
-        _button(frame, text, command, kind=kind, accent=accent)
+    frame.buttons = [_button(frame, text, command, kind=kind, accent=accent)
+                     for text, command, kind, accent in buttons]
     return frame
 
 
@@ -178,7 +185,7 @@ def _choose(parent, w):
     # The action this whole screen exists for. It is a fixed row, so it cannot
     # be the thing the layout gives up when the window is small.
     w.apply_button = layout.fixed(lambda box: _bar(box, (
-        ('선택대로 적용', w.apply_selection, None, True),)))
+        ('선택대로 적용', w.apply_selection, None, True),))).buttons[0]
     w.choice_plan = tk.StringVar(master=w.root, value='')
     layout.fixed(lambda box: _label(box, w.choice_plan), pad=(0, 6))
     layout.fixed(lambda box: _note(box,

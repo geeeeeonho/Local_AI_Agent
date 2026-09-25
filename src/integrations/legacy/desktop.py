@@ -80,6 +80,11 @@ class LegacyBackend:
         checks = {
             'ollama': lambda: self.load('launcher.services.ollama').OllamaService(
                 self.env, model_dir=self.model_dir).is_managed_running(),
+            # Where the running Ollama keeps its models is the thing the status
+            # line could not say, so a server that was serving perfectly well
+            # from its own default directory read as "not recognised".
+            'ollama_store': lambda: self.load('launcher.services.ollama').OllamaService(
+                self.env, model_dir=self.model_dir).describe_store(),
             'docker': lambda: self.load('launcher.services.docker').DockerService.daemon_alive(),
             'chat_image': lambda: self.load('launcher.anythingllm_runtime').image_exists(),
             'chat': lambda: self.load('launcher.anythingllm_runtime').is_ready(),
@@ -90,9 +95,11 @@ class LegacyBackend:
 
         def run(check):
             try:
-                return bool(check())
+                value = check()
             except Exception:
                 return None
+            # One of these answers in words rather than yes/no.
+            return value if isinstance(value, str) else bool(value)
 
         with ThreadPoolExecutor(max_workers=len(checks), thread_name_prefix='health') as pool:
             futures = {name: pool.submit(run, check) for name, check in checks.items()}

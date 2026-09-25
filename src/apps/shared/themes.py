@@ -255,6 +255,17 @@ class ThemeController:
                       indicatorbackground=[('selected', p.chat), ('active', p.hover)])
         # Failures need to be legible as failures, not one more muted line.
         style.configure('Alert.TLabel', foreground=p.danger)
+        # A readiness line has three states and they have to be told apart at a
+        # glance; "the button is no longer greyed out" is not a signal anyone
+        # notices while looking at a log.
+        style.configure('Waiting.Status.TLabel', foreground=p.muted,
+                        font=('Segoe UI', 10, 'bold'))
+        style.configure('Working.Status.TLabel', foreground=p.info,
+                        font=('Segoe UI', 10, 'bold'))
+        style.configure('Ready.Status.TLabel', foreground=p.success,
+                        font=('Segoe UI', 10, 'bold'))
+        style.configure('Failed.Status.TLabel', foreground=p.danger,
+                        font=('Segoe UI', 10, 'bold'))
         style.configure('TNotebook', background=p.bg, borderwidth=0)
         style.configure('TNotebook.Tab', background=p.surface, foreground=p.muted, padding=(17, 10))
         style.map('TNotebook.Tab', background=[('selected', p.chat_soft), ('active', p.hover)],

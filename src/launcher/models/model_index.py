@@ -158,10 +158,16 @@ def _manifest_records(root: Path, errors: list[dict]) -> list[dict]:
     return records
 
 
-def read_manifests(model_dir) -> dict[str, dict]:
-    """Legacy dictionary view. Use build_index for scan diagnostics."""
+def read_manifests(model_dir, errors: list | None = None) -> dict[str, dict]:
+    """Legacy dictionary view. Use build_index for scan diagnostics.
+
+    ``errors`` collects the manifests that could not be read. They used to be
+    dropped in silence, which made a half-finished download look like proof
+    that a running Ollama was serving from somewhere else entirely.
+    """
     return {item['name']: item['data'] for item in
-            _manifest_records(Path(model_dir).absolute(), [])}
+            _manifest_records(Path(model_dir).absolute(),
+                              errors if errors is not None else [])}
 
 
 def build_index(model_dir, roles: Mapping[str, str] | None = None) -> dict:

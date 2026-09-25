@@ -10,7 +10,7 @@ from core.projects.model import Project
 from core.urls import local_url
 from .specs import SPECS, LABELS, navigation_groups, nav_style
 from .tasks import TaskRunner
-from .widgets import set_text, theme, wrap_to_parent
+from .widgets import set_text, set_status, theme, wrap_to_parent
 from .themes import themed
 from . import views
 
@@ -44,6 +44,10 @@ class DesktopWindow:
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
         self._chat_progress = [];self._chat_starting = False
+        self.chat_state = tk.StringVar(master=self.root,
+            value='준비 안 됨 · [Chat 시작]을 누르면 Network → Ollama → AnythingLLM 순으로 확인합니다.')
+        self.agent_state = tk.StringVar(master=self.root,
+            value='준비 안 됨 · [Agent 시작]을 누르면 프로필과 모델을 고른 뒤 실행 환경을 준비합니다.')
         self.session_mode = tk.StringVar(master=self.root,value='inherit')
         self.project_id = tk.StringVar(master=self.root,value='(none)')
         self.message = tk.StringVar(master=self.root,value='Ready')
@@ -178,6 +182,7 @@ class DesktopWindow:
         if text and event.topic=='runtime.progress' and (
                 service=='chat' or self._chat_starting):
             label=str(text) if service in (None,'chat') else str(service)+': '+str(text)
+            if self._chat_starting:self.set_chat_state('Working','준비 중 · '+label[:150])
             self._chat_progress.append(label)
             self._chat_progress = self._chat_progress[-12:]
             if hasattr(self, 'chat_text') and not self.services.chat.started:
@@ -329,6 +334,7 @@ class DesktopWindow:
         # has already finished. A flag the worker does not race decides whether
         # they still belong on the Chat readiness box.
         self._chat_starting = True
+        self.set_chat_state('Working','준비 중 · 진행 상황은 아래에 그대로 나옵니다. 창은 계속 쓸 수 있습니다.')
         set_text(self.chat_text,'Chat 준비 시작\n\n'+self._chat_progress[0])
         def work():
             try:
@@ -339,8 +345,8 @@ class DesktopWindow:
                 raise
         def ready(url):
             self._chat_starting = False
-            self.chat_open_button.configure(state='normal')
             active_model=self.services.chat.model or model or '(default)'
+            self.set_chat_state('Ready','준비 완료 · [대화 화면 열기]를 누르세요 · 모델 '+active_model)
             set_text(self.chat_text,'Chat 연결 검증 완료\n\n'+str(url)+'\nNetwork: '+mode+
                 '\nOllama model: '+active_model+
                 '\nContainer → host Ollama → model: verified'+
@@ -351,10 +357,27 @@ class DesktopWindow:
             # Keep the whole preparation trail on the page: the last line alone
             # never said which of the five steps actually stopped.
             self._chat_starting = False
+            self.set_chat_state('Failed','준비 실패 · '+str(exc)[:150])
             if hasattr(self,'chat_text'):
                 set_text(self.chat_text,'Chat 준비 실패\n\n'+'\n'.join(self._chat_progress)+
                     '\n\n'+str(exc))
         self.run_task('chat.start',work,ready,error=failed)
+
+    def set_chat_state(self,state,text):
+        """One place decides how ready Chat looks, so the words, the colour and
+        the open button can never disagree with each other."""
+        label=getattr(self,'chat_status',None)
+        if label is not None:set_status(label,state,text)
+        button=getattr(self,'chat_open_button',None)
+        if button is not None:
+            ready=state=='Ready'
+            button.configure(state='normal' if ready else 'disabled',
+                             style='Chat.TButton' if ready else 'TButton',
+                             text='대화 화면 열기 →' if ready else '대화 화면 열기')
+
+    def set_agent_state(self,state,text):
+        label=getattr(self,'agent_status',None)
+        if label is not None:set_status(label,state,text)
 
     def open_chat(self):
         try:
@@ -379,6 +402,7 @@ class DesktopWindow:
             self.log('An Agent is already active. Stop the session before opening another.');return
         try:p=self.presenter('agent');mode=self.selected_mode('interpreter');project=self.current_project()
         except Exception as exc:self.log(str(exc),level='error');return
+        self.set_agent_state('Working','준비 중 · 시작 설정을 고른 뒤 Ollama·Docker·네트워크를 준비합니다.')
         def ready(session):
             if session is None:
                 # The wizard replaces this host with its own progress screen the
@@ -386,8 +410,11 @@ class DesktopWindow:
                 # to take that screen back down, or the page keeps saying the
                 # Agent is starting when nothing is.
                 self.clear_agent_panel()
+                self.set_agent_state('Waiting','취소됨 · [Agent 시작]으로 다시 시작할 수 있습니다.')
                 return
             self.agent_session=session
+            self.set_agent_state('Ready','준비 완료 · 아래 대화 패널에서 지시를 입력하세요 · 모델 '
+                                 +str(session.metadata.get('model','')))
             callbacks={'input':lambda text:self.run_task('agent.input',lambda:session.handle_input(text)),
                 'stop':lambda:self.run_task('agent.stop_turn',session.stop),
                 'restart':lambda:self.run_task('agent.restart',session.restart)}
@@ -398,7 +425,11 @@ class DesktopWindow:
             self.agent_panel.enable_send()
         self.run_task('agent.start',
             lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set),
-            ready,error=lambda exc:self.clear_agent_panel())
+            ready,error=self._agent_failed)
+
+    def _agent_failed(self,exc):
+        self.clear_agent_panel()
+        self.set_agent_state('Failed','준비 실패 · '+str(exc)[:150])
 
     def clear_agent_panel(self):
         self.agent_panel=None
@@ -410,7 +441,8 @@ class DesktopWindow:
             if not ok:raise RuntimeError('Shutdown was not verified; ownership is retained.')
             if self.agent_panel is not None:self.agent_panel.disable_send()
             self.agent_session=None
-            if hasattr(self,'chat_open_button'):self.chat_open_button.configure(state='disabled')
+            self.set_chat_state('Waiting','세션을 종료했습니다 · [Chat 시작]으로 다시 준비할 수 있습니다.')
+            self.set_agent_state('Waiting','세션을 종료했습니다 · [Agent 시작]으로 다시 준비할 수 있습니다.')
             self.refresh_health()
         self.run_task('sessions.stop',self.services.close,stopped)
 
@@ -691,16 +723,30 @@ class DesktopWindow:
                 elapsed=status.get('probe_seconds')
                 suffix=(' · %.1f초' % elapsed) if isinstance(elapsed,(int,float)) else ''
                 self.log('상태 확인 완료 · '+summary+suffix)
+            store=status.get('ollama_store')
             if hasattr(self,'chat_text') and not self.services.chat.attempted:
                 set_text(
                     self.chat_text,
                     'Chat 준비 상태\n\n'
                     'AnythingLLM image: '+shown(status.get('chat_image'))+'\n'
                     'AnythingLLM + Ollama/model connection: '+shown(status.get('chat'))+'\n'
-                    'Ollama: '+shown(status.get('ollama'))+'\n'
+                    'Ollama: '+shown(status.get('ollama'))+
+                    (('\n  └ '+str(store)) if isinstance(store,str) else '')+'\n'
                     'Docker: '+shown(status.get('docker'))+
                     '\n\nChat 시작을 누르면 Network → Ollama → AnythingLLM → model 순으로 검증합니다.'
                 )
+            # Before anything is started the readiness line reports the poll,
+            # so the page is never blank about why it is not ready.
+            if not self.services.chat.attempted and not self._chat_starting:
+                if status.get('ollama') is False:
+                    self.set_chat_state('Waiting','Ollama 가 응답하지 않습니다 · '
+                        '[Chat 시작]을 누르면 이 창이 직접 시작합니다.')
+                elif status.get('chat_image') is False:
+                    self.set_chat_state('Waiting','AnythingLLM 이미지가 없습니다 · '
+                        '[설치 / 복구]에서 먼저 받으세요.')
+                else:
+                    self.set_chat_state('Waiting','준비 안 됨 · [Chat 시작]을 누르세요'
+                        +((' · '+str(store)) if isinstance(store,str) else ''))
             active=self.services.network.mode
             if hasattr(self,'network_text'):set_text(self.network_text,'Pinned mode: '+(active.value if active else '(none)')+
                 '\nRuntime ownership in this window: '+str(self.services.owner.owned)+

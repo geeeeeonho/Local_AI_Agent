@@ -1,7 +1,8 @@
 """Persistent view construction. User actions are delegated to the shared shell."""
 import tkinter as tk
 from tkinter import ttk, filedialog
-from .widgets import heading, note, text_box, PanelHost, ScrollArea, set_text
+from .widgets import (heading, note, text_box, PanelHost, ScrollArea, set_text,
+                      status_line)
 from .specs import LABELS, DESCRIPTIONS
 from . import models_view
 
@@ -74,6 +75,10 @@ def chat(parent,w):
     w.chat_open_button=button(r,'대화 화면 열기',w.open_chat)
     w.chat_open_button.configure(state='disabled')
     button(r,'세션 종료',w.stop_sessions)
+    # Right under the buttons it belongs to, and filled in before anything has
+    # been pressed: the only signal used to be the open button losing its
+    # greyed-out look, which is not something anyone is watching for.
+    w.chat_status=status_line(main,w.chat_state)
     card=ttk.Frame(main,style='Chat.Card.TFrame',padding=18);card.pack(fill='x',pady=(8,8))
     ttk.Label(card,text='프로젝트는 Chat 안에서',style='Chat.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
     ttk.Label(card,text='Workspace를 만들고, 문서와 대화를 AnythingLLM에서 관리합니다.',
@@ -105,6 +110,7 @@ def agent(parent,w):
     r=mode_row(main,w)
     button(r,'Agent 시작',w.start_agent,kind='Agent')
     button(r,'세션 종료',w.stop_sessions)
+    w.agent_status=status_line(main,w.agent_state)
     note(main,'기존 프로필 / 모델 / Host·Sandbox / 폴더 선택과 승인 절차를 유지합니다.\n'
          '연결 폴더는 선택 창의 기본값이며, 자동 접근 허용이 아닙니다.')
     w.hosts['agent']=PanelHost(main)

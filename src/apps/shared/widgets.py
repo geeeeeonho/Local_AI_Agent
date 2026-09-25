@@ -42,6 +42,31 @@ def note(parent, text, *, side='top'):
     return wrap_to_parent(label)
 
 
+def status_line(parent, variable, *, side='top'):
+    """One always-visible line saying what state this page is in and what to do.
+
+    Readiness used to be signalled only by a button losing its disabled look,
+    which nobody watches for, and the explanation only appeared inside a log
+    box further down the page. This says it in words, in place, from the moment
+    the page opens.
+    """
+    frame = ttk.Frame(parent)
+    frame.pack(fill='x', pady=(0, 10), side=side)
+    label = ttk.Label(frame, textvariable=variable, style='Waiting.Status.TLabel',
+                      wraplength=780, justify='left')
+    label.pack(anchor='w', fill='x')
+    wrap_to_parent(label, inset=24)
+    return label
+
+
+def set_status(label, state, text):
+    """Recolour the line and set its words. ``state`` is one of the styles."""
+    label.configure(style=state + '.Status.TLabel')
+    variable = label.cget('textvariable')
+    if variable:
+        label.setvar(variable, text)
+
+
 def text_box(parent, *, height=8, expand=True, side='top', place=True):
     """A read-only box.
 
