@@ -32,6 +32,18 @@ class ManagedInference:
         cls = self.load('launcher.services.ollama').OllamaService
         return cls(self.env, model_dir=self.model_dir).local_models()
 
+    def describe_models(self):
+        """Why nothing is runnable, distinguishing absent from invisible."""
+        cls = self.load('launcher.services.ollama').OllamaService
+        service = cls(self.env, model_dir=self.model_dir)
+        situation, detail = service.inspect_store()
+        if situation != service.STORE_NOT_READ:
+            return None
+        held = detail.get('on_disk') or ()
+        return ('설치된 모델 %d개가 %s 에 있는데 실행 중인 Ollama 가 그 경로를 읽지 '
+                '않습니다. 모델 화면의 [Ollama 시작 / 확인] 에서 이 경로로 다시 시작하세요. '
+                '(%s)' % (len(held), self.model_dir, ', '.join(list(held)[:4])))
+
     def ensure_running(self, log=None):
         cls = self.load('launcher.services.ollama').OllamaService
         # 로거를 주지 않으면 최대 30초의 기동이 통째로 침묵한다. Chat 준비창이

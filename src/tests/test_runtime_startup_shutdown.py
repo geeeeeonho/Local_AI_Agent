@@ -81,8 +81,8 @@ def test_a_disagreeing_store_is_reported_not_treated_as_a_dead_server(tmp_path, 
     """
     svc = service(tmp_path)
     unidentified(monkeypatch, svc)
-    monkeypatch.setattr(svc, 'store_agrees', lambda timeout=5: False)
-    monkeypatch.setattr(svc, 'locate_store', lambda timeout=5: tmp_path / 'real-store')
+    monkeypatch.setattr(svc, 'inspect_store', lambda timeout=5: (
+        svc.OTHER_STORE, {'found': str(tmp_path / 'real-store')}))
     said = []
     for level in ('_ok', '_info', '_warn', '_err'):
         monkeypatch.setattr(svc, level, lambda message, _l=level: said.append(message))

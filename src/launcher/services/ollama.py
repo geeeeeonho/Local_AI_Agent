@@ -229,26 +229,68 @@ class OllamaService:
             return None
         return None if not read.router_reachable else sorted(read.local_tags)
 
-    def describe_store(self, timeout: float = 5) -> str:
-        """One line about which store the running server is serving from."""
-        local = self.local_models(timeout=timeout)
-        if local is not None and not local:
-            # "Both sides are empty" is technically agreement and reads as all
-            # clear, which is what it said right before Chat stopped at the
-            # last step for having no model to use.
-            return "실행 중이지만 설치된 로컬 모델이 없습니다 · 모델 화면에서 먼저 받으세요"
-        agrees = self.store_agrees(timeout=timeout)
-        if agrees:
-            return "모델 저장소 일치: %s (로컬 모델 %d개)" % (
-                self.model_dir, len(local or ()))
-        if agrees is None:
-            return "모델 저장소를 확인하지 못했습니다: %s" % self.model_dir
+    #: The reading, as one of a small set of situations the user can act on.
+    #: "Nothing installed" and "installed but the server is not reading them"
+    #: are opposite instructions, and telling a user with three models on disk
+    #: to go and download one is worse than saying nothing.
+    READY = 'ready'                 # the server serves what the store holds
+    NOTHING_INSTALLED = 'empty'     # store and server are both empty
+    STORE_NOT_READ = 'unread'       # the store holds models; the server serves none of them
+    OTHER_STORE = 'elsewhere'       # the server serves from a different directory
+    UNKNOWN = 'unknown'             # the question could not be answered
+
+    def inspect_store(self, timeout: float = 5):
+        """(situation, detail) for the running server and the resolved store."""
+        try:
+            from integrations.ollama import inventory
+            read = inventory.read(self.model_dir, timeout=timeout)
+        except Exception:
+            return self.UNKNOWN, {}
+        if not read.router_reachable:
+            return self.UNKNOWN, {}
+        served = sorted(read.local_tags)
+        detail = {'served': served, 'store': str(self.model_dir),
+                  'on_disk': sorted(read.on_disk or ()),
+                  'unreachable': sorted(read.unreachable)}
+        if read.agreement:
+            # Agreement between two empty sides is not readiness.
+            return (self.READY if served else self.NOTHING_INSTALLED), detail
+        if read.agreement is None:
+            return self.UNKNOWN, detail
+        if not served:
+            # Models are here and the server lists none of them. It is reading
+            # somewhere else - the usual cause is Windows restarting Ollama from
+            # its own startup entry, with no OLLAMA_MODELS in that environment.
+            return self.STORE_NOT_READ, detail
         found = self.locate_store(timeout=timeout)
         if found is not None:
-            return ("실행 중인 Ollama 는 %s 를 씁니다 (이 프로그램의 기준 경로는 %s)"
-                    % (found, self.model_dir))
-        return ("실행 중인 Ollama 의 모델이 %s 에 없습니다 — 다른 경로를 쓰고 있습니다"
-                % self.model_dir)
+            detail['found'] = str(found)
+        return self.OTHER_STORE, detail
+
+    def store_fix_command(self) -> str:
+        """What the user has to run so the server reads the resolved store."""
+        return 'setx OLLAMA_MODELS "%s"' % self.model_dir
+
+    def describe_store(self, timeout: float = 5) -> str:
+        """One line about which store the running server is serving from."""
+        situation, detail = self.inspect_store(timeout=timeout)
+        if situation == self.READY:
+            return "모델 저장소 일치: %s (로컬 모델 %d개)" % (
+                self.model_dir, len(detail.get('served') or ()))
+        if situation == self.STORE_NOT_READ:
+            return ("%s 에 모델 %d개가 있는데 실행 중인 Ollama 가 그 경로를 읽고 있지 "
+                    "않습니다 · Ollama 를 이 경로로 다시 시작해야 합니다"
+                    % (self.model_dir, len(detail.get('on_disk') or ())))
+        if situation == self.OTHER_STORE:
+            found = detail.get('found')
+            if found:
+                return ("실행 중인 Ollama 는 %s 를 씁니다 (이 프로그램의 기준 경로는 %s)"
+                        % (found, self.model_dir))
+            return ("실행 중인 Ollama 의 모델이 %s 에 없습니다 — 다른 경로를 쓰고 있습니다"
+                    % self.model_dir)
+        if situation == self.NOTHING_INSTALLED:
+            return "실행 중이지만 설치된 로컬 모델이 없습니다 · 모델 화면에서 먼저 받으세요"
+        return "모델 저장소를 확인하지 못했습니다: %s" % self.model_dir
 
     def _report_store(self) -> None:
         """Say where the models are. A mismatch is news, not a failure.
@@ -259,26 +301,31 @@ class OllamaService:
         when downloading and when counting disk usage, so it is reported - and
         the model screen says it again where it is actually actionable.
         """
-        local = self.local_models()
-        if local is not None and not local:
-            self._warn("설치된 로컬 모델이 없습니다. 모델 화면에서 먼저 받으세요.")
-            return
-        agrees = self.store_agrees()
-        if agrees:
+        situation, detail = self.inspect_store()
+        if situation == self.READY:
             self._ok("실행 중인 Ollama 를 사용합니다 (로컬 모델 %d개, 저장소 일치)."
-                     % len(local or ()))
-            return
-        if agrees is None:
-            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다. 그대로 사용합니다.")
-            return
-        found = self.locate_store()
-        if found is not None:
-            self._warn("실행 중인 Ollama 는 %s 를 씁니다. 그 모델을 그대로 사용합니다." % found)
-            self._info("이 프로그램이 새로 받을 위치는 %s 입니다. 한곳으로 모으려면 "
-                       "OLLAMA_MODELS 를 맞추고 Ollama 를 재시작하세요." % self.model_dir)
+                     % len(detail.get('served') or ()))
+        elif situation == self.NOTHING_INSTALLED:
+            self._warn("설치된 로컬 모델이 없습니다. 모델 화면에서 먼저 받으세요.")
+        elif situation == self.STORE_NOT_READ:
+            held = detail.get('on_disk') or ()
+            self._err("%s 에 모델 %d개가 있는데 실행 중인 Ollama 가 그 경로를 읽지 "
+                      "않습니다." % (self.model_dir, len(held)))
+            self._err("보이지 않는 모델: " + ', '.join(list(held)[:6]))
+            self._info("모델 화면의 [Ollama 다시 시작] 을 누르면 이 경로로 다시 시작합니다. "
+                       "직접 고치려면 %s 실행 후 Ollama 를 재시작하세요."
+                       % self.store_fix_command())
+        elif situation == self.OTHER_STORE:
+            found = detail.get('found')
+            if found:
+                self._warn("실행 중인 Ollama 는 %s 를 씁니다. 그 모델을 그대로 사용합니다." % found)
+                self._info("이 프로그램이 새로 받을 위치는 %s 입니다. 한곳으로 모으려면 "
+                           "OLLAMA_MODELS 를 맞추고 Ollama 를 재시작하세요." % self.model_dir)
+            else:
+                self._warn("실행 중인 Ollama 의 모델이 %s 에서 보이지 않습니다. "
+                           "서버가 제공하는 모델을 그대로 사용합니다." % self.model_dir)
         else:
-            self._warn("실행 중인 Ollama 의 모델이 %s 에서 보이지 않습니다. "
-                       "서버가 제공하는 모델을 그대로 사용합니다." % self.model_dir)
+            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다. 그대로 사용합니다.")
 
     def _accept_unidentified_server(self) -> bool:
         """포트 주인을 식별하지 못했을 때도 응답하는 서버는 쓸 수 있는 서버다.
@@ -551,6 +598,52 @@ class OllamaService:
         # 하고 추가로 무언가를 더 죽이지는 않는다.
         self._warn("Ollama 종료를 확인하지 못했습니다.")
         return False
+
+    def restart_for_store(self, stop_timeout: int = 8) -> bool:
+        """Restart the running Ollama so it reads the store we resolved.
+
+        Only for the one situation that needs it: a server in a known location
+        that is serving nothing while the store holds models. Ollama takes
+        OLLAMA_MODELS from its environment at startup and there is no way to
+        change it in a running process, so the models stay invisible until it
+        is restarted - which is what happens when Windows relaunches Ollama
+        from its own startup entry, outside the environment the installer set.
+
+        A server with models loaded is somebody's working server and is never
+        touched. This one is serving nothing, and the caller asked for it.
+        """
+        situation, detail = self.inspect_store()
+        if situation != self.STORE_NOT_READ:
+            self._info("지금은 다시 시작할 이유가 없습니다: " + self.describe_store())
+            return situation in (self.READY, self.NOTHING_INSTALLED)
+
+        pid = self._listener_pid()
+        executable = self._process_executable(pid) if pid is not None else None
+        if pid is None or executable is None:
+            self._err("포트 소유 프로세스를 확인하지 못해 다시 시작하지 않았습니다.")
+            self._info("직접 고치려면 %s 실행 후 Ollama 를 재시작하세요."
+                       % self.store_fix_command())
+            return False
+        if not self._is_known(executable):
+            self._err("알 수 없는 위치의 Ollama 라서 다시 시작하지 않았습니다: %s" % executable)
+            return False
+
+        self._info("Ollama 를 %s 경로로 다시 시작합니다." % self.model_dir)
+        if not self._kill(pid):
+            return False
+        deadline = time.monotonic() + max(1, stop_timeout)
+        while time.monotonic() < deadline:
+            if not self.is_running():
+                break
+            time.sleep(0.2)
+        else:
+            self._err("기존 Ollama 가 종료되지 않았습니다.")
+            return False
+        if not self.ensure_running():
+            return False
+        found = self.local_models()
+        self._ok("다시 시작 완료 · 로컬 모델 %d개" % len(found or ()))
+        return bool(found)
 
     def register_exit_cleanup(self) -> bool:
         """우리가 띄운 서버에 한해 종료 정리를 등록한다 (중복 등록 없음)."""

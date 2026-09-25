@@ -199,8 +199,8 @@ def test_an_official_server_on_a_different_store_is_used_and_explained(tmp_path,
     monkeypatch.setattr(ollama_paths, "store_candidates", lambda environ=None: (elsewhere,))
     svc = _service(tmp_path)
     running_as(monkeypatch, svc, exe)
-    monkeypatch.setattr(svc, "store_agrees", lambda timeout=5: False)
-    monkeypatch.setattr(svc, "locate_store", lambda timeout=5: elsewhere)
+    monkeypatch.setattr(svc, "inspect_store",
+                        lambda timeout=5: (svc.OTHER_STORE, {'found': str(elsewhere)}))
     said = []
     for level in ("_ok", "_info", "_warn", "_err"):
         monkeypatch.setattr(svc, level, lambda m, _l=level: said.append(m))

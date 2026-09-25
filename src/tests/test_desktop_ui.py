@@ -459,3 +459,28 @@ def test_an_ollama_with_nothing_installed_is_named_before_anything_is_pressed(ui
     w.navigate('chat');w.refresh_health(fresh=True)
     pump(w,lambda:'로컬 모델이 없습니다' in w.chat_state.get())
     assert w.chat_status.action.winfo_ismapped(),'and it offers the screen that fixes it'
+
+
+def test_installed_but_invisible_points_at_the_restart_not_the_download(ui):
+    """The models are already there; "모델 화면 열기" to download another one is
+    the one instruction that cannot help."""
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    w.set_chat_state('Failed','설치된 모델 3개가 C:/Ollama/models 에 있는데 '
+                     '실행 중인 Ollama 가 그 경로를 읽지 않습니다.')
+    pump(w)
+    action=w.chat_status.action
+    assert action.winfo_ismapped()
+    assert 'Ollama' in str(action.cget('text')),str(action.cget('text'))
+
+
+def test_that_button_lands_on_the_screen_that_can_restart_it(ui):
+    w,svc,backend=ui
+    called=[]
+    w.ensure_ollama=lambda:called.append('ollama')
+    w.navigate('chat');pump(w)
+    w.set_chat_state('Failed','실행 중인 Ollama 가 그 경로를 읽지 않습니다.')
+    pump(w)
+    w.chat_status.action.invoke();pump(w)
+    assert w.current_page=='models'
+    assert called==['ollama']

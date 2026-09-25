@@ -112,11 +112,27 @@ class ChatService:
         ``None`` from the inference service means the question could not be
         asked - Ollama may simply not be running yet - and that is not the same
         as "none installed", so it is not treated as one.
+
+        "Installed but invisible" is not the same either, and it is the case
+        that matters most: telling someone with three models on disk to go and
+        download one sends them to the wrong screen to do the wrong thing. The
+        runtime knows the difference, so its words are used when it has them.
         """
         local = self.inference.local_models()
         if local is not None and not local:
-            raise RuntimeError(self.NO_LOCAL_MODEL)
+            raise RuntimeError(self._no_model_reason())
         return local
+
+    def _no_model_reason(self) -> str:
+        explain = getattr(self.inference, 'describe_models', None)
+        if callable(explain):
+            try:
+                detail = explain()
+            except Exception:
+                detail = None
+            if detail:
+                return str(detail)
+        return self.NO_LOCAL_MODEL
 
     def stop(self):
         if not self.attempted:

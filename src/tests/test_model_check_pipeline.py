@@ -69,8 +69,18 @@ def test_a_case_difference_is_not_a_disagreement():
     assert registry.resolve(lambda: ['Ghost:7B'], lambda: ['ghost:7b']).agreement is True
 
 
-def test_an_empty_router_contradicts_nothing():
-    assert registry.resolve(lambda: [], lambda: ['a:1']).agreement is True
+def test_a_router_serving_none_of_what_is_on_disk_is_the_clearest_disagreement():
+    """This used to read as agreement - "nothing served contradicts nothing" -
+    and it hid the case it most needed to catch: Ollama restarted by Windows
+    without OLLAMA_MODELS, reading its own empty default while every installed
+    model sat in the store this program manages. Three models on disk, zero
+    served, and the program reported the store as matching."""
+    assert registry.resolve(lambda: [], lambda: ['a:1']).agreement is False
+    assert registry.resolve(lambda: [], lambda: ['a:1']).unreachable == frozenset({'a:1'})
+
+
+def test_two_empty_sides_still_agree():
+    assert registry.resolve(lambda: [], lambda: []).agreement is True
 
 
 def test_agreement_is_unknown_when_either_side_is_unreadable():

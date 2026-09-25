@@ -24,13 +24,31 @@ def _ensure_ollama(env: Path, presenter) -> bool:
     try:
         from launcher.services.ollama import OllamaService
 
-        if OllamaService(env, logger=presenter).ensure_running():
-            return True
+        service = OllamaService(env, logger=presenter)
+        if not service.ensure_running():
+            presenter.error("Ollama 서비스를 시작할 수 없습니다.")
+            return False
     except Exception as exc:
         presenter.error("Ollama 확인 실패: " + str(exc))
         return False
-    presenter.error("Ollama 서비스를 시작할 수 없습니다.")
-    return False
+
+    # Same check Chat makes, for the same reason: the model search downstream
+    # asks the router, so a router serving nothing ends in "설치된 에이전트
+    # 모델이 없습니다" after the whole runtime is up - and that sentence is
+    # wrong when the models are installed and the server is simply not reading
+    # the directory they are in.
+    local = service.local_models()
+    if local is not None and not local:
+        situation, detail = service.inspect_store()
+        if situation == service.STORE_NOT_READ:
+            presenter.error("설치된 모델 %d개를 실행 중인 Ollama 가 읽지 못합니다: %s"
+                            % (len(detail.get('on_disk') or ()), service.model_dir))
+            presenter.info("모델 화면의 [Ollama 시작 / 확인] 에서 이 경로로 다시 시작하세요.")
+        else:
+            presenter.error("에이전트가 쓸 로컬 Ollama 모델이 없습니다. "
+                            "모델 화면에서 먼저 받으세요.")
+        return False
+    return True
 
 
 def _cancelled(cancel) -> bool:
