@@ -58,6 +58,29 @@ def test_prepare_install_stops_managed_listener_before_storage_migration(monkeyp
     assert terminated == [31337]
 
 
+def test_prepare_install_stops_the_tray_app_before_the_server(monkeypatch, tmp_path):
+    """Otherwise the store is re-opened before the migration can rename it.
+
+    ``ollama app.exe`` owns the server process and starts a replacement within
+    milliseconds of the listener being killed. That replacement holds the model
+    store open, the rename fails with a Windows sharing violation, and setup
+    reports a migration that never happened.
+    """
+    svc = _service(tmp_path)
+    running = iter([True, False])
+    monkeypatch.setattr(svc, "is_running", lambda: next(running))
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 31337)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: svc.exe)
+
+    order = []
+    monkeypatch.setattr(svc, "stop_supervisor", lambda: order.append("tray") or True)
+    monkeypatch.setattr(svc, "_terminate_listener",
+                        lambda pid: order.append("server %d" % pid) or True)
+
+    assert svc.prepare_install(stop_timeout=1) is True
+    assert order == ["tray", "server 31337"]
+
+
 def test_prepare_install_rejects_foreign_listener(monkeypatch, tmp_path):
     svc = _service(tmp_path)
     monkeypatch.setattr(svc, "is_running", lambda: True)

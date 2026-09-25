@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """사용자 설정 저장소.
 
-모든 영속 설정의 정본은 프로젝트 루트의
-``user_data/settings/user_config.json`` 이다.
+모든 영속 설정의 정본은 런타임 루트의
+``user_data/settings/user_config.json`` 이다. 위치는 ``project_paths`` 한
+곳에서 정하고 여기서는 물어보기만 한다 — "프로젝트 루트 + user_data" 를
+모듈마다 따로 조립하던 것이 설치기와 데스크톱이 서로 다른 폴더에 쓰던
+원인이었다.
 
 과거 버전의 설정 파일은 정본으로 병합한다. 이 저장소는 junction/symlink 를 만들지
 않는다. 예전에는 레거시 경로를 직접 읽는 agent_runner 를 위해 소스 트리 안으로
@@ -50,10 +53,20 @@ def _root(project_root: Path | None = None) -> Path:
     return user_data.project_root()
 
 
+def _data_root(project_root: Path | None = None) -> Path:
+    """설정이 실제로 놓이는 user_data 폴더.
+
+    명시적으로 루트를 받으면 그 밑의 ``user_data`` 를 쓴다 — 테스트와 포터블
+    실행이 프로젝트 하나를 통째로 옮기는 방식이라 그대로 유지한다.
+    """
+    if project_root is not None:
+        return Path(project_root) / "user_data"
+    return user_data.root()
+
+
 def path(project_root: Path | None = None) -> Path:
     """정본 설정 파일 경로를 반환한다."""
-    root = _root(project_root)
-    p = root / "user_data" / "settings" / "user_config.json"
+    p = _data_root(project_root) / "settings" / "user_config.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -97,7 +110,10 @@ def _cleanup_legacy_files(root: Path, canonical: Path) -> None:
 def migrate_legacy_settings(project_root: Path | None = None) -> bool:
     """레거시 설정을 정본으로 병합한다. 링크나 junction 은 만들지 않는다."""
     root = _root(project_root)
-    canonical = path(root)
+    # path() takes the caller's argument, not the resolved root: re-wrapping a
+    # resolved root would compose "<root>/user_data" a second time and send the
+    # canonical file back into the checkout.
+    canonical = path(project_root)
     canonical_data = _read_dict(canonical) if canonical.exists() else {}
 
     merged: dict[str, Any] = {}
@@ -119,9 +135,8 @@ def migrate_legacy_settings(project_root: Path | None = None) -> bool:
 
 
 def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
-    root = _root(project_root)
-    migrate_legacy_settings(root)
-    canonical = path(root)
+    migrate_legacy_settings(project_root)
+    canonical = path(project_root)
     return _read_dict(canonical) if canonical.exists() else {}
 
 

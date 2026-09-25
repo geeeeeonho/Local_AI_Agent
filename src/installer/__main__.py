@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-from project_paths import ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT
+from project_paths import (ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT,
+                           RUNTIME_ROOT)
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
 from installer.steps import model
@@ -18,6 +19,7 @@ from installer.i18n import t
 
 HERE = PROJECT_ROOT
 ENV = ENV_DIR
+ROOT = RUNTIME_ROOT
 
 
 def _parse_args(argv=None):
@@ -72,10 +74,15 @@ def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
 
 
 def _run_install(args) -> int:
+    # Before anything reads a setting or writes a file: an install left in the
+    # checkout by an older release is brought into the runtime root, so the
+    # rest of this run - and every later run - sees one location.
+    utils.migrate_runtime_root(HERE, ROOT)
+
     lang_setup.initialize_language(HERE, override=args.lang)
 
     utils.section(t("install.title"))
-    utils.info(t("install.location", path=ENV))
+    utils.info(t("install.location", path=ROOT))
     utils.info(t("install.python_ver", ver=sys.version.split()[0]))
 
     utils.preflight_windows()

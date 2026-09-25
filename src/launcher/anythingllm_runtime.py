@@ -175,7 +175,8 @@ def storage_dir():
     except Exception:
         d = None
     if d is None:
-        d = Path(__file__).resolve().parents[1] / "user_data" / "anythingllm"
+        import project_paths
+        d = project_paths.user_data_dir() / "anythingllm"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

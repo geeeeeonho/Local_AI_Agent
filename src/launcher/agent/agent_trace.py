@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from project_paths import PROJECT_ROOT
+import project_paths
 
 _SECRET_KEYS = {
     "authorization",
@@ -39,10 +39,7 @@ _OMITTED = "[OMITTED: detailed logging disabled]"
 
 
 def _project_root() -> Path:
-    override = os.environ.get("LLM_PROJECT_ROOT")
-    if override:
-        return Path(override).resolve()
-    return PROJECT_ROOT
+    return project_paths.project_root()
 
 
 def detailed_logging_enabled(project_root: Path | None = None) -> bool:
@@ -120,8 +117,7 @@ class AgentTrace:
         workspace: Path,
         detailed: bool | None = None,
     ):
-        root = _project_root()
-        log_dir = root / "user_data" / "logs"
+        log_dir = project_paths.user_data_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         _prune_old_traces(log_dir)
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -131,7 +127,8 @@ class AgentTrace:
         self.network_mode = str(network_mode)
         self.profile_name = str(profile_name)
         self.workspace = str(Path(workspace).resolve())
-        self.detailed = detailed_logging_enabled(root) if detailed is None else bool(detailed)
+        self.detailed = (detailed_logging_enabled() if detailed is None
+                         else bool(detailed))
         self._lock = threading.RLock()
         self._handle = None
         self._closed = False

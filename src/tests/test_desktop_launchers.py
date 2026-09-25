@@ -27,11 +27,16 @@ def test_readme_names_every_entrypoint_a_user_can_double_click():
 def test_paths_follow_ollama_and_still_remember_the_old_store(monkeypatch):
     monkeypatch.delenv('LLM_MODEL_DIR',raising=False)
     monkeypatch.delenv('LLM_OLLAMA_DIR',raising=False)
-    from core import ollama_paths
+    monkeypatch.delenv('LOCAL_AI_ROOT',raising=False)
+    monkeypatch.delenv('LLM_PROJECT_ROOT',raising=False)
+    monkeypatch.delenv('OLLAMA_MODELS',raising=False)
+    from core import runtime_root
     from test_reform_core import _isolated_paths
     paths=_isolated_paths()
-    assert paths.MODEL_STORAGE_DIR==ollama_paths.models_dir()
+    assert paths.MODEL_STORAGE_DIR==paths.RUNTIME_ROOT/runtime_root.MODELS
     assert str(paths.LEGACY_FORCED_MODEL_DIR)==r'C:\LLM_Models'
+    # The store Ollama's own uninstaller deletes is remembered too.
+    assert any(str(d)==str(Path(r'C:\Ollama')/'models') for d in paths.LEGACY_MODEL_DIRS)
 
 
 # Redirect the canonical module's attributes instead of replacing the module:

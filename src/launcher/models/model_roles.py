@@ -340,10 +340,14 @@ def _flatten_tiers(_tiers):
 
 # >>> MODEL_REGISTRY_v1 - user_data/models/registry.json 으로 티어 덮어쓰기/추가
 def _registry_path():
-    """<프로젝트루트>/user_data/models/registry.json"""
-    here = os.path.dirname(os.path.abspath(__file__))          # launcher/models
-    root = os.path.dirname(os.path.dirname(here))              # 프로젝트 루트
-    return os.path.join(root, "user_data", "models", "registry.json")
+    """<런타임 루트>/user_data/models/registry.json.
+
+    예전에는 이 파일 위치에서 두 단계를 거슬러 올라가 경로를 만들었는데, 그
+    결과는 소스 트리 안의 ``src/user_data`` 였다. 아무도 쓰지 않는 자리라서,
+    사용자가 적어 둔 registry.json 이 조용히 무시됐다.
+    """
+    import project_paths
+    return str(project_paths.user_data_dir() / "models" / "registry.json")
 
 
 def _valid_tier(t):

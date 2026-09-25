@@ -20,12 +20,18 @@ from services.system.desktop import SetupService, SystemService
 
 
 class DesktopServices:
-    def __init__(self, *, project_root, env, model_dir, backend=None):
+    def __init__(self, *, project_root, env, model_dir, data=None, backend=None):
         self.project_root, self.env, self.model_dir = map(Path, (project_root, env, model_dir))
-        self.data = self.project_root / 'user_data'
+        # ``create_services`` passes the runtime root's user_data, because the
+        # source checkout and the folder this product writes to are two
+        # different places now. A caller that names only a project root means
+        # "this whole install lives here", which is how tests and portable
+        # runs express themselves, so that root keeps its own user_data.
+        self.data = Path(data) if data is not None else self.project_root / 'user_data'
         if backend is None:
             from integrations.legacy.desktop import LegacyBackend
-            backend = LegacyBackend(self.env, self.model_dir, self.project_root)
+            backend = LegacyBackend(self.env, self.model_dir, self.project_root,
+                                    data=self.data)
         self.backend = backend
         self.events = EventBus()
         self.settings = SettingsStore(self.data / 'settings' / 'localai.json')
@@ -76,5 +82,7 @@ class DesktopServices:
 
 
 def create_services():
-    from project_paths import PROJECT_ROOT, ENV_DIR, MODEL_STORAGE_DIR
-    return DesktopServices(project_root=PROJECT_ROOT, env=ENV_DIR, model_dir=MODEL_STORAGE_DIR)
+    from project_paths import (PROJECT_ROOT, ENV_DIR, MODEL_STORAGE_DIR,
+                               USER_DATA_DIR)
+    return DesktopServices(project_root=PROJECT_ROOT, env=ENV_DIR,
+                           model_dir=MODEL_STORAGE_DIR, data=USER_DATA_DIR)

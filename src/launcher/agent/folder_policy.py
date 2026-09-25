@@ -14,17 +14,17 @@ import os
 from pathlib import Path
 from typing import List
 
-from project_paths import PROJECT_ROOT
+import project_paths
 
 _FILENAME = "folder_policy.json"
 
 
 def _root() -> Path:
-    return PROJECT_ROOT
+    return project_paths.user_data_dir()
 
 
 def _store_path() -> Path:
-    return _root() / "user_data" / "settings" / _FILENAME
+    return _root() / "settings" / _FILENAME
 
 
 def load() -> dict:

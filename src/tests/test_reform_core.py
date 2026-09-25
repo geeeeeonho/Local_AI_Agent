@@ -20,12 +20,58 @@ def _isolated_paths():
     return module
 
 
-def test_paths_preserve_existing_user_data_layout(monkeypatch, tmp_path):
+def test_every_runtime_path_sits_under_one_root(monkeypatch, tmp_path):
+    """A portable run moves the whole product, not three quarters of it.
+
+    Each module used to compose its own "<project root>/user_data" or
+    "<project root>/llm_environment", so pointing one override at a new folder
+    left the rest writing to the old one.
+    """
     monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path))
+    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
+    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
+    monkeypatch.delenv('OLLAMA_MODELS', raising=False)
     paths = _isolated_paths()
+    assert paths.RUNTIME_ROOT == tmp_path
     assert paths.USER_DATA_DIR == tmp_path / 'user_data'
-    assert paths.ENV_DIR == tmp_path / 'llm_environment'
+    assert paths.ENV_DIR == tmp_path / 'environment'
+    assert paths.LOGS_DIR == tmp_path / 'logs'
+    assert paths.MODEL_STORAGE_DIR == tmp_path / 'models'
+    # Reading a path still creates nothing.
     assert not paths.USER_DATA_DIR.exists()
+
+
+def test_the_root_is_one_folder_directly_under_the_drive_on_windows():
+    """C:\\LocalAI - short, ASCII, space-free, and not inside the checkout.
+
+    A checkout lives wherever the user unzipped it: Desktop, Downloads, a
+    OneDrive folder that syncs tens of gigabytes to the cloud, a path with
+    spaces that Docker Desktop will not bind-mount.
+    """
+    # Built with / rather than a literal so the comparison means the same
+    # thing on the Linux box that runs this suite as it does on Windows.
+    from core import runtime_root
+    drive_root = Path(r'C:\LocalAI')
+    assert runtime_root.root({}, windows=True) == drive_root
+    layout = runtime_root.layout({}, windows=True)
+    assert layout['models'] == drive_root / 'models'
+    assert layout['env'] == drive_root / 'environment'
+    assert layout['user_data'] == drive_root / 'user_data'
+    assert layout['logs'] == drive_root / 'logs'
+    # "Directly under C:" is the point, so check it as Windows would.
+    import ntpath
+    drive, tail = ntpath.splitdrive(str(runtime_root.WINDOWS_ROOT))
+    assert drive.upper() == 'C:'
+    assert tail.strip('\\').count('\\') == 0, 'one level below the drive root'
+
+
+def test_an_explicit_root_beats_the_portable_override(monkeypatch, tmp_path):
+    monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path / 'checkout'))
+    monkeypatch.setenv('LOCAL_AI_ROOT', str(tmp_path / 'elsewhere'))
+    paths = _isolated_paths()
+    assert paths.PROJECT_ROOT == tmp_path / 'checkout'
+    assert paths.RUNTIME_ROOT == tmp_path / 'elsewhere'
+    assert paths.ENV_DIR == tmp_path / 'elsewhere' / 'environment'
 
 
 def test_model_and_runtime_paths_support_existing_overrides(monkeypatch, tmp_path):

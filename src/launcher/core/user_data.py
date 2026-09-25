@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """user_data — persistent data root management (USER_DATA_v1).
 
-The repository-root ``user_data/`` directory remains the single product-owned
-location for settings, logs, chat data, and interpreter runtime state. Open
-Interpreter thread IDs are the Agent session source of truth; this module does
-not create or scan any product-owned per-session state file.
+``<runtime root>/user_data`` is the single product-owned location for settings,
+logs, chat data, and interpreter runtime state. The root itself is decided in
+one place, ``project_paths``; composing it here as "project root + user_data"
+is how the desktop shell and the installer ended up writing to two different
+folders on the same machine. Open Interpreter thread IDs are the Agent session
+source of truth; this module does not create or scan any product-owned
+per-session state file.
 """
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from project_paths import PROJECT_ROOT
+import project_paths
 
 __all__ = [
     "project_root", "root",
@@ -34,16 +37,13 @@ _LAYOUT = (
 
 
 def project_root() -> Path:
-    """Project root; keep LLM_PROJECT_ROOT override for tests/portable runs."""
-    ov = os.environ.get("LLM_PROJECT_ROOT")
-    if ov:
-        return Path(ov).resolve()
-    return PROJECT_ROOT
+    """The checkout; LLM_PROJECT_ROOT still moves it for tests/portable runs."""
+    return project_paths.project_root()
 
 
 def root() -> Path:
     """Return the user_data root without creating it."""
-    return project_root() / "user_data"
+    return project_paths.user_data_dir()
 
 
 def _sub(*parts: str) -> Path:
