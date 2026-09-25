@@ -161,12 +161,25 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertNotIn("Tor 프록시 이미지 pull", searx)
         self.assertLess(main.index("searxng.install(paths)"), main.index("warp.install(paths)"))
 
-    def test_project_paths_keep_runtime_data_at_repository_root(self):
+    def test_project_paths_keep_runtime_data_under_one_root(self):
+        """Every runtime directory is composed from the runtime root, here.
+
+        The failure this guards against is a module quietly growing its own
+        "<project root>/user_data": that is how the installer and the desktop
+        came to write to two different folders on the same machine.
+        """
         path_module = REPO_ROOT / "src" / "project_paths.py"
         self.assertTrue(path_module.is_file())
         text = path_module.read_text(encoding="utf-8")
-        self.assertIn('USER_DATA_DIR = PROJECT_ROOT / "user_data"', text)
-        self.assertIn('ENV_DIR = PROJECT_ROOT / "llm_environment"', text)
+        for line in ('RUNTIME_ROOT = runtime_dir()',
+                     'USER_DATA_DIR = user_data_dir()',
+                     'ENV_DIR = env_dir()',
+                     'LOGS_DIR = logs_dir()',
+                     'MODEL_STORAGE_DIR = model_dir()'):
+            self.assertIn(line, text)
+        for resolver in ('env_dir', 'user_data_dir', 'logs_dir'):
+            self.assertIn('def %s() -> Path:\n    return runtime_dir() / runtime_root.'
+                          % resolver, text)
 
     def test_no_shadowed_gui_module(self):
         self.assertFalse((REPO_ROOT / "src" / "launcher" / "presenter" / "gui.py").exists())

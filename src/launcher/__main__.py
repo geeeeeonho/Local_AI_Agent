@@ -20,7 +20,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from project_paths import ENV_DIR, PROJECT_ROOT
+from project_paths import (ENV_DIR, PROJECT_ROOT, RUNTIME_ROOT,
+                           USER_DATA_DIR)
 
 HERE = PROJECT_ROOT
 ENV = ENV_DIR
@@ -81,7 +82,7 @@ def _create_presenter_with_fallback(requested_mode: str):
 
 def _fatal_log_path() -> Path:
     """치명적 예외 트레이스백을 저장할 경로."""
-    log_dir = ENV / "logs" if ENV.exists() else HERE
+    log_dir = ENV / "logs" if ENV.exists() else RUNTIME_ROOT
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / "launcher_fatal.log"
 
@@ -111,7 +112,8 @@ def main():
     # v6_lifelog: 모든 종료 경로에서 로그 보존 + 컨테이너 정리
     try:
         from launcher.core import lifelog as _ll
-        _ll.install_global_hooks(HERE)
+        # The runtime root owns user_data and the session log.
+        _ll.install_global_hooks(RUNTIME_ROOT)
     except Exception as _e:
         print("[WARN] lifelog 초기화 실패: " + str(_e), file=sys.stderr)
 
@@ -159,7 +161,7 @@ def main():
     try:
         from launcher.core import lifelog as _ll5
         if hasattr(_ll5, "register_cache_cleanup"):
-            _ll5.register_cache_cleanup(HERE)
+            _ll5.register_cache_cleanup(USER_DATA_DIR)
             _trace("캐시 정리 cleanup 등록 완료")
     except Exception as _cce:
         _trace("캐시 정리 cleanup 등록 실패: " + str(_cce))

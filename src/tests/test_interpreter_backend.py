@@ -73,7 +73,7 @@ def _config(tmp_path):
 
 
 def _backend(tmp_path, monkeypatch):
-    exe = tmp_path / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    exe = tmp_path / "environment" / "open_interpreter" / "bin" / "interpreter.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("fake", encoding="utf-8")
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))

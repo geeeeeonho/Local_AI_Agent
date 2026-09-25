@@ -85,7 +85,9 @@ def run(env: Path, p: Presenter) -> None:
                 from launcher.core import user_data
                 cfg_path = user_data.settings_dir() / "user_config.json"
             except Exception:
-                cfg_path = env.parent / "user_data" / "settings" / "user_config.json"
+                import project_paths
+                cfg_path = (project_paths.user_data_dir()
+                            / "settings" / "user_config.json")
 
         choice = p.show_menu(
             title="설정 관리",

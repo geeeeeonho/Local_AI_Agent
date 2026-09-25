@@ -9,19 +9,31 @@ from installer.core.filesystem import (
     write_install_manifest,
 )
 from launcher.services.ollama import OllamaService
-from project_paths import MODEL_STORAGE_DIR
+import project_paths
+from project_paths import MODEL_STORAGE_DIR, RUNTIME_ROOT
 
 
-def test_the_model_store_follows_ollama_rather_than_being_forced():
-    """This project no longer picks the location; Ollama does.
+def test_the_model_store_is_never_a_location_this_project_forced():
+    """Forcing a store of our own is what this project stopped doing.
 
-    Forcing OLLAMA_MODELS to C:\\LLM_Models made the models ours rather than
-    Ollama's: nothing else on the machine could see them, and a user who had
-    already moved their store off C: had that silently overridden.
+    OLLAMA_MODELS=C:\\LLM_Models made the models ours rather than Ollama's:
+    nothing else on the machine could see them, and a user who had already
+    moved their store off C: had that silently overridden. A store the user
+    configures still wins; the stores older releases picked do not.
     """
     from core import ollama_paths
-    assert MODEL_STORAGE_DIR == ollama_paths.models_dir()
     assert str(MODEL_STORAGE_DIR).lower() != r"c:\llm_models"
+    assert not ollama_paths.is_legacy_forced_store(MODEL_STORAGE_DIR)
+
+
+def test_the_store_lives_in_the_runtime_root_with_everything_else():
+    """One folder holds the whole install, so the store is inside it."""
+    from core import runtime_root
+    assert MODEL_STORAGE_DIR == RUNTIME_ROOT / runtime_root.MODELS
+    assert runtime_root.is_inside(MODEL_STORAGE_DIR)
+    # On Windows that root is the one directly under the drive.
+    assert (runtime_root.models_dir({}, windows=True)
+            == Path(r"C:\LocalAI") / "models")
 
 
 def test_the_default_store_is_shared_by_every_account_on_the_machine():
@@ -36,9 +48,19 @@ def test_the_default_store_is_shared_by_every_account_on_the_machine():
     assert ollama_paths.is_per_user_store(ollama_paths.user_default_models_dir(home), home)
 
 
-def test_the_shared_store_lives_inside_the_ollama_install():
-    from core import ollama_paths
-    assert ollama_paths.SHARED_MODELS_DIR.parent == ollama_paths.PROJECT_INSTALL_DIR
+def test_the_store_is_not_inside_the_folder_ollamas_uninstaller_deletes():
+    """Models used to sit in C:\\Ollama\\models, which Ollama's uninstaller removes.
+
+    Uninstalling Ollama - to reinstall it, to try another version - took tens of
+    gigabytes of downloads with it. The store belongs to this product, so it
+    lives in this product's root and survives.
+    """
+    from core import ollama_paths, runtime_root
+    assert ollama_paths.SHARED_MODELS_DIR.parent == runtime_root.WINDOWS_ROOT
+    assert ollama_paths.SHARED_MODELS_DIR.parent != ollama_paths.PROJECT_INSTALL_DIR
+    # The old location is still known, so setup can find models left there.
+    assert ollama_paths.LEGACY_INSTALL_STORE in ollama_paths.LEGACY_STORES
+    assert ollama_paths.is_legacy_forced_store(ollama_paths.LEGACY_INSTALL_STORE)
 
 
 def test_a_store_the_user_configured_wins_over_the_shared_default():
@@ -265,7 +287,7 @@ def blobs(path):
 
 def migrate(monkeypatch, forced, env, models):
     from installer.core import filesystem
-    monkeypatch.setattr(filesystem, "LEGACY_FORCED_MODEL_DIR", forced)
+    monkeypatch.setattr(filesystem, "LEGACY_MODEL_DIRS", (forced,))
     filesystem._migrate_legacy_models(env, models)
 
 
@@ -314,7 +336,7 @@ def test_an_interrupted_rename_is_promoted_not_deleted(monkeypatch, tmp_path):
 
 
 def test_a_completed_copy_cleans_up_the_store_it_names(monkeypatch, tmp_path):
-    from installer.core.filesystem import _MIGRATION_COMPLETE_MARKER
+    from installer.core.relocate import MARKER_NAME as _MIGRATION_COMPLETE_MARKER
     forced = store(tmp_path / "LLM_Models", "source")
     env = tmp_path / "env"
     other = store(env / "llm_models", "untouched")
@@ -330,7 +352,7 @@ def test_a_completed_copy_cleans_up_the_store_it_names(monkeypatch, tmp_path):
 
 def test_a_completed_copy_with_no_recorded_origin_keeps_ambiguous_sources(monkeypatch, tmp_path):
     """An older marker names no origin; with two candidates, delete neither."""
-    from installer.core.filesystem import _MIGRATION_COMPLETE_MARKER
+    from installer.core.relocate import MARKER_NAME as _MIGRATION_COMPLETE_MARKER
     forced = store(tmp_path / "LLM_Models", "one")
     env = tmp_path / "env"
     other = store(env / "llm_models", "two")

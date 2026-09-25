@@ -5,7 +5,8 @@ import queue
 from pathlib import Path
 from typing import Any
 
-from project_paths import PROJECT_ROOT, SRC_ROOT
+import project_paths
+from project_paths import SRC_ROOT
 from runtime_versions import OPEN_INTERPRETER_VERSION as OI_VERSION
 from .agent_trace import AgentTrace
 from .app_server_client import AppServerClient
@@ -36,20 +37,28 @@ _STREAM_DELTA_METHODS = frozenset({
 
 
 def _project_root() -> Path:
-    override = os.environ.get("LLM_PROJECT_ROOT")
-    if override:
-        return Path(override).resolve()
-    return PROJECT_ROOT
+    return project_paths.project_root()
 
 
 def managed_interpreter_exe(project_root: Path | None = None) -> Path:
-    root = Path(project_root).resolve() if project_root is not None else _project_root()
-    return root / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    """The interpreter this project installed, under the managed environment.
+
+    A caller that names a root means "this whole install lives here", so the
+    environment folder is looked for inside it rather than at the runtime root.
+    """
+    if project_root is None:
+        env = project_paths.env_dir()
+    else:
+        env = Path(project_root).resolve() / project_paths.ENV_DIRNAME
+    return env / "open_interpreter" / "bin" / "interpreter.exe"
 
 
 def runtime_interpreter_home(project_root: Path | None = None) -> Path:
-    root = Path(project_root).resolve() if project_root is not None else _project_root()
-    path = root / "user_data" / "open_interpreter"
+    if project_root is None:
+        base = project_paths.user_data_dir()
+    else:
+        base = Path(project_root).resolve() / "user_data"
+    path = base / "open_interpreter"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

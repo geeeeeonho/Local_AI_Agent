@@ -118,7 +118,8 @@ def default_csv_path(model_dir) -> Path:
         from launcher.core import user_data
         fallback = user_data.root() / "models"
     except Exception:
-        fallback = Path.cwd() / "user_data" / "models"
+        import project_paths
+        fallback = project_paths.user_data_dir() / "models"
     try:
         fallback.mkdir(parents=True, exist_ok=True)
     except OSError:

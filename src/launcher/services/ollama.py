@@ -537,6 +537,12 @@ class OllamaService:
             return False
 
         self._info("모델 저장소 정리를 위해 관리형 Ollama를 잠시 종료합니다.")
+        # The tray application owns the server process and starts a
+        # replacement within milliseconds of the listener being killed. That
+        # replacement re-opens the model store, and the migration's rename
+        # then fails with a sharing violation on Windows - the models stay
+        # where they were and setup reports success.
+        self.stop_supervisor()
         if not self._terminate_listener(pid):
             return False
 

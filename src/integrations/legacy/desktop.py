@@ -57,8 +57,14 @@ class ManagedInference:
 
 
 class LegacyBackend:
-    def __init__(self, env, model_dir, project_root, *, importer=importlib.import_module):
+    def __init__(self, env, model_dir, project_root, *, data=None,
+                 importer=importlib.import_module):
         self.env, self.model_dir, self.root = map(Path, (env, model_dir, project_root))
+        # Where this product writes. DesktopServices hands over the runtime
+        # root's user_data; a caller that names only a project root means the
+        # whole install lives there, which is how portable runs and tests
+        # express themselves.
+        self.data = Path(data) if data is not None else self.root / 'user_data'
         self.load = importer
         self.inference = ManagedInference(self.env, self.model_dir, self.load)
         self._chat_owned_id = None
@@ -66,6 +72,48 @@ class LegacyBackend:
         self._chat_probe_failed = False
         self._search_runtime = None
         self._health = None          # (monotonic, result)
+
+    def runtime_root_leftovers(self):
+        """Folders an older release left outside the runtime root, newest first.
+
+        Only locations this product itself created are listed. A directory the
+        user chose stays theirs; the point is to find the install the last
+        version put in the checkout, or the model store it put inside Ollama's
+        own folder where Ollama's uninstaller deletes it.
+        """
+        paths = self.load('project_paths')
+        filesystem = self.load('installer.core.filesystem')
+        root = Path(paths.RUNTIME_ROOT)
+        found = []
+        for candidates in filesystem.runtime_root_sources(paths.PROJECT_ROOT, root).values():
+            found.extend(candidates)
+        found.extend(filesystem.legacy_model_stores(self.env, Path(self.model_dir)))
+        out = []
+        for candidate in found:
+            candidate = Path(candidate)
+            try:
+                inside = candidate.resolve().is_relative_to(root.resolve())
+            except (OSError, ValueError):
+                inside = False
+            if inside or candidate in out:
+                continue
+            try:
+                if candidate.is_dir() and any(candidate.iterdir()):
+                    out.append(candidate)
+            except OSError:
+                continue
+        return out
+
+    def describe_runtime_root(self):
+        """One line about where this install lives, or None when it is tidy."""
+        leftovers = self.runtime_root_leftovers()
+        if not leftovers:
+            return None
+        paths = self.load('project_paths')
+        return ('예전 위치에 설치 데이터가 남아 있습니다: %s. '
+                '[설치 / 복구] 를 한 번 실행하면 %s 아래로 옮기고 확인합니다.'
+                % (' / '.join(str(path) for path in leftovers[:3]),
+                   paths.RUNTIME_ROOT))
 
     def current_mode(self):
         return self.load('launcher.network_policy').current_mode().value
@@ -107,6 +155,11 @@ class LegacyBackend:
             'chat': lambda: self.load('launcher.anythingllm_runtime').is_ready(),
             'search': lambda: self.load('launcher.services.docker').DockerService.container_running(
                 self.load('launcher.config').SEARXNG_CONTAINER),
+            # An install left where an older release put it - inside the
+            # checkout, or in Ollama's own folder - is invisible from the new
+            # root, so the window would report a perfectly good install as
+            # missing. Say where it is instead.
+            'runtime_root': self.describe_runtime_root,
         }
         started = time.monotonic()
 
@@ -161,7 +214,7 @@ class LegacyBackend:
         policy = self.load('launcher.network_policy')
         self._search_runtime = SearchRuntime(
             self.env / 'searxng' / 'config' / 'settings.yml',
-            self.root / 'user_data' / 'cache' / 'search',
+            self.data / 'cache' / 'search',
             self.load('launcher.services.docker').DockerService,
             image=cfg.SEARXNG_IMAGE, container=cfg.SEARXNG_CONTAINER,
             network=cfg.LLM_NETWORK, host_port=cfg.SEARXNG_HOST_PORT,
@@ -453,6 +506,12 @@ class LegacyBackend:
         ollama = self.load('installer.steps.ollama')
         utils = self.load('installer.utils')
         project_paths = self.load('project_paths')
+
+        # Repair is one of the two moments allowed to move an install: bring
+        # anything an older release left outside the runtime root in first, so
+        # the rest of this call works on one location.
+        utils.migrate_runtime_root(project_paths.PROJECT_ROOT,
+                                   project_paths.RUNTIME_ROOT)
 
         ollama.prepare_install(self.env, self.model_dir)
         if Path(self.model_dir) == Path(project_paths.MODEL_STORAGE_DIR):

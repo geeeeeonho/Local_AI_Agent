@@ -369,7 +369,8 @@ class DesktopWindow:
     #: one instruction that cannot help them.
     STORE_UNREAD=('그 경로를 읽지 않습니다','그 경로를 읽고 있지 않습니다')
     MODELS_NEEDED=('로컬 Ollama 모델이 없습니다','설치된 로컬 모델이 없습니다','모델을 먼저')
-    SETUP_NEEDED=('AnythingLLM is not installed','이미지가 없습니다','Setup / Repair')
+    SETUP_NEEDED=('AnythingLLM is not installed','이미지가 없습니다','Setup / Repair',
+                  '[설치 / 복구]')
 
     def state_action(self,text):
         """The button that belongs next to this message, if there is one.
@@ -772,7 +773,14 @@ class DesktopWindow:
             # Before anything is started the readiness line reports the poll,
             # so the page is never blank about why it is not ready.
             if not self.services.chat.attempted and not self._chat_starting:
-                if status.get('ollama') is False:
+                stray=status.get('runtime_root')
+                if isinstance(stray,str):
+                    # An install the previous release left in the checkout is
+                    # complete and working; it is simply somewhere the new
+                    # paths do not look. Saying "not ready" without saying
+                    # that sends the user off to re-download it.
+                    self.set_chat_state('Waiting',stray)
+                elif status.get('ollama') is False:
                     self.set_chat_state('Waiting','Ollama 가 응답하지 않습니다 · '
                         '[Chat 시작]을 누르면 이 창이 직접 시작합니다.')
                 elif isinstance(store,str) and ('로컬 모델이 없습니다' in store

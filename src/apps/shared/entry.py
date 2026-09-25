@@ -53,11 +53,12 @@ def main(app='studio',argv=None):
     try:
         from services.desktop import create_services
         from .window import DesktopWindow
-        from project_paths import PROJECT_ROOT
+        from project_paths import RUNTIME_ROOT
         # Before anything can start a container: WARP, Tor and the sandbox
         # hand their teardown to these hooks, so a shell without them leaves
-        # containers running after the window closes.
-        install_exit_hooks(PROJECT_ROOT)
+        # containers running after the window closes. The runtime root, not
+        # the checkout: that is where user_data and the session log live.
+        install_exit_hooks(RUNTIME_ROOT)
         services=create_services()
         initialize_language(services.project_root,args.lang)
         DesktopWindow(args.app,services).run()

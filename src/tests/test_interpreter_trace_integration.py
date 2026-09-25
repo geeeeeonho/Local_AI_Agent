@@ -44,7 +44,7 @@ class FakeClient:
 
 def test_backend_traces_lifecycle_turn_and_completed_mcp(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
-    exe = tmp_path / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    exe = tmp_path / "environment" / "open_interpreter" / "bin" / "interpreter.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("fake", encoding="utf-8")
 
@@ -111,7 +111,7 @@ def test_backend_traces_lifecycle_turn_and_completed_mcp(tmp_path, monkeypatch):
 
 def test_streaming_deltas_are_counted_not_traced_per_token(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
-    exe = tmp_path / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    exe = tmp_path / "environment" / "open_interpreter" / "bin" / "interpreter.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("fake", encoding="utf-8")
 
@@ -161,7 +161,7 @@ def test_trace_omits_payload_rows_when_logging_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
     assert settings_store.set_logging_enabled(False, tmp_path)
 
-    exe = tmp_path / "llm_environment" / "open_interpreter" / "bin" / "interpreter.exe"
+    exe = tmp_path / "environment" / "open_interpreter" / "bin" / "interpreter.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("fake", encoding="utf-8")
 

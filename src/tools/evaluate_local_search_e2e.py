@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from project_paths import ENV_DIR, USER_DATA_DIR as USER_DATA
 from runtime_versions import OPEN_INTERPRETER_VERSION
 
 from launcher import config as launcher_config
@@ -117,7 +118,7 @@ def _preflight(model: str) -> dict:
         try:
             from launcher import searxng_runtime
 
-            searxng_runtime.start(ROOT / "llm_environment")
+            searxng_runtime.start(ENV_DIR)
             _http_json(launcher_config.SEARXNG_URL.rstrip("/") + "/search?q=Open+Interpreter&format=json", timeout=8.0)
             result["searxng"] = True
         except Exception as exc:
@@ -136,7 +137,7 @@ def _runtime_spec_for_case(*, mode: str, workspace: Path, model: str) -> tuple[P
     container = launcher_config.SANDBOX_CONTAINER_PREFIX + "eval_" + secrets.token_hex(4)
     command, is_host = build_cmd_for_mode(
         "sandbox",
-        ROOT / "llm_environment",
+        ENV_DIR,
         profile,
         workspace,
         container,
@@ -161,7 +162,7 @@ def _run_case(*, case: dict, mode: str, model: str, timeout_s: float, workspace_
         network_mode=launcher_config.NET_MODE,
         runtime_spec=runtime_spec,
     )
-    service = AgentService(create_backend(mode, ROOT / "llm_environment"))
+    service = AgentService(create_backend(mode, ENV_DIR))
     events: list[AgentEvent] = []
     start_error = None
     try:
@@ -203,8 +204,8 @@ def _run_case(*, case: dict, mode: str, model: str, timeout_s: float, workspace_
 
 def run_suite(*, mode: str, model: str, timeout_s: float) -> dict:
     stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
-    result_dir = ROOT / "user_data" / "search_eval_results"
-    workspace_root = ROOT / "user_data" / "search_eval_workspace"
+    result_dir = USER_DATA / "search_eval_results"
+    workspace_root = USER_DATA / "search_eval_workspace"
     result_dir.mkdir(parents=True, exist_ok=True)
     workspace_root.mkdir(parents=True, exist_ok=True)
 
