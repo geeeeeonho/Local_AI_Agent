@@ -52,6 +52,16 @@ class InferenceService:
                  for row in rows if isinstance(row, dict)}
         return sorted(local_only(name for name in names if name))
 
+    def describe_models(self):
+        """Why there is nothing to run, in the runtime's own words, or None."""
+        explain = getattr(self.runtime, 'describe_models', None)
+        if not callable(explain):
+            return None
+        try:
+            return explain()
+        except Exception:
+            return None
+
     def _start(self, log):
         """Forward the progress callback only to a runtime that accepts one.
 

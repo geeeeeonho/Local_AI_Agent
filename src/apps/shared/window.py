@@ -363,7 +363,11 @@ class DesktopWindow:
                     '\n\n'+str(exc))
         self.run_task('chat.start',work,ready,error=failed)
 
-    #: Wording that identifies a cause the user can act on from here.
+    #: Wording that identifies a cause the user can act on from here. Order
+    #: matters: "the models are here and the server cannot see them" contains
+    #: the word 모델 too, and sending that user to the download screen is the
+    #: one instruction that cannot help them.
+    STORE_UNREAD=('그 경로를 읽지 않습니다','그 경로를 읽고 있지 않습니다')
     MODELS_NEEDED=('로컬 Ollama 모델이 없습니다','설치된 로컬 모델이 없습니다','모델을 먼저')
     SETUP_NEEDED=('AnythingLLM is not installed','이미지가 없습니다','Setup / Repair')
 
@@ -373,11 +377,25 @@ class DesktopWindow:
         A message that says where to go is only half an instruction while the
         page offers no way to get there.
         """
+        if any(hint in text for hint in self.STORE_UNREAD):
+            return ('Ollama 다시 시작 →',self.fix_model_store)
         if any(hint in text for hint in self.MODELS_NEEDED):
             return ('모델 화면 열기 →',lambda:self.navigate('models'))
         if any(hint in text for hint in self.SETUP_NEEDED):
             return ('설치 / 복구 열기 →',lambda:self.navigate('setup'))
         return None
+
+    def fix_model_store(self):
+        """Take the user to the action that restarts Ollama on the right store.
+
+        The models are installed; Ollama reads OLLAMA_MODELS only at startup,
+        so they stay invisible until it is restarted. The Ollama action asks
+        before ending a process the user did not ask us to end.
+        """
+        self.navigate('models')
+        try:self.model_tabs.select(self.model_pages['stack'])
+        except Exception:pass
+        self.ensure_ollama()
 
     def set_chat_state(self,state,text):
         """One place decides how ready Chat looks, so the words, the colour and
@@ -757,7 +775,8 @@ class DesktopWindow:
                 if status.get('ollama') is False:
                     self.set_chat_state('Waiting','Ollama 가 응답하지 않습니다 · '
                         '[Chat 시작]을 누르면 이 창이 직접 시작합니다.')
-                elif isinstance(store,str) and '로컬 모델이 없습니다' in store:
+                elif isinstance(store,str) and ('로컬 모델이 없습니다' in store
+                                                or '읽고 있지 않습니다' in store):
                     self.set_chat_state('Waiting',store)
                 elif status.get('chat_image') is False:
                     self.set_chat_state('Waiting','AnythingLLM 이미지가 없습니다 · '

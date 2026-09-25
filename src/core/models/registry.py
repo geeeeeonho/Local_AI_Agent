@@ -61,6 +61,20 @@ class Inventory:
         return frozenset(local_only(self.tags))
 
     @property
+    def unreachable(self) -> FrozenSet[str]:
+        """Models this machine holds that the running router will not serve.
+
+        Not "missing" and not "nothing installed": they are here, and the
+        server is looking somewhere else. The two lead to opposite actions -
+        download them, or point the server at them - so they are kept apart.
+        """
+        if self.served is None or self.on_disk is None:
+            return frozenset()
+        lowered = {name.lower() for name in local_only(self.served)}
+        return frozenset(name for name in local_only(self.on_disk)
+                         if name.lower() not in lowered)
+
+    @property
     def known(self) -> bool:
         """False means nothing could be read, not that nothing is installed."""
         return self.source != UNKNOWN
@@ -82,8 +96,13 @@ class Inventory:
             return None
         served = local_only(self.served)
         if not served:
-            # A router with nothing local loaded contradicts no store.
-            return True
+            # A router serving nothing while the store holds models is the
+            # clearest disagreement there is: the server is not reading this
+            # directory. Calling it agreement ("nothing to contradict") hid the
+            # exact case it most needed to catch - an Ollama that Windows
+            # restarted without OLLAMA_MODELS, reading its own empty default
+            # while every model the user installed sat in the store we manage.
+            return not self.on_disk
         # Folded, because neither side controls the spelling. Vendor tags mix
         # case (prutser/...:Q4_K_S), Ollama does not promise to echo a name
         # unchanged, and canonicalization can only fix the spelling of tags the
