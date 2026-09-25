@@ -22,21 +22,12 @@ def model_name(value: str) -> str:
     return value
 
 
-def is_cloud_tag(value: str) -> bool:
-    """A tag Ollama runs remotely rather than on this machine.
-
-    Ollama marks these with a ``cloud`` label (``gpt-oss:20b-cloud``,
-    ``gemma4:cloud``). The local daemon attaches the user's credentials and
-    proxies the request to Ollama's servers, so the prompt leaves the machine
-    through the daemon - not through anything this project prepared. Every
-    OpenAI-compatible client, this one included, talks to them exactly like a
-    local model, and on Windows the suffix has been reported stripped from run
-    and API calls, so the name alone cannot be trusted to look remote later.
-    """
-    if not isinstance(value, str):
-        return False
-    label = value.rpartition(':')[2].lower()
-    return label == 'cloud' or label.endswith('-cloud')
+# The rule lives in core.models.registry so there is one of it. The local
+# daemon attaches the user's credentials and proxies these to Ollama's servers,
+# so the prompt leaves the machine through the daemon - not through anything
+# this project prepared - and every OpenAI-compatible client, this one
+# included, talks to them exactly like a local model.
+from core.models.registry import is_cloud_tag  # noqa: E402  (re-export)
 
 
 def local_model_name(value: str) -> str:

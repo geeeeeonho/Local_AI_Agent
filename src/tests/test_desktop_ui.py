@@ -415,3 +415,47 @@ def test_the_apply_button_is_the_button_and_not_the_row_it_sits_in(ui):
     plan['install']=['a:1'];plan['download_gb']=1.0
     w.update_choice_summary();pump(w)
     assert 'disabled' not in w.apply_button.state()
+
+
+def test_a_message_that_names_a_screen_carries_the_button_to_it(ui):
+    """"모델 화면에서 받으세요" with no way there is half an instruction."""
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    w.set_chat_state('Failed','Chat에 사용할 로컬 Ollama 모델이 없습니다. 모델 화면에서 먼저 받으세요.')
+    pump(w)
+    action=w.chat_status.action
+    assert action.winfo_ismapped(),'the way out has to be on screen'
+    assert '모델' in str(action.cget('text'))
+    action.invoke();pump(w)
+    assert w.current_page=='models'
+
+
+def test_the_button_goes_away_when_there_is_nothing_to_do(ui):
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    w.set_chat_state('Failed','Chat에 사용할 로컬 Ollama 모델이 없습니다. 모델 화면에서 먼저 받으세요.')
+    pump(w)
+    assert w.chat_status.action.winfo_ismapped()
+    w.set_chat_state('Working','준비 중 · Network 확인 중')
+    pump(w)
+    assert not w.chat_status.action.winfo_ismapped()
+
+
+def test_a_missing_image_points_at_setup_instead(ui):
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    w.set_chat_state('Failed','AnythingLLM is not installed. Run RUN.bat --install or Setup / Repair.')
+    pump(w)
+    assert '설치' in str(w.chat_status.action.cget('text'))
+    w.chat_status.action.invoke();pump(w)
+    assert w.current_page=='setup'
+
+
+def test_an_ollama_with_nothing_installed_is_named_before_anything_is_pressed(ui):
+    w,svc,backend=ui
+    backend.health=lambda max_age=None:{'ollama':True,'docker':True,'chat_image':True,
+        'chat':False,'search':False,
+        'ollama_store':'실행 중이지만 설치된 로컬 모델이 없습니다 · 모델 화면에서 먼저 받으세요'}
+    w.navigate('chat');w.refresh_health(fresh=True)
+    pump(w,lambda:'로컬 모델이 없습니다' in w.chat_state.get())
+    assert w.chat_status.action.winfo_ismapped(),'and it offers the screen that fixes it'

@@ -13,8 +13,14 @@ class Backend:
         self.ready = True
         self.images = True
         self.mode = 'warp'
+        # A machine with no model installed is a real state, but it is not the
+        # default one: Chat now refuses at step 2 rather than after preparing
+        # the network and Docker, so a stub that serves nothing cannot start.
+        self.installed = ['qwen3:8b']
         self.inference = SimpleNamespace(model_dir=root / 'models',
-            client=SimpleNamespace(list_models=lambda: [], pull=self.pull, remove=self.remove),
+            client=SimpleNamespace(list_models=lambda: [{'name': tag} for tag in self.installed],
+                                   pull=self.pull, remove=self.remove),
+            local_models=lambda: list(self.installed),
             ensure_running=lambda: 'http://127.0.0.1:11434')
         self.inference.model_dir.mkdir(exist_ok=True)
     def pull(self, name, progress=None): self.calls.append(('pull', name))

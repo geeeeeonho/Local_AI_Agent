@@ -215,11 +215,32 @@ class OllamaService:
                 continue
         return None
 
+    def local_models(self, timeout: float = 5):
+        """Tags the running server can serve from this machine. None = unknown.
+
+        Cloud tags are excluded: Ollama proxies those to its own servers, so a
+        library made only of them cannot answer a prompt under Block, and a
+        Chat start that counts them finds nothing to use at the last step.
+        """
+        try:
+            from integrations.ollama import inventory
+            read = inventory.read(self.model_dir, timeout=timeout, store=False)
+        except Exception:
+            return None
+        return None if not read.router_reachable else sorted(read.local_tags)
+
     def describe_store(self, timeout: float = 5) -> str:
         """One line about which store the running server is serving from."""
+        local = self.local_models(timeout=timeout)
+        if local is not None and not local:
+            # "Both sides are empty" is technically agreement and reads as all
+            # clear, which is what it said right before Chat stopped at the
+            # last step for having no model to use.
+            return "실행 중이지만 설치된 로컬 모델이 없습니다 · 모델 화면에서 먼저 받으세요"
         agrees = self.store_agrees(timeout=timeout)
         if agrees:
-            return "모델 저장소 일치: %s" % self.model_dir
+            return "모델 저장소 일치: %s (로컬 모델 %d개)" % (
+                self.model_dir, len(local or ()))
         if agrees is None:
             return "모델 저장소를 확인하지 못했습니다: %s" % self.model_dir
         found = self.locate_store(timeout=timeout)
@@ -238,9 +259,14 @@ class OllamaService:
         when downloading and when counting disk usage, so it is reported - and
         the model screen says it again where it is actually actionable.
         """
+        local = self.local_models()
+        if local is not None and not local:
+            self._warn("설치된 로컬 모델이 없습니다. 모델 화면에서 먼저 받으세요.")
+            return
         agrees = self.store_agrees()
         if agrees:
-            self._ok("실행 중인 Ollama 를 사용합니다 (모델 저장소 일치 확인됨).")
+            self._ok("실행 중인 Ollama 를 사용합니다 (로컬 모델 %d개, 저장소 일치)."
+                     % len(local or ()))
             return
         if agrees is None:
             self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다. 그대로 사용합니다.")

@@ -48,23 +48,39 @@ def status_line(parent, variable, *, side='top'):
     Readiness used to be signalled only by a button losing its disabled look,
     which nobody watches for, and the explanation only appeared inside a log
     box further down the page. This says it in words, in place, from the moment
-    the page opens.
+    the page opens - and carries the button for whatever it is telling the user
+    to do, because "모델 화면에서 받으세요" with no way there is a dead end.
     """
     frame = ttk.Frame(parent)
     frame.pack(fill='x', pady=(0, 10), side=side)
     label = ttk.Label(frame, textvariable=variable, style='Waiting.Status.TLabel',
                       wraplength=780, justify='left')
-    label.pack(anchor='w', fill='x')
-    wrap_to_parent(label, inset=24)
+    label.pack(anchor='w', fill='x', side='left', expand=True)
+    label.action = ttk.Button(frame)
+    wrap_to_parent(label, inset=200)
     return label
 
 
-def set_status(label, state, text):
-    """Recolour the line and set its words. ``state`` is one of the styles."""
+def set_status(label, state, text, action=None):
+    """Recolour the line, set its words, and offer the way out it names.
+
+    ``action`` is ``(label, callback)`` or ``None``.
+    """
     label.configure(style=state + '.Status.TLabel')
     variable = label.cget('textvariable')
     if variable:
         label.setvar(variable, text)
+    button = getattr(label, 'action', None)
+    if button is None:
+        return
+    if action is None:
+        if button.winfo_ismapped():
+            button.pack_forget()
+        return
+    text, command = action
+    button.configure(text=text, command=command, style='Accent.TButton')
+    if not button.winfo_ismapped():
+        button.pack(side='right', padx=(12, 0))
 
 
 def text_box(parent, *, height=8, expand=True, side='top', place=True):

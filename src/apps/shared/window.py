@@ -363,11 +363,27 @@ class DesktopWindow:
                     '\n\n'+str(exc))
         self.run_task('chat.start',work,ready,error=failed)
 
+    #: Wording that identifies a cause the user can act on from here.
+    MODELS_NEEDED=('로컬 Ollama 모델이 없습니다','설치된 로컬 모델이 없습니다','모델을 먼저')
+    SETUP_NEEDED=('AnythingLLM is not installed','이미지가 없습니다','Setup / Repair')
+
+    def state_action(self,text):
+        """The button that belongs next to this message, if there is one.
+
+        A message that says where to go is only half an instruction while the
+        page offers no way to get there.
+        """
+        if any(hint in text for hint in self.MODELS_NEEDED):
+            return ('모델 화면 열기 →',lambda:self.navigate('models'))
+        if any(hint in text for hint in self.SETUP_NEEDED):
+            return ('설치 / 복구 열기 →',lambda:self.navigate('setup'))
+        return None
+
     def set_chat_state(self,state,text):
         """One place decides how ready Chat looks, so the words, the colour and
         the open button can never disagree with each other."""
         label=getattr(self,'chat_status',None)
-        if label is not None:set_status(label,state,text)
+        if label is not None:set_status(label,state,text,self.state_action(text))
         button=getattr(self,'chat_open_button',None)
         if button is not None:
             ready=state=='Ready'
@@ -377,7 +393,7 @@ class DesktopWindow:
 
     def set_agent_state(self,state,text):
         label=getattr(self,'agent_status',None)
-        if label is not None:set_status(label,state,text)
+        if label is not None:set_status(label,state,text,self.state_action(text))
 
     def open_chat(self):
         try:
@@ -741,6 +757,8 @@ class DesktopWindow:
                 if status.get('ollama') is False:
                     self.set_chat_state('Waiting','Ollama 가 응답하지 않습니다 · '
                         '[Chat 시작]을 누르면 이 창이 직접 시작합니다.')
+                elif isinstance(store,str) and '로컬 모델이 없습니다' in store:
+                    self.set_chat_state('Waiting',store)
                 elif status.get('chat_image') is False:
                     self.set_chat_state('Waiting','AnythingLLM 이미지가 없습니다 · '
                         '[설치 / 복구]에서 먼저 받으세요.')
@@ -761,7 +779,11 @@ class DesktopWindow:
         if self.services.chat.started or self.services.agent.opened:
             self.log('Stop active sessions before Setup / Repair.',level='error');return
         if not messagebox.askyesno('Setup / Repair','Run the existing installer in a separate console?\nReview its prompts before installing or migrating data.',parent=self.root):return
-        self.run_task('setup.repair',self.services.setup.repair)
+        def done(_result):
+            self.log('설치 / 복구가 끝났습니다. 상태를 다시 확인합니다.')
+            self.refresh_health(fresh=True)
+        self.run_task('setup.repair',self.services.setup.repair,done,
+                      error=lambda exc:self.refresh_health(fresh=True))
 
     def maintenance(self,key,host='setup'):
         if self.services.chat.started or self.services.agent.opened:
