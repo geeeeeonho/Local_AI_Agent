@@ -74,11 +74,6 @@ def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
 
 
 def _run_install(args) -> int:
-    # Before anything reads a setting or writes a file: an install left in the
-    # checkout by an older release is brought into the runtime root, so the
-    # rest of this run - and every later run - sees one location.
-    utils.migrate_runtime_root(HERE, ROOT)
-
     lang_setup.initialize_language(HERE, override=args.lang)
 
     utils.section(t("install.title"))
