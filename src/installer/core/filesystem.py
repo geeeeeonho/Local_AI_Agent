@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
-from project_paths import (ACCOUNT_ROOT, ENV_DIRNAME, LEGACY_ENV_DIRNAME,
-                           LEGACY_MODEL_DIRS, LOGS_DIRNAME, MODEL_STORAGE_DIR,
+from project_paths import (ACCOUNT_ROOT, ENV_DIRNAME, LOGS_DIRNAME,
+                           MODEL_STORAGE_DIR, OLLAMA_INSTALL_DIR,
                            USER_DATA_DIRNAME)
 
 from . import relocate
@@ -51,127 +51,12 @@ def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) ->
     return False
 
 
-def legacy_model_stores(env: Path, models: Path) -> list:
-    """이 프로젝트가 예전에 모델을 두던 위치들. 최근 것부터.
-
-    ``C:\\LocalAI\\models`` 는 바로 이전 릴리스가 쓰던 자리이고,
-    ``C:\\LLM_Models`` 는 Ollama 가 위치를 갖기 전에 강제하던 저장소다. 둘 다
-    Ollama 눈에는 안 보이므로, 설치기가 찾아서 옮겨 줘야 수십 GB 가 사라진
-    것처럼 보이지 않는다.
-    """
-    out = []
-    for candidate in tuple(LEGACY_MODEL_DIRS) + (Path(env) / "llm_models",):
-        candidate = Path(candidate)
-        if candidate != models and candidate not in out:
-            out.append(candidate)
-    return out
-
-
-def _report_relocation(result, label: str) -> None:
-    """옮긴 결과를 사람이 읽을 수 있게 알린다. 확인까지 마친 것만 ok 로."""
-    if result.problem:
-        warn(result.problem)
-        return
-    if result.moved_from is not None:
-        ok("  %-20s %s → %s (%d개 / %s 확인)"
-           % (label + " 이동", result.moved_from, result.target, result.files,
-              relocate.human_bytes(result.total_bytes)))
-    elif result.promoted:
-        ok("  %-20s → %s (중단됐던 이전을 마무리했습니다)"
-           % (label + " 이동", result.target))
-    if result.leftovers:
-        warn(
-            "옮기지 못하고 남은 예전 %s 데이터가 있습니다: " % label
-            + " / ".join(str(path) for path in result.leftovers)
-            + " / 새 위치가 이미 사용 중이라 자동 병합하지 않습니다: %s" % result.target
-        )
-
-
-def _migrate_legacy_models(env: Path, models: Path) -> None:
-    """예전 저장소들을 지금 쓰는 위치로 안전하게 옮긴다.
-
-    같은 볼륨에서는 rename, 다른 볼륨에서는 staging 복사 → 완료 marker →
-    원본 삭제 → 승격. 어느 지점에서 중단돼도 다음 실행이 완성본과 부분
-    복사본을 구분한다. 자세한 규칙은 ``installer.core.relocate`` 에 있다.
-    """
-    models = Path(models)
-    result = relocate.relocate(legacy_model_stores(Path(env), models), models,
-                               label="models")
-    _report_relocation(result, "models")
-
-
-def runtime_root_sources(project_root: Path, root: Path,
-                         account: Optional[Path] = None) -> dict:
-    """무엇이 어디에서 어디로 와야 하는지. 이름 -> (후보들, 목적지).
-
-    두 번의 이사를 한 번에 처리한다. 하나는 체크아웃 밖으로 — 체크아웃은
-    사용자가 내려받은 폴더라 이름이 바뀌거나 통째로 옮겨지고, OneDrive
-    아래라면 수십 GB 가 클라우드로 동기화된다. 다른 하나는 루트 안에서
-    계정 폴더로 — 설정·대화·추적 기록은 이 PC 를 함께 쓰는 다른 Windows
-    계정이 읽을 것이 아니다.
-    """
-    project_root, root = Path(project_root), Path(root)
-    account = Path(account) if account is not None else ACCOUNT_ROOT
-    return {
-        "environment": ([project_root / LEGACY_ENV_DIRNAME,
-                         project_root / ENV_DIRNAME],
-                        root / ENV_DIRNAME),
-        "user_data": ([root / USER_DATA_DIRNAME,
-                       project_root / USER_DATA_DIRNAME],
-                      account / USER_DATA_DIRNAME),
-        "logs": ([root / LOGS_DIRNAME], account / LOGS_DIRNAME),
-        # The agent worked on the user's own files in there. Listed after
-        # "environment" so the move out of the checkout has already happened
-        # by the time this one looks for it.
-        "workspace": ([root / ENV_DIRNAME / "agent" / "workspace",
-                       project_root / LEGACY_ENV_DIRNAME / "agent" / "workspace"],
-                      account / "workspace"),
-    }
-
-
-def migrate_runtime_root(project_root: Path, root: Path,
-                         account: Optional[Path] = None) -> dict:
-    """예전 위치에 남은 환경·사용자 데이터·로그를 제자리로 옮긴다.
-
-    설치/복구를 실행할 때마다 한 번 확인한다. 옮길 것이 없으면 아무 말도
-    하지 않고, 옮겼으면 개수와 용량까지 확인한 뒤 보고한다.
-    """
-    project_root, root = Path(project_root), Path(root)
-    account = Path(account) if account is not None else ACCOUNT_ROOT
-    results: Dict[str, object] = {}
-    plan = runtime_root_sources(project_root, root, account)
-    announced = False
-    for name, (candidates, target) in plan.items():
-        candidates = [Path(c) for c in candidates if Path(c) != Path(target)]
-        if _same_dir(project_root, root) and name == "environment":
-            continue        # 개발용 체크아웃 자체가 루트인 경우
-        if not any(c.exists() for c in candidates) and \
-                not relocate.staging_for(target).exists():
-            continue
-        if not announced:
-            section("기존 설치를 제자리로 옮기는 중 · %s" % root)
-            announced = True
-        result = relocate.relocate(candidates, target, label=name)
-        results[name] = result
-        _report_relocation(result, name)
-    return results
-
-
-def _same_dir(left: Path, right: Path) -> bool:
-    try:
-        return Path(left).resolve() == Path(right).resolve()
-    except OSError:
-        return str(left) == str(right)
-
-
 def create_environment(env: Path, model_dir: Optional[Path] = None,
                        account_root: Optional[Path] = None) -> Dict[str, Path]:
-    """관리 환경 트리와 공용 모델 저장소를 생성해 경로 dict를 반환한다.
+    """새 설치용 공용 런타임과 이 계정의 개인 폴더를 생성한다.
 
-    모델은 프로젝트 체크아웃과 분리된 Ollama 공용 저장소
-    ``C:\\Ollama\\models`` 를 기본으로 사용한다. 예전 ``C:\\LLM_Models``
-    저장소는 비어 있는 공용 저장소로 안전하게 이전한다. 테스트나 관리형
-    배포에서는 ``model_dir`` 로 명시적으로 재정의할 수 있다.
+    새 설치는 이전 경로를 검색하거나 옮기지 않는다. 공용 구성은 runtime root
+    아래 environment/ollama/models 세 곳이고, 사용 기록은 users/<account> 아래다.
     """
     try:
         from ..i18n import t
@@ -182,11 +67,9 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     env = Path(env)
     models = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
     account = Path(account_root) if account_root is not None else ACCOUNT_ROOT
-    _migrate_legacy_models(env, models)
-
     paths = {
         "env":                   env,
-        "ollama":                env / "ollama_runtime",
+        "ollama":                OLLAMA_INSTALL_DIR,
         "models":                models,
         "chat":                  env / "chat_ui",
         "agent":                 env / "agent",
@@ -218,8 +101,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
             raise
         ok(f"  {name:<20} → {p}")
 
-    # 기본 경로일 때만 기계 공용으로 만든다. 명시적으로 지정된 경로는
-    # 호출자의 것이므로 권한이나 시스템 환경변수를 건드리지 않는다.
+    # 기본 모델 저장소는 모든 Windows 계정이 같은 한 벌을 읽는다.
     if model_dir is None:
         ensure_shared_model_access(models)
         publish_shared_model_dir(models)
