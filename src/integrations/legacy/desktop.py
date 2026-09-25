@@ -74,34 +74,8 @@ class LegacyBackend:
         self._health = None          # (monotonic, result)
 
     def runtime_root_leftovers(self):
-        """Folders an older release left outside the runtime root, newest first.
-
-        Only locations this product itself created are listed. A directory the
-        user chose stays theirs; the point is to find the install the last
-        version put in the checkout, or the model store it put inside Ollama's
-        own folder where Ollama's uninstaller deletes it.
-        """
-        paths = self.load('project_paths')
-        filesystem = self.load('installer.core.filesystem')
-        root = Path(paths.RUNTIME_ROOT)
-        plan = filesystem.runtime_root_sources(paths.PROJECT_ROOT, root,
-                                               paths.ACCOUNT_ROOT)
-        found = []
-        for candidates, target in plan.values():
-            found.extend((Path(c), Path(target)) for c in candidates)
-        models = Path(self.model_dir)
-        found.extend((Path(c), models)
-                     for c in filesystem.legacy_model_stores(self.env, models))
-        out = []
-        for candidate, target in found:
-            if candidate == target or candidate in out:
-                continue
-            try:
-                if candidate.is_dir() and any(candidate.iterdir()):
-                    out.append(candidate)
-            except OSError:
-                continue
-        return out
+        """Fresh-install layout does not scan or migrate older installations."""
+        return []
 
     def describe_records_privacy(self):
         """One line when this account's records are open to other accounts.
@@ -122,15 +96,8 @@ class LegacyBackend:
                 % paths.ACCOUNT_ROOT)
 
     def describe_runtime_root(self):
-        """One line about where this install lives, or None when it is tidy."""
-        leftovers = self.runtime_root_leftovers()
-        if not leftovers:
-            return None
-        paths = self.load('project_paths')
-        return ('예전 위치에 설치 데이터가 남아 있습니다: %s. '
-                '[설치 / 복구] 를 한 번 실행하면 %s 아래로 옮기고 확인합니다.'
-                % (' / '.join(str(path) for path in leftovers[:3]),
-                   paths.RUNTIME_ROOT))
+        """Fresh-install layout has no legacy-location warning."""
+        return None
 
     def current_mode(self):
         return self.load('launcher.network_policy').current_mode().value
@@ -511,12 +478,8 @@ class LegacyBackend:
     def prepare_model_runtime(self):
         """Make Ollama usable for explicit model management.
 
-        Model selection is itself an explicit install action, so it may acquire
-        the Ollama binary when the machine has none. A healthy existing server
-        is reused. Otherwise we stop only a recognized Ollama, migrate legacy
-        model data through the installer's guarded filesystem path, install the
-        official binary (portable fallback), and start it against the resolved
-        store.
+        Model selection is an explicit install action. It ensures the shared
+        LocalAI broker/runtime exists and starts it against the resolved store.
         """
         service_cls = self.load('launcher.services.ollama').OllamaService
         service = service_cls(self.env, model_dir=self.model_dir)
@@ -526,12 +489,6 @@ class LegacyBackend:
         ollama = self.load('installer.steps.ollama')
         utils = self.load('installer.utils')
         project_paths = self.load('project_paths')
-
-        # Repair is one of the two moments allowed to move an install: bring
-        # anything an older release left outside the runtime root in first, so
-        # the rest of this call works on one location.
-        utils.migrate_runtime_root(project_paths.PROJECT_ROOT,
-                                   project_paths.RUNTIME_ROOT)
 
         ollama.prepare_install(self.env, self.model_dir)
         if Path(self.model_dir) == Path(project_paths.MODEL_STORAGE_DIR):
