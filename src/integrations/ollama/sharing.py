@@ -9,14 +9,12 @@ it short of reinstalling.
 """
 from __future__ import annotations
 
-import os
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Optional
 
 from core.models import sharing as policy
 from core.models.sharing import Sharing, VARIABLE
+from integrations.windows import acl
 
 __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
            'ensure_readable', 'publish_machine_variable', 'publish_user_variable',
@@ -26,17 +24,10 @@ __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
 BUILTIN_USERS_SID = policy.USERS_SID
 _MACHINE_KEY = r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
 _USER_KEY = 'Environment'
-_NO_WINDOW = 0x08000000
 
-
-def _run(command, timeout=20):
-    """Run one console tool without flashing a window. None if it cannot run."""
-    try:
-        return subprocess.run(command, capture_output=True, text=True,
-                              timeout=timeout, check=False,
-                              creationflags=_NO_WINDOW if os.name == 'nt' else 0)
-    except (OSError, subprocess.SubprocessError):
-        return None
+# One copy of the console plumbing: the private records folder under the same
+# root asks the opposite question of the same tool.
+_run = acl.run
 
 
 def _registry_value(root, key) -> Optional[str]:
@@ -71,39 +62,11 @@ def _registry_value(root, key) -> Optional[str]:
         return None
 
 
-def _saved_sddl(model_dir: Path) -> Optional[str]:
-    """The store's DACL in SDDL form, via ``icacls /save``. None if unavailable.
-
-    ``icacls`` on its own prints account names in the language Windows is
-    installed in, so reading its normal output meant matching "BUILTIN\\Users"
-    against "BUILTIN\\사용자" on a Korean machine and concluding, permanently,
-    that nobody could read the store - including right after a repair that had
-    worked. SDDL names that group "BU" in every language.
-    """
-    handle, name = tempfile.mkstemp(prefix='localai-acl-', suffix='.txt')
-    os.close(handle)
-    saved = Path(name)
-    try:
-        # icacls will not overwrite an existing save file.
-        saved.unlink(missing_ok=True)
-        result = _run(['icacls', str(model_dir), '/save', str(saved), '/Q'])
-        if result is None or result.returncode != 0 or not saved.is_file():
-            return None
-        return saved.read_text(encoding='utf-16', errors='replace')
-    except (OSError, UnicodeError):
-        return None
-    finally:
-        try:
-            saved.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
 def _readable_by_users(model_dir: Path) -> Optional[bool]:
     """Can BUILTIN\\Users read the store? None when the answer is unavailable."""
     if not model_dir.exists():
         return None
-    text = _saved_sddl(model_dir)
+    text = acl.saved_sddl(model_dir)
     if text is None:
         return None
     for line in text.splitlines():
@@ -120,8 +83,7 @@ def read(model_dir=None, *, windows=None) -> Sharing:
         from project_paths import MODEL_STORAGE_DIR
         model_dir = MODEL_STORAGE_DIR
     model_dir = Path(model_dir)
-    on_windows = (os.name == 'nt') if windows is None else bool(windows)
-    if not on_windows:
+    if not acl.on_windows(windows):
         return Sharing(path=str(model_dir),
                        intended_shared=model_dir == ollama_paths.SHARED_MODELS_DIR,
                        per_user_path=ollama_paths.is_per_user_store(model_dir),
@@ -146,7 +108,7 @@ def ensure_readable(model_dir: Path, *, windows=None) -> bool:
     replace them. (OI)(CI) makes the grant apply to models pulled later, not
     just the ones present when this runs.
     """
-    if not ((os.name == 'nt') if windows is None else bool(windows)):
+    if not acl.on_windows(windows):
         return True
     result = _run(['icacls', str(model_dir), '/grant',
                    '*%s:(OI)(CI)(RX)' % BUILTIN_USERS_SID, '/T', '/Q'])
@@ -159,7 +121,7 @@ def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
     Without this, another account's Ollama reads no OLLAMA_MODELS, falls back
     to that account's own profile, and re-downloads the whole library.
     """
-    if not ((os.name == 'nt') if windows is None else bool(windows)):
+    if not acl.on_windows(windows):
         return True
     result = _run(['setx', VARIABLE, str(model_dir), '/M'])
     return result is not None and result.returncode == 0
@@ -167,7 +129,7 @@ def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
 
 def publish_user_variable(model_dir: Path, *, windows=None) -> bool:
     """Point this account's Ollama here. No administrator needed."""
-    if not ((os.name == 'nt') if windows is None else bool(windows)):
+    if not acl.on_windows(windows):
         return True
     result = _run(['setx', VARIABLE, str(model_dir)])
     return result is not None and result.returncode == 0
@@ -185,7 +147,7 @@ def publish_variable(model_dir: Path, *, windows=None) -> str:
     view. Machine scope needs administrator; user scope does not and is enough
     for the account actually using the program.
     """
-    if not ((os.name == 'nt') if windows is None else bool(windows)):
+    if not acl.on_windows(windows):
         return 'machine'
     if publish_machine_variable(model_dir, windows=windows):
         return 'machine'

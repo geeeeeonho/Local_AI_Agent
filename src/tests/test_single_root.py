@@ -28,14 +28,21 @@ SRC = Path(__file__).resolve().parents[1]
 
 def test_every_directory_the_product_writes_to_is_under_the_root(monkeypatch, tmp_path):
     monkeypatch.setenv('LOCAL_AI_ROOT', str(tmp_path / 'root'))
+    monkeypatch.setenv('LOCAL_AI_ACCOUNT', 'Tester')
     monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
     monkeypatch.delenv('OLLAMA_MODELS', raising=False)
     import project_paths
     root = tmp_path / 'root'
     assert project_paths.runtime_dir() == root
-    for resolved in (project_paths.env_dir(), project_paths.user_data_dir(),
-                     project_paths.logs_dir(), project_paths.model_dir()):
+    # Shared: one copy per machine, straight off the root.
+    for resolved in (project_paths.env_dir(), project_paths.model_dir()):
         assert resolved.parent == root, resolved
+    # Private: this account's, and inside the root all the same.
+    account = project_paths.account_dir()
+    assert account.parent == root / 'users'
+    for resolved in (project_paths.user_data_dir(), project_paths.logs_dir(),
+                     project_paths.workspace_dir()):
+        assert resolved.parent == account, resolved
 
 
 def composed_runtime_names(tree):
@@ -134,16 +141,40 @@ def names_in(path):
 
 def test_an_install_left_in_the_checkout_moves_into_the_root(tmp_path):
     checkout, root = tmp_path / 'Downloads' / 'Local_AI_Agent', tmp_path / 'LocalAI'
+    account = root / 'users' / 'Tester'
     seeded(checkout / 'llm_environment' / 'searxng', 'settings.yml')
     seeded(checkout / 'user_data' / 'settings', 'user_config.json')
 
-    results = filesystem.migrate_runtime_root(checkout, root)
+    results = filesystem.migrate_runtime_root(checkout, root, account)
 
+    # Shared where the machine shares, private where the person does.
     assert names_in(root / 'environment' / 'searxng') == ['settings.yml']
-    assert names_in(root / 'user_data' / 'settings') == ['user_config.json']
+    assert names_in(account / 'user_data' / 'settings') == ['user_config.json']
+    assert not (root / 'user_data').exists()
     assert not (checkout / 'llm_environment').exists()
     assert not (checkout / 'user_data').exists()
     assert all(result.verified for result in results.values())
+
+
+def test_records_shared_by_the_previous_layout_move_into_this_account(tmp_path):
+    """The release before this one put user_data at the root, for everyone.
+
+    Settings, projects, chat history and every agent trace sat in a folder the
+    machine's other accounts could open - and two signed-in users writing the
+    same settings file corrupt each other, which is worse than the leak.
+    """
+    root = tmp_path / 'LocalAI'
+    account = root / 'users' / 'Tester'
+    seeded(root / 'user_data' / 'settings', 'user_config.json')
+    seeded(root / 'logs', 'session.log')
+
+    results = filesystem.migrate_runtime_root(tmp_path / 'checkout', root, account)
+
+    assert names_in(account / 'user_data' / 'settings') == ['user_config.json']
+    assert names_in(account / 'logs') == ['session.log']
+    assert not (root / 'user_data').exists()
+    assert not (root / 'logs').exists()
+    assert results['user_data'].verified and results['logs'].verified
 
 
 def test_a_move_reports_what_it_actually_carried(tmp_path):
@@ -177,59 +208,66 @@ def test_a_move_that_loses_files_says_so_instead_of_reporting_success(tmp_path):
 
 def test_nothing_is_merged_into_a_location_already_in_use(tmp_path):
     checkout, root = tmp_path / 'checkout', tmp_path / 'root'
+    account = root / 'users' / 'Tester'
     seeded(checkout / 'user_data' / 'settings', 'old.json')
-    seeded(root / 'user_data' / 'settings', 'current.json')
+    seeded(account / 'user_data' / 'settings', 'current.json')
 
-    results = filesystem.migrate_runtime_root(checkout, root)
+    results = filesystem.migrate_runtime_root(checkout, root, account)
 
-    assert names_in(root / 'user_data' / 'settings') == ['current.json']
+    assert names_in(account / 'user_data' / 'settings') == ['current.json']
     assert names_in(checkout / 'user_data' / 'settings') == ['old.json']
     assert results['user_data'].leftovers == [checkout / 'user_data']
 
 
 def test_an_empty_destination_left_by_an_earlier_run_does_not_block_the_move(tmp_path):
     checkout, root = tmp_path / 'checkout', tmp_path / 'root'
+    account = root / 'users' / 'Tester'
     seeded(checkout / 'user_data' / 'settings', 'real.json')
-    (root / 'user_data').mkdir(parents=True)
+    (account / 'user_data').mkdir(parents=True)
 
-    filesystem.migrate_runtime_root(checkout, root)
+    filesystem.migrate_runtime_root(checkout, root, account)
 
-    assert names_in(root / 'user_data' / 'settings') == ['real.json']
+    assert names_in(account / 'user_data' / 'settings') == ['real.json']
 
 
 def test_an_interrupted_copy_is_discarded_while_the_original_survives(tmp_path):
     checkout, root = tmp_path / 'checkout', tmp_path / 'root'
+    account = root / 'users' / 'Tester'
     seeded(checkout / 'user_data', 'whole')
-    staging = relocate.staging_for(root / 'user_data')
+    staging = relocate.staging_for(account / 'user_data')
     seeded(staging, 'half')          # no marker: the copy never finished
 
-    filesystem.migrate_runtime_root(checkout, root)
+    filesystem.migrate_runtime_root(checkout, root, account)
 
-    assert names_in(root / 'user_data') == ['whole']
+    assert names_in(account / 'user_data') == ['whole']
     assert not staging.exists()
     assert not (checkout / 'user_data').exists()
 
 
 def test_a_finished_copy_is_promoted_even_though_the_run_stopped(tmp_path):
     checkout, root = tmp_path / 'checkout', tmp_path / 'root'
-    staging = relocate.staging_for(root / 'user_data')
+    account = root / 'users' / 'Tester'
+    staging = relocate.staging_for(account / 'user_data')
     seeded(staging, 'complete')
     (staging / relocate.MARKER_NAME).write_text(
         'complete\n%s\n' % (checkout / 'user_data'), encoding='utf-8')
     seeded(checkout / 'user_data', 'complete')   # source cleanup never ran
 
-    results = filesystem.migrate_runtime_root(checkout, root)
+    results = filesystem.migrate_runtime_root(checkout, root, account)
 
-    assert names_in(root / 'user_data') == ['complete']
+    assert names_in(account / 'user_data') == ['complete']
     assert not staging.exists()
     assert not (checkout / 'user_data').exists()
     assert results['user_data'].promoted
 
 
-def test_a_checkout_that_is_its_own_root_is_left_alone(tmp_path):
-    seeded(tmp_path / 'user_data', 'here')
-    assert filesystem.migrate_runtime_root(tmp_path, tmp_path) == {}
-    assert names_in(tmp_path / 'user_data') == ['here']
+def test_a_development_checkout_keeps_its_shared_environment_in_place(tmp_path):
+    """When the checkout is the root, the environment is already where it goes."""
+    seeded(tmp_path / 'environment' / 'searxng', 'settings.yml')
+    account = tmp_path / 'users' / 'Tester'
+    results = filesystem.migrate_runtime_root(tmp_path, tmp_path, account)
+    assert 'environment' not in results
+    assert names_in(tmp_path / 'environment' / 'searxng') == ['settings.yml']
 
 
 def test_the_store_ollama_used_to_own_is_a_migration_source(tmp_path):

@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
-from project_paths import (ENV_DIRNAME, LEGACY_ENV_DIRNAME,
-                           LEGACY_MODEL_DIRS, MODEL_STORAGE_DIR,
+from project_paths import (ACCOUNT_ROOT, ENV_DIRNAME, LEGACY_ENV_DIRNAME,
+                           LEGACY_MODEL_DIRS, LOGS_DIRNAME, MODEL_STORAGE_DIR,
                            USER_DATA_DIRNAME)
 
 from . import relocate
@@ -101,43 +101,56 @@ def _migrate_legacy_models(env: Path, models: Path) -> None:
     _report_relocation(result, "models")
 
 
-def runtime_root_sources(project_root: Path, root: Path) -> dict:
-    """런타임 루트로 들어와야 할 예전 위치들. 항목마다 후보 목록.
+def runtime_root_sources(project_root: Path, root: Path,
+                         account: Optional[Path] = None) -> dict:
+    """무엇이 어디에서 어디로 와야 하는지. 이름 -> (후보들, 목적지).
 
-    체크아웃 안에 있던 ``llm_environment`` 와 ``user_data`` 가 대상이다.
-    체크아웃은 사용자가 내려받은 폴더라 이름이 바뀌거나 통째로 옮겨지고,
-    OneDrive 아래라면 수십 GB 가 클라우드로 동기화된다. 런타임 루트로
-    옮겨 두면 체크아웃을 지워도 설치가 그대로 남는다.
+    두 번의 이사를 한 번에 처리한다. 하나는 체크아웃 밖으로 — 체크아웃은
+    사용자가 내려받은 폴더라 이름이 바뀌거나 통째로 옮겨지고, OneDrive
+    아래라면 수십 GB 가 클라우드로 동기화된다. 다른 하나는 루트 안에서
+    계정 폴더로 — 설정·대화·추적 기록은 이 PC 를 함께 쓰는 다른 Windows
+    계정이 읽을 것이 아니다.
     """
     project_root, root = Path(project_root), Path(root)
+    account = Path(account) if account is not None else ACCOUNT_ROOT
     return {
-        "environment": [project_root / LEGACY_ENV_DIRNAME,
-                        project_root / ENV_DIRNAME],
-        "user_data": [project_root / USER_DATA_DIRNAME],
+        "environment": ([project_root / LEGACY_ENV_DIRNAME,
+                         project_root / ENV_DIRNAME],
+                        root / ENV_DIRNAME),
+        "user_data": ([root / USER_DATA_DIRNAME,
+                       project_root / USER_DATA_DIRNAME],
+                      account / USER_DATA_DIRNAME),
+        "logs": ([root / LOGS_DIRNAME], account / LOGS_DIRNAME),
+        # The agent worked on the user's own files in there. Listed after
+        # "environment" so the move out of the checkout has already happened
+        # by the time this one looks for it.
+        "workspace": ([root / ENV_DIRNAME / "agent" / "workspace",
+                       project_root / LEGACY_ENV_DIRNAME / "agent" / "workspace"],
+                      account / "workspace"),
     }
 
 
-def migrate_runtime_root(project_root: Path, root: Path) -> dict:
-    """체크아웃에 남아 있는 환경·사용자 데이터를 런타임 루트로 옮긴다.
+def migrate_runtime_root(project_root: Path, root: Path,
+                         account: Optional[Path] = None) -> dict:
+    """예전 위치에 남은 환경·사용자 데이터·로그를 제자리로 옮긴다.
 
     설치/복구를 실행할 때마다 한 번 확인한다. 옮길 것이 없으면 아무 말도
     하지 않고, 옮겼으면 개수와 용량까지 확인한 뒤 보고한다.
     """
     project_root, root = Path(project_root), Path(root)
+    account = Path(account) if account is not None else ACCOUNT_ROOT
     results: Dict[str, object] = {}
-    if _same_dir(project_root, root):
-        return results          # 개발용 체크아웃 자체가 루트인 경우
-    targets = {"environment": root / ENV_DIRNAME,
-               "user_data": root / USER_DATA_DIRNAME}
-    sources = runtime_root_sources(project_root, root)
+    plan = runtime_root_sources(project_root, root, account)
     announced = False
-    for name, target in targets.items():
-        candidates = [s for s in sources[name] if s != target]
-        if not any(Path(s).exists() for s in candidates) and \
+    for name, (candidates, target) in plan.items():
+        candidates = [Path(c) for c in candidates if Path(c) != Path(target)]
+        if _same_dir(project_root, root) and name == "environment":
+            continue        # 개발용 체크아웃 자체가 루트인 경우
+        if not any(c.exists() for c in candidates) and \
                 not relocate.staging_for(target).exists():
             continue
         if not announced:
-            section("기존 설치를 %s 아래로 옮기는 중" % root)
+            section("기존 설치를 제자리로 옮기는 중 · %s" % root)
             announced = True
         result = relocate.relocate(candidates, target, label=name)
         results[name] = result
@@ -152,7 +165,8 @@ def _same_dir(left: Path, right: Path) -> bool:
         return str(left) == str(right)
 
 
-def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str, Path]:
+def create_environment(env: Path, model_dir: Optional[Path] = None,
+                       account_root: Optional[Path] = None) -> Dict[str, Path]:
     """관리 환경 트리와 공용 모델 저장소를 생성해 경로 dict를 반환한다.
 
     모델은 프로젝트 체크아웃과 분리된 Ollama 공용 저장소
@@ -168,6 +182,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str,
 
     env = Path(env)
     models = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
+    account = Path(account_root) if account_root is not None else ACCOUNT_ROOT
     _migrate_legacy_models(env, models)
 
     paths = {
@@ -177,16 +192,20 @@ def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str,
         "chat":                  env / "chat_ui",
         "agent":                 env / "agent",
         "sandbox":               env / "agent" / "sandbox",
-        "workspace":             env / "agent" / "workspace",
+        # The agent's default working folder holds the user's own files, so it
+        # is theirs, not the machine's.
+        "workspace":             account / "workspace",
         "open_interpreter":      env / "open_interpreter",
         "open_interpreter_bin":  env / "open_interpreter" / "bin",
         "open_interpreter_home": env / "open_interpreter" / "home",
         "searxng":               env / "searxng",
         "scripts":               env / "scripts",
         "logs":                  env / "logs",
-        # The root's own logs, beside the environment: session logs outlive a
-        # rebuilt environment, which is the whole reason they are not in it.
-        "session_logs":          env.parent / "logs",
+        # Private to this Windows account. Settings, projects, chat history and
+        # every agent trace are a record of what one person asked an AI to do.
+        "account":               account,
+        "user_data":             account / USER_DATA_DIRNAME,
+        "session_logs":          account / LOGS_DIRNAME,
     }
     for name, p in paths.items():
         try:
@@ -205,7 +224,51 @@ def create_environment(env: Path, model_dir: Optional[Path] = None) -> Dict[str,
     if model_dir is None:
         ensure_shared_model_access(models)
         publish_shared_model_dir(models)
+    ensure_private_account(account)
     return paths
+
+
+ACCOUNT_MARKER = "ACCOUNT.txt"
+
+
+def name_the_account(account: Path) -> None:
+    """Record whose folder this is, in the account's real name.
+
+    The folder name has to be ASCII and space-free - it ends up in a
+    ``docker -v`` argument - so a Korean or spaced Windows account name is
+    replaced by a fingerprint, and ``users\\user-9c6b9b1b`` tells nobody
+    anything. The name itself goes inside, where no path rule applies.
+    """
+    from core import accounts
+    marker = Path(account) / ACCOUNT_MARKER
+    try:
+        marker.write_text(
+            "%s\n\n이 폴더는 위 Windows 계정 전용입니다.\n"
+            "설정·프로젝트·대화·추적 기록·세션 로그가 들어 있고, 이 PC 의 다른\n"
+            "계정은 읽을 수 없습니다. 모델은 공용이라 ..\\..\\models 에 한 벌만\n"
+            "있습니다 — 계정마다 다시 받지 않습니다.\n" % accounts.current_name(),
+            encoding="utf-8")
+    except OSError:
+        pass
+
+
+def ensure_private_account(account: Path) -> Optional[bool]:
+    """이 계정 폴더를 다른 Windows 계정이 못 읽게 잠근다.
+
+    바로 옆 모델 저장소는 일부러 ``BUILTIN\\Users`` 읽기를 허용한다 — 그래야
+    두 번째 계정이 수십 GB 를 다시 받지 않는다. 그 밑에 만들어진 폴더는 그
+    허용을 상속하므로, 자리만 옮겨서는 개인 기록이 개인 것이 되지 않는다.
+    상속을 끊고 확인까지 한다.
+    """
+    from integrations.windows import privacy
+    name_the_account(account)
+    state = privacy.ensure_private(account)
+    if state is True:
+        ok("  %-20s → %s (이 계정 전용)" % ("account", account))
+    elif state is False:
+        warn("개인 기록 폴더를 이 계정 전용으로 잠그지 못했습니다: %s" % account)
+        warn("이 PC 의 다른 Windows 계정이 설정·대화·추적 기록을 읽을 수 있습니다.")
+    return state
 
 
 def write_install_manifest(

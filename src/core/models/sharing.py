@@ -21,9 +21,10 @@ job, so the rule stays testable without a registry or an ACL.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Optional, Tuple
+
+from core import sddl
 
 # The variable Ollama itself reads to find its store.
 VARIABLE = 'OLLAMA_MODELS'
@@ -62,74 +63,20 @@ def _same(left, right, windows: bool = True) -> bool:
 
 
 # ── reading an ACL without depending on the display language ─────────────
-# icacls prints account names in the language Windows is installed in, so on a
-# Korean install the store's ACL lists "BUILTIN\\사용자", not "BUILTIN\\Users".
-# Matching on the English name reported every Korean machine as unreadable -
-# permanently, including right after a repair that had actually worked. SDDL
-# names the same group "BU" whatever the display language, so that is what is
-# parsed here.
-USERS_SDDL = 'BU'
-USERS_SID = 'S-1-5-32-545'
+# The parse itself lives in ``core.sddl``: the same descriptor answers the
+# opposite question for an account's private folder, and one parser with two
+# callers beats two parsers that disagree.
+USERS_SDDL = sddl.USERS_SDDL
+USERS_SID = sddl.USERS_SID
 
-# Access-mask bits that matter for "can another account read a model file".
-FILE_READ_DATA = 0x1
-GENERIC_READ = 0x80000000
-GENERIC_ALL = 0x10000000
-
-# SDDL rights aliases, expanded to their masks. Execute-only aliases are here
-# too and deliberately lack FILE_READ_DATA: running a file is not reading it.
-_RIGHTS = {
-    'FA': 0x1F01FF, 'FR': 0x120089, 'FW': 0x120116, 'FX': 0x1200A0,
-    'GA': GENERIC_ALL, 'GR': GENERIC_READ, 'GW': 0x40000000, 'GX': 0x20000000,
-    'KA': 0xF003F, 'KR': 0x20019, 'KW': 0x20006, 'KX': 0x20019,
-}
+FILE_READ_DATA = sddl.FILE_READ_DATA
+GENERIC_READ = sddl.GENERIC_READ
+GENERIC_ALL = sddl.GENERIC_ALL
 
 
-def _mask(text: str) -> int:
-    """An SDDL rights field as a number. Aliases concatenate, so sum them."""
-    text = (text or '').strip()
-    if not text:
-        return 0
-    try:
-        return int(text, 16) if text.lower().startswith('0x') else int(text)
-    except ValueError:
-        pass
-    total = 0
-    for index in range(0, len(text) - 1, 2):
-        total |= _RIGHTS.get(text[index:index + 2].upper(), 0)
-    return total
-
-
-def _grants_read(mask: int) -> bool:
-    return bool(mask & (FILE_READ_DATA | GENERIC_READ | GENERIC_ALL))
-
-
-def readable_from_sddl(sddl: str) -> Optional[bool]:
-    """Can BUILTIN\\Users read, per this security descriptor? None if unparsable.
-
-    An explicit deny wins over any allow, the way Windows evaluates it.
-    """
-    if not isinstance(sddl, str) or 'D:' not in sddl:
-        return None
-    body = sddl[sddl.index('D:'):]
-    aces = re.findall(r'\(([^()]*)\)', body)
-    if not aces:
-        return None
-    allowed = False
-    for ace in aces:
-        parts = ace.split(';')
-        if len(parts) < 6:
-            continue
-        kind, _flags, rights, _obj, _inherit, account = (part.strip() for part in parts[:6])
-        if account.upper() not in (USERS_SDDL, USERS_SID.upper()):
-            continue
-        if not _grants_read(_mask(rights)):
-            continue
-        if kind.upper().startswith('D'):
-            return False
-        if kind.upper().startswith('A'):
-            allowed = True
-    return allowed
+def readable_from_sddl(descriptor: str) -> Optional[bool]:
+    """Can BUILTIN\\Users read, per this security descriptor? None if unparsable."""
+    return sddl.read_access(descriptor, (USERS_SDDL, USERS_SID))
 
 
 @dataclass(frozen=True)

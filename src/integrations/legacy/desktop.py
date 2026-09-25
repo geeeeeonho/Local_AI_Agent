@@ -84,18 +84,17 @@ class LegacyBackend:
         paths = self.load('project_paths')
         filesystem = self.load('installer.core.filesystem')
         root = Path(paths.RUNTIME_ROOT)
+        plan = filesystem.runtime_root_sources(paths.PROJECT_ROOT, root,
+                                               paths.ACCOUNT_ROOT)
         found = []
-        for candidates in filesystem.runtime_root_sources(paths.PROJECT_ROOT, root).values():
-            found.extend(candidates)
-        found.extend(filesystem.legacy_model_stores(self.env, Path(self.model_dir)))
+        for candidates, target in plan.values():
+            found.extend((Path(c), Path(target)) for c in candidates)
+        models = Path(self.model_dir)
+        found.extend((Path(c), models)
+                     for c in filesystem.legacy_model_stores(self.env, models))
         out = []
-        for candidate in found:
-            candidate = Path(candidate)
-            try:
-                inside = candidate.resolve().is_relative_to(root.resolve())
-            except (OSError, ValueError):
-                inside = False
-            if inside or candidate in out:
+        for candidate, target in found:
+            if candidate == target or candidate in out:
                 continue
             try:
                 if candidate.is_dir() and any(candidate.iterdir()):
@@ -103,6 +102,24 @@ class LegacyBackend:
             except OSError:
                 continue
         return out
+
+    def describe_records_privacy(self):
+        """One line when this account's records are open to other accounts.
+
+        The model store next door is deliberately readable by everyone on the
+        PC - that is how a second Windows account avoids re-downloading tens of
+        gigabytes - and a folder created under it inherits that grant. So the
+        records folder is not private by being in the right place, and a user
+        who is never told cannot know that the household's other account can
+        read their chat history.
+        """
+        paths = self.load('project_paths')
+        privacy = self.load('integrations.windows.privacy')
+        if privacy.is_private(paths.ACCOUNT_ROOT) is not False:
+            return None
+        return ('이 PC 의 다른 Windows 계정이 내 기록(%s)을 읽을 수 있습니다 · '
+                '[설치 / 복구] 를 한 번 실행하면 이 계정 전용으로 잠급니다'
+                % paths.ACCOUNT_ROOT)
 
     def describe_runtime_root(self):
         """One line about where this install lives, or None when it is tidy."""
@@ -160,6 +177,9 @@ class LegacyBackend:
             # root, so the window would report a perfectly good install as
             # missing. Say where it is instead.
             'runtime_root': self.describe_runtime_root,
+            # Personal records sharing a folder with the machine's other
+            # accounts is not a smaller problem than a missing install.
+            'records_private': self.describe_records_privacy,
         }
         started = time.monotonic()
 

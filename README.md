@@ -11,12 +11,35 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 
 ```text
 C:\LocalAI\
-  models\        Ollama 모델 저장소 (OLLAMA_MODELS 가 여기를 가리킵니다)
-  environment\   관리형 런타임 · 컨테이너 설정 · 스크립트
-  user_data\     설정 · 프로젝트 · 대화 · 추적 기록
-  logs\          세션 로그
-C:\Ollama\       Ollama 실행 파일 — Ollama 것이므로 우리 데이터는 넣지 않습니다
+  models\                공용 — Ollama 모델 저장소 (OLLAMA_MODELS 가 여기)
+  environment\           공용 — 관리형 런타임 · 컨테이너 설정 · 스크립트
+  users\<계정>\
+    user_data\           개인 — 설정 · 프로젝트 · 대화 · 추적 기록
+    logs\                개인 — 세션 로그
+    workspace\           개인 — 에이전트 기본 작업 폴더
+C:\Ollama\               Ollama 실행 파일 — Ollama 것이므로 우리 데이터는 넣지 않습니다
 ```
+
+**공용과 개인을 가르는 기준은 "누구 것인가" 입니다.** 모델은 기계의 것입니다 —
+누구에게나 똑같고 받는 데 하루가 걸리므로 이 PC 의 모든 Windows 계정이 한 벌을
+같이 씁니다. 그 모델로 **무엇을 했는지는 그 사람 것**입니다. 설정, 프로젝트,
+대화 기록, AnythingLLM 벡터 저장소, 에이전트 추적, 세션 로그. 이걸 계정끼리
+공유하면 새는 것에서 끝나지 않습니다 — 두 사람이 동시에 로그인해 같은 설정
+파일과 같은 세션 상태에 쓰면 서로를 망가뜨립니다.
+
+바로 옆 모델 저장소는 일부러 `BUILTIN\Users` 읽기를 허용합니다. 그 밑에 만든
+폴더는 그 허용을 **상속**하므로, 자리만 옮겨서는 개인 기록이 개인 것이 되지
+않습니다. 그래서 설치/복구가 계정 폴더의 상속을 끊고 소유자·SYSTEM·
+Administrators 만 남긴 뒤 **다시 읽어서 확인**합니다. 확인하지 못하면 "안전하다"
+가 아니라 "확인하지 못했다" 라고 말합니다. 다른 계정이 읽을 수 있는 상태가
+확인되면 창이 알려 주고 [설치 / 복구] 버튼을 옆에 띄웁니다.
+
+계정 폴더 이름은 ASCII·공백 없음이어야 합니다 — `docker -v` 인자로 들어가기
+때문에 한글이나 공백이 있으면 Docker Desktop 이 마운트를 거부하고 샌드박스가
+아예 뜨지 않습니다. 그래서 `홍길동` 같은 이름은 `users\user-9c6b9b1b` 가 되고,
+누구 폴더인지는 그 안의 `ACCOUNT.txt` 와 시스템 화면이 실제 계정 이름으로
+알려 줍니다. `Hong Gil-dong` 과 `HongGil-dong` 은 서로 다른 계정이므로 지문이
+붙어 절대 같은 폴더를 쓰지 않습니다.
 
 드라이브 바로 밑에 두는 이유가 있습니다. 체크아웃은 사용자가 내려받은 폴더라
 바탕화면이든 다운로드든 OneDrive 밑이든 어디에나 있을 수 있는데, 그러면 수십
@@ -239,10 +262,12 @@ Windows 에서는 `user_data/`·`environment/`·`models/`·`logs/` 가 모두
 SRC_ROOT          -> <checkout>/src
 PROJECT_ROOT      -> <checkout>                 소스·RUN.bat·번들 리소스
 RUNTIME_ROOT      -> C:\LocalAI                 이 제품이 만들고 쓰는 전부
-  ENV_DIR         -> C:\LocalAI\environment
-  USER_DATA_DIR   -> C:\LocalAI\user_data
-  LOGS_DIR        -> C:\LocalAI\logs
-  MODEL_STORAGE_DIR -> C:\LocalAI\models        (OLLAMA_MODELS 를 직접 설정했다면 그 값)
+  ENV_DIR         -> C:\LocalAI\environment       공용
+  MODEL_STORAGE_DIR -> C:\LocalAI\models          공용 (OLLAMA_MODELS 를 직접 설정했다면 그 값)
+  ACCOUNT_ROOT    -> C:\LocalAI\users\<계정>       개인
+  USER_DATA_DIR   -> <ACCOUNT_ROOT>\user_data
+  LOGS_DIR        -> <ACCOUNT_ROOT>\logs
+  WORKSPACE_DIR   -> <ACCOUNT_ROOT>\workspace
 OLLAMA_INSTALL_DIR-> C:\Ollama                  Ollama 실행 파일만
 ```
 
@@ -254,8 +279,8 @@ OLLAMA_INSTALL_DIR-> C:\Ollama                  Ollama 실행 파일만
 
 Windows 가 아닌 개발 머신에는 들어갈 `C:` 가 없으므로 체크아웃 자체가 런타임
 루트가 되고, 같은 배치가 그 안에 생깁니다. 관리형 배포나 테스트에서는
-`LOCAL_AI_ROOT` 로 루트 전체를, `LLM_MODEL_DIR` 로 모델 저장소만 재정의할 수
-있습니다.
+`LOCAL_AI_ROOT` 로 루트 전체를, `LLM_MODEL_DIR` 로 모델 저장소만,
+`LOCAL_AI_ACCOUNT` 로 기록을 어느 계정 앞으로 둘지 재정의할 수 있습니다.
 
 따라서 체크아웃을 옮기거나 이름을 바꿔도, 다시 내려받아도 설치는 그대로 남습니다.
 모델은 체크아웃 위치와 분리되어 같은 PC의 여러 프로젝트/사용자가 동일한 저장소를 읽어 사용할 수 있습니다. 설치기는 `BUILTIN\Users`에 기존 파일까지 포함한 읽기/실행 권한을 재귀적으로 추가하지만 모든 사용자에게 쓰기 권한을 새로 부여하지는 않습니다. 기존 ACL도 강제로 초기화하지 않으므로 모델 다운로드·삭제는 해당 계정이 이미 필요한 쓰기 권한을 가진 경우에만 가능합니다. 관리형 배포나 테스트에서만 `LLM_MODEL_DIR` 환경변수로 경로를 재정의할 수 있습니다.
@@ -981,9 +1006,12 @@ hook 을 설치하게 되면서 이 파일이 **창을 열 때마다** 쌓이게
 옮기든 지우든 다시 받든 그대로 남습니다.
 
 ```text
-<checkout>/llm_environment/   ->  C:\LocalAI\environment/
-<checkout>/user_data/         ->  C:\LocalAI\user_data/
-C:\Ollama\models               ->  C:\LocalAI\models
+<checkout>/llm_environment/   ->  C:\LocalAI\environment/        (공용)
+C:\Ollama\models               ->  C:\LocalAI\models              (공용)
+<checkout>/user_data/         ->  C:\LocalAI\users\<계정>\user_data/
+C:\LocalAI\user_data           ->  C:\LocalAI\users\<계정>\user_data/
+C:\LocalAI\logs                ->  C:\LocalAI\users\<계정>\logs/
+<environment>/agent/workspace ->  C:\LocalAI\users\<계정>\workspace/
 ```
 
 이동은 `RUN.bat --install`(설치/복구)에서만 일어나고, 옮긴 뒤 개수와 용량을
@@ -991,8 +1019,8 @@ C:\Ollama\models               ->  C:\LocalAI\models
 있습니다" 라고 알리고 [설치 / 복구] 버튼을 바로 옆에 띄웁니다 — 이미 받아 둔
 수십 GB 를 "준비 안 됨" 으로 오해해 다시 받는 일이 없도록.
 
-특히 `user_data/settings/user_config.json`, Agent trace, 인터프리터 세션, 폴더 정책 등은 모두 런타임 루트의 `user_data/`(`C:\LocalAI\user_data`)를 기준으로 사용합니다.
-대용량 모델은 `C:\LocalAI\models` 에 있어 체크아웃을 복사하거나 업데이트해도 중복되지 않습니다.
+특히 `user_data/settings/user_config.json`, Agent trace, 인터프리터 세션, 폴더 정책 등은 모두 **내 계정** 폴더(`C:\LocalAI\users\<계정>\user_data`)를 기준으로 사용합니다.
+대용량 모델은 공용인 `C:\LocalAI\models` 에 한 벌만 있어, 체크아웃을 복사하거나 업데이트해도, 계정을 추가해도 중복되지 않습니다.
 
 ## 이전 상세 README
 

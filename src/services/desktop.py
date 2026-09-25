@@ -65,6 +65,16 @@ class DesktopServices:
             self.events.emit('runtime.error', {'service': name, 'detail': str(exc)})
             return False
 
+    def account_label(self) -> str:
+        """The account these records belong to, in its own name.
+
+        The folder can be ``users\\user-9c6b9b1b`` when the Windows account name
+        is Korean or has a space, because the path has to survive a
+        ``docker -v`` argument. The person still gets to see their own name.
+        """
+        from core import accounts
+        return accounts.current_name()
+
     def close(self):
         # Keep ownership if shutdown is not verified. The OS releases it if the
         # process terminates; no stale lock-file deletion or PID guessing.

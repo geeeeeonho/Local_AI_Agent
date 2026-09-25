@@ -28,17 +28,46 @@ def test_every_runtime_path_sits_under_one_root(monkeypatch, tmp_path):
     left the rest writing to the old one.
     """
     monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path))
+    monkeypatch.setenv('LOCAL_AI_ACCOUNT', 'Tester')
     monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
     monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
     monkeypatch.delenv('OLLAMA_MODELS', raising=False)
     paths = _isolated_paths()
     assert paths.RUNTIME_ROOT == tmp_path
-    assert paths.USER_DATA_DIR == tmp_path / 'user_data'
+    # Shared by every account on the machine: one copy of each.
     assert paths.ENV_DIR == tmp_path / 'environment'
-    assert paths.LOGS_DIR == tmp_path / 'logs'
     assert paths.MODEL_STORAGE_DIR == tmp_path / 'models'
+    # This account's alone.
+    assert paths.ACCOUNT_ROOT == tmp_path / 'users' / 'Tester'
+    assert paths.USER_DATA_DIR == paths.ACCOUNT_ROOT / 'user_data'
+    assert paths.LOGS_DIR == paths.ACCOUNT_ROOT / 'logs'
+    assert paths.WORKSPACE_DIR == paths.ACCOUNT_ROOT / 'workspace'
     # Reading a path still creates nothing.
     assert not paths.USER_DATA_DIR.exists()
+
+
+def test_two_accounts_share_the_models_and_share_nothing_else(monkeypatch, tmp_path):
+    """The whole point of the split, in one assertion each way.
+
+    Downloading the models twice wastes a day and tens of gigabytes. Sharing
+    the records is worse than waste: two signed-in accounts writing one
+    settings file and one session state corrupt each other, and one of them
+    can read the other's chat history.
+    """
+    monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path))
+    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
+    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
+    monkeypatch.delenv('OLLAMA_MODELS', raising=False)
+
+    monkeypatch.setenv('LOCAL_AI_ACCOUNT', 'Geonho')
+    first = _isolated_paths()
+    monkeypatch.setenv('LOCAL_AI_ACCOUNT', 'Someone Else')
+    second = _isolated_paths()
+
+    assert first.MODEL_STORAGE_DIR == second.MODEL_STORAGE_DIR
+    assert first.ENV_DIR == second.ENV_DIR
+    for name in ('ACCOUNT_ROOT', 'USER_DATA_DIR', 'LOGS_DIR', 'WORKSPACE_DIR'):
+        assert getattr(first, name) != getattr(second, name), name
 
 
 def test_the_root_is_one_folder_directly_under_the_drive_on_windows():
@@ -53,11 +82,14 @@ def test_the_root_is_one_folder_directly_under_the_drive_on_windows():
     from core import runtime_root
     drive_root = Path(r'C:\LocalAI')
     assert runtime_root.root({}, windows=True) == drive_root
-    layout = runtime_root.layout({}, windows=True)
+    layout = runtime_root.layout({'USERNAME': 'Geonho'}, windows=True)
     assert layout['models'] == drive_root / 'models'
     assert layout['env'] == drive_root / 'environment'
-    assert layout['user_data'] == drive_root / 'user_data'
-    assert layout['logs'] == drive_root / 'logs'
+    assert layout['account'] == drive_root / 'users' / 'Geonho'
+    assert layout['user_data'] == layout['account'] / 'user_data'
+    assert layout['logs'] == layout['account'] / 'logs'
+    # Every entry is on one side of the split or the other, never neither.
+    assert set(layout) == set(runtime_root.SHARED) | set(runtime_root.PRIVATE)
     # "Directly under C:" is the point, so check it as Windows would.
     import ntpath
     drive, tail = ntpath.splitdrive(str(runtime_root.WINDOWS_ROOT))
@@ -68,6 +100,7 @@ def test_the_root_is_one_folder_directly_under_the_drive_on_windows():
 def test_an_explicit_root_beats_the_portable_override(monkeypatch, tmp_path):
     monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path / 'checkout'))
     monkeypatch.setenv('LOCAL_AI_ROOT', str(tmp_path / 'elsewhere'))
+    monkeypatch.setenv('LOCAL_AI_ACCOUNT', 'Tester')
     paths = _isolated_paths()
     assert paths.PROJECT_ROOT == tmp_path / 'checkout'
     assert paths.RUNTIME_ROOT == tmp_path / 'elsewhere'

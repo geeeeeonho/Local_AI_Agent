@@ -773,7 +773,7 @@ class DesktopWindow:
             # Before anything is started the readiness line reports the poll,
             # so the page is never blank about why it is not ready.
             if not self.services.chat.attempted and not self._chat_starting:
-                stray=status.get('runtime_root')
+                stray=status.get('runtime_root') or status.get('records_private')
                 if isinstance(stray,str):
                     # An install the previous release left in the checkout is
                     # complete and working; it is simply somewhere the new
@@ -797,7 +797,9 @@ class DesktopWindow:
                 '\nRuntime ownership in this window: '+str(self.services.owner.owned)+
                 '\n\nPreferences apply to the next session. Block reuses canonical relay quiescence and internal-network verification.')
             if hasattr(self,'system_text'):set_text(self.system_text,json.dumps(status,indent=2)+
-                '\n\nEnvironment: '+str(self.services.env)+'\nModels: '+str(self.services.model_dir)+'\nUser data: '+str(self.services.data))
+                '\n\n공용 (이 PC 의 모든 계정) ─ Environment: '+str(self.services.env)+
+                '\n공용 ─ Models: '+str(self.services.model_dir)+
+                '\n내 계정 전용 ─ '+self.services.account_label()+': '+str(self.services.data))
         # Health is background telemetry, not user work. Keep failures visible,
         # but do not flood the shared activity log with "health .../completed".
         self.run_task('health',lambda:self.services.system.health(fresh=fresh),display,mutate=False,announce=False)

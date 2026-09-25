@@ -55,6 +55,7 @@ class OllamaService:
         env: Path,
         logger: Optional[_Logger] = None,
         model_dir: Optional[Path] = None,
+        state_dir: Optional[Path] = None,
     ):
         self.env = Path(env)
         self.portable_exe = self.env / "ollama_runtime" / ollama_paths.PORTABLE_EXECUTABLE
@@ -62,8 +63,13 @@ class OllamaService:
         # project used to unzip into its own folder is now only a fallback.
         self.exe = ollama_paths.find_executable(
             fallback=(self.portable_exe.parent,)) or self.portable_exe
-        self.log_file = self.env / "logs" / "ollama_run.log"
-        self.runtime_state_file = self.env / "logs" / "ollama_server.json"
+        # Which server *this account* started, and its output. The managed
+        # environment beside it is shared by every account on the machine, so
+        # recording a pid there let a second signed-in user read the first
+        # user's pid as their own and stop a server they had not started.
+        state = Path(state_dir) if state_dir is not None else project_paths.LOGS_DIR
+        self.log_file = state / "ollama_run.log"
+        self.runtime_state_file = state / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
         self.last_error = ""
