@@ -10,7 +10,6 @@ from project_paths import (ACCOUNT_ROOT, ENV_DIRNAME, LOGS_DIRNAME,
                            MODEL_STORAGE_DIR, OLLAMA_INSTALL_DIR,
                            USER_DATA_DIRNAME)
 
-from . import relocate
 from .console import section, ok, warn
 
 
@@ -79,10 +78,10 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
         "workspace":             account / "workspace",
         "open_interpreter":      env / "open_interpreter",
         "open_interpreter_bin":  env / "open_interpreter" / "bin",
-        "open_interpreter_home": env / "open_interpreter" / "home",
+        "open_interpreter_home": account / USER_DATA_DIRNAME / "interpreter",
         "searxng":               env / "searxng",
         "scripts":               env / "scripts",
-        "logs":                  env / "logs",
+        "logs":                  account / LOGS_DIRNAME,
         # Private to this Windows account. Settings, projects, chat history and
         # every agent trace are a record of what one person asked an AI to do.
         "account":               account,
