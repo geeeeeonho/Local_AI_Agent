@@ -172,14 +172,17 @@ def write_install_manifest(
             pass
 
     data = {
-        "schema_version": 2,
+        "schema_version": 3,
         "product": "Local AI Agent",
         "repository": "geeeeeonho/Local_AI_Agent",
         "managed_environment": True,
         "status": status,
         "project_root": str(Path(project_root).resolve()),
+        "runtime_root": str(paths["env"].parent.resolve()),
         "environment_path": str(paths["env"].resolve()),
+        "ollama_path": str(paths["ollama"].resolve()),
         "model_storage": str(paths["models"].resolve()),
+        "account_path": str(paths["account"].resolve()),
         "model_storage_access": (
             "builtin-users-read-execute-requested; existing-acl-preserved"
         ),
