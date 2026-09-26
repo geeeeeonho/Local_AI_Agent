@@ -32,7 +32,14 @@ class DesktopServices:
         """
         data = Path(data)
         account = data.parent
-        account.mkdir(parents=True, exist_ok=True)
+        try:
+            account.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise RuntimeError(
+                "이 Windows 계정의 LocalAI 폴더를 만들 권한이 없습니다: %s. "
+                "관리자 또는 기존 설치 계정에서 Setup을 한 번 실행해 "
+                "C:\\LocalAI\\users 공용 부모 권한을 갱신하세요." % account
+            ) from exc
         if __import__('os').name != 'nt':
             data.mkdir(parents=True, exist_ok=True)
             for name in ('runtime', 'settings', 'projects'):
@@ -48,10 +55,29 @@ class DesktopServices:
         except Exception:
             pass
 
-        data.mkdir(parents=True, exist_ok=True)
+        try:
+            data.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            try:
+                privacy.make_private(account)
+                data.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    "현재 계정의 user_data 폴더를 쓸 수 없습니다: %s" % data
+                ) from exc
+
         for name in ('runtime', 'settings', 'projects'):
             folder = data / name
-            folder.mkdir(parents=True, exist_ok=True)
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except PermissionError:
+                try:
+                    privacy.make_private(data)
+                    folder.mkdir(parents=True, exist_ok=True)
+                except Exception as exc:
+                    raise RuntimeError(
+                        "현재 계정의 상태 폴더를 쓸 수 없습니다: %s" % folder
+                    ) from exc
             try:
                 # Always cover existing children too: the exact failure seen in
                 # production is runtime-state.json.lock, not the directory.
