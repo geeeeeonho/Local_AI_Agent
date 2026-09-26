@@ -101,13 +101,16 @@ class OllamaService:
             # 보고하면 상태 화면이 거짓말을 한다.
             return True
         if self._listener_is_managed(pid) and self._state_matches(pid):
-            return True
+            return self._managed_store_usable()
         executable = self._process_executable(pid)
         if executable is None:
-            return True
+            # Identity/store inspection can be unavailable across Windows
+            # accounts. Do not call a responsive broker stopped unless a
+            # mismatch is actually proven.
+            return self._managed_store_usable()
         # A shared broker can have been started by another Windows account,
         # whose private runtime-state file is intentionally invisible here.
-        return _same_path(executable, self.exe)
+        return _same_path(executable, self.exe) and self._managed_store_usable()
 
     def known_executables(self) -> tuple:
         """Executable paths LocalAI is allowed to manage."""
@@ -295,14 +298,14 @@ class OllamaService:
         elif situation == self.OTHER_STORE:
             found = detail.get('found')
             if found:
-                self._warn("실행 중인 Ollama 는 %s 를 씁니다. 그 모델을 그대로 사용합니다." % found)
-                self._info("이 프로그램이 새로 받을 위치는 %s 입니다. 한곳으로 모으려면 "
-                           "OLLAMA_MODELS 를 맞추고 Ollama 를 재시작하세요." % self.model_dir)
+                self._warn("실행 중인 Ollama 는 %s 를 씁니다." % found)
+                self._info("LocalAI 공용 저장소 %s 로 맞춘 뒤 Ollama 를 재시작해야 합니다."
+                           % self.model_dir)
             else:
                 self._warn("실행 중인 Ollama 의 모델이 %s 에서 보이지 않습니다. "
-                           "서버가 제공하는 모델을 그대로 사용합니다." % self.model_dir)
+                           "LocalAI 공용 저장소와 일치하지 않습니다." % self.model_dir)
         else:
-            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다. 그대로 사용합니다.")
+            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다.")
 
     def _accept_unidentified_server(self) -> bool:
         """Use an unidentified listener only when no store mismatch is proven."""
