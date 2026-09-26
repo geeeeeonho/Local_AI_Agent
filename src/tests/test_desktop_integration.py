@@ -52,6 +52,19 @@ def test_setup_command_reflects_choices_without_a_second_ui(tmp_path):
     assert '--skip-search' in command
 
 
+def test_embedded_setup_inherits_desktop_language_without_prompt(tmp_path):
+    from installer.i18n import get_language, set_language
+
+    b,m,calls=fixture(tmp_path)
+    previous=get_language()
+    try:
+        set_language('ko')
+        command=b.setup_command({})
+        assert command[command.index('--lang') + 1]=='ko'
+    finally:
+        set_language(previous)
+
+
 def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
     import inspect
     from integrations.legacy.desktop import LegacyBackend
