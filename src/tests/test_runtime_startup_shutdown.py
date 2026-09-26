@@ -30,11 +30,14 @@ def service(tmp_path, monkeypatch=None):
     if monkeypatch is not None:
         # Registration is process-wide on purpose; each test gets a clean slate.
         monkeypatch.setattr(OllamaService, '_cleanup_registered', False)
-    env = tmp_path / 'llm_environment'
-    exe = env / 'ollama_runtime' / 'ollama.exe'
+    env = tmp_path / 'environment'
+    exe = tmp_path / 'LocalAI' / 'ollama' / 'ollama.exe'
     exe.parent.mkdir(parents=True)
-    exe.write_text('portable', encoding='utf-8')
-    return OllamaService(env, model_dir=tmp_path / 'models')
+    exe.write_text('managed', encoding='utf-8')
+    svc = OllamaService(env, model_dir=tmp_path / 'LocalAI' / 'models')
+    svc.portable_exe = exe
+    svc.exe = exe
+    return svc
 
 
 def unidentified(monkeypatch, svc):
