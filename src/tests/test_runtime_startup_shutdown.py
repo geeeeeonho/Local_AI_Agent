@@ -76,12 +76,7 @@ def test_an_unverifiable_store_still_does_not_block_the_user(tmp_path, monkeypat
     assert svc.ensure_running(boot_timeout=1) is True
 
 
-def test_a_disagreeing_store_is_reported_not_treated_as_a_dead_server(tmp_path, monkeypatch):
-    """Where the models sit does not decide whether the server can be used.
-
-    It decides where a download would land, so it is said out loud - and the
-    store the server really serves from is named when it can be found.
-    """
+def test_an_unidentified_server_on_a_different_store_is_rejected(tmp_path, monkeypatch):
     svc = service(tmp_path)
     unidentified(monkeypatch, svc)
     monkeypatch.setattr(svc, 'inspect_store', lambda timeout=5: (
@@ -89,7 +84,7 @@ def test_a_disagreeing_store_is_reported_not_treated_as_a_dead_server(tmp_path, 
     said = []
     for level in ('_ok', '_info', '_warn', '_err'):
         monkeypatch.setattr(svc, level, lambda message, _l=level: said.append(message))
-    assert svc.ensure_running(boot_timeout=1) is True
+    assert svc.ensure_running(boot_timeout=1) is False
     assert any('real-store' in message for message in said), said
 
 
