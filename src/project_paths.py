@@ -24,14 +24,10 @@ chat, traces, logs - and the machine's other accounts are locked out of it,
 because sharing those between two signed-in users does not merely leak, it
 corrupts.
 
-``MODEL_STORAGE_DIR``
-    The exception, and deliberately so: the models belong to Ollama, which
-    finds them by its own rule, so they sit beside Ollama's install at
-    ``C:\\Ollama\\models``. That is the one place every Ollama on the machine
-    looks - ours, the tray app Windows starts at login, a user typing
-    ``ollama serve`` - and Ollama is this product's relay, so it is not going
-    anywhere. A root someone set explicitly still takes the store with it,
-    because that means "the whole product lives here".
+Shared machine assets are all below the runtime root:
+``environment``, ``ollama`` and ``models``. Ollama's own per-user default is
+not used for the managed broker; LocalAI starts it with the shared model path.
+An explicit deployment/user model override still wins.
 
 Off Windows there is no C: drive to install into, so a development checkout is
 its own runtime root and the same layout appears inside it.
