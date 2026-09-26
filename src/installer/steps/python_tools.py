@@ -172,7 +172,12 @@ def install_open_interpreter(
                 "-ExecutionPolicy", "Bypass",
                 "-File", str(script),
             ]
-            result = subprocess.run(command, env=install_env, check=False)
+            result = subprocess.run(
+                command,
+                env=install_env,
+                check=False,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
             if result.returncode != 0:
                 utils.err(f"Open Interpreter standalone install failed: rc={result.returncode}")
                 return False
