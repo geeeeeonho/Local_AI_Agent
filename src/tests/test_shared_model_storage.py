@@ -57,6 +57,63 @@ def test_model_control_paths_are_shared_not_account_scoped(monkeypatch, tmp_path
     assert project_paths.model_files_path() == root / "models" / "MODEL_FILES.csv"
 
 
+def test_role_registry_written_by_alice_is_read_by_bob(monkeypatch, tmp_path):
+    import project_paths
+    from launcher.models import model_roles
+
+    root = tmp_path / "LocalAI"
+    monkeypatch.setenv("LOCAL_AI_ROOT", str(root))
+    monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
+    shared = project_paths.model_registry_path()
+    shared.parent.mkdir(parents=True)
+    shared.write_text(json.dumps({
+        "replace": {
+            "coding": [{
+                "need": 9.0,
+                "primary": "model-A",
+                "alts": [],
+            }]
+        }
+    }), encoding="utf-8")
+
+    monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Alice")
+    alice_path = Path(model_roles._registry_path())
+    alice_replace, _, _ = model_roles.load_registry()
+
+    monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Bob")
+    bob_path = Path(model_roles._registry_path())
+    bob_replace, _, _ = model_roles.load_registry()
+
+    assert alice_path == bob_path == shared
+    assert alice_replace["coding"][0]["primary"] == "model-A"
+    assert bob_replace == alice_replace
+
+
+def test_legacy_personal_registry_is_not_auto_imported(monkeypatch, tmp_path):
+    import project_paths
+    from launcher.models import model_roles
+
+    root = tmp_path / "LocalAI"
+    monkeypatch.setenv("LOCAL_AI_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Alice")
+    monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
+
+    legacy = project_paths.user_data_dir() / "models" / "registry.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({
+        "replace": {
+            "coding": [{"need": 9.0, "primary": "legacy-A", "alts": []}]
+        }
+    }), encoding="utf-8")
+
+    assert not project_paths.model_registry_path().exists()
+    replace, add, errors = model_roles.load_registry()
+    assert replace == {}
+    assert add == {}
+    assert errors == []
+    assert legacy.exists(), "legacy data is preserved, not migrated or deleted"
+
+
 def test_user_ollama_models_is_diagnostic_not_the_managed_store():
     from core import ollama_paths
     moved = {"OLLAMA_MODELS": r"D:\ai-models"}
