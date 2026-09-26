@@ -1,4 +1,4 @@
-"""C:\\Ollama\\models only serves the whole machine if the machine says so.
+"""C:\\LocalAI\\models only serves the whole machine if the machine says so.
 
 Putting the store outside a profile is half of it. Another account's Ollama
 reads OLLAMA_MODELS from its own environment; with no machine-scope value it
@@ -15,7 +15,7 @@ import pytest
 from core.models import sharing as policy
 from core.models.sharing import Sharing
 
-STORE = r'C:\Ollama\models'
+STORE = r'C:\LocalAI\models'
 
 
 def state(**kw):
@@ -75,7 +75,7 @@ def test_trailing_quotes_and_slashes_are_not_a_disagreement():
 
 
 @pytest.mark.parametrize('value', [STORE.lower(), STORE.upper(),
-                                   'C:\\Ollama\\.\\models', 'C:/Ollama/models',
+                                   'C:\\LocalAI\\.\\models', 'C:/LocalAI/models',
                                    STORE + '\\'])
 def test_the_same_path_written_differently_still_matches(value):
     """Windows rules, checked on whatever platform the tests run on."""
@@ -124,7 +124,7 @@ def install_fake_windows(monkeypatch, store, *, machine=None, user=None,
     import sys
     from core import ollama_paths
     from integrations.windows import acl
-    # This tmp directory stands in for C:\Ollama\models, so the reads under
+    # This tmp directory stands in for C:\LocalAI\models, so the reads under
     # test are about the machine's settings rather than the path's shape.
     monkeypatch.setattr(ollama_paths, 'SHARED_MODELS_DIR', store)
     monkeypatch.setitem(sys.modules, 'winreg', FakeWinreg(machine, user))
