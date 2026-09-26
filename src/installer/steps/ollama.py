@@ -57,7 +57,15 @@ def prepare_install(env: Path, model_dir: Path) -> None:
 
 def find_existing(paths: Dict[str, Path]) -> Optional[Path]:
     """LocalAI-managed Ollama already present in the shared broker directory."""
-    return ollama_paths.find_executable(extra=(paths["ollama"],))
+    folder = Path(paths["ollama"])
+    for name in ollama_paths.executable_names():
+        candidate = folder / name
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
 def _is_windows() -> bool:
