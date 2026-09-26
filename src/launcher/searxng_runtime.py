@@ -141,7 +141,34 @@ def _register_exit_cleanup() -> None:
 
 
 def _cfg_dir(env) -> Path:
-    return Path(env) / "searxng" / "config"
+    """Private writable derivative of the installed shared SearXNG config.
+
+    The source under environment is shared RX-only. Agent startup hardens the
+    settings for the selected network mode, so mutating the installed source
+    both fails for a second Windows account and lets one account rewrite
+    another account's search route.
+    """
+    source = Path(env) / "searxng" / "config"
+    try:
+        import project_paths
+        target = project_paths.user_data_dir() / "cache" / "searxng"
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return source
+
+    for name in ("settings.yml", "limiter.toml"):
+        src = source / name
+        dst = target / name
+        try:
+            if src.is_file():
+                payload = src.read_bytes()
+                if not dst.is_file() or dst.read_bytes() != payload:
+                    dst.write_bytes(payload)
+            elif dst.exists():
+                dst.unlink()
+        except OSError:
+            pass
+    return target
 
 
 def _harden_settings(cfg, log_path=None):
