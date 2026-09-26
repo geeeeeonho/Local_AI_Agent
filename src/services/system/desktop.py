@@ -62,6 +62,7 @@ class SetupService:
     def repair(self, options=None, *, cancel=None):
         """Run installer/repair from the desktop without spawning a UI/console."""
         self.require_idle()
+        acquired_here = not self.network.owner.owned
         self.network.owner.acquire()
 
         def log(message):
@@ -71,7 +72,11 @@ class SetupService:
                     'message': str(message),
                 })
 
-        return self.backend.run_setup(options or {}, log=log, cancel=cancel)
+        try:
+            return self.backend.run_setup(options or {}, log=log, cancel=cancel)
+        finally:
+            if acquired_here:
+                self.network.owner.release()
 
     def maintenance(self, key, presenter):
         self.require_idle()
