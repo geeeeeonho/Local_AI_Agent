@@ -49,9 +49,9 @@ def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) ->
     if sharing.publish_machine_variable(model_dir, windows=windows):
         return True
     warn("시스템 범위 OLLAMA_MODELS 설정 실패")
-    warn("이 계정에서는 정상 동작하지만, 다른 Windows 계정은 같은 모델을 "
-         "보지 못합니다. 모델 화면의 '모든 계정 공용으로 고치기' 를 "
-         "관리자 권한으로 한 번 실행하세요.")
+    warn("LocalAI는 모든 계정에서 공용 모델 경로를 직접 주입하므로 계속 사용할 수 "
+         "있습니다. 다만 LocalAI 밖에서 실행한 Ollama CLI/Tray는 자기 기본 경로를 "
+         "볼 수 있습니다.")
     return False
 
 
