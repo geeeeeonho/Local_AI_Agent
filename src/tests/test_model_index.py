@@ -263,6 +263,12 @@ def test_refresh_tracks_external_install_and_remove_without_touching_the_store(t
     assert b.read_bytes() == before
 
 
+def test_default_inventory_output_never_falls_back_to_user_data(tmp_path):
+    root = tmp_path / 'models'
+    with patch.object(mf, '_writable', return_value=False):
+        assert mf.default_csv_path(root) == root / mf.CSV_NAME
+
+
 def test_unique_write_probe_does_not_destroy_an_existing_file(tmp_path):
     protected = tmp_path / '.model_files_write_probe'
     protected.write_text('do not delete', encoding='utf-8')
@@ -289,7 +295,7 @@ def test_json_replace_failure_preserves_previous_json_and_cleans_temporary_files
     assert not list(tmp_path.glob('*.tmp'))
 
 
-def test_read_only_store_fallback_keeps_both_outputs_together(tmp_path):
+def test_output_override_keeps_json_and_csv_together(tmp_path):
     root, output = tmp_path / 'store', tmp_path / 'derived'
     blob(root)
     manifest(root)
