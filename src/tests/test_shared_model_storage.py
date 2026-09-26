@@ -68,6 +68,7 @@ def test_create_environment_builds_shared_and_private_sides(tmp_path, monkeypatc
 
     monkeypatch.setattr(filesystem, "MODEL_STORAGE_DIR", models)
     monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", broker)
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "ensure_shared_model_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "publish_shared_model_dir", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
@@ -97,6 +98,7 @@ def test_create_environment_does_not_scan_or_move_old_model_folders(tmp_path, mo
 
     monkeypatch.setattr(filesystem, "MODEL_STORAGE_DIR", models)
     monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", root / "ollama")
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "ensure_shared_model_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "publish_shared_model_dir", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
@@ -108,6 +110,20 @@ def test_create_environment_does_not_scan_or_move_old_model_folders(tmp_path, mo
     assert models.is_dir()
     assert not (models / "blobs" / "sha256-old").exists()
 
+
+
+
+def test_shared_runtime_access_grants_read_execute_to_environment_and_ollama(monkeypatch, tmp_path):
+    from installer.core import filesystem
+    touched = []
+    monkeypatch.setattr(
+        "integrations.ollama.sharing.ensure_readable",
+        lambda path, **kwargs: touched.append(Path(path)) or True,
+    )
+    env = tmp_path / "LocalAI" / "environment"
+    broker = tmp_path / "LocalAI" / "ollama"
+    assert filesystem.ensure_shared_runtime_access((env, broker), windows=True) is True
+    assert touched == [env, broker]
 
 def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
@@ -139,6 +155,7 @@ def test_explicit_model_dir_is_not_published_or_reacled(tmp_path, monkeypatch):
     monkeypatch.setattr(filesystem, "publish_shared_model_dir",
                         lambda *a, **k: touched.append("setx"))
     monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", tmp_path / "ollama")
 
     filesystem.create_environment(
