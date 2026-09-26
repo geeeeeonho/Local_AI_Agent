@@ -3,75 +3,49 @@
 Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한 자기완결형 프로젝트입니다.
 
 사용자 관점에서 프로젝트 루트의 **유일한 실행 진입점은 `RUN.bat`** 입니다.
-
-`RUN.bat` 하나에서 Studio, Chat, Interpreter, Setup, 설치/관리, TUI를 모두 선택합니다.
-각 화면은 같은 서비스·설정·모델을 공유합니다. 화면 구성과 정책은 [STUDIO.md](STUDIO.md) 를 보세요.
-
-프로그램 소스와 개발용 파일은 체크아웃의 `src/` 아래에 모여 있고, **이 제품이 만들고 쓰는 것은 전부 `C:\LocalAI` 한 곳**에 있습니다.
+각 Windows 사용자는 자기 체크아웃과 `RUN.bat`을 가질 수 있지만, PC의 무거운
+실행환경·Ollama·모델은 한 벌만 공유하고 사용 기록은 계정별로 분리합니다.
 
 ```text
-C:\Ollama\
-  ollama.exe ...        Ollama 실행 파일
-  models\               공용 — 모델 저장소 (OLLAMA_MODELS 가 여기)
 C:\LocalAI\
-  environment\          공용 — 관리형 런타임 · 컨테이너 설정 · 스크립트
-  users\<계정>\
-    user_data\          개인 — 설정 · 프로젝트 · 대화 · 추적 기록
-    logs\               개인 — 세션 로그
-    workspace\          개인 — 에이전트 기본 작업 폴더
+├─ environment\          공용 — 관리형 런타임 · 컨테이너 설정 · 스크립트
+├─ ollama\               공용 — LocalAI가 관리하는 Ollama 중계기
+├─ models\               공용 — 모든 Windows 계정이 함께 쓰는 모델 저장소
+└─ users\
+   └─ <계정>\
+      ├─ user_data\      개인 — 설정 · 프로젝트 · 대화 · 벡터 저장소 · 추적 기록
+      ├─ logs\           개인 — 세션/런타임 로그
+      └─ workspace\      개인 — 에이전트 기본 작업 폴더
 ```
 
-**모델만 `C:\Ollama\models` 에 있는 이유**는 그 모델을 실제로 서빙하는 것이
-Ollama 이기 때문입니다. 이 프로젝트가 따로 정한 저장소는 이 프로그램만 아는
-저장소가 됩니다 — Windows 가 로그인할 때 띄우는 트레이 앱도, 사용자가 직접 친
-`ollama serve` 도 Ollama 자기 규칙을 읽습니다. 실행 파일 바로 옆에 두면 이
-프로그램이 켜져 있든 아니든 그 전부가 같은 라이브러리를 찾습니다.
+공용과 개인을 가르는 기준은 **누구의 데이터인가**입니다. `environment`,
+`ollama`, `models`는 PC 자산이라 계정마다 다시 설치하거나 모델을 다시 받지
+않습니다. 반대로 설정·대화·프로젝트·AnythingLLM 저장소·에이전트 작업 기록은
+`users\<계정>` 아래에만 둡니다.
 
-**공용과 개인을 가르는 기준은 "누구 것인가" 입니다.** 모델은 기계의 것입니다 —
-누구에게나 똑같고 받는 데 하루가 걸리므로 이 PC 의 모든 Windows 계정이 한 벌을
-같이 씁니다. 그 모델로 **무엇을 했는지는 그 사람 것**입니다. 설정, 프로젝트,
-대화 기록, AnythingLLM 벡터 저장소, 에이전트 추적, 세션 로그. 이걸 계정끼리
-공유하면 새는 것에서 끝나지 않습니다 — 두 사람이 동시에 로그인해 같은 설정
-파일과 같은 세션 상태에 쓰면 서로를 망가뜨립니다.
+LocalAI는 Ollama를 `C:\LocalAI\ollama`에서 직접 관리하고 시작할 때
+`OLLAMA_MODELS=C:\LocalAI\models`를 명시합니다. 따라서 Ollama의 사용자별
+기본값인 `%USERPROFILE%\.ollama\models`로 모델이 계정마다 갈라지는 것을
+피합니다. 다른 Windows 계정이 이미 공용 Ollama 중계기를 실행 중이면 그 프로세스를
+임의로 종료하거나 재시작하지 않고 그대로 재사용합니다.
 
-바로 옆 모델 저장소는 일부러 `BUILTIN\Users` 읽기를 허용합니다. 그 밑에 만든
-폴더는 그 허용을 **상속**하므로, 자리만 옮겨서는 개인 기록이 개인 것이 되지
-않습니다. 그래서 설치/복구가 계정 폴더의 상속을 끊고 소유자·SYSTEM·
-Administrators 만 남긴 뒤 **다시 읽어서 확인**합니다. 확인하지 못하면 "안전하다"
-가 아니라 "확인하지 못했다" 라고 말합니다. 다른 계정이 읽을 수 있는 상태가
-확인되면 창이 알려 주고 [설치 / 복구] 버튼을 옆에 띄웁니다.
+이번 설치 구조는 **새 설치 기준**입니다. `RUN.bat --install`은 이전 릴리스의
+`C:\LocalAI\ollama`, `C:\LLM_Models`, `llm_environment` 등을 자동 검색·이동·병합하지
+않습니다.
 
-계정 폴더 이름은 ASCII·공백 없음이어야 합니다 — `docker -v` 인자로 들어가기
-때문에 한글이나 공백이 있으면 Docker Desktop 이 마운트를 거부하고 샌드박스가
-아예 뜨지 않습니다. 그래서 `홍길동` 같은 이름은 `users\user-9c6b9b1b` 가 되고,
-누구 폴더인지는 그 안의 `ACCOUNT.txt` 와 시스템 화면이 실제 계정 이름으로
-알려 줍니다. `Hong Gil-dong` 과 `HongGil-dong` 은 서로 다른 계정이므로 지문이
-붙어 절대 같은 폴더를 쓰지 않습니다.
-
-둘 다 드라이브 바로 밑에 두는 이유가 있습니다. 체크아웃은 사용자가 내려받은
-폴더라 바탕화면이든 다운로드든 OneDrive 밑이든 어디에나 있을 수 있는데, 그러면
-수십 GB가 클라우드로 동기화되고, 공백·한글이 섞인 경로는 Docker Desktop 이
-bind mount 를 거부하며, 폴더 이름만 바꿔도 설치 전체가 미아가 됩니다.
-
-이 PC의 다른 Windows 계정도 같은 모델을 그대로 씁니다 — 계정마다 수십 GB를 다시 받지 않습니다.
-
-예전 버전으로 설치한 PC는 `RUN.bat --install` (또는 모델 화면의 복구)을 한 번
-실행하면 예전 위치에 있는 환경·사용자 데이터·모델을 새 루트로 **옮기고 개수와
-용량까지 확인한 뒤 보고**합니다. 같은 볼륨이면 rename 이라 즉시 끝나고, 다른
-볼륨이면 복사 → 완료 표시 → 원본 삭제 순서라 중간에 멈춰도 잃는 것이 없습니다.
-
+## 빠른 시작
 ## 빠른 시작
 
 ### 1. 설치 또는 관리
 
 ```bat
-RUN.bat --install   :: 설치 / 복구
+RUN.bat --install   :: 설치 / 재설치
 RUN.bat --manage    :: 현재 Setup 관리 화면
 ```
 
 두 경로의 역할은 분리되어 있습니다.
 
-- `--install` → 설치·복구 전용 흐름. 기존 설치가 있어도 멱등하게 필요한 항목을 확인하고, 예전 모델 저장소나 중단된 이전 작업이 있으면 복구/마이그레이션합니다.
+- `--install` → 현재 단일 루트 구조 기준 설치/재설치 흐름입니다. 예전 경로를 자동 이전하거나 병합하지 않습니다.
 - `--manage` → 현재 데스크톱 Setup 화면. 모델·공용 저장소·네트워크·런타임 유지보수를 관리합니다. `RUN.bat --app setup`과 같은 관리 화면입니다.
 - 설치기 자체가 예전 별도 관리 GUI로 자동 전환하지 않습니다.
 
@@ -113,71 +87,29 @@ Windows UI 언어)을 이번 실행에만 씁니다 — 한국어 Windows 가 �
 
 ## Ollama 를 중간 매개체로 쓰기
 
-이 프로그램은 Ollama 를 품지 않고 **중간 매개체로 씁니다.** 모델을 받고, 보관하고,
-서빙하는 일은 전부 Ollama 가 합니다. 그래서 같은 모델을 AnythingLLM, Open Interpreter,
-그리고 이 PC 의 다른 프로그램이 함께 씁니다.
+Ollama는 LocalAI의 **로컬 모델 중계기**입니다. 모델 API는 Ollama가 제공하지만,
+설치 위치와 공용 모델 저장소는 LocalAI가 명시적으로 관리합니다.
 
-**설치** — 기계에 이미 Ollama 가 있으면 그것을 씁니다. 없을 때만 공식 설치기를
-`OllamaSetup.exe /DIR=C:\Ollama /VERYSILENT /NORESTART` 로 돌립니다. 공식 설치기는
-관리자 권한이 필요 없고 기본값은 `%LOCALAPPDATA%\Programs\Ollama` 이므로, C: 루트에
-두려면 `/DIR` 이 필요합니다. `C:\Program Files` 로는 넣지 않습니다 — 공식 설치기가
-per-machine 파일과 per-user 레지스트리가 섞인 상태를 만든다고 보고돼 있습니다.
+**설치 위치** — `C:\LocalAI\ollama`. 공식 설치기를 사용할 수 있으면
+`OllamaSetup.exe /DIR=C:\LocalAI\ollama /VERYSILENT /NORESTART`로 설치하고,
+실패할 때만 같은 폴더에 포터블 배포본을 사용합니다. 시스템에 사용자가 별도로
+설치해 둔 Ollama 파일을 자동으로 삭제하거나 옮기지는 않습니다.
 
-**모델 화면에서 바로 적용해도 됩니다.** 모델 설치·삭제를 적용하기 전에 Ollama를 한 번 준비합니다. 이미 정상 실행 중이면 재사용하고, 없으면 공식 Ollama를 설치한 뒤 모델 저장소를 준비하고 서버를 시작합니다. 따라서 Ollama가 없는 상태에서 모델마다 같은 시작 오류를 반복하지 않습니다. 예전 릴리스가 스스로 정했던 경로(`C:\\LocalAI\\models`, `C:\\LLM_Models`)가 남아 있으면 사용자 지정 경로로 고정하지 않고 레거시 저장소로 인식해, 새 저장소가 비어 있을 때 `C:\\Ollama\\models` 로 안전하게 이전합니다. 그 밖의 사용자 지정 `OLLAMA_MODELS` 경로는 그대로 존중합니다.
+**모델 위치** — `C:\LocalAI\models`. LocalAI가 띄우는 Ollama에는 항상
+`OLLAMA_MODELS`를 이 경로로 넘깁니다. 설치 시에는 가능한 경우 시스템 범위
+`OLLAMA_MODELS`도 기록하고 모델 폴더에 `BUILTIN\Users` 읽기/실행 권한을 줘
+다른 Windows 계정도 같은 모델을 읽도록 합니다.
 
-**모델 위치** — `C:\Ollama\models`. Ollama 자체 기본값(`%USERPROFILE%\.ollama\models`)은
-계정 전용이라 두 번째 Windows 계정이 빈 목록을 보고 전부 다시 받게 됩니다. 그래서
-설치기가 `OLLAMA_MODELS` 를 **시스템 범위**로 기록하고(관리자 권한 필요),
-`BUILTIN\Users` 에 읽기/실행 권한을 줍니다. 쓰기 권한은 주지 않습니다 — 모델은 AI
-동작을 좌우하는 신뢰 자산이라, 다른 계정은 **쓰는 게 아니라 쓰기만** 합니다.
-권한은 상속되게(`(OI)(CI)`) 주므로 내일 받는 모델에도 그대로 적용됩니다.
+**계정 간 공유** — 공용 Ollama가 이미 응답 중이면 어느 Windows 계정이 시작했든
+재사용합니다. 계정별 런타임 상태 파일이 없다는 이유만으로 공용 프로세스를 자기
+프로세스로 간주하거나 재시작하지 않습니다. 반대로 알 수 없는 위치의 Ollama가
+11434 포트를 점유하면 임의 종료하지 않고 설치/실행을 중단합니다.
 
-**진짜 공용인지는 확인해서 말합니다.** 경로가 `C:\Ollama\models` 라는 것과 이 PC 가
-실제로 공용으로 설정돼 있다는 것은 다른 이야기입니다. 시스템 범위 환경변수를 쓰려면
-관리자 권한이 필요하고, 그 단계는 그냥 실패할 수 있습니다. 예전에는 경로 모양만 보고
-"모든 계정 공용" 이라고 표시해서, 관리자 없이 설치한 사용자에게 **사실이 아닌 것을**
-알려 줬습니다. 지금은 **모델 화면 → 디스크 사용량** 이 실제 상태를 읽어 말합니다.
+**개인 데이터는 공유하지 않습니다.** AnythingLLM 저장소, Open Interpreter HOME,
+설정, 프로젝트, 로그와 작업공간은 현재 계정의
+`C:\LocalAI\users\<계정>` 아래에서만 사용합니다.
 
-| 읽은 사실 | 화면 |
-| --- | --- |
-| 시스템 `OLLAMA_MODELS` 가 여기를 가리키고 `Users` 가 읽을 수 있음 | 모든 계정이 같은 모델을 씁니다 |
-| 시스템 변수 없음 / 다른 경로 / 읽기 권한 없음 | 이 계정에서만 — 이유와 함께, **고치기 버튼** |
-| 이 계정의 사용자 범위 변수가 가림 | 이유만 설명 (개인 설정이라 프로그램이 지우지 않습니다) |
-| 확인 실패 | "확인하지 못했습니다" — 성공으로 넘기지 않습니다 |
-
-**고치기** 는 언제든 눌러도 되고 두 번 눌러도 됩니다(둘 다 idempotent). 설치 때 한 번만
-돌던 것을 상시 확인·복구로 바꾼 이유는, 관리자 없이 설치했을 때 **그 사실을 알 방법도
-고칠 방법도 없었기** 때문입니다.
-
-**이미 `OLLAMA_MODELS` 를 직접 설정해 뒀다면 그 값이 이깁니다.** 예전 버전이
-`C:\LLM_Models` 를 강제해서 사용자가 옮겨 둔 저장소를 덮어썼는데, 그 실수를
-반복하지 않습니다.
-
-**예전 `C:\LocalAI\models` 와 `C:\LLM_Models`** — 설치기가 찾아서 지금 위치로 옮깁니다. 같은 볼륨이면 rename,
-다른 볼륨이면 복사 → 완료 marker(출처 기록) → 원본 정리 순서라 어느 지점에서
-중단돼도 다음 실행이 완성본과 부분 복사본을 구분합니다. 새 위치에 이미 모델이 있으면
-자동 병합하지 않고 경고만 합니다. 이전이 끝나기 전에는 실행을 거부합니다 — 디스크에
-수십 GB 가 보이는데 목록이 비어 있는 상태로 시작하지 않기 위해서입니다.
-
-**Ollama 는 경로를 스스로 기억하지 않습니다** — `ollama serve` 는 시작할 때마다
-`OLLAMA_MODELS` 를 다시 읽고 아무것도 저장하지 않습니다. Ollama 데스크톱 앱은
-`%LOCALAPPDATA%\Ollama` 의 자체 DB 에 기억해 두었다가 서버를 띄울 때 `OLLAMA_MODELS`
-로 주입합니다 — 우리와 같은 방식입니다. 그래서 **지속되는 기억은 시스템 환경변수**이고,
-그 값은 Ollama 앱이 자기 설정이 비어 있을 때 채택하는 기본값이기도 합니다. 한 번
-설정해 두면 누가 어떻게 띄우든, 어느 계정이든 같은 저장소를 씁니다.
-
-**중계기를 로컬 전용으로 설정합니다** — 우리가 띄우는 서버에는 `OLLAMA_NO_CLOUD=1` 을
-줍니다. 그러면 cloud 모델 요청에 Ollama 가 직접 `403 "ollama cloud is disabled"` 로
-답합니다. `/api/chat` 과 우리가 쓰는 `/v1/chat/completions` 양쪽 다이고 로컬 모델은
-영향이 없습니다. 이름 단계 거부는 우리가 보내는 요청만 막지만, 이건 근원에서 막습니다.
-우리가 안 띄운 서버는 `GET /api/status` 로 물어보고, 클라우드가 열려 있으면 끄는 방법
-두 가지(`OLLAMA_NO_CLOUD=1`, `~/.ollama/server.json` 의 `disable_ollama_cloud`)와 함께
-알려 줍니다.
-
-**이미 떠 있는 Ollama** — 알려진 위치에서 실행 중이고 우리와 같은 저장소를 보고 있으면
-(`/api/tags` 와 디스크 인덱스 대조) 그대로 씁니다. 남의 Windows 서비스를 죽이지
-않습니다. 다른 저장소를 쓰고 있으면 무엇을 맞춰야 하는지 알려주고 중단합니다.
-
+### 모델 확인은 한 경로로만
 ### 모델 확인은 한 경로로만
 
 "어떤 모델이 있나" 를 묻는 자리가 일곱 군데였고 각자 다르게 답했습니다 — 런처는
@@ -212,85 +144,68 @@ integrations/ollama/inventory.py 그 규칙을 실제 라우터·저장소에 �
 
 ```text
 C:\
-└─ Ollama\                  공식 Ollama (설치기가 /DIR 로 여기에 넣습니다)
-   └─ models\               이 PC 의 모든 Windows 계정이 함께 쓰는 모델 저장소
+└─ LocalAI\
+   ├─ environment\          공용 런타임
+   ├─ ollama\               공용 Ollama 중계기
+   ├─ models\               공용 모델 저장소
+   └─ users\
+      └─ <계정>\
+         ├─ user_data\      개인 상태/기록
+         ├─ logs\           개인 로그
+         └─ workspace\      개인 작업공간
 
 Local_AI_Agent/
-├─ .github/                 GitHub Actions
-├─ .gitignore
-├─ README.md                현재 사용법
-├─ STUDIO.md                데스크톱 셸의 화면·정책 문서
+├─ README.md
+├─ STUDIO.md
 ├─ RUN.bat                  유일한 루트 실행 진입점
-│
-├─ src/
-│  ├─ project_paths.py      프로젝트/런타임/공용 모델 경로 정본 (유일)
-│  ├─ runtime_versions.py   외부 런타임 버전 정본 (Open Interpreter 등)
-│  ├─ apps/                 데스크톱 셸 (studio / chat / interpreter / setup)
-│  ├─ services/             앱이 쓰는 서비스 경계 (network / chat / agent / models)
-│  ├─ core/                 UI·런타임에 의존하지 않는 계약 (경로·정책·저장)
-│  ├─ integrations/         구 런처 구현으로 가는 전환 어댑터
-│  ├─ launcher/             런처 / 서비스 / Agent runtime
-│  ├─ installer/            설치 / 관리 구현
-│  ├─ tools/                개발·평가 도구
-│  ├─ tests/                테스트
-│  └─ docs/                 상세 문서와 과거 문서
-│
-└─ user_data/               (개발 체크아웃에서만) 사용자 영속 데이터
+└─ src/
+   ├─ project_paths.py      모든 런타임 경로의 정본
+   ├─ apps/
+   ├─ services/
+   ├─ core/
+   ├─ integrations/
+   ├─ launcher/
+   ├─ installer/
+   └─ tests/
 ```
 
-Windows 에서는 `user_data/`·`environment/`·`models/`·`logs/` 가 모두
-`C:\LocalAI` 밑에 있습니다. 위 트리의 `user_data/` 는 Windows 가 아닌 개발
-머신에서 체크아웃 자체가 런타임 루트가 될 때의 모습입니다.
+체크아웃은 실행 진입점과 소스 코드이고, `C:\LocalAI`는 실제 설치/사용 데이터가
+있는 런타임 루트입니다. 여러 Windows 계정이 각각 체크아웃을 가지고 있어도
+공용 환경·Ollama·모델은 같은 경로를 사용합니다.
 
-계층은 `apps → services → integrations` 이고, `core` 는 어느 쪽에도 의존하지
-않습니다. 새 계층은 구 `launcher` 구현을 어댑터 뒤에서 그대로 재사용합니다.
-모든 경로는 `src/project_paths.py` 한 곳에서만 정해집니다.
-
-설치 후 생성되는 `C:\LocalAI\environment/` 는 소스가 아니라 관리되는 런타임 환경입니다. (예전 이름은 프로젝트 루트의 `llm_environment/` 였고, 설치/복구가 찾아서 옮깁니다.)
-설치기는 이 폴더에 `LOCAL_AI_AGENT_INSTALL.json`을 생성해 제품명, 설치 상태, 프로젝트 경로, 환경 경로, 공용 모델 저장소와 설치 구성요소를 기록합니다. 필수 구성요소 일부가 실패하면 `status`는 `partial`이 되고, `failed_components` / `skipped_components`에 복구 대상과 명시적 건너뜀 항목이 남습니다. 기본 네트워크인 WARP는 단순 이미지 존재만으로 완료 처리하지 않고 실제 HTTP 브리지용 Sandbox/SearXNG 이미지까지 확인합니다. Tor와 SearXNG도 각각 별도 설치 단계로 기록해 중복 pull과 숨은 의존성을 피합니다.
-
-예전 저장소(`C:\LocalAI\models`, `C:\LLM_Models`, `llm_environment/llm_models`)에 모델이 있고 새 저장소가 비어 있으면 설치 과정에서 자동 이동합니다. 환경 폴더와 `user_data` 도 같은 방식으로 옮깁니다. 다른 드라이브에서 이동하는 도중 중단되어도 최종 위치에 부분 복사본이 노출되지 않도록 `<대상>.migrating` 을 임시 staging 으로 쓰고 완료 marker 로 복사 완료 여부를 구분합니다. 다음 `RUN.bat --install` 실행은 완료된 staging 을 승격하거나 부분 staging 을 버리고 원본에서 다시 시작합니다. 옮긴 뒤에는 파일 개수와 총 용량을 원본과 대조해 확인한 값만 `[ OK ]` 로 보고하고, 어긋나면 경고합니다. 두 위치에 모두 데이터가 있으면 임의로 병합하지 않고 남은 쪽을 알려 줍니다.
-
-모델 저장소를 옮기기 전에는 Ollama 트레이 앱(`ollama app.exe`)부터 종료합니다. 서버 프로세스만 죽이면 트레이 앱이 밀리초 안에 똑같은 서버를 다시 띄우고, 그 서버가 저장소를 다시 열어 Windows 의 공유 위반으로 rename 이 실패합니다 — 설치기는 성공했다고 말하는데 모델은 그대로 있는 상태가 됩니다.
-
-업데이트 직후 이전 모델 또는 staging이 남은 상태에서 `RUN.bat`을 먼저 실행하면 Ollama를 빈 공용 저장소로 시작하지 않고 실행을 중단하며 `RUN.bat --install`로 이전/복구를 먼저 완료하도록 안내합니다.
+설치기는 `C:\LocalAI\environment\LOCAL_AI_AGENT_INSTALL.json`에
+`runtime_root`, `environment_path`, `ollama_path`, `model_storage`,
+현재 `account_path`와 설치 구성요소 상태를 기록합니다.
 
 ## 경로 정책
 
-프로그램 내부에서 프로젝트 루트를 각 파일의 `parent.parent` 깊이로 추측하지 않습니다.
-`src/project_paths.py`가 다음 경로의 정본입니다.
-
-루트는 둘이고, 서로 다른 것입니다. **체크아웃**은 소스가 있는 곳이고,
-**런타임 루트**는 이 제품이 쓰는 것이 전부 들어가는 곳입니다.
+프로그램 내부의 경로 정본은 `src/project_paths.py` 하나입니다.
 
 ```text
-SRC_ROOT          -> <checkout>/src
-PROJECT_ROOT      -> <checkout>                 소스·RUN.bat·번들 리소스
-RUNTIME_ROOT      -> C:\LocalAI                 이 제품이 만들고 쓰는 전부
-  ENV_DIR         -> C:\LocalAI\environment       공용
-  ACCOUNT_ROOT    -> C:\LocalAI\users\<계정>       개인
-  USER_DATA_DIR   -> <ACCOUNT_ROOT>\user_data
-  LOGS_DIR        -> <ACCOUNT_ROOT>\logs
-  WORKSPACE_DIR   -> <ACCOUNT_ROOT>\workspace
-MODEL_STORAGE_DIR -> C:\Ollama\models           공용, Ollama 것 (OLLAMA_MODELS 를 직접 설정했다면 그 값)
-OLLAMA_INSTALL_DIR-> C:\Ollama                  Ollama 실행 파일만
+SRC_ROOT            -> <checkout>/src
+PROJECT_ROOT        -> <checkout>
+
+RUNTIME_ROOT        -> C:\LocalAI
+ENV_DIR             -> C:\LocalAI\environment
+OLLAMA_INSTALL_DIR  -> C:\LocalAI\ollama
+MODEL_STORAGE_DIR   -> C:\LocalAI\models
+
+ACCOUNT_ROOT        -> C:\LocalAI\users\<계정>
+USER_DATA_DIR       -> <ACCOUNT_ROOT>\user_data
+LOGS_DIR            -> <ACCOUNT_ROOT>\logs
+WORKSPACE_DIR       -> <ACCOUNT_ROOT>\workspace
 ```
 
-경로를 묻는 곳은 `src/project_paths.py` 하나이고, 배치 자체는
-`src/core/runtime_root.py` 가 정합니다. 모듈이 저마다
-`<프로젝트 루트>/user_data` 를 조립하던 것이 설치기와 데스크톱이 서로 다른
-폴더에 쓰던 원인이라, `src/tests/test_single_root.py` 가 AST 로 그런 조립을
-찾아 실패시킵니다.
+`LOCAL_AI_ROOT`는 관리형 배포/테스트에서 전체 런타임 루트를 바꾸고,
+`LLM_MODEL_DIR` 또는 사용자가 명시한 `OLLAMA_MODELS`는 모델 저장소만
+재정의합니다. `LOCAL_AI_ACCOUNT`는 개인 기록을 어느 계정 폴더에 둘지
+재정의합니다.
 
-Windows 가 아닌 개발 머신에는 들어갈 `C:` 가 없으므로 체크아웃 자체가 런타임
-루트가 되고, 같은 배치가 그 안에 생깁니다. 관리형 배포나 테스트에서는
-`LOCAL_AI_ROOT` 로 루트 전체를(모델 저장소까지 따라갑니다), `LLM_MODEL_DIR` 로
-모델 저장소만, `LOCAL_AI_ACCOUNT` 로 기록을 어느 계정 앞으로 둘지 재정의할 수
-있습니다.
+기본 설치에서는 모델 폴더가 모든 계정에서 읽힐 수 있도록 공용 읽기 권한을
+설정하지만, 각 `users\<계정>` 폴더는 상속을 끊어 다른 로컬 계정이 읽지 못하도록
+별도로 보호합니다.
 
-따라서 체크아웃을 옮기거나 이름을 바꿔도, 다시 내려받아도 설치는 그대로 남습니다.
-모델은 체크아웃 위치와 분리되어 같은 PC의 여러 프로젝트/사용자가 동일한 저장소를 읽어 사용할 수 있습니다. 설치기는 `BUILTIN\Users`에 기존 파일까지 포함한 읽기/실행 권한을 재귀적으로 추가하지만 모든 사용자에게 쓰기 권한을 새로 부여하지는 않습니다. 기존 ACL도 강제로 초기화하지 않으므로 모델 다운로드·삭제는 해당 계정이 이미 필요한 쓰기 권한을 가진 경우에만 가능합니다. 관리형 배포나 테스트에서만 `LLM_MODEL_DIR` 환경변수로 경로를 재정의할 수 있습니다.
-
+## Ollama 서비스 소유권
 ## Ollama 서비스 소유권
 
 프로그램은 `11434` 포트가 응답한다는 이유만으로 임의의 Ollama를 재사용하지 않습니다.
@@ -301,7 +216,7 @@ Windows 가 아닌 개발 머신에는 들어갈 `C:` 가 없으므로 체크아
 - **우리가 띄운 서버인지**는 런타임 상태 파일에 기록한 PID 로 판별합니다. 바이너리
   경로로는 알 수 없습니다 — 공식 Ollama 를 우선하게 된 뒤로 우리가 실행할 파일과
   Windows 가 실행한 파일이 같은 파일이기 때문입니다.
-- **공식 설치 Ollama**(`C:\Ollama`, `%LOCALAPPDATA%\Programs\Ollama` 등)가 이미
+- **공식 설치 Ollama**(`C:\LocalAI\ollama`, `%LOCALAPPDATA%\Programs\Ollama` 등)가 이미
   떠 있고 같은 저장소를 보고 있으면 그대로 씁니다. 그게 중간 매개체의 목적입니다.
 - **다른 저장소를 보고 있으면** 강제 종료하지 않고, 무엇을 맞춰야 하는지 알려주고
   중단합니다. 확인조차 못 하면 경고만 하고 진행합니다.
@@ -319,7 +234,7 @@ Windows 가 아닌 개발 머신에는 들어갈 `C:` 가 없으므로 체크아
 
 ### 모델이 어디 있는지는 "쓸 수 있는지" 와 다른 질문입니다
 
-이 프로젝트가 정하는 저장소(`OLLAMA_MODELS`, 없으면 `C:\Ollama\models`)는 **새로 받을
+이 프로젝트가 정하는 저장소(`OLLAMA_MODELS`, 없으면 `C:\LocalAI\models`)는 **새로 받을
 모델을 어디에 둘지** 에 대한 답입니다. 그것을 **이미 돌고 있는 서버를 써도 되는지** 의
 기준으로도 쓰고 있었고, 두 질문은 다릅니다.
 
@@ -377,7 +292,7 @@ Windows 에서 서버를 실제로 소유하는 건 CLI 가 아니라 **트레�
 Ollama 는 `OLLAMA_MODELS` 를 **시작할 때 한 번만** 읽습니다. 설치기가 그 값을 주고 띄운
 뒤, Windows 가 재부팅 후 자기 시작 항목으로 Ollama 를 다시 띄우면 그 환경에는 변수가
 없습니다. 그러면 Ollama 는 자기 기본 경로(비어 있음)를 읽고, 사용자가 받아 둔 모델은
-`C:\Ollama\models` 에 그대로 있는데 **하나도 나열되지 않습니다.**
+`C:\LocalAI\models` 에 그대로 있는데 **하나도 나열되지 않습니다.**
 
 이 상태에서 예전 코드는 "라우터가 아무것도 안 내놓으면 저장소와 어긋날 것도 없다" 는
 규칙 때문에 **"모델 저장소 일치 확인됨"** 이라고 말하고 지나갔습니다. 그리고 몇 단계
@@ -860,17 +775,17 @@ Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하�
 
 ## 모델 파일 ↔ 이름 대응표
 
-Ollama 는 받은 모델을 내용 해시로만 저장합니다. `C:\Ollama\models` 를 열면 이렇게 보입니다.
+Ollama 는 받은 모델을 내용 해시로만 저장합니다. `C:\LocalAI\models` 를 열면 이렇게 보입니다.
 
 ```text
-C:\Ollama\models\
+C:\LocalAI\models\
   blobs\sha256-3f1c...          <- 15GB 짜리인데 어느 모델인지 알 수 없음
   manifests\registry.ollama.ai\
     library\gemma4\12b          <- 이 JSON 이 위 해시를 가리킴
 ```
 
 `src/launcher/models/model_files.py` 가 manifest 를 읽어 대응을 복원하고
-**`C:\Ollama\models\MODEL_FILES.csv`** 로 저장합니다(저장소에 쓸 수 없으면
+**`C:\LocalAI\models\MODEL_FILES.csv`** 로 저장합니다(저장소에 쓸 수 없으면
 `user_data/models/` 로). 모델 설치·삭제 후 자동으로 갱신되고, **모델 → 디스크 사용량**
 화면의 [인덱스 갱신] 으로도 다시 씁니다.
 
@@ -1040,7 +955,7 @@ hook 을 설치하게 되면서 이 파일이 **창을 열 때마다** 쌓이게
 
 ```text
 <checkout>/llm_environment/   ->  C:\LocalAI\environment/        (공용)
-C:\LocalAI\models              ->  C:\Ollama\models               (공용)
+C:\LocalAI\models              ->  C:\LocalAI\models               (공용)
 <checkout>/user_data/         ->  C:\LocalAI\users\<계정>\user_data/
 C:\LocalAI\user_data           ->  C:\LocalAI\users\<계정>\user_data/
 C:\LocalAI\logs                ->  C:\LocalAI\users\<계정>\logs/
@@ -1053,7 +968,7 @@ C:\LocalAI\logs                ->  C:\LocalAI\users\<계정>\logs/
 수십 GB 를 "준비 안 됨" 으로 오해해 다시 받는 일이 없도록.
 
 특히 `user_data/settings/user_config.json`, Agent trace, 인터프리터 세션, 폴더 정책 등은 모두 **내 계정** 폴더(`C:\LocalAI\users\<계정>\user_data`)를 기준으로 사용합니다.
-대용량 모델은 공용인 `C:\Ollama\models` 에 한 벌만 있어, 체크아웃을 복사하거나 업데이트해도, 계정을 추가해도 중복되지 않습니다.
+대용량 모델은 공용인 `C:\LocalAI\models` 에 한 벌만 있어, 체크아웃을 복사하거나 업데이트해도, 계정을 추가해도 중복되지 않습니다.
 
 ## 이전 상세 README
 
