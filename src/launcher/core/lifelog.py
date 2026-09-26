@@ -9,7 +9,7 @@ v6.1 변경:
 
 핵심 책임
 ─────────
-1. 런타임 루트의 logs/ 폴더에 세션 로그 기록
+1. 현재 계정의 users/<account>/logs 폴더에 세션 로그 기록
 2. 매 줄마다 flush + os.fsync
 3. 모든 종료 경로에서 호출되는 cleanup hook 등록
 """
