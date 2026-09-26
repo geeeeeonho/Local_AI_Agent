@@ -466,6 +466,41 @@ def test_every_service_is_asked_to_stop_even_after_one_refuses(tmp_path):
 
 # ── the default network mode prepares out loud ───────────────────────────
 
+def test_cleanup_can_be_suppressed_after_session_release_and_rearmed(monkeypatch):
+    from launcher.core import lifelog
+
+    monkeypatch.setattr(lifelog, "_cleanup_callbacks", [])
+    monkeypatch.setattr(lifelog, "_sweep_cleanup_callbacks", [])
+    monkeypatch.setattr(lifelog, "_final_cleanup_callbacks", [])
+    monkeypatch.setattr(lifelog, "_cleanups_ran", False)
+
+    seen = []
+    lifelog.register_cleanup(lambda: seen.append("ran"))
+    lifelog.suppress_exit_cleanups()
+    lifelog.shutdown_then_exit()
+    assert seen == []
+
+    lifelog.rearm_exit_cleanups()
+    lifelog.shutdown_then_exit()
+    assert seen == ["ran"]
+
+
+def test_agent_searxng_recreates_container_when_network_mode_changed(monkeypatch, tmp_path):
+    from launcher import searxng_runtime
+
+    monkeypatch.setenv("NET_MODE", "warp")
+    monkeypatch.setattr(searxng_runtime, "_CLEANUP_REGISTERED", False)
+    monkeypatch.setattr(searxng_runtime, "is_running", lambda: True)
+    monkeypatch.setattr(searxng_runtime, "running_mode", lambda: "tor")
+    removed = []
+    monkeypatch.setattr(searxng_runtime, "remove", lambda: removed.append("old"))
+    monkeypatch.setattr(searxng_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(searxng_runtime, "image_exists", lambda: False)
+
+    assert searxng_runtime.start(tmp_path) is False
+    assert removed == ["old"]
+
+
 def test_warp_preparation_reports_progress_and_takes_a_cancel(tmp_path):
     """WARP is the default mode and its start can run past two minutes. Every
     word of it went to a log file and to print(), which reaches nobody under
@@ -498,6 +533,7 @@ def test_searxng_registers_the_teardown_every_other_runtime_had(monkeypatch, tmp
     from launcher.core import lifelog
     monkeypatch.setattr(searxng_runtime, '_CLEANUP_REGISTERED', False)
     monkeypatch.setattr(searxng_runtime, 'is_running', lambda: True)
+    monkeypatch.setattr(searxng_runtime, 'running_mode', lambda: 'block')
     registered = []
     monkeypatch.setattr(lifelog, 'register_cleanup', lambda fn, **kw: registered.append(fn))
     assert searxng_runtime.start(tmp_path) is True
