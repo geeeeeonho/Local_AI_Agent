@@ -111,6 +111,21 @@ def test_two_accounts_using_one_store_share_the_same_model_lock(tmp_path):
     assert alice.data != bob.data
     assert alice.models.lock_path == bob.models.lock_path
     assert alice.models.lock_path == tmp_path / 'models' / '.localai' / 'model-mutation.lock'
+    alice.close()
+    bob.close()
+
+
+def test_second_account_cannot_mutate_models_while_shared_lock_is_held(tmp_path):
+    from core.persistence import file_lock
+    services, backend = make(tmp_path)
+    lock = services.models.lock_path
+
+    with file_lock(lock):
+        with pytest.raises(RuntimeError, match='다른 LocalAI 창'):
+            services.models.remove_model('test:latest')
+
+    assert ('remove', 'test:latest') not in backend.calls
+    services.close()
 
 
 def test_health_does_not_start_or_repair_services(tmp_path):
