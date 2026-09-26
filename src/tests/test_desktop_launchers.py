@@ -100,6 +100,33 @@ def test_runtime_owner_blocks_a_second_account_on_the_same_machine_lock(tmp_path
     second.release()
 
 
+def test_agent_default_workspace_is_current_accounts_workspace(monkeypatch, tmp_path):
+    from launcher.agent import setup_flow
+    from launcher.agent import folder_policy
+    from launcher import settings_store
+    import project_paths
+
+    expected = tmp_path / "LocalAI" / "users" / "Tester" / "workspace"
+    monkeypatch.setattr(project_paths, "workspace_dir", lambda: expected)
+    monkeypatch.setattr(folder_policy, "list_allowed", lambda: [])
+    monkeypatch.setattr(
+        settings_store,
+        "load",
+        lambda: NS(last_workspace=""),
+    )
+
+    seen = {}
+
+    class Presenter:
+        def prompt_path(self, *, title, default, last_used=None, must_exist=False):
+            seen["default"] = Path(default)
+            return Path(default)
+
+    result = setup_flow.ask_workspace(Presenter(), tmp_path / "environment")
+    assert result == expected
+    assert seen["default"] == expected
+
+
 def chat_backend(tmp_path,ids,monkeypatch=None,installed=('chosen:latest',)):
     from test_desktop_integration import fixture
     b,m,c=fixture(tmp_path)
