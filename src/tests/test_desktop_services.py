@@ -80,6 +80,18 @@ def test_composition_is_side_effect_free_until_requested(tmp_path):
     assert svc.model_dir == backend.inference.model_dir
 
 
+def test_ephemeral_state_locks_do_not_reuse_legacy_cache(tmp_path):
+    svc, backend = make(tmp_path)
+
+    state_path = svc.inference.state.store.path
+    model_lock = svc.models.lock_path
+
+    assert state_path == tmp_path / 'user_data' / 'runtime' / 'runtime-state.json'
+    assert model_lock == tmp_path / 'user_data' / 'runtime' / 'model-mutation.lock'
+    assert 'cache' not in state_path.parts
+    assert 'cache' not in model_lock.parts
+
+
 def test_health_does_not_start_or_repair_services(tmp_path):
     svc, backend = make(tmp_path)
     assert svc.system.health()['docker'] is False
