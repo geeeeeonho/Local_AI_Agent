@@ -612,30 +612,28 @@ class OllamaService:
         return False
 
     def persist_store_setting(self) -> str:
-        """Make this store the one every future Ollama start reads.
+        """Best-effort machine-scope compatibility for Ollama outside LocalAI.
 
-        Passing OLLAMA_MODELS to the server we launch covers that one process
-        and nothing else. The Startup entry Windows runs at login does not
-        inherit it, so after a reboot the models stop being visible - which is
-        the whole failure, and it comes back every reboot until the value is
-        written somewhere Windows keeps.
+        The managed broker always receives OLLAMA_MODELS in its child
+        environment, so LocalAI itself does not need a registry value. Never
+        overwrite a user's personal OLLAMA_MODELS as a fallback; that setting
+        may intentionally belong to a separately launched Ollama.
         """
         try:
             from integrations.ollama import sharing
         except Exception:
             return ''
         try:
-            scope = sharing.publish_variable(self.model_dir)
+            written = sharing.publish_machine_variable(self.model_dir)
         except Exception:
             return ''
-        if scope == 'machine':
-            self._ok("모델 경로를 시스템 설정에 저장했습니다: %s" % self.model_dir)
-        elif scope == 'user':
-            self._ok("모델 경로를 이 계정 설정에 저장했습니다: %s" % self.model_dir)
-        else:
-            self._warn("모델 경로를 Windows 설정에 저장하지 못했습니다. "
-                       "직접 %s 를 실행하세요." % self.store_fix_command())
-        return scope
+        if written:
+            self._ok("외부 Ollama 호환용 모델 경로를 시스템 설정에 저장했습니다: %s"
+                     % self.model_dir)
+            return 'machine'
+        self._warn("시스템 범위 OLLAMA_MODELS 를 저장하지 못했습니다. "
+                   "LocalAI 공용 broker는 실행 시 경로를 직접 받아 계속 동작합니다.")
+        return ''
 
     def restart_for_store(self, stop_timeout: int = 8) -> bool:
         """Restart the running Ollama so it reads the store we resolved.
