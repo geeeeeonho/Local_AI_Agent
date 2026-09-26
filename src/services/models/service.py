@@ -4,6 +4,7 @@ from pathlib import Path
 from core.events import EventBus
 from core.persistence import file_lock
 from integrations.ollama.client import is_cloud_tag, local_model_name, model_name
+from project_paths import model_mutation_lock_path
 from . import index
 
 
@@ -18,7 +19,7 @@ class ModelService:
         self.lock_path = (
             Path(lock_path)
             if lock_path is not None
-            else Path(self.model_dir) / ".localai" / "model-mutation.lock"
+            else model_mutation_lock_path(self.model_dir)
         )
 
     def list_models(self):
