@@ -709,7 +709,17 @@ class OllamaService:
         return True
 
     def register_exit_cleanup(self) -> bool:
-        """우리가 띄운 서버에 한해 종료 정리를 등록한다 (중복 등록 없음)."""
+        """Compatibility hook; the machine-shared broker survives window exit.
+
+        Older launchers called this after starting Ollama. Keeping the method
+        avoids a transition break, but registering a per-window teardown would
+        let one Windows account terminate the broker while another account is
+        using it.
+        """
+        return True
+
+    def _register_exit_cleanup_legacy(self) -> bool:
+        """Old per-window cleanup implementation, retained only for reference."""
         if OllamaService._cleanup_registered:
             return True
         try:
@@ -832,7 +842,9 @@ class OllamaService:
                     self._err("시작 도중 다른 Ollama가 포트를 선점했습니다.")
                     return False
                 self._write_runtime_state(listener_pid)
-                self.register_exit_cleanup()
+                # The broker is machine-shared. Do not tie its lifetime to the
+                # account/window that happened to start it; another signed-in
+                # account may already be using the same service.
                 # Our child got OLLAMA_MODELS through its environment. Writing
                 # it where Windows keeps it is what makes the next start - by
                 # the Startup entry, the tray app or the user - read it too.
