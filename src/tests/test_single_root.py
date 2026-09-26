@@ -32,7 +32,9 @@ def test_every_shared_asset_is_inside_the_runtime_root(monkeypatch, tmp_path):
     assert project_paths.runtime_dir() == root
     assert project_paths.env_dir() == root / "environment"
     assert project_paths.model_dir() == root / "models"
-    assert project_paths.OLLAMA_INSTALL_DIR == root / "ollama"
+    assert runtime_root.ollama_dir(
+        {"LOCAL_AI_ROOT": str(root)}, windows=True
+    ) == root / "ollama"
 
     account = project_paths.account_dir()
     assert account == root / "users" / "Tester"
