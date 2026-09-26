@@ -29,6 +29,7 @@ INTERPRETER_KINDS = ("sandbox", "host")
 
 _LAYOUT = (
     "settings",
+    "runtime",
     "chat",
     "interpreter/sandbox",
     "interpreter/host",
@@ -83,6 +84,7 @@ _README = (
     "This user_data directory is preserved when the program exits.\n"
     "\n"
     "  settings/            product settings\n"
+    "  runtime/             ephemeral state and cross-process lock files\n"
     "  chat/                chat-related persistent data\n"
     "  interpreter/sandbox/ Open Interpreter sandbox runtime state/assets\n"
     "  interpreter/host/    Open Interpreter host runtime state/assets\n"
