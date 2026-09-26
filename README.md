@@ -10,7 +10,11 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 C:\LocalAI\
 ├─ environment\          공용 — 관리형 런타임 · 설치 템플릿 · 스크립트
 ├─ ollama\               공용 — LocalAI가 관리하는 Ollama 중계기
-├─ models\               공용 — 모든 Windows 계정이 함께 쓰는 모델 저장소
+├─ models\               공용 — 모든 Windows 계정이 함께 관리하는 모델 저장소
+│  ├─ MODEL_FILES.csv
+│  └─ .localai\
+│     ├─ registry.json
+│     └─ model-mutation.lock
 └─ users\
    └─ <계정>\
       ├─ user_data\      개인 — 설정 · 프로젝트 · 대화 · 벡터 저장소
@@ -107,8 +111,9 @@ Ollama는 LocalAI의 **로컬 모델 중계기**입니다. 모델 API는 Ollama�
 
 **모델 위치** — `C:\LocalAI\models`. LocalAI가 띄우는 Ollama에는 항상
 `OLLAMA_MODELS`를 이 경로로 넘깁니다. 설치 시에는 가능한 경우 시스템 범위
-`OLLAMA_MODELS`도 기록하고 모델 폴더에 `BUILTIN\Users` 읽기/실행 권한을 줘
-다른 Windows 계정도 같은 모델을 읽도록 합니다.
+`OLLAMA_MODELS`도 기록합니다. `environment`와 `ollama`는 계속
+`BUILTIN\Users` 읽기/실행만 허용하지만, `models`에는 Modify를 허용해
+다른 Windows 계정도 같은 모델을 설치·삭제하고 같은 관리 상태를 사용합니다.
 
 **계정 간 공유** — 공용 Ollama가 이미 응답 중이면 어느 Windows 계정이 시작했든
 재사용합니다. 계정별 런타임 상태 파일이 없다는 이유만으로 공용 프로세스를 자기
@@ -199,6 +204,10 @@ RUNTIME_ROOT        -> C:\LocalAI
 ENV_DIR             -> C:\LocalAI\environment
 OLLAMA_INSTALL_DIR  -> C:\LocalAI\ollama
 MODEL_STORAGE_DIR   -> C:\LocalAI\models
+MODEL_CONTROL_DIR   -> C:\LocalAI\models\.localai
+MODEL_REGISTRY_PATH -> C:\LocalAI\models\.localai\registry.json
+MODEL_MUTATION_LOCK -> C:\LocalAI\models\.localai\model-mutation.lock
+MODEL_FILES_PATH    -> C:\LocalAI\models\MODEL_FILES.csv
 
 ACCOUNT_ROOT        -> C:\LocalAI\users\<계정>
 USER_DATA_DIR       -> <ACCOUNT_ROOT>\user_data
@@ -213,19 +222,20 @@ WORKSPACE_DIR       -> <ACCOUNT_ROOT>\workspace
 있기 때문입니다. `LOCAL_AI_ACCOUNT`는 개인 기록을 어느 계정 폴더에 둘지
 재정의합니다.
 
-기본 설치에서는 `environment`, `ollama`, `models`에 `BUILTIN\Users` 읽기/실행 권한을
-보장해 다른 **일반 Windows 사용자 계정도 관리자 권한 없이 실행**할 수 있게 합니다.
+기본 설치에서는 `environment`, `ollama`에 `BUILTIN\Users` 읽기/실행 권한을
+보장하고, `models`에만 Modify 권한을 부여합니다. 따라서 일반 Windows 계정도 공용
+모델을 설치·삭제할 수 있지만 공용 실행 바이너리는 임의로 바꿀 수 없습니다.
 `C:\LocalAI\users` 부모에는 자기 `users\<계정>` 폴더를 만들 수 있는 최소 권한만
 주고, 생성한 계정 폴더는 즉시 상속을 끊어 해당 계정·SYSTEM·Administrators만 접근하게
 합니다. 개인 설정과 잠금 파일은 `users\<계정>\user_data\runtime` 아래에서 현재 계정이
 직접 쓰며, 이전 실행이 남긴 `user_data\cache\*.lock`은 런타임 정본으로 다시 사용하지
 않습니다.
 
-공용 모델/런타임 권한은 의도적으로 **읽기/실행**입니다. 공용 바이너리나 모델 자체는
-신뢰 자산이라 모든 로컬 계정에 임의 변경 권한을 주지 않습니다. 따라서 Chat/Agent/이미
-설치된 Open Interpreter 사용은 일반 사용자로 가능하지만, `environment` 아래 공용
-Open Interpreter 바이너리를 새로 설치·업데이트해야 할 때는 관리자 또는 처음 공용
-환경을 준비한 계정에서 Setup을 한 번 실행해야 합니다.
+공용 실행환경 권한은 의도적으로 **읽기/실행**이고, 모델 저장소만 **Modify**입니다.
+모델 설치·삭제, manifest/blob 변경, `MODEL_FILES.csv`, 공용 registry와 mutation lock은
+모두 `C:\LocalAI\models` 아래에서 한 벌로 관리합니다. 반면 `environment` 아래 공용
+Open Interpreter 바이너리 등을 새로 설치·업데이트할 때는 관리자 또는 처음 공용 환경을
+준비한 계정에서 Setup을 실행해야 합니다.
 
 ## Ollama 서비스 소유권
 
@@ -260,7 +270,8 @@ LocalAI가 관리하는 공용 Ollama의 정본은 **`C:\LocalAI\ollama\ollama.e
 보기 쉽도록 Windows 환경변수 기록을 best-effort로 시도합니다.
 
 모델 화면의 **LocalAI 계정 간 공유 여부**는 실제 공용 경로인지와
-`BUILTIN\Users`가 모델을 읽을 수 있는지로 판단합니다. 사용자 범위
+`BUILTIN\Users`가 모델을 읽고 수정할 수 있는지로 판단합니다. 예전 RX-only 설치는
+공유 완료로 오인하지 않고 Setup의 권한 복구 대상으로 표시합니다. 사용자 범위
 `OLLAMA_MODELS`가 다른 곳을 가리켜도 LocalAI가 띄우는 broker에는 공용 경로를 직접
 주입하므로 LocalAI 저장소 정본이 바뀌지 않습니다.
 
@@ -542,9 +553,11 @@ Ollama 가 필요하면 자기 PC 에서 위 진단을 한 번 돌려 보세요.
 강제합니다. 모델을 추가·교체할 때는 두 파일을 함께 고치세요.
 (임베더는 `kind="embed"` 로 표시하며 역할 사다리에서 제외됩니다.)
 
-모델 선택의 정본은 `TIERS` 하나입니다. `ROLES[*].model / fallback` 은 화면 표시용이며
-임포트 시점에 `TIERS` 의 1·2단계로 덮어써집니다(직접 적지 마세요). 사용자별 재정의는
-`user_data/models/registry.json` 의 `replace` / `add` 로 합니다.
+모델 선택의 기본 정본은 `TIERS` 이고, 역할별 공용 재정의는
+`C:\LocalAI\models\.localai\registry.json` 의 `replace` / `add` 로 합니다.
+`ROLES[*].model / fallback` 은 화면 표시용이며 임포트 시점에 최종 TIERS의 1·2단계로
+덮어써집니다. 예전 `user_data\models\registry.json`은 자동 병합하지 않고 legacy
+데이터로 남겨 둡니다.
 
 ### 메모리 예산과 3단계
 
@@ -676,7 +689,7 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 | `gemma4:31b` · `qwen3-vl:32b` | 적재 상한 18.4GB 초과 — 이 예산에선 절대 안 뜬다 |
 
 역할 이름을 바꾸면 `model_roles.ROLE_ALIASES` 에 옛 이름을 등록하세요.
-`user_data/models/registry.json` 에 옛 키를 적어 둔 설정이 조용히 무시되지 않습니다.
+공용 `models\.localai\registry.json` 에 옛 키가 있어도 alias를 통해 계속 읽습니다.
 
 ### 기본 권장 모델 세트
 
