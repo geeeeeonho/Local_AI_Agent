@@ -95,6 +95,11 @@ class DesktopServices:
         with self._close_lock:
             if not self._close_sessions():
                 return False
+            try:
+                from launcher.core import lifelog
+                lifelog.suppress_exit_cleanups()
+            except Exception:
+                pass
             self.owner.release()
             return True
 
