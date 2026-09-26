@@ -85,7 +85,7 @@ def ensure_accounts_parent_access(users_root: Path, windows: Optional[bool] = No
         return True
     result = acl.run([
         "icacls", str(users_root), "/grant",
-        "*%s:(RX,WD,AD)" % BUILTIN_USERS_SID, "/Q",
+        "*%s:(RD,X,AD,RA,REA)" % BUILTIN_USERS_SID, "/Q",
     ])
     return result is not None and result.returncode == 0
 
@@ -224,9 +224,10 @@ def ensure_private_account(account: Path) -> Optional[bool]:
     상속을 끊고 확인까지 한다.
     """
     from integrations.windows import privacy
-    name_the_account(account)
     state = privacy.ensure_private(account)
     if state is True:
+        # Write only after the creator's private/full-control ACL is in place.
+        name_the_account(account)
         ok("  %-20s → %s (이 계정 전용)" % ("account", account))
     elif state is False:
         warn("개인 기록 폴더를 이 계정 전용으로 잠그지 못했습니다: %s" % account)
