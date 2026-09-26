@@ -14,8 +14,9 @@ signed-in users write the same settings file and the same session state.
 
 So the root splits:
 
-    C:\\LocalAI\\models              shared, readable by every account
     C:\\LocalAI\\environment         shared, the installed runtimes
+    C:\\LocalAI\\ollama              shared, the managed Ollama broker
+    C:\\LocalAI\\models              shared, one model library
     C:\\LocalAI\\users\\<account>\\    private, one per Windows account
 
 This module decides the naming and what an ACL means. Touching the real

@@ -1,6 +1,6 @@
 """Whether every account on this machine can actually use the model store.
 
-The store lives at ``C:\\Ollama\\models`` so one copy serves the whole machine
+The store lives at ``C:\\LocalAI\\models`` so one copy serves the whole machine
 rather than one copy per Windows profile. Putting it there is not enough:
 
   * another account's Ollama reads ``OLLAMA_MODELS`` from its own environment,

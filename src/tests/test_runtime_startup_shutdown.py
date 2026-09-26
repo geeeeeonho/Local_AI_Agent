@@ -30,11 +30,14 @@ def service(tmp_path, monkeypatch=None):
     if monkeypatch is not None:
         # Registration is process-wide on purpose; each test gets a clean slate.
         monkeypatch.setattr(OllamaService, '_cleanup_registered', False)
-    env = tmp_path / 'llm_environment'
-    exe = env / 'ollama_runtime' / 'ollama.exe'
+    env = tmp_path / 'environment'
+    exe = tmp_path / 'LocalAI' / 'ollama' / 'ollama.exe'
     exe.parent.mkdir(parents=True)
-    exe.write_text('portable', encoding='utf-8')
-    return OllamaService(env, model_dir=tmp_path / 'models')
+    exe.write_text('managed', encoding='utf-8')
+    svc = OllamaService(env, model_dir=tmp_path / 'LocalAI' / 'models')
+    svc.portable_exe = exe
+    svc.exe = exe
+    return svc
 
 
 def unidentified(monkeypatch, svc):
@@ -101,9 +104,9 @@ def test_a_known_executable_on_another_store_is_unaffected_by_the_fallback(tmp_p
     assert svc.ensure_running(boot_timeout=1) is False
 
 
-# ── Ollama: what we started, we stop ─────────────────────────────────────
+# ── Ollama: machine-shared lifetime ──────────────────────────────────────
 
-def test_starting_ollama_registers_the_teardown_that_closing_runs(tmp_path, monkeypatch):
+def test_starting_shared_ollama_registers_no_window_teardown(tmp_path, monkeypatch):
     from launcher.core import lifelog
     svc = service(tmp_path, monkeypatch)
     running = iter([False, True])
@@ -111,15 +114,16 @@ def test_starting_ollama_registers_the_teardown_that_closing_runs(tmp_path, monk
     monkeypatch.setattr(svc, '_launch', lambda: 4242)
     monkeypatch.setattr(svc, '_listener_pid', lambda: 4242)
     monkeypatch.setattr(svc, '_process_executable', lambda _pid: svc.exe)
+    monkeypatch.setattr(svc, '_write_runtime_state', lambda _pid: None)
+    monkeypatch.setattr(svc, 'persist_store_setting', lambda: 'user')
     registered = []
     monkeypatch.setattr(lifelog, 'register_cleanup',
                         lambda fn, **kw: registered.append((fn, kw)))
     assert svc.ensure_running(boot_timeout=2) is True
-    assert len(registered) == 1, 'the server this window started must be torn down with it'
+    assert registered == [], 'closing one account window must not stop a machine-shared broker'
 
 
-def test_reusing_someone_elses_ollama_registers_no_teardown(tmp_path, monkeypatch):
-    """A server we did not start is not ours to stop."""
+def test_reusing_shared_ollama_registers_no_teardown(tmp_path, monkeypatch):
     from launcher.core import lifelog
     svc = service(tmp_path, monkeypatch)
     unidentified(monkeypatch, svc)

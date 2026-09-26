@@ -56,8 +56,16 @@ def prepare_install(env: Path, model_dir: Path) -> None:
 
 
 def find_existing(paths: Dict[str, Path]) -> Optional[Path]:
-    """이미 설치된 Ollama. 프로젝트가 예전에 넣은 포터블 exe 도 포함한다."""
-    return ollama_paths.find_executable(fallback=(paths["ollama"],))
+    """LocalAI-managed Ollama already present in the shared broker directory."""
+    folder = Path(paths["ollama"])
+    for name in ollama_paths.executable_names():
+        candidate = folder / name
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
 def _is_windows() -> bool:
@@ -82,7 +90,7 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
         return None
     target = Path(target or ollama_paths.PROJECT_INSTALL_DIR)
 
-    # Do not stage the installer beside C:\\Ollama. A normal desktop process
+    # Do not stage the installer beside C:\\LocalAI\\ollama. A normal desktop process
     # may not be allowed to create files at the drive root even though the
     # official installer itself can negotiate what it needs. A closed temporary
     # file also works under pythonw.exe, where there is no console.
@@ -123,7 +131,7 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
 
 
 def install(paths: Dict[str, Path]) -> Path:
-    """설치된 Ollama 를 확보한다: 기존 → 공식 설치 → 포터블 폴백."""
+    """Ensure the shared LocalAI-managed Ollama broker exists."""
     utils.section(t("install.ollama_section"))
 
     existing = find_existing(paths)
@@ -131,12 +139,12 @@ def install(paths: Dict[str, Path]) -> Path:
         utils.ok(t("install.ollama_already", path=str(existing)))
         return existing
 
-    official = install_official()
+    official = install_official(paths["ollama"])
     if official is not None:
         utils.ok(t("install.ollama_done", path=str(official)))
         return official
 
-    utils.warn("공식 설치를 완료하지 못해 포터블 Ollama 로 대체합니다.")
+    utils.warn("공식 설치를 완료하지 못해 같은 공용 폴더에 포터블 Ollama 로 대체합니다.")
     install_portable(paths)
     return _exe(paths)
 

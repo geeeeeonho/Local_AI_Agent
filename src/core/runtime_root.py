@@ -1,46 +1,21 @@
-"""One folder directly under C: holds everything this product runs on.
+"""Machine-wide LocalAI runtime layout.
 
-Until now the parts lived wherever each of them had historically landed: the
-managed environment and ``user_data`` inside whatever folder the repository was
-unzipped into, the model store inside Ollama's own install at
-``C:\\Ollama\\models``, and the logs under the environment. That spread has cost
-real time:
-
-* The checkout is where a user puts a download - Desktop, Downloads, a OneDrive
-  folder that syncs tens of gigabytes to the cloud, a path with spaces and
-  non-ASCII characters that Docker Desktop refuses to bind-mount. Moving or
-  renaming that folder silently orphaned the whole environment.
-* Nothing could answer "where is this installed" with a single path.
-
-So there is one runtime root, directly under the drive root, holding every
-piece of state this product owns - split by who it belongs to::
+A Windows machine has one shared runtime root::
 
     C:\\LocalAI\\
-        environment\\          shared: managed runtimes, container config
+        environment\\          shared managed runtimes/tools
+        ollama\\               shared LocalAI-managed Ollama broker
+        models\\               shared local model library
         users\\<account>\\
-            user_data\\        private: settings, projects, chat, traces
-            logs\\             private: session logs
-            workspace\\        private: the agent's default working folder
+            user_data\\        private settings/projects/chat/traces
+            logs\\             private session/runtime logs
+            workspace\\        private working files
 
-What a person *does* with the models is theirs, and a shared ``user_data`` does
-not merely leak it - two signed-in accounts write the same settings file and
-the same session state. ``core.accounts`` names those folders and says what
-makes one private.
+Each Windows account may keep its own checkout and RUN.bat. Those launchers all
+resolve the same shared environment, Ollama broker and model store, while every
+piece of usage data resolves below that account's private directory.
 
-The model store itself is not here. It belongs to Ollama, which finds it by
-its own rule, so ``core.ollama_paths`` answers that question and puts it beside
-Ollama's install at ``C:\\Ollama\\models`` - the one place every Ollama on the
-machine looks, ours or not. The exception is a root someone set explicitly:
-that means "the whole product lives here", models included, which is how a
-portable run and the tests work.
-
-Ollama's own binaries stay where they are (``C:\\Ollama``); they belong to
-Ollama's installer, not to us, and keeping our data out of that folder is what
-lets an Ollama uninstall leave the models alone.
-
-Nothing here creates or moves a directory. Resolving a path must stay free of
-side effects so the installer can ask "where would this go" before deciding
-whether anything needs migrating.
+This module only resolves paths. It never creates, moves or deletes data.
 """
 from __future__ import annotations
 
@@ -69,15 +44,12 @@ PORTABLE_VARIABLE = 'LLM_PROJECT_ROOT'
 
 #: Folder names under the root. One spelling, used by every component.
 MODELS = 'models'
+OLLAMA = 'ollama'
 ENVIRONMENT = 'environment'
 USERS = 'users'
 USER_DATA = 'user_data'
 LOGS = 'logs'
 WORKSPACE = 'workspace'
-
-#: What earlier releases called the managed environment folder. Kept so setup
-#: can find one and move it, never to write to.
-LEGACY_ENVIRONMENT = 'llm_environment'
 
 
 def _expanded(value: str) -> Path:
@@ -107,13 +79,13 @@ def root(environ=None, windows=None, fallback: Path | None = None) -> Path:
 
 
 def models_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
-    """The store when the root owns it: a portable run, a test, a dev checkout.
-
-    On an ordinary Windows install it does not, because Ollama decides where
-    its models are; ``core.ollama_paths`` answers that. ``project_paths``
-    picks between the two so no caller has to.
-    """
+    """Shared model store for every Windows account on the machine."""
     return root(environ, windows, fallback) / MODELS
+
+
+def ollama_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
+    """Shared LocalAI-managed Ollama installation."""
+    return root(environ, windows, fallback) / OLLAMA
 
 
 def env_dir(environ=None, windows=None, fallback: Path | None = None) -> Path:
@@ -149,6 +121,7 @@ def layout(environ=None, windows=None, fallback: Path | None = None) -> dict:
     return {
         'root': base,
         'models': base / MODELS,
+        'ollama': base / OLLAMA,
         'env': base / ENVIRONMENT,
         'accounts': base / USERS,
         'account': account,
@@ -160,9 +133,7 @@ def layout(environ=None, windows=None, fallback: Path | None = None) -> dict:
 
 #: What each directory in the layout is, so a caller never has to guess which
 #: side of the split it is on. Shared is readable by every account on the PC.
-SHARED = ('root', 'models', 'env', 'accounts')
-# 'models' is in the layout because an explicitly overridden root takes the
-# store with it; on an ordinary install ollama_paths has the final word.
+SHARED = ('root', 'models', 'ollama', 'env', 'accounts')
 PRIVATE = ('account', 'user_data', 'logs', 'workspace')
 
 
@@ -177,8 +148,8 @@ def is_inside(path, environ=None, windows=None, fallback: Path | None = None) ->
 
 __all__ = [
     'CHECKOUT_ROOT', 'WINDOWS_ROOT', 'ROOT_VARIABLE', 'PORTABLE_VARIABLE',
-    'MODELS', 'ENVIRONMENT', 'USERS', 'USER_DATA', 'LOGS', 'WORKSPACE',
-    'LEGACY_ENVIRONMENT', 'SHARED', 'PRIVATE',
-    'root', 'models_dir', 'env_dir', 'accounts_dir', 'account_dir',
+    'MODELS', 'OLLAMA', 'ENVIRONMENT', 'USERS', 'USER_DATA', 'LOGS', 'WORKSPACE',
+    'SHARED', 'PRIVATE',
+    'root', 'models_dir', 'ollama_dir', 'env_dir', 'accounts_dir', 'account_dir',
     'user_data_dir', 'logs_dir', 'workspace_dir', 'layout', 'is_inside',
 ]

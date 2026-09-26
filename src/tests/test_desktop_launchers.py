@@ -24,20 +24,17 @@ def test_readme_names_every_entrypoint_a_user_can_double_click():
     assert not missing, 'README 에 없는 진입점: '+', '.join(missing)
 
 
-def test_paths_follow_ollama_and_still_remember_the_old_store(monkeypatch):
-    monkeypatch.delenv('LLM_MODEL_DIR',raising=False)
-    monkeypatch.delenv('LLM_OLLAMA_DIR',raising=False)
-    monkeypatch.delenv('LOCAL_AI_ROOT',raising=False)
-    monkeypatch.delenv('LLM_PROJECT_ROOT',raising=False)
-    monkeypatch.delenv('OLLAMA_MODELS',raising=False)
+def test_paths_keep_shared_assets_under_the_runtime_root(monkeypatch):
+    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
+    monkeypatch.delenv('LLM_OLLAMA_DIR', raising=False)
+    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
+    monkeypatch.delenv('LLM_PROJECT_ROOT', raising=False)
+    monkeypatch.delenv('OLLAMA_MODELS', raising=False)
     from core import runtime_root
     from test_reform_core import _isolated_paths
-    paths=_isolated_paths()
-    # No C: drive here, so the checkout is the root and takes the store.
-    assert paths.MODEL_STORAGE_DIR==paths.RUNTIME_ROOT/runtime_root.MODELS
-    assert str(paths.LEGACY_FORCED_MODEL_DIR)==r'C:\LLM_Models'
-    # The store the release before this one used is remembered too.
-    assert any(str(d)==str(Path(r'C:\LocalAI')/'models') for d in paths.LEGACY_MODEL_DIRS)
+    paths = _isolated_paths()
+    assert paths.MODEL_STORAGE_DIR == paths.RUNTIME_ROOT / runtime_root.MODELS
+    assert paths.OLLAMA_INSTALL_DIR == paths.RUNTIME_ROOT / runtime_root.OLLAMA
 
 
 # Redirect the canonical module's attributes instead of replacing the module:

@@ -4,14 +4,17 @@ from installer.core.filesystem import create_environment
 from installer.steps import python_tools
 
 
-def test_environment_contains_managed_interpreter_paths(tmp_path):
+def test_environment_contains_shared_binary_and_private_interpreter_home(tmp_path):
+    env = tmp_path / "LocalAI" / "environment"
+    account = tmp_path / "LocalAI" / "users" / "Tester"
     paths = create_environment(
-        tmp_path / "llm_environment",
-        model_dir=tmp_path / "LLM_Models",
+        env,
+        model_dir=tmp_path / "LocalAI" / "models",
+        account_root=account,
     )
-    assert paths["open_interpreter"] == tmp_path / "llm_environment" / "open_interpreter"
-    assert paths["open_interpreter_bin"] == tmp_path / "llm_environment" / "open_interpreter" / "bin"
-    assert paths["open_interpreter_home"] == tmp_path / "llm_environment" / "open_interpreter" / "home"
+    assert paths["open_interpreter"] == env / "open_interpreter"
+    assert paths["open_interpreter_bin"] == env / "open_interpreter" / "bin"
+    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter"
 
 
 def test_install_script_and_release_are_pinned():

@@ -5,7 +5,7 @@ MODEL_FILES_v1 compatibility. MODEL_INDEX.json is now authoritative; CSV is a de
 
 Ollama 는 받은 모델을 내용 해시로만 저장한다.
 
-    C:\\LLM_Models\\
+    C:\\LocalAI\\models\\
       blobs\\sha256-3f1c...           <- 실제 가중치. 이름만 봐선 뭔지 알 수 없다
       manifests\\registry.ollama.ai\\
         library\\gemma4\\12b           <- 이 JSON 이 위 해시를 가리킨다

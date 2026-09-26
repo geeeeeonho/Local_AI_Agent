@@ -1,7 +1,7 @@
-import pytest
-
 import json
 from pathlib import Path
+
+import pytest
 
 from installer.core.filesystem import (
     create_environment,
@@ -9,236 +9,124 @@ from installer.core.filesystem import (
     write_install_manifest,
 )
 from launcher.services.ollama import OllamaService
-import project_paths
-from project_paths import MODEL_STORAGE_DIR, RUNTIME_ROOT
 
 
-def test_the_model_store_is_never_a_location_this_project_forced():
-    """Forcing a store of our own is what this project stopped doing.
+def test_default_windows_layout_keeps_models_under_localai(monkeypatch):
+    from core import ollama_paths, runtime_root
+    import project_paths
 
-    OLLAMA_MODELS=C:\\LLM_Models made the models ours rather than Ollama's:
-    nothing else on the machine could see them, and a user who had already
-    moved their store off C: had that silently overridden. A store the user
-    configures still wins; the stores older releases picked do not.
-    """
+    monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
+    monkeypatch.delenv("OLLAMA_MODELS", raising=False)
+    monkeypatch.delenv("LOCAL_AI_ROOT", raising=False)
+    monkeypatch.delenv("LLM_PROJECT_ROOT", raising=False)
+
+    assert ollama_paths.SHARED_MODELS_DIR == runtime_root.WINDOWS_ROOT / "models"
+    assert ollama_paths.PROJECT_INSTALL_DIR == runtime_root.WINDOWS_ROOT / "ollama"
+
+
+def test_explicit_root_takes_shared_assets_with_it(monkeypatch, tmp_path):
+    import project_paths
+    root = tmp_path / "LocalAI"
+    monkeypatch.setenv("LOCAL_AI_ROOT", str(root))
+    monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
+    monkeypatch.delenv("OLLAMA_MODELS", raising=False)
+
+    assert project_paths.runtime_dir() == root
+    assert project_paths.model_dir() == root / "models"
+
+
+def test_user_model_override_is_still_respected():
     from core import ollama_paths
-    assert str(MODEL_STORAGE_DIR).lower() != r"c:\llm_models"
-    assert not ollama_paths.is_legacy_forced_store(MODEL_STORAGE_DIR)
+    moved = {"OLLAMA_MODELS": r"D:\ai-models"}
+    assert str(ollama_paths.models_dir(moved)) == r"D:\ai-models"
 
 
-def test_on_windows_the_store_is_ollamas_folder_not_the_products_root(monkeypatch):
-    """The actual install: models beside Ollama, records in our own root."""
-    from core import ollama_paths
-    monkeypatch.setattr(project_paths, '_on_windows', lambda: True)
-    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
-    monkeypatch.delenv('OLLAMA_MODELS', raising=False)
-    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
-    monkeypatch.delenv('LLM_PROJECT_ROOT', raising=False)
-    assert project_paths.model_dir() == ollama_paths.SHARED_MODELS_DIR
-    assert str(project_paths.model_dir()).startswith(str(Path(r"C:\Ollama")))
+def test_service_explicitly_points_ollama_at_shared_store(tmp_path, monkeypatch):
+    import project_paths
+    broker = tmp_path / "LocalAI" / "ollama"
+    broker.mkdir(parents=True)
+    exe = broker / "ollama.exe"
+    exe.write_text("ollama", encoding="utf-8")
+    monkeypatch.setattr(project_paths, "OLLAMA_INSTALL_DIR", broker)
+
+    store = tmp_path / "LocalAI" / "models"
+    svc = OllamaService(tmp_path / "environment", model_dir=store)
+    svc.exe = exe
+    svc.portable_exe = exe
+
+    assert svc.env_vars({})["OLLAMA_MODELS"] == str(store)
 
 
-def test_a_stale_pointer_to_the_previous_store_is_not_obeyed(monkeypatch):
-    """OLLAMA_MODELS=C:\\LocalAI\\models is our own leftover, not a user choice.
+def test_create_environment_builds_shared_and_private_sides(tmp_path, monkeypatch):
+    from installer.core import filesystem
 
-    The release before this one wrote that value machine-wide. Reading it back
-    as a preference would pin every future run to a store nothing migrates out
-    of, and the models would stay split across two folders.
-    """
-    from core import ollama_paths
-    monkeypatch.setattr(project_paths, '_on_windows', lambda: True)
-    monkeypatch.delenv('LLM_MODEL_DIR', raising=False)
-    monkeypatch.delenv('LOCAL_AI_ROOT', raising=False)
-    monkeypatch.delenv('LLM_PROJECT_ROOT', raising=False)
-    monkeypatch.setenv('OLLAMA_MODELS', str(ollama_paths.LEGACY_ROOT_STORE))
-    assert project_paths.model_dir() == ollama_paths.SHARED_MODELS_DIR
-    # A store the user really chose is still theirs.
-    monkeypatch.setenv('OLLAMA_MODELS', r'D:\ai-models')
-    assert str(project_paths.model_dir()) == r'D:\ai-models'
+    root = tmp_path / "LocalAI"
+    env = root / "environment"
+    models = root / "models"
+    account = root / "users" / "Tester"
+    broker = root / "ollama"
 
+    monkeypatch.setattr(filesystem, "MODEL_STORAGE_DIR", models)
+    monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", broker)
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_shared_model_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "publish_shared_model_dir", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
 
-def test_an_explicitly_moved_root_takes_the_store_with_it():
-    """"Put the whole product here" has to mean the whole product.
+    paths = create_environment(env, account_root=account)
 
-    On an ordinary Windows install the store is Ollama's to place, but a
-    portable run, a test, or a machine with no C: drive says where everything
-    goes - and leaving forty gigabytes behind would make that a lie.
-    """
-    from core import runtime_root
-    assert MODEL_STORAGE_DIR == RUNTIME_ROOT / runtime_root.MODELS
-    assert runtime_root.is_inside(MODEL_STORAGE_DIR)
+    assert paths["env"] == env
+    assert paths["ollama"] == broker
+    assert paths["models"] == models
+    assert paths["account"] == account
+    assert paths["user_data"] == account / "user_data"
+    assert paths["logs"] == account / "logs"
+    assert paths["workspace"] == account / "workspace"
+    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter"
 
 
-def test_the_default_store_is_shared_by_every_account_on_the_machine():
-    """Ollama's own default is per-user, so a second account re-downloads everything."""
-    from core import ollama_paths
-    home = {"USERPROFILE": r"C:\Users\someone", "HOME": r"C:\Users\someone"}
-    assert ollama_paths.models_dir(home) == ollama_paths.SHARED_MODELS_DIR
-    assert ollama_paths.models_dir_is_shared(home)
-    assert not ollama_paths.is_per_user_store(ollama_paths.models_dir(home), home)
-    # The per-user location Ollama would pick unaided is still named, so the
-    # shell can say why it is not being used.
-    assert ollama_paths.is_per_user_store(ollama_paths.user_default_models_dir(home), home)
+def test_create_environment_does_not_scan_or_move_old_model_folders(tmp_path, monkeypatch):
+    from installer.core import filesystem
+
+    root = tmp_path / "LocalAI"
+    env = root / "environment"
+    models = root / "models"
+    account = root / "users" / "Tester"
+    old = tmp_path / "LLM_Models"
+    (old / "blobs").mkdir(parents=True)
+    (old / "blobs" / "sha256-old").write_text("old", encoding="utf-8")
+
+    monkeypatch.setattr(filesystem, "MODEL_STORAGE_DIR", models)
+    monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", root / "ollama")
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_shared_model_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "publish_shared_model_dir", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
+
+    create_environment(env, account_root=account)
+
+    assert old.exists()
+    assert (old / "blobs" / "sha256-old").exists()
+    assert models.is_dir()
+    assert not (models / "blobs" / "sha256-old").exists()
 
 
-def test_the_store_sits_where_every_ollama_on_the_machine_looks():
-    """Beside Ollama's install, because Ollama is what serves the models.
-
-    A store this product invents is a store only this product knows about: the
-    tray app Windows starts at login, and a user typing ``ollama serve``, read
-    Ollama's own rule. Keeping the library one folder from the binaries means
-    every one of them finds it, whether or not this program is running.
-    """
-    from core import ollama_paths
-    assert ollama_paths.SHARED_MODELS_DIR.parent == ollama_paths.PROJECT_INSTALL_DIR
-    # The location the release before this one used is still known, so setup
-    # can find models left there and bring them back.
-    assert ollama_paths.LEGACY_ROOT_STORE in ollama_paths.LEGACY_STORES
-    assert ollama_paths.is_legacy_forced_store(ollama_paths.LEGACY_ROOT_STORE)
-    assert not ollama_paths.is_legacy_forced_store(ollama_paths.SHARED_MODELS_DIR)
 
 
-def test_a_store_the_user_configured_wins_over_the_shared_default():
-    from core import ollama_paths
-    home = {"USERPROFILE": r"C:\Users\someone"}
-    moved = dict(home, OLLAMA_MODELS=r"D:\models")
-    assert str(ollama_paths.models_dir(moved)) == r"D:\models"
-    assert not ollama_paths.models_dir_is_shared(moved)
-    assert str(ollama_paths.configured_models_dir(moved)) == r"D:\models"
-    assert ollama_paths.configured_models_dir(home) is None
-    assert ollama_paths.configured_models_dir(dict(home, OLLAMA_MODELS="   ")) is None
-
-
-def test_the_old_forced_environment_value_is_migration_input_not_a_user_choice():
-    from core import ollama_paths
-    # One backslash, not two: the doubled form only compared equal because
-    # Windows collapses it, so this test could not run anywhere else.
-    environ = {"OLLAMA_MODELS": r"C:\LLM_Models"}
-    # We still remember the raw configured value so migration/diagnostics can
-    # identify it, but the active target is the new shared Ollama store.
-    assert ollama_paths.configured_models_dir(environ) == ollama_paths.LEGACY_FORCED_STORE
-    assert ollama_paths.models_dir(environ) == ollama_paths.SHARED_MODELS_DIR
-
-
-def test_the_store_this_project_used_to_force_is_still_known():
-    """The installer has to find models left there before it can move them."""
-    from project_paths import LEGACY_FORCED_MODEL_DIR
-    assert str(LEGACY_FORCED_MODEL_DIR).lower() == r"c:\llm_models"
-
-
-def test_the_service_tells_ollama_where_the_shared_store_is(tmp_path):
-    """Left unsaid, Ollama would use a profile path and the sharing is lost."""
-    from core import ollama_paths
-    service = OllamaService(tmp_path, model_dir=ollama_paths.SHARED_MODELS_DIR)
-    assert service.env_vars({})["OLLAMA_MODELS"] == str(ollama_paths.SHARED_MODELS_DIR)
-    directed = OllamaService(tmp_path, model_dir=tmp_path / "elsewhere")
-    assert directed.env_vars({})["OLLAMA_MODELS"] == str(tmp_path / "elsewhere")
-
-
-def test_a_user_who_already_moved_their_store_keeps_their_choice(tmp_path):
-    """Their OLLAMA_MODELS is already in the environment; we must not rewrite it."""
-    from core import ollama_paths
-    chosen = tmp_path / "chosen"
-    environ = {"USERPROFILE": str(tmp_path), "OLLAMA_MODELS": str(chosen)}
-    service = OllamaService(tmp_path, model_dir=ollama_paths.models_dir(environ))
-    assert service.model_dir == chosen
-    assert service.env_vars(environ)["OLLAMA_MODELS"] == str(chosen)
-
-
-def test_being_pointed_elsewhere_overrides_even_a_user_setting(tmp_path):
-    """A controlled deployment that names a directory still wins, explicitly."""
-    directed = tmp_path / "directed"
-    environ = {"USERPROFILE": str(tmp_path), "OLLAMA_MODELS": str(tmp_path / "chosen")}
-    service = OllamaService(tmp_path, model_dir=directed)
-    assert service.env_vars(environ)["OLLAMA_MODELS"] == str(directed)
-
-
-def test_create_environment_keeps_models_outside_project_environment(tmp_path):
-    env = tmp_path / "project" / "llm_environment"
-    shared_models = tmp_path / "shared" / "LLM_Models"
-
-    paths = create_environment(env, model_dir=shared_models)
-
-    assert paths["models"] == shared_models
-    assert shared_models.is_dir()
-    assert not (env / "llm_models").exists()
-
-
-def test_create_environment_migrates_legacy_models_when_shared_storage_is_empty(tmp_path):
-    env = tmp_path / "project" / "llm_environment"
-    legacy = env / "llm_models"
-    shared_models = tmp_path / "shared" / "LLM_Models"
-    (legacy / "blobs").mkdir(parents=True)
-    (legacy / "blobs" / "sha256-test").write_text("model", encoding="utf-8")
-
-    paths = create_environment(env, model_dir=shared_models)
-
-    assert paths["models"] == shared_models
-    assert (shared_models / "blobs" / "sha256-test").read_text(encoding="utf-8") == "model"
-    assert not legacy.exists()
-
-
-def test_create_environment_promotes_completed_staging_after_interruption(tmp_path):
-    env = tmp_path / "project" / "llm_environment"
-    shared_models = tmp_path / "shared" / "LLM_Models"
-    staging = shared_models.with_name(shared_models.name + ".migrating")
-    (staging / "blobs").mkdir(parents=True)
-    (staging / "blobs" / "sha256-complete").write_text("complete", encoding="utf-8")
-
-    paths = create_environment(env, model_dir=shared_models)
-
-    assert paths["models"] == shared_models
-    assert (shared_models / "blobs" / "sha256-complete").read_text(encoding="utf-8") == "complete"
-    assert not staging.exists()
-
-
-def test_create_environment_discards_partial_staging_when_legacy_source_remains(tmp_path):
-    env = tmp_path / "project" / "llm_environment"
-    legacy = env / "llm_models"
-    shared_models = tmp_path / "shared" / "LLM_Models"
-    staging = shared_models.with_name(shared_models.name + ".migrating")
-    (legacy / "blobs").mkdir(parents=True)
-    (legacy / "blobs" / "sha256-real").write_text("real", encoding="utf-8")
-    (staging / "blobs").mkdir(parents=True)
-    (staging / "blobs" / "sha256-partial").write_text("partial", encoding="utf-8")
-
-    paths = create_environment(env, model_dir=shared_models)
-
-    assert (shared_models / "blobs" / "sha256-real").read_text(encoding="utf-8") == "real"
-    assert not (shared_models / "blobs" / "sha256-partial").exists()
-    assert not staging.exists()
-    assert not legacy.exists()
-
-
-def test_completed_staging_wins_if_source_cleanup_was_interrupted(tmp_path):
-    env = tmp_path / "project" / "llm_environment"
-    legacy = env / "llm_models"
-    shared_models = tmp_path / "shared" / "LLM_Models"
-    staging = shared_models.with_name(shared_models.name + ".migrating")
-
-    # Source cleanup has already removed one file, while staging has the complete copy.
-    (legacy / "blobs").mkdir(parents=True)
-    (legacy / "blobs" / "sha256-still-left").write_text("left", encoding="utf-8")
-    (staging / "blobs").mkdir(parents=True)
-    (staging / "blobs" / "sha256-still-left").write_text("left", encoding="utf-8")
-    (staging / "blobs" / "sha256-already-removed-from-source").write_text(
-        "complete-copy", encoding="utf-8"
+def test_shared_runtime_access_grants_read_execute_to_environment_and_ollama(monkeypatch, tmp_path):
+    from installer.core import filesystem
+    touched = []
+    monkeypatch.setattr(
+        "integrations.ollama.sharing.ensure_readable",
+        lambda path, **kwargs: touched.append(Path(path)) or True,
     )
-    (staging / ".LOCAL_AI_MIGRATION_COMPLETE").write_text("complete\n", encoding="utf-8")
-
-    paths = create_environment(env, model_dir=shared_models)
-
-    assert paths["models"] == shared_models
-    assert (
-        shared_models / "blobs" / "sha256-already-removed-from-source"
-    ).read_text(encoding="utf-8") == "complete-copy"
-    assert not (shared_models / ".LOCAL_AI_MIGRATION_COMPLETE").exists()
-    assert not staging.exists()
-    assert not legacy.exists()
-
+    env = tmp_path / "LocalAI" / "environment"
+    broker = tmp_path / "LocalAI" / "ollama"
+    assert filesystem.ensure_shared_runtime_access((env, broker), windows=True) is True
+    assert touched == [env, broker]
 
 def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
-    model_dir = tmp_path / "LLM_Models"
+    model_dir = tmp_path / "models"
     model_dir.mkdir()
     calls = []
 
@@ -252,186 +140,69 @@ def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_
         return Result()
 
     monkeypatch.setattr("integrations.windows.acl.subprocess.run", fake_run)
-
     assert ensure_shared_model_access(model_dir, windows=True) is True
     assert calls[0][0] == [
-        "icacls",
-        str(model_dir),
-        "/grant",
-        "*S-1-5-32-545:(OI)(CI)(RX)",
-        "/T",
-        "/Q",
+        "icacls", str(model_dir), "/grant",
+        "*S-1-5-32-545:(OI)(CI)(RX)", "/T", "/Q",
     ]
 
 
-def test_ollama_service_uses_same_shared_model_directory(tmp_path):
-    env = tmp_path / "llm_environment"
-    shared_models = tmp_path / "LLM_Models"
-    svc = OllamaService(env, model_dir=shared_models)
-
-    values = svc.env_vars({})
-
-    assert values["OLLAMA_MODELS"] == str(shared_models)
-
-
-def test_install_manifest_identifies_product_and_external_model_storage(tmp_path):
-    project_root = tmp_path / "Local_AI_Agent"
-    env = project_root / "llm_environment"
-    shared_models = tmp_path / "LLM_Models"
-    paths = create_environment(env, model_dir=shared_models)
-
-    manifest = write_install_manifest(
-        paths,
-        project_root=project_root,
-        status="installed",
-        components=["ollama", "anythingllm", "open_interpreter"],
-    )
-
-    data = json.loads(manifest.read_text(encoding="utf-8"))
-    assert manifest == env / "LOCAL_AI_AGENT_INSTALL.json"
-    assert data["schema_version"] == 2
-    assert data["product"] == "Local AI Agent"
-    assert data["repository"] == "geeeeeonho/Local_AI_Agent"
-    assert data["status"] == "installed"
-    assert Path(data["environment_path"]) == env
-    assert Path(data["model_storage"]) == shared_models
-    assert data["model_storage_access"] == (
-        "builtin-users-read-execute-requested; existing-acl-preserved"
-    )
-    assert data["components"] == ["ollama", "anythingllm", "open_interpreter"]
-    assert data["failed_components"] == []
-    assert data["skipped_components"] == []
-
-
-# ── moving the old forced store into Ollama's ────────────────────────────
-# C:\LLM_Models was this project's own invention. Once Ollama owns the
-# location, that folder is invisible to Ollama, so the installer has to move it
-# or tens of gigabytes appear to vanish. These pin the data-safety rules.
-
-def store(path, *blobs):
-    (path / "blobs").mkdir(parents=True, exist_ok=True)
-    for blob in blobs:
-        (path / "blobs" / ("sha256-" + blob)).write_text(blob, encoding="utf-8")
-    return path
-
-
-def blobs(path):
-    folder = path / "blobs"
-    return sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
-
-
-def migrate(monkeypatch, forced, env, models):
-    from installer.core import filesystem
-    monkeypatch.setattr(filesystem, "LEGACY_MODEL_DIRS", (forced,))
-    filesystem._migrate_legacy_models(env, models)
-
-
-def test_the_old_forced_store_moves_into_the_ollama_store(monkeypatch, tmp_path):
-    forced = store(tmp_path / "LLM_Models", "aaa", "bbb")
-    models = tmp_path / "Ollama" / "models"
-    migrate(monkeypatch, forced, tmp_path / "env", models)
-    assert blobs(models) == ["sha256-aaa", "sha256-bbb"]
-    assert not forced.exists()
-
-
-def test_a_store_already_in_use_is_never_merged_into(monkeypatch, tmp_path):
-    forced = store(tmp_path / "LLM_Models", "old")
-    models = store(tmp_path / "Ollama" / "models", "new")
-    migrate(monkeypatch, forced, tmp_path / "env", models)
-    assert blobs(models) == ["sha256-new"]
-    assert blobs(forced) == ["sha256-old"], "the source must survive untouched"
-
-
-def test_only_one_store_moves_and_the_other_is_left_for_the_user(monkeypatch, tmp_path):
-    forced = store(tmp_path / "LLM_Models", "forced")
-    env = tmp_path / "env"
-    older = store(env / "llm_models", "older")
-    models = tmp_path / "Ollama" / "models"
-    migrate(monkeypatch, forced, env, models)
-    assert blobs(models) == ["sha256-forced"]
-    assert blobs(older) == ["sha256-older"], "never silently discarded"
-
-
-def test_a_partial_copy_is_discarded_while_its_source_still_exists(monkeypatch, tmp_path):
-    forced = store(tmp_path / "LLM_Models", "real")
-    models = tmp_path / "Ollama" / "models"
-    store(models.with_name(models.name + ".migrating"), "partial")
-    migrate(monkeypatch, forced, tmp_path / "env", models)
-    assert blobs(models) == ["sha256-real"]
-    assert not models.with_name(models.name + ".migrating").exists()
-
-
-def test_an_interrupted_rename_is_promoted_not_deleted(monkeypatch, tmp_path):
-    """Source already renamed into staging: discarding it destroys the only copy."""
-    models = tmp_path / "Ollama" / "models"
-    store(models.with_name(models.name + ".migrating"), "only-copy")
-    migrate(monkeypatch, forced := tmp_path / "LLM_Models", tmp_path / "env", models)
-    assert blobs(models) == ["sha256-only-copy"]
-    assert not forced.exists()
-
-
-def test_a_completed_copy_cleans_up_the_store_it_names(monkeypatch, tmp_path):
-    from installer.core.relocate import MARKER_NAME as _MIGRATION_COMPLETE_MARKER
-    forced = store(tmp_path / "LLM_Models", "source")
-    env = tmp_path / "env"
-    other = store(env / "llm_models", "untouched")
-    models = tmp_path / "Ollama" / "models"
-    staging = store(models.with_name(models.name + ".migrating"), "copied")
-    (staging / _MIGRATION_COMPLETE_MARKER).write_text(
-        "complete\n%s\n" % forced, encoding="utf-8")
-    migrate(monkeypatch, forced, env, models)
-    assert blobs(models) == ["sha256-copied"]
-    assert not forced.exists(), "the recorded origin is cleaned up"
-    assert blobs(other) == ["sha256-untouched"], "an unrelated store is not touched"
-
-
-def test_a_completed_copy_with_no_recorded_origin_keeps_ambiguous_sources(monkeypatch, tmp_path):
-    """An older marker names no origin; with two candidates, delete neither."""
-    from installer.core.relocate import MARKER_NAME as _MIGRATION_COMPLETE_MARKER
-    forced = store(tmp_path / "LLM_Models", "one")
-    env = tmp_path / "env"
-    other = store(env / "llm_models", "two")
-    models = tmp_path / "Ollama" / "models"
-    staging = store(models.with_name(models.name + ".migrating"), "copied")
-    (staging / _MIGRATION_COMPLETE_MARKER).write_text("complete\n", encoding="utf-8")
-    migrate(monkeypatch, forced, env, models)
-    assert blobs(models) == ["sha256-copied"]
-    assert blobs(forced) == ["sha256-one"] and blobs(other) == ["sha256-two"]
-
-
-def test_publishing_the_shared_dir_is_skipped_off_windows(tmp_path):
-    from installer.core.filesystem import publish_shared_model_dir
-    assert publish_shared_model_dir(tmp_path, windows=False) is True
-
-
-def test_an_explicit_model_dir_is_not_published_or_reacled(tmp_path, monkeypatch):
-    """A caller-chosen directory belongs to the caller, not to the machine."""
+def test_explicit_model_dir_is_not_published_or_reacled(tmp_path, monkeypatch):
     from installer.core import filesystem
     touched = []
     monkeypatch.setattr(filesystem, "ensure_shared_model_access",
                         lambda *a, **k: touched.append("acl"))
     monkeypatch.setattr(filesystem, "publish_shared_model_dir",
                         lambda *a, **k: touched.append("setx"))
-    filesystem.create_environment(tmp_path / "env", model_dir=tmp_path / "chosen")
+    monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", tmp_path / "ollama")
+
+    filesystem.create_environment(
+        tmp_path / "environment",
+        model_dir=tmp_path / "chosen",
+        account_root=tmp_path / "users" / "Tester",
+    )
     assert touched == []
 
 
-# ── matching Ollama's own resolution ─────────────────────────────────────
-# Verified against a real ollama binary built from source: envconfig.Models is
-#     if OLLAMA_MODELS != "" -> it, else <home>/.ollama/models
-# and envconfig.Var is strings.Trim(strings.TrimSpace(v), "\"'"). Disagreeing
-# with either sends this project looking in a directory that does not exist
-# while Ollama serves happily from the real one.
+def test_install_manifest_records_shared_root_and_private_account(tmp_path, monkeypatch):
+    from installer.core import filesystem
+
+    root = tmp_path / "LocalAI"
+    env = root / "environment"
+    models = root / "models"
+    account = root / "users" / "Tester"
+    broker = root / "ollama"
+
+    monkeypatch.setattr(filesystem, "MODEL_STORAGE_DIR", models)
+    monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", broker)
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_shared_model_access", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "publish_shared_model_dir", lambda *a, **k: True)
+    monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
+
+    paths = create_environment(env, account_root=account)
+    manifest = write_install_manifest(
+        paths,
+        project_root=tmp_path / "checkout",
+        status="installed",
+        components=["ollama"],
+    )
+
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert data["schema_version"] == 3
+    assert Path(data["runtime_root"]) == root
+    assert Path(data["environment_path"]) == env
+    assert Path(data["ollama_path"]) == broker
+    assert Path(data["model_storage"]) == models
+    assert Path(data["account_path"]) == account
+
 
 @pytest.mark.parametrize("raw,expected", [
-    (r"C:\Ollama\models", r"C:\Ollama\models"),
-    # Quotes are easy to end up with from a Windows dialog or a batch file.
-    (r'"C:\Ollama\models"', r"C:\Ollama\models"),
-    (r"'C:\Ollama\models'", r"C:\Ollama\models"),
-    (r'""C:\Ollama\models""', r"C:\Ollama\models"),
-    ("  C:\\Ollama\\models  ", r"C:\Ollama\models"),
-    # Ollama trims the quotes but not spaces inside them, and so must this.
-    (r'" C:\Ollama\models "', r" C:\Ollama\models "),
+    (r"C:\LocalAI\models", r"C:\LocalAI\models"),
+    (r'"C:\LocalAI\models"', r"C:\LocalAI\models"),
+    ("  C:\\LocalAI\\models  ", r"C:\LocalAI\models"),
     (r"D:\내 모델\ollama", r"D:\내 모델\ollama"),
 ])
 def test_ollama_models_is_parsed_the_way_ollama_parses_it(raw, expected):
@@ -440,7 +211,7 @@ def test_ollama_models_is_parsed_the_way_ollama_parses_it(raw, expected):
 
 
 @pytest.mark.parametrize("raw", ["", "   ", '""', "''", None])
-def test_an_empty_or_quote_only_value_means_unconfigured(raw):
+def test_empty_ollama_models_uses_shared_default(raw):
     from core import ollama_paths
     environ = {} if raw is None else {"OLLAMA_MODELS": raw}
     assert ollama_paths.configured_models_dir(environ) is None
