@@ -143,7 +143,13 @@ def _prepare_interpreter_home(package_home: Path) -> tuple[bool, str]:
     subtree explicitly and verify a real write before invoking PowerShell.
     """
     package_home = Path(package_home)
-    package_home.mkdir(parents=True, exist_ok=True)
+    try:
+        package_home.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return False, (
+            "Open Interpreter 사용자 폴더를 만들 수 없습니다: "
+            + str(package_home) + " (" + str(exc) + ")"
+        )
 
     if os.name == "nt":
         try:
@@ -190,7 +196,10 @@ def _prepare_interpreter_home(package_home: Path) -> tuple[bool, str]:
 
 def _directory_writable(path: Path) -> bool:
     path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
     probe = path / (".localai-write-probe-%d" % os.getpid())
     try:
         with probe.open("xb") as stream:
@@ -214,8 +223,6 @@ def install_open_interpreter(
 
     bin_dir = paths.get("open_interpreter_bin", paths["env"] / "open_interpreter" / "bin")
     package_home = paths.get("open_interpreter_home", paths["env"] / "open_interpreter" / "home")
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    package_home.mkdir(parents=True, exist_ok=True)
 
     writable, detail = _prepare_interpreter_home(package_home)
     if not writable:
