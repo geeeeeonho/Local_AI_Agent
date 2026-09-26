@@ -25,16 +25,17 @@ class DesktopServices:
         """Repair small per-account state folders before any JsonStore opens.
 
         A stale lock created by an elevated/older run can deny the normal token
-        even when the account root itself is correctly private. Cache/settings/
+        even when the account root itself is correctly private. Runtime/settings/
         projects are small control-state trees, so recursively normalising their
-        ACLs here is cheap and prevents Chat startup from failing on .lock files.
+        ACLs here is cheap. Ephemeral locks deliberately live in the fresh
+        user_data/runtime tree instead of reusing legacy cache lock files.
         """
         data = Path(data)
         account = data.parent
         account.mkdir(parents=True, exist_ok=True)
         data.mkdir(parents=True, exist_ok=True)
         if __import__('os').name != 'nt':
-            for name in ('cache', 'settings', 'projects'):
+            for name in ('runtime', 'settings', 'projects'):
                 (data / name).mkdir(parents=True, exist_ok=True)
             return
 
@@ -44,7 +45,7 @@ class DesktopServices:
         except Exception:
             pass
 
-        for name in ('cache', 'settings', 'projects'):
+        for name in ('runtime', 'settings', 'projects'):
             folder = data / name
             folder.mkdir(parents=True, exist_ok=True)
             try:
@@ -73,10 +74,17 @@ class DesktopServices:
         self.projects = ProjectRegistry(self.data / 'projects' / 'registry.json')
         self.owner = RuntimeOwner(self.env / "desktop-runtime.lock")
         self.network = NetworkManager(backend, self.owner, self.events)
-        self.inference = InferenceService(runtime=backend.inference, events=self.events,
-            state=RuntimeState(self.data / 'cache' / 'runtime-state.json'))
-        self.models = ModelService(self.inference, events=self.events,
-            lock_path=self.data / 'cache' / 'model-mutation.lock')
+        control = self.data / 'runtime'
+        self.inference = InferenceService(
+            runtime=backend.inference,
+            events=self.events,
+            state=RuntimeState(control / 'runtime-state.json'),
+        )
+        self.models = ModelService(
+            self.inference,
+            events=self.events,
+            lock_path=control / 'model-mutation.lock',
+        )
         self.search = SearchService(backend, self.network, self.events)
         self.chat = ChatService(backend, self.inference, self.network, self.search, self.events)
         self.agent = AgentLauncher(backend, self.network, self.events)
