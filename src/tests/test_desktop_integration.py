@@ -65,6 +65,21 @@ def test_embedded_setup_inherits_desktop_language_without_prompt(tmp_path):
         set_language(previous)
 
 
+def test_embedded_setup_reuses_the_desktop_language(monkeypatch, tmp_path):
+    b,m,calls=fixture(tmp_path)
+    import installer.i18n as i18n
+    monkeypatch.setattr(i18n, 'get_language', lambda: 'ko')
+
+    command=b.setup_command({
+        'sandbox':True,
+        'build':True,
+        'search':True,
+    })
+
+    lang_index=command.index('--lang')
+    assert command[lang_index + 1]=='ko'
+
+
 def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
     import inspect
     from integrations.legacy.desktop import LegacyBackend
