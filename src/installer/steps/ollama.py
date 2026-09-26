@@ -135,12 +135,50 @@ def install_official(target: Optional[Path] = None, model_dir: Optional[Path] = 
                 continue
         if found is None:
             utils.warn("설치 후에도 LocalAI 공용 경로에서 ollama 실행 파일을 찾지 못했습니다.")
+        if not disable_login_autostart():
+            utils.warn("Ollama 로그인 자동시작 바로가기를 제거하지 못했습니다. "
+                       "작업 관리자 > 시작 앱에서 Ollama를 비활성화하세요.")
         return found
     finally:
         try:
             installer.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def disable_login_autostart() -> bool:
+    """Remove Ollama's per-user login shortcut for the installing account.
+
+    LocalAI owns broker startup. Ollama's Windows app creates a Startup shortcut
+    during installation/first launch; leaving it enabled can start 11434 before
+    LocalAI has applied the managed store policy on the next sign-in.
+    """
+    if not _is_windows():
+        return True
+    appdata = os.environ.get("APPDATA", "").strip()
+    if not appdata:
+        return False
+    shortcut = (
+        Path(appdata)
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+        / "Ollama.lnk"
+    )
+    # The installer starts the app asynchronously. Give it a short chance to
+    # create the shortcut, then remove it. Missing is already the desired state.
+    import time
+    for _ in range(20):
+        try:
+            if shortcut.exists():
+                shortcut.unlink()
+                return not shortcut.exists()
+        except OSError:
+            return False
+        time.sleep(0.1)
+    return not shortcut.exists()
 
 
 def install(paths: Dict[str, Path]) -> Path:
