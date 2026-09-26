@@ -63,6 +63,15 @@ def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
     assert 'stderr' in source and 'subprocess.STDOUT' in source
 
 
+def test_checkbox_panels_never_install_global_mousewheel_handlers():
+    import inspect
+    from launcher.presenter.gui.panels import CheckboxPanel
+
+    source=inspect.getsource(CheckboxPanel)
+    assert 'bind_all' not in source
+    assert 'bind_wheel_tree' in source
+
+
 def test_docker_build_action_never_spawns_a_progress_console():
     import inspect
     from launcher.actions import docker_image
