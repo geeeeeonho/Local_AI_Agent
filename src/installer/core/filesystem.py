@@ -73,7 +73,7 @@ def ensure_shared_runtime_access(paths, windows: Optional[bool] = None) -> bool:
     return ok_all
 
 def ensure_accounts_parent_access(users_root: Path, windows: Optional[bool] = None) -> bool:
-    """Allow any local account to create its own child under C:\LocalAI\users.
+    r"""Allow any local account to create its own child under C:\LocalAI\users.
 
     The grant is parent-only: it does not carry into account folders. Each
     users/<account> child immediately breaks inheritance and grants only that
@@ -132,6 +132,12 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     if not ensure_accounts_parent_access(users_root):
         warn("다른 Windows 계정의 사용자 폴더 생성 권한을 설정하지 못했습니다: %s" % users_root)
 
+    # A standard account may have permission to create users/<account> but no
+    # inherited write grant inside it. As the creator/owner it can rewrite the
+    # DACL, so do that immediately before making user_data/logs/workspace.
+    account.mkdir(parents=True, exist_ok=True)
+    ensure_private_account(account)
+
     paths = {
         "env":                   env,
         "ollama":                OLLAMA_INSTALL_DIR,
@@ -182,7 +188,6 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     if model_dir is None:
         ensure_shared_model_access(models)
         publish_shared_model_dir(models)
-    ensure_private_account(account)
     return paths
 
 
