@@ -154,6 +154,7 @@ def test_a_machine_set_up_by_an_admin_reads_as_shared(monkeypatch, tmp_path):
     found = sharing.read(store, windows=True)
     assert found.machine_value == str(store)
     assert found.readable_by_users is True
+    assert found.manageable_by_users is True
     assert found.blockers == ()
 
 
@@ -256,6 +257,19 @@ def test_the_screen_reports_localai_sharing_even_without_machine_variable(monkey
 ])
 def test_the_acl_is_read_from_sddl_not_a_localized_name(sddl, expected):
     assert policy.readable_from_sddl(sddl) is expected
+
+
+@pytest.mark.parametrize('sddl,expected', [
+    (GRANTED, True),
+    (READ_ONLY, False),
+    ('D:AI(A;OICI;FA;;;BU)', True),
+    ('D:AI(A;OICI;FW;;;BU)', False),
+    ('D:AI(D;OICI;FA;;;BU)(A;OICI;0x1301bf;;;BU)', False),
+    (NOT_GRANTED, False),
+    ('not an sddl at all', None),
+])
+def test_modify_access_is_read_from_the_acl_mask(sddl, expected):
+    assert policy.manageable_from_sddl(sddl) is expected
 
 
 def test_a_korean_windows_reads_the_same_as_an_english_one(monkeypatch, tmp_path):
