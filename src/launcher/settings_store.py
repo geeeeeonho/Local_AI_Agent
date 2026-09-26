@@ -135,7 +135,13 @@ def migrate_legacy_settings(project_root: Path | None = None) -> bool:
 
 
 def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
-    migrate_legacy_settings(project_root)
+    """Read only the canonical store.
+
+    Legacy merging is intentionally not automatic on a fresh-install product:
+    reading settings must never mutate the checkout or import state from an old
+    layout behind the user's back. ``migrate_legacy_settings`` remains an
+    explicit compatibility helper only.
+    """
     canonical = path(project_root)
     return _read_dict(canonical) if canonical.exists() else {}
 
