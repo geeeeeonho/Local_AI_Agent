@@ -118,7 +118,7 @@ class AgentTrace:
         workspace: Path,
         detailed: bool | None = None,
     ):
-        log_dir = project_paths.user_data_dir() / "logs"
+        log_dir = project_paths.logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         _prune_old_traces(log_dir)
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
