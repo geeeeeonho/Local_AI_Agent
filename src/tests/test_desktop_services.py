@@ -319,3 +319,33 @@ def test_removing_everything_never_reads_as_not_fitting(tmp_path, monkeypatch):
         assert plan['fits'] is True
     finally:
         services.close()
+
+
+
+def test_session_close_suppresses_stale_global_cleanup(monkeypatch, tmp_path):
+    from launcher.core import lifelog
+    svc, _ = make(tmp_path)
+    svc.owner.acquire()
+    seen = []
+    monkeypatch.setattr(lifelog, "suppress_exit_cleanups", lambda: seen.append("suppress"))
+
+    assert svc.close() is True
+    assert seen == ["suppress"]
+    assert svc.owner.owned is False
+
+
+def test_final_cleanup_runs_while_machine_runtime_is_owned(monkeypatch, tmp_path):
+    from launcher.core import lifelog
+    svc, _ = make(tmp_path)
+    seen = []
+
+    def cleanup():
+        seen.append(svc.owner.owned)
+
+    monkeypatch.setattr(lifelog, "shutdown_then_exit", cleanup)
+
+    assert svc.finalize() is True
+    assert seen == [True]
+    assert svc.owner.owned is False
+    assert svc.finalize() is True
+    assert seen == [True]
