@@ -533,6 +533,36 @@ class LegacyBackend:
             command.append('--skip-search')
         return command
 
+    @staticmethod
+    def _stop_setup_process(process):
+        if process.poll() is not None:
+            return
+        if os.name == 'nt':
+            try:
+                subprocess.run(
+                    ['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000),
+                    timeout=10,
+                    check=False,
+                )
+                return
+            except (OSError, subprocess.SubprocessError):
+                pass
+        try:
+            process.terminate()
+        except OSError:
+            return
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
     def run_setup(self, options=None, log=None, cancel=None):
         """Run Setup invisibly and stream every line into the desktop UI.
 
@@ -579,17 +609,7 @@ class LegacyBackend:
             if cancel is not None and cancel():
                 if log:
                     log('설치 / 복구 취소 요청 — 실행 중인 설치 프로세스를 종료합니다.')
-                try:
-                    process.terminate()
-                except OSError:
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    try:
-                        process.kill()
-                    except OSError:
-                        pass
+                self._stop_setup_process(process)
                 raise RuntimeError('설치 / 복구가 취소되었습니다.')
 
             try:
