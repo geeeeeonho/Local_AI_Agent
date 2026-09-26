@@ -43,6 +43,7 @@ class DesktopWindow:
         self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
         self._model_records = {};self._projects = {};self.project_boxes = []
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
+        self._model_confirm_signature = None
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
         self._chat_progress = [];self._chat_starting = False
@@ -197,6 +198,8 @@ class DesktopWindow:
         # sat on "[1/5] Network preparation" for the entire ninety seconds that
         # Docker Desktop was booting, with the explanation in the activity log.
         service=data.get('service')
+        if event.topic=='runtime.progress' and service=='models':
+            self.update_model_transfer(data)
         if text and event.topic=='runtime.progress' and (
                 service=='chat' or self._chat_starting):
             label=str(text) if service in (None,'chat') else str(service)+': '+str(text)
@@ -210,6 +213,29 @@ class DesktopWindow:
                 )
         if text:self.log(event.topic+': '+str(text),
                          level='error' if event.topic=='runtime.error' else 'info')
+
+    def update_model_transfer(self,data):
+        """Render Ollama pull progress inside the existing Models page."""
+        if not hasattr(self,'model_progress_text'):
+            return
+        model=str(data.get('model') or '')
+        status=str(data.get('status') or '받는 중')
+        total=data.get('total')
+        completed=data.get('completed')
+        percent=None
+        if isinstance(total,(int,float)) and total>0 and isinstance(completed,(int,float)):
+            percent=max(0.0,min(100.0,float(completed)*100.0/float(total)))
+            self.model_progress.configure(value=percent)
+            amount=f"{float(completed)/(1024**3):.1f}/{float(total)/(1024**3):.1f} GB"
+        else:
+            amount=''
+            if status.lower()=='success':
+                self.model_progress.configure(value=100)
+        digest=str(data.get('digest') or '')
+        layer=(' · '+digest[:18]) if digest else ''
+        pct=(f" · {percent:.1f}%" if percent is not None else '')
+        parts=[p for p in (model,status+layer,pct.strip(' ·'),amount) if p]
+        self.model_progress_text.set(' · '.join(parts)[:180])
 
     def run_task(self,key,fn,done=None,*,mutate=True,announce=True,error=None):
         if self.closing:return False
@@ -664,6 +690,9 @@ class DesktopWindow:
         try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
         except Exception as exc:self.choice_summary.set('선택 계산 실패: '+str(exc));return
         self._plan=plan
+        self._model_confirm_signature=None
+        if hasattr(self,'apply_button'):
+            self.apply_button.configure(text='선택대로 적용')
         self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
                                 f"   ·   삭제 예정 {len(plan['remove'])}개")
         self.choice_storage.set(self.storage_line(plan))
@@ -729,31 +758,38 @@ class DesktopWindow:
         except Exception as exc:self.log('선택 계산 실패: '+str(exc),level='error');return
         if not plan['install'] and not plan['remove']:
             self.log('변경할 내용이 없습니다.');return
-        lines=[]
-        if plan['install']:
-            lines.append(f"설치 {len(plan['install'])}개 (~{plan['download_gb']:.1f} GB):")
-            lines+=['  + '+tag for tag in plan['install'][:12]]
-        if plan['remove']:
-            lines.append(f"삭제 {len(plan['remove'])}개:")
-            lines+=['  - '+tag for tag in plan['remove'][:12]]
-        lines.append('')
-        lines.append(self.storage_line(plan))
-        if plan['install'] and plan['fits'] is False:
-            lines.append('공간이 모자라면 받다가 중간에 실패합니다. 먼저 정리하거나 덜 고르세요.')
-        lines.append('')
-        lines.append('설치는 로컬 Ollama 서버가 받고, 삭제는 Ollama가 정리합니다. 계속할까요?')
-        if not messagebox.askyesno('모델 적용','\n'.join(lines),parent=self.root):return
+
+        signature=(tuple(plan['install']),tuple(plan['remove']))
+        if plan['remove'] and self._model_confirm_signature!=signature:
+            self._model_confirm_signature=signature
+            self.apply_button.configure(text='삭제 포함 적용 확인')
+            self.choice_plan.set(
+                f"삭제 {len(plan['remove'])}개가 포함됩니다 · 같은 버튼을 한 번 더 누르면 "
+                "설치/삭제를 시작합니다.")
+            if hasattr(self,'model_progress_text'):
+                self.model_progress_text.set('삭제 포함 — 적용 버튼을 한 번 더 눌러 확인')
+            self.log('모델 삭제가 포함되어 있습니다. 같은 화면의 적용 버튼을 한 번 더 누르면 진행합니다.')
+            return
+
+        self._model_confirm_signature=None
+        self.apply_button.configure(text='선택대로 적용')
+        self.apply_button.state(['disabled'])
+        if hasattr(self,'model_progress'):
+            self.model_progress.configure(value=0)
+        if hasattr(self,'model_progress_text'):
+            self.model_progress_text.set(
+                f"준비 중 · 설치 {len(plan['install'])}개 · 삭제 {len(plan['remove'])}개")
+
         def work():
             done={'install':[],'remove':[],'failed':[]}
-            # Model operations all depend on the same Ollama/store precondition.
-            # Check/bootstrap it once so one machine-level problem is not printed
-            # again for every selected model.
             try:
                 self.services.setup.ensure_model_runtime(download=bool(plan['install']))
             except Exception as exc:
                 done['failed'].append(('prepare','Ollama',str(exc)))
                 return done
             for tag in plan['remove']:
+                if hasattr(self,'model_progress_text'):
+                    self.root.after(0,lambda t=tag:self.model_progress_text.set('삭제 중 · '+t))
                 try:self.services.setup.remove_model(tag);done['remove'].append(tag)
                 except Exception as exc:done['failed'].append(('remove',tag,str(exc)))
             for tag in plan['install']:
@@ -761,7 +797,16 @@ class DesktopWindow:
                 try:self.services.setup.install_model(tag);done['install'].append(tag)
                 except Exception as exc:done['failed'].append(('install',tag,str(exc)))
             return done
+
         def finished(done):
+            self.apply_button.configure(text='선택대로 적용')
+            self.apply_button.state(['!disabled'])
+            if hasattr(self,'model_progress'):
+                self.model_progress.configure(value=100 if not done['failed'] else 0)
+            if hasattr(self,'model_progress_text'):
+                self.model_progress_text.set(
+                    f"완료 · 설치 {len(done['install'])} · 삭제 {len(done['remove'])}"
+                    + (f" · 실패 {len(done['failed'])}" if done['failed'] else ''))
             for kind,tag,error in done['failed']:
                 self.log(kind+' 실패 '+tag+': '+error,level='error')
             self.log(f"설치 {len(done['install'])}개 · 삭제 {len(done['remove'])}개 완료"
@@ -769,7 +814,17 @@ class DesktopWindow:
                      level='error' if done['failed'] else 'info')
             self.load_catalog();self.refresh_stack()
             if 'models' in self.pages:self.refresh_models()
-        self.run_task('models.apply',work,finished)
+
+        def failed(exc):
+            self.apply_button.configure(text='선택대로 적용')
+            self.apply_button.state(['!disabled'])
+            if hasattr(self,'model_progress'):
+                self.model_progress.configure(value=0)
+            if hasattr(self,'model_progress_text'):
+                self.model_progress_text.set('실패 · '+str(exc))
+            self.log('models.apply: '+str(exc),level='error')
+
+        self.run_task('models.apply',work,finished,error=failed)
 
     def refresh_health(self,*,fresh=False):
         if fresh:
