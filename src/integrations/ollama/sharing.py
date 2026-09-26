@@ -1,11 +1,9 @@
-"""Read and repair the machine-shared model store. One place, any time.
+"""Read and repair the LocalAI machine-shared model store.
 
-``core.models.sharing`` decides what the facts mean; this reads them off the
-real machine and can put them right. Both halves used to live in the
-installer, where they ran exactly once - during setup, only for the default
-path, and only if that setup happened to have administrator rights. A user
-whose setup ran without admin had no way to find that out and no way to fix
-it short of reinstalling.
+``core.models.sharing`` decides whether LocalAI accounts can read the shared
+library. Registry OLLAMA_MODELS values are still exposed here for external
+Ollama compatibility, but the LocalAI-managed broker receives its store path
+explicitly and does not depend on those registry values.
 """
 from __future__ import annotations
 
@@ -116,10 +114,11 @@ def ensure_readable(model_dir: Path, *, windows=None) -> bool:
 
 
 def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
-    """Point every account's Ollama here, machine-wide. Needs administrator.
+    """Best-effort compatibility for Ollama launched outside LocalAI.
 
-    Without this, another account's Ollama reads no OLLAMA_MODELS, falls back
-    to that account's own profile, and re-downloads the whole library.
+    The LocalAI-managed broker does not require this value because its child
+    environment always receives the canonical model store. Machine scope still
+    helps a user who opens the standalone Ollama CLI/Tray directly.
     """
     if not acl.on_windows(windows):
         return True
@@ -157,9 +156,11 @@ def publish_variable(model_dir: Path, *, windows=None) -> str:
 
 
 def repair(model_dir=None, *, windows=None) -> dict:
-    """Put right what can be put right, and report what is left.
+    """Repair LocalAI cross-account readability and report what is left.
 
-    Safe to run at any time and safe to run twice; both steps are idempotent.
+    Safe to run at any time and safe to run twice; the ACL step is idempotent.
+    Machine-scope OLLAMA_MODELS is an external-Ollama compatibility setting,
+    not a LocalAI sharing requirement.
     Returns the state afterwards so a caller can tell the user whether it
     worked without guessing.
     """
@@ -171,7 +172,6 @@ def repair(model_dir=None, *, windows=None) -> dict:
     done, failed = [], []
     for name, action in (
         ('readable', lambda: ensure_readable(model_dir, windows=windows)),
-        ('machine_variable', lambda: publish_machine_variable(model_dir, windows=windows)),
     ):
         (done if action() else failed).append(name)
     after = read(model_dir, windows=windows)

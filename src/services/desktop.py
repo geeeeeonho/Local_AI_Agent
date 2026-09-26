@@ -36,7 +36,7 @@ class DesktopServices:
         self.events = EventBus()
         self.settings = SettingsStore(self.data / 'settings' / 'localai.json')
         self.projects = ProjectRegistry(self.data / 'projects' / 'registry.json')
-        self.owner = RuntimeOwner(self.data / 'cache' / 'desktop-runtime.lock')
+        self.owner = RuntimeOwner(self.env / "desktop-runtime.lock")
         self.network = NetworkManager(backend, self.owner, self.events)
         self.inference = InferenceService(runtime=backend.inference, events=self.events,
             state=RuntimeState(self.data / 'cache' / 'runtime-state.json'))
@@ -49,6 +49,7 @@ class DesktopServices:
         self.setup = SetupService(backend, self.models, self.network, self.settings,
             active=lambda: self.chat.attempted or self.agent.opened)
         self._close_lock = threading.RLock()
+        self._finalized = False
 
     def resolve_mode(self, app, *, project=None, session=None):
         return self.settings.network_mode(app=app,
@@ -75,19 +76,69 @@ class DesktopServices:
         from core import accounts
         return accounts.current_name()
 
+    def _close_sessions(self):
+        """Stop account-owned sessions without running process-global cleanup."""
+        agent_ok = self._stop('agent', self.agent)
+        chat_ok = self._stop('chat', self.chat)
+        search_ok = self._stop('search', self.search)
+        if not agent_ok or not chat_ok or not search_ok:
+            return False
+        self.network.mode = None
+        return True
+
     def close(self):
-        # Keep ownership if shutdown is not verified. The OS releases it if the
-        # process terminates; no stale lock-file deletion or PID guessing.
+        """Stop this account's sessions and release the machine runtime lease.
+
+        The desktop remains usable after the Session stop button, so global
+        atexit callbacks must not run here.
+        """
         with self._close_lock:
-            # Every service is asked, even after one refuses: a failure to stop
-            # Chat is no reason to leave the Agent and search running too.
-            agent_ok = self._stop('agent', self.agent)
-            chat_ok = self._stop('chat', self.chat)
-            search_ok = self._stop('search', self.search)
-            if not agent_ok or not chat_ok or not search_ok:
+            if not self._close_sessions():
                 return False
-            self.network.mode = None
+            try:
+                from launcher.core import lifelog
+                lifelog.suppress_exit_cleanups()
+            except Exception:
+                pass
             self.owner.release()
+            return True
+
+    def finalize(self):
+        """Final process teardown while holding the machine-wide runtime lock.
+
+        Shared WARP/Tor/SearXNG/Docker callbacks use fixed machine-wide names.
+        They must finish before another Windows account can acquire the runtime
+        lease and start replacements with those same names.
+        """
+        with self._close_lock:
+            if self._finalized:
+                return True
+            acquired_here = False
+            if not self.owner.owned:
+                try:
+                    self.owner.acquire()
+                    acquired_here = True
+                except RuntimeError:
+                    # Another account now owns the shared runtime. Never run
+                    # stale callbacks from this process against its containers.
+                    try:
+                        from launcher.core import lifelog
+                        lifelog.suppress_exit_cleanups()
+                    except Exception:
+                        pass
+                    self._finalized = True
+                    return True
+            if not self._close_sessions():
+                # Keep the lease on an unverified shutdown. Releasing it would
+                # let another account reuse the same container names while this
+                # process may still own live resources.
+                return False
+            try:
+                from launcher.core import lifelog
+                lifelog.shutdown_then_exit()
+            finally:
+                self.owner.release()
+            self._finalized = True
             return True
 
 

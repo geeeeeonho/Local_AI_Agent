@@ -12,7 +12,7 @@ def _trace_dir():
     rather than at the runtime root that the machine shares.
     """
     import project_paths
-    return project_paths.user_data_dir() / "logs"
+    return project_paths.logs_dir()
 
 class FakeClient:
     def __init__(self, command, env, cwd):

@@ -887,7 +887,7 @@ class DesktopWindow:
                 self.closing=False;self._shutdown_started=False;self.runner.cancel.clear()
                 for button in self.nav.values():button.configure(state='normal')
                 self.log(str(exc)+' Window retained; retry Session stop.')
-            self.runner.submit('shutdown',self.services.close,done,failed)
+            self.runner.submit('shutdown',self.services.finalize,done,failed)
         elif not self.closing and self._polling:
             self._ticks+=1
             if self._ticks%200==0:self.sync_theme()

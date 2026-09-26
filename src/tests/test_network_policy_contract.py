@@ -103,6 +103,49 @@ def test_prepare_runtime_does_not_require_proxy_for_direct_or_block(monkeypatch)
     assert policy.prepare_runtime("block") is True
 
 
+def test_warp_preparation_removes_stale_tor_relay(monkeypatch):
+    policy = _policy()
+    from launcher import warp_runtime
+    from launcher.services.docker import DockerService
+
+    removed = []
+    monkeypatch.setattr(
+        DockerService,
+        "container_exists",
+        staticmethod(lambda name: name == "llm_tor"),
+    )
+    monkeypatch.setattr(
+        DockerService,
+        "remove_container",
+        staticmethod(lambda name, force=True: removed.append((name, force)) or True),
+    )
+    monkeypatch.setattr(warp_runtime, "start", lambda *a, **k: True)
+
+    assert policy.prepare_runtime("warp") is True
+    assert removed == [("llm_tor", True)]
+
+
+def test_direct_preparation_removes_stale_proxy_relays(monkeypatch):
+    policy = _policy()
+    from launcher.services.docker import DockerService
+
+    stale = {"llm_httpbridge", "llm_warp", "llm_tor"}
+    removed = []
+    monkeypatch.setattr(
+        DockerService,
+        "container_exists",
+        staticmethod(lambda name: name in stale),
+    )
+    monkeypatch.setattr(
+        DockerService,
+        "remove_container",
+        staticmethod(lambda name, force=True: removed.append((name, force)) or True),
+    )
+
+    assert policy.prepare_runtime("direct") is True
+    assert {name for name, force in removed if force} == stale
+
+
 def test_block_network_name_defaults_to_managed_internal_network(monkeypatch):
     policy = _policy()
     import launcher.config as config

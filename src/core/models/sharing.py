@@ -1,23 +1,17 @@
-"""Whether every account on this machine can actually use the model store.
+"""Policy for sharing the LocalAI-managed model library across accounts.
 
-The store lives at ``C:\\LocalAI\\models`` so one copy serves the whole machine
-rather than one copy per Windows profile. Putting it there is not enough:
+The managed library lives at ``C:\\LocalAI\\models``. Every LocalAI broker is
+started with that path explicitly, so per-user or machine-scope
+``OLLAMA_MODELS`` registry values do not decide LocalAI sharing.
 
-  * another account's Ollama reads ``OLLAMA_MODELS`` from its own environment,
-    and with no machine-scope value it falls back to that account's
-    ``%USERPROFILE%\\.ollama\\models`` and re-downloads tens of gigabytes;
-  * a machine-scope value is overridden by a user-scope one, so an account
-    that set its own keeps pointing somewhere else;
-  * and the files still have to be readable by ``BUILTIN\\Users``.
+For LocalAI accounts, sharing requires two facts:
 
-Setting the machine-scope variable needs administrator rights, so it can
-simply fail during setup. Until now the program reported "모든 계정 공용"
-whenever the path had the right shape, which is a claim about a string, not
-about the machine - a user whose setup ran without admin was told the store
-was shared when no other account could see a single file.
+* the library is the machine-wide LocalAI store, not a profile-local path;
+* ``BUILTIN\\Users`` can read the files.
 
-This module decides what those facts mean. Reading them is someone else's
-job, so the rule stays testable without a registry or an ACL.
+Registry values remain on ``Sharing`` as external-Ollama diagnostics only.
+They help explain what a separately launched Ollama CLI/Tray might do, but are
+not blockers for the LocalAI-managed broker.
 """
 from __future__ import annotations
 
@@ -33,9 +27,10 @@ VARIABLE = 'OLLAMA_MODELS'
 # UI turns them into sentences, and tests name them.
 NOT_SHARED_PATH = 'not_shared_path'      # the store is not the machine-wide one
 PER_USER_PATH = 'per_user_path'          # it sits inside one profile
-VARIABLE_MISSING = 'variable_missing'    # no machine-scope value: they look elsewhere
-VARIABLE_ELSEWHERE = 'variable_elsewhere'  # machine-scope value names another store
-USER_OVERRIDE = 'user_override'          # this account's own value hides it
+# Retained as stable diagnostic keys for external-Ollama compatibility.
+VARIABLE_MISSING = 'variable_missing'
+VARIABLE_ELSEWHERE = 'variable_elsewhere'
+USER_OVERRIDE = 'user_override'
 NOT_READABLE = 'not_readable'            # BUILTIN\Users cannot read the files
 
 
@@ -105,15 +100,8 @@ class Sharing:
             found.append(PER_USER_PATH)
         elif not self.intended_shared:
             found.append(NOT_SHARED_PATH)
-        if self.windows:
-            if self.machine_value == '':
-                found.append(VARIABLE_MISSING)
-            elif self.machine_value and not _same(self.machine_value, self.path, self.windows):
-                found.append(VARIABLE_ELSEWHERE)
-            if self.user_value and not _same(self.user_value, self.path, self.windows):
-                found.append(USER_OVERRIDE)
-            if self.readable_by_users is False:
-                found.append(NOT_READABLE)
+        if self.windows and self.readable_by_users is False:
+            found.append(NOT_READABLE)
         return tuple(found)
 
     @property
@@ -128,7 +116,7 @@ class Sharing:
             return False
         if not self.windows:
             return True
-        if self.machine_value is None or self.readable_by_users is None:
+        if self.readable_by_users is None:
             return None
         return True
 
@@ -137,13 +125,11 @@ class Sharing:
         """Can the program fix this itself, given the rights to do it?
 
         Offered when something is wrong that we may fix, and also when we
-        could not read the facts: both steps are idempotent and neither grants
-        anything beyond read access, so trying is better than a screen that
-        says it does not know and offers nothing. Not offered for the blockers
-        that are somebody's decision rather than a fault - a store the caller
-        chose, or this account's own OLLAMA_MODELS.
+        could not read the ACL: the read-access repair is idempotent. Registry
+        OLLAMA_MODELS values are not part of LocalAI's sharing decision because
+        the managed broker receives its model path explicitly.
         """
-        fixable = {VARIABLE_MISSING, VARIABLE_ELSEWHERE, NOT_READABLE}
+        fixable = {NOT_READABLE}
         blockers = set(self.blockers)
         if blockers:
             return blockers <= fixable

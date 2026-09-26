@@ -14,7 +14,7 @@ def test_environment_contains_shared_binary_and_private_interpreter_home(tmp_pat
     )
     assert paths["open_interpreter"] == env / "open_interpreter"
     assert paths["open_interpreter_bin"] == env / "open_interpreter" / "bin"
-    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter"
+    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter" / "host"
 
 
 def test_install_script_and_release_are_pinned():
@@ -23,13 +23,15 @@ def test_install_script_and_release_are_pinned():
 
 
 def test_managed_install_passes_product_scoped_environment(monkeypatch, tmp_path):
-    env_root = tmp_path / "llm_environment"
+    root = tmp_path / "LocalAI"
+    env_root = root / "environment"
+    account = root / "users" / "Tester"
     paths = {
         "env": env_root,
         "agent": env_root / "agent",
         "open_interpreter": env_root / "open_interpreter",
         "open_interpreter_bin": env_root / "open_interpreter" / "bin",
-        "open_interpreter_home": env_root / "open_interpreter" / "home",
+        "open_interpreter_home": account / "user_data" / "interpreter" / "host",
     }
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)

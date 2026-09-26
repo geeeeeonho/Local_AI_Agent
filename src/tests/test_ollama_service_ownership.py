@@ -39,6 +39,40 @@ def test_shared_broker_started_by_another_account_is_reused_not_restarted(monkey
     assert killed == []
 
 
+def test_shared_broker_from_another_account_is_rejected_on_proven_store_mismatch(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    running_as(monkeypatch, svc, svc.exe, pid=31337, state=False)
+    monkeypatch.setattr(svc, "_launched_by_us", lambda _pid: False)
+    monkeypatch.setattr(
+        svc,
+        "inspect_store",
+        lambda timeout=5: (svc.OTHER_STORE, {"found": str(tmp_path / "other-models")}),
+    )
+    killed = []
+    monkeypatch.setattr(svc, "_terminate_listener", lambda pid: killed.append(pid) or True)
+
+    assert svc.ensure_running() is False
+    assert killed == []
+
+
+def test_explicit_store_repair_accepts_a_fresh_empty_shared_store(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    states = iter([
+        (svc.OTHER_STORE, {"found": str(tmp_path / "old-store")}),
+        (svc.NOTHING_INSTALLED, {"served": [], "on_disk": []}),
+    ])
+    monkeypatch.setattr(svc, "inspect_store", lambda timeout=5: next(states))
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 4242)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: svc.exe)
+    monkeypatch.setattr(svc, "persist_store_setting", lambda: "user")
+    monkeypatch.setattr(svc, "stop_supervisor", lambda: True)
+    monkeypatch.setattr(svc, "_kill", lambda _pid: True)
+    monkeypatch.setattr(svc, "is_running", lambda: False)
+    monkeypatch.setattr(svc, "ensure_running", lambda *a, **k: True)
+
+    assert svc.restart_for_store(stop_timeout=1) is True
+
+
 def test_prepare_install_leaves_running_shared_broker_alone(monkeypatch, tmp_path):
     svc = _service(tmp_path)
     running_as(monkeypatch, svc, svc.exe, pid=31337, state=False)

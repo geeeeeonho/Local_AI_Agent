@@ -133,11 +133,15 @@ def _wait_port(timeout=BOOT_TIMEOUT, log=None, cancel_check=None) -> bool:
 def _write_torrc(env):
     if TOR_IMAGE == "dperson/torproxy":
         return None
-    if not env:
-        return None
     try:
         from pathlib import Path as _P
-        d = _P(env) / "tor"
+        try:
+            import project_paths
+            d = project_paths.user_data_dir() / "cache" / "tor"
+        except Exception:
+            if not env:
+                return None
+            d = _P(env) / "tor"
         d.mkdir(parents=True, exist_ok=True)
         f = d / "torrc"
         f.write_text(

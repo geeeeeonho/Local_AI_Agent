@@ -36,7 +36,9 @@ def select_profile(p: Presenter):
 
 
 def ask_workspace(p: Presenter, env: Path) -> Optional[Path]:
-    default = Path(env) / "agent" / "workspace"
+    del env
+    import project_paths
+    default = project_paths.workspace_dir()
 
     last_used = None
     try:

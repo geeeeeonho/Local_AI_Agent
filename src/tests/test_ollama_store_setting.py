@@ -1,15 +1,9 @@
-"""Making the model path stick, and taking the server with us when we go.
+"""Managed Ollama store persistence and explicit repair behavior.
 
-Three things were missing, and each one on its own is enough to lose the whole
-library from view:
-
-  * the install wrote OLLAMA_MODELS into one child process and nowhere else, so
-    the first reboot left Ollama reading its own empty default;
-  * changing it on a running Ollama did nothing, because killing the server
-    while its tray application is alive just gets another server with the same
-    environment - "다시 시작 완료 · 로컬 모델 0개";
-  * and the server we started outlived the window, because the tray would put
-    it back the moment we stopped it.
+LocalAI owns one machine-wide broker and does not stop it merely because one
+window closes. These tests cover the remaining explicit maintenance behavior:
+persisting compatibility settings, stopping the tray supervisor before an
+explicit store repair, and never stopping a broker this process did not start.
 """
 from pathlib import Path
 
@@ -20,13 +14,12 @@ from launcher.services.ollama import OllamaService
 
 def service(tmp_path, monkeypatch, *, held=(), served=()):
     from core import ollama_paths
-    exe = tmp_path / 'Ollama' / 'ollama.exe'
+    root = tmp_path / 'LocalAI'
+    exe = root / 'ollama' / 'ollama.exe'
     exe.parent.mkdir(parents=True)
-    exe.write_text('official', encoding='utf-8')
-    monkeypatch.setattr(ollama_paths, 'install_candidates', lambda environ=None: (exe.parent,))
-    env = tmp_path / 'env'
-    (env / 'ollama_runtime').mkdir(parents=True)
-    (env / 'ollama_runtime' / 'ollama.exe').write_text('portable', encoding='utf-8')
+    exe.write_text('managed', encoding='utf-8')
+    env = root / 'environment'
+    env.mkdir(parents=True)
     said = []
 
     class Log:
@@ -35,7 +28,7 @@ def service(tmp_path, monkeypatch, *, held=(), served=()):
         def warn(self, m): said.append(str(m))
         def error(self, m): said.append(str(m))
 
-    svc = OllamaService(env, logger=Log(), model_dir=tmp_path / 'Ollama' / 'models')
+    svc = OllamaService(env, logger=Log(), model_dir=root / 'models')
     svc.exe = exe
     svc.said = said
     return svc
@@ -56,7 +49,7 @@ def test_machine_scope_first_then_the_account_that_needs_no_administrator():
     original = sharing._run
     sharing._run = run
     try:
-        assert sharing.publish_variable(Path('C:/Ollama/models'), windows=True) == 'user'
+        assert sharing.publish_variable(Path('C:/LocalAI/models'), windows=True) == 'user'
     finally:
         sharing._run = original
     assert ['/M' in call for call in calls] == [True, False], calls
@@ -116,8 +109,11 @@ def test_the_tray_goes_first_or_the_restart_is_undone(tmp_path, monkeypatch):
     within milliseconds, reading exactly the directory we were trying to change."""
     svc = service(tmp_path, monkeypatch)
     order = []
-    monkeypatch.setattr(svc, 'inspect_store',
-                        lambda timeout=5: (svc.STORE_NOT_READ, {'on_disk': ['a:1']}))
+    stores = iter([
+        (svc.STORE_NOT_READ, {'on_disk': ['a:1']}),
+        (svc.READY, {'served': ['a:1'], 'on_disk': ['a:1']}),
+    ])
+    monkeypatch.setattr(svc, 'inspect_store', lambda timeout=5: next(stores))
     monkeypatch.setattr(svc, 'persist_store_setting',
                         lambda: order.append('persist') or 'user')
     monkeypatch.setattr(svc, 'supervisor_pids', lambda: [222])
@@ -127,7 +123,6 @@ def test_the_tray_goes_first_or_the_restart_is_undone(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, 'is_running', lambda: False)
     monkeypatch.setattr(svc, 'ensure_running',
                         lambda *a, **k: order.append('start') or True)
-    monkeypatch.setattr(svc, 'local_models', lambda timeout=5: ['a:1'])
     assert svc.restart_for_store(stop_timeout=1) is True
     assert order == ['persist', 'kill 222', 'kill 111', 'start'], order
 
@@ -135,8 +130,11 @@ def test_the_tray_goes_first_or_the_restart_is_undone(tmp_path, monkeypatch):
 def test_a_restart_that_changed_nothing_is_not_reported_as_done(tmp_path, monkeypatch):
     """"다시 시작 완료 · 로컬 모델 0개" was the message. Nothing was completed."""
     svc = service(tmp_path, monkeypatch)
-    monkeypatch.setattr(svc, 'inspect_store',
-                        lambda timeout=5: (svc.STORE_NOT_READ, {'on_disk': ['a:1']}))
+    stores = iter([
+        (svc.STORE_NOT_READ, {'on_disk': ['a:1']}),
+        (svc.STORE_NOT_READ, {'on_disk': ['a:1']}),
+    ])
+    monkeypatch.setattr(svc, 'inspect_store', lambda timeout=5: next(stores))
     monkeypatch.setattr(svc, 'persist_store_setting', lambda: 'user')
     monkeypatch.setattr(svc, 'supervisor_pids', lambda: [])
     monkeypatch.setattr(svc, '_listener_pid', lambda: 111)
@@ -144,11 +142,10 @@ def test_a_restart_that_changed_nothing_is_not_reported_as_done(tmp_path, monkey
     monkeypatch.setattr(svc, '_kill', lambda pid: True)
     monkeypatch.setattr(svc, 'is_running', lambda: False)
     monkeypatch.setattr(svc, 'ensure_running', lambda *a, **k: True)
-    monkeypatch.setattr(svc, 'local_models', lambda timeout=5: [])
     assert svc.restart_for_store(stop_timeout=1) is False
 
 
-# ── it has to go when the window goes ────────────────────────────────────
+# ── explicit managed stop behavior ───────────────────────────────────────
 
 def test_closing_stops_the_tray_before_the_server_it_would_restart(tmp_path, monkeypatch):
     svc = service(tmp_path, monkeypatch)

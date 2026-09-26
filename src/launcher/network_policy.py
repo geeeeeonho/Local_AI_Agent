@@ -326,6 +326,51 @@ def container_proxy_env(value) -> dict[str, str]:
     return {"LOCAL_AI_NETWORK_MODE": mode.value}
 
 
+def _quiesce_inactive_proxy(mode: NetworkMode, log=None) -> bool:
+    """Remove managed proxy relays not used by the selected mode."""
+    if mode is NetworkMode.BLOCK:
+        return True
+    cfg = _config()
+    if mode is NetworkMode.WARP:
+        stale = (
+            ("Tor", str(getattr(cfg, "TOR_CONTAINER", "llm_tor"))),
+        )
+    elif mode is NetworkMode.TOR:
+        stale = (
+            ("WARP HTTP bridge", str(getattr(cfg, "HTTP_BRIDGE_CONTAINER", "llm_httpbridge"))),
+            ("WARP", str(getattr(cfg, "WARP_CONTAINER", "llm_warp"))),
+        )
+    else:  # Direct
+        stale = (
+            ("WARP HTTP bridge", str(getattr(cfg, "HTTP_BRIDGE_CONTAINER", "llm_httpbridge"))),
+            ("WARP", str(getattr(cfg, "WARP_CONTAINER", "llm_warp"))),
+            ("Tor", str(getattr(cfg, "TOR_CONTAINER", "llm_tor"))),
+        )
+    try:
+        from .services.docker import DockerService
+    except Exception:
+        return False
+
+    for label, name in stale:
+        try:
+            exists = DockerService.container_exists(name)
+        except Exception:
+            return False
+        if not exists:
+            continue
+        if log:
+            try:
+                log("이전 네트워크 relay 정리: " + label)
+            except Exception:
+                pass
+        try:
+            if not DockerService.remove_container(name, force=True):
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None = None,
                     cancel: Callable[[], bool] | None = None) -> bool:
     """Ensure the selected protected proxy runtime is ready.
@@ -335,7 +380,16 @@ def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None =
     which prevents one readiness probe from changing later policy decisions.
     """
     mode = normalize_mode(value)
-    if mode in (NetworkMode.DIRECT, NetworkMode.BLOCK):
+    if mode is NetworkMode.BLOCK:
+        return True
+    if not _quiesce_inactive_proxy(mode, log=log):
+        if log is not None:
+            try:
+                log("이전 네트워크 relay를 안전하게 정리하지 못했습니다.")
+            except Exception:
+                pass
+        return False
+    if mode is NetworkMode.DIRECT:
         return True
     try:
         if mode is NetworkMode.WARP:

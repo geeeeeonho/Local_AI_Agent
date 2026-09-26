@@ -36,12 +36,12 @@ def install_docker_sweep(project_root):
     images from every Chat/Agent session and every image pull simply piled up.
     """
     try:
-        from project_paths import ENV_DIR
+        from project_paths import USER_DATA_DIR
         from launcher.core import docker_maint
     except Exception:
         return False
     try:
-        return bool(docker_maint.register_exit_sweep(ENV_DIR))
+        return bool(docker_maint.register_exit_sweep(USER_DATA_DIR))
     except Exception:
         return False
 
@@ -66,9 +66,9 @@ def run_exit_cleanups():
 def run_module_entry(module, arguments):
     if module not in ('launcher', 'installer'):
         raise ValueError('unsupported module entrypoint')
-    from project_paths import USER_DATA_DIR
+    from project_paths import RUNTIME_LOCK_PATH
     from services.network.ownership import RuntimeOwner
-    owner = RuntimeOwner(USER_DATA_DIR / 'cache' / 'desktop-runtime.lock')
+    owner = RuntimeOwner(RUNTIME_LOCK_PATH)
     owner.acquire()
     previous=sys.argv
     try:

@@ -8,7 +8,7 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 
 ```text
 C:\LocalAI\
-├─ environment\          공용 — 관리형 런타임 · 컨테이너 설정 · 스크립트
+├─ environment\          공용 — 관리형 런타임 · 설치 템플릿 · 스크립트
 ├─ ollama\               공용 — LocalAI가 관리하는 Ollama 중계기
 ├─ models\               공용 — 모든 Windows 계정이 함께 쓰는 모델 저장소
 └─ users\
@@ -91,8 +91,11 @@ Ollama는 LocalAI의 **로컬 모델 중계기**입니다. 모델 API는 Ollama�
 
 **설치 위치** — `C:\LocalAI\ollama`. 공식 설치기를 사용할 수 있으면
 `OllamaSetup.exe /DIR=C:\LocalAI\ollama /VERYSILENT /NORESTART`로 설치하고,
-실패할 때만 같은 폴더에 포터블 배포본을 사용합니다. 시스템에 사용자가 별도로
-설치해 둔 Ollama 파일을 자동으로 삭제하거나 옮기지는 않습니다.
+실패할 때만 같은 폴더에 포터블 배포본을 사용합니다. Ollama Windows 앱이 만드는
+로그인 자동시작(`Ollama.lnk`)은 설치 뒤 제거합니다. LocalAI가 필요할 때 공용
+`ollama.exe`를 직접 관리하므로 Windows 로그인 때 별도 Tray가 먼저 11434를 잡지
+않게 하기 위해서입니다. 시스템에 사용자가 별도로 설치해 둔 Ollama 파일은 자동으로
+삭제하거나 옮기지 않습니다.
 
 **모델 위치** — `C:\LocalAI\models`. LocalAI가 띄우는 Ollama에는 항상
 `OLLAMA_MODELS`를 이 경로로 넘깁니다. 설치 시에는 가능한 경우 시스템 범위
@@ -105,7 +108,8 @@ Ollama는 LocalAI의 **로컬 모델 중계기**입니다. 모델 API는 Ollama�
 11434 포트를 점유하면 임의 종료하지 않고 설치/실행을 중단합니다.
 
 **개인 데이터는 공유하지 않습니다.** AnythingLLM 저장소, Open Interpreter HOME,
-설정, 프로젝트, 로그와 작업공간은 현재 계정의
+설정·프로젝트·대화·컨테이너 파생 설정은 `user_data`, 실행/Agent trace는 `logs`,
+작업 파일은 `workspace`로 나눠 모두 현재 계정의
 `C:\LocalAI\users\<계정>` 아래에서만 사용합니다.
 
 ### 모델 확인은 한 경로로만
@@ -195,13 +199,17 @@ WORKSPACE_DIR       -> <ACCOUNT_ROOT>\workspace
 ```
 
 `LOCAL_AI_ROOT`는 관리형 배포/테스트에서 전체 런타임 루트를 바꾸고,
-`LLM_MODEL_DIR` 또는 사용자가 명시한 `OLLAMA_MODELS`는 모델 저장소만
-재정의합니다. `LOCAL_AI_ACCOUNT`는 개인 기록을 어느 계정 폴더에 둘지
+`LLM_MODEL_DIR`만 LocalAI 자체의 명시적 모델 저장소 override로 사용합니다.
+사용자 범위 `OLLAMA_MODELS`는 Ollama 프로세스 설정일 뿐 LocalAI 경로 정본으로
+사용하지 않습니다. 그렇지 않으면 Windows 계정마다 공용 저장소가 다시 갈라질 수
+있기 때문입니다. `LOCAL_AI_ACCOUNT`는 개인 기록을 어느 계정 폴더에 둘지
 재정의합니다.
 
 기본 설치에서는 `environment`, `ollama`, `models`에 `BUILTIN\Users` 읽기/실행 권한을
-보장해 다른 계정도 같은 공용 자산을 사용할 수 있게 합니다. 반대로 각
-`users\<계정>` 폴더는 상속을 끊어 다른 로컬 계정이 읽지 못하도록 별도로 보호합니다.
+보장해 다른 계정도 같은 공용 자산을 사용할 수 있게 합니다. 모델 폴더의 다른 계정
+권한은 의도적으로 **읽기/실행**입니다. 공용 모델 파일 자체는 신뢰 자산이라 모든 로컬
+계정에 임의 변경 권한을 주지 않습니다. 반대로 각 `users\<계정>` 폴더는 상속을 끊어
+다른 로컬 계정이 읽지 못하도록 별도로 보호합니다.
 
 ## Ollama 서비스 소유권
 
@@ -228,13 +236,17 @@ LocalAI가 관리하는 공용 Ollama의 정본은 **`C:\LocalAI\ollama\ollama.e
 라우터가 0개면 "저장소를 읽지 못함", 읽을 수 없는 manifest가 있으면 "확인 불가"로
 구분합니다. 이미 모델을 제공 중인 공용 서버를 단순 경로 추정만으로 재시작하지 않습니다.
 
-### 경로는 Windows 설정에도 남깁니다
+### Windows 환경변수는 외부 Ollama 호환용입니다
 
 공용 Ollama 자식 프로세스에는 실행할 때마다 `OLLAMA_MODELS=C:\LocalAI\models`를
-직접 전달합니다. 설치 시에는 가능한 경우 시스템 범위 환경변수에도 같은 값을 기록하고,
-권한이 부족하면 현재 계정 범위 설정으로 폴백합니다. 모델 화면은 실제 시스템 변수와
-ACL을 읽어 "모든 계정 공용" 여부를 표시하며, 확인하지 못한 상태를 성공으로 표시하지
-않습니다.
+직접 전달합니다. 따라서 LocalAI 계정 간 모델 공유는 사용자/시스템 환경변수에 의존하지
+않습니다. 설치와 명시적 Ollama 관리에서는 외부 `ollama` CLI나 Tray도 같은 경로를
+보기 쉽도록 Windows 환경변수 기록을 best-effort로 시도합니다.
+
+모델 화면의 **LocalAI 계정 간 공유 여부**는 실제 공용 경로인지와
+`BUILTIN\Users`가 모델을 읽을 수 있는지로 판단합니다. 사용자 범위
+`OLLAMA_MODELS`가 다른 곳을 가리켜도 LocalAI가 띄우는 broker에는 공용 경로를 직접
+주입하므로 LocalAI 저장소 정본이 바뀌지 않습니다.
 
 ## 모델이 없으면 준비를 시작하지 않습니다
 
@@ -294,21 +306,31 @@ WARP 와 Tor 는 Docker 컨테이너로 돌고, 종료 정리를 `lifelog.regist
 WARP·Tor 컨테이너가 계속 돌았습니다.** 터미널 런처는 처음부터 설치하고 있었고 GUI 만
 빠져 있었습니다.
 
-지금은 셸이 **컨테이너를 띄울 수 있는 어떤 코드보다 먼저** hook 을 설치하고,
-`services.close()` 가 끝난 뒤 정리를 직접 실행합니다 — atexit 에 맡기지 않는 이유는,
-사용자가 기다리고 있는 종료 시간 안에 정리를 끝내기 위해서입니다. 정상 종료와
-외부에서 온 SIGTERM 양쪽에서 실제 프로세스로 확인했습니다.
+지금은 셸이 **컨테이너를 띄울 수 있는 어떤 코드보다 먼저** hook 을 설치합니다.
+또한 `C:\LocalAI\environment\desktop-runtime.lock` 하나로 모든 Windows 계정의
+공용 Docker/네트워크 변경을 직렬화합니다.
 
-**켠 사람이 끕니다.** 정리 대상은 컨테이너만이 아닙니다.
+여기서 **세션 종료**와 **앱 최종 종료**를 구분합니다.
+
+- 세션 종료는 현재 계정의 Chat/Agent/Search만 정리하고 공용 잠금을 풉니다. 이때 그
+  프로세스에 남아 있는 오래된 atexit cleanup은 비활성화합니다.
+- 같은 프로세스가 나중에 새 세션을 시작해 공용 잠금을 다시 얻으면 cleanup도 다시
+  활성화됩니다.
+- 앱 최종 종료는 공용 잠금을 가진 상태에서 WARP/Tor/SearXNG/AnythingLLM 등의 cleanup을
+  끝낸 뒤 잠금을 풉니다. 다른 계정이 이미 잠금을 얻었다면 이전 프로세스의 stale cleanup은
+  실행하지 않습니다.
+
+이 순서가 필요한 이유는 A 계정이 세션을 끝낸 뒤 B 계정이 같은 이름의 공용 컨테이너를
+새로 띄웠는데, 나중에 A의 atexit가 B의 컨테이너를 지우는 레이스를 막기 위해서입니다.
 
 | 무엇 | 언제 멈추나 | 절대 건드리지 않는 것 |
 | --- | --- | --- |
-| AnythingLLM · SearXNG · WARP · Tor · 샌드박스 | 창을 닫을 때 | 우리가 만들지 않은 컨테이너 |
-| Ollama | 이 창이 직접 띄웠을 때만 | 원래 돌고 있던 공식/서비스 Ollama |
-| Docker Desktop | 이 창이 직접 켰고, 남의 컨테이너가 하나도 안 돌 때만 | 사용자가 켜 둔 Docker |
+| AnythingLLM · SearXNG · WARP · Tor · 샌드박스 | 소유 세션/앱 최종 종료 시 | 다른 계정이 새로 소유한 공용 런타임 |
+| Ollama | 일반 창 종료에서는 유지 | 다른 위치의 Ollama, 다른 계정이 사용 중인 공용 broker |
+| Docker Desktop | 이 프로세스가 직접 켰고, 남의 컨테이너가 하나도 없을 때만 | 사용자가 켜 둔 Docker |
 
-- Ollama 는 실행할 때 남긴 runtime state 파일의 PID 로만 판별합니다. 포트 주인이 그
-  PID 가 아니면 우리 서버는 이미 사라진 것이므로 기록만 지우고 아무것도 죽이지 않습니다.
+- Ollama는 머신 공용 broker라 특정 창의 cleanup에 묶지 않습니다. 저장소 불일치가
+  명확하면 일반 실행에서는 거부하고 Setup의 명시적 관리 동작에서만 재시작합니다.
 - Docker 데몬을 내리는 정리는 `register_cleanup(..., last=True)` 로 **맨 마지막에**
   돕니다. 컨테이너를 멈추는 콜백들보다 먼저 데몬을 내리면 그 콜백이 전부 실패합니다.
 - `LOCAL_AI_KEEP_DOCKER=1` 을 두면 Docker Desktop 은 계속 켜 둡니다.
@@ -731,7 +753,8 @@ Excel 에서 한글이 깨지지 않도록 UTF-8 BOM 으로 씁니다.
 - **Ollama**: 로컬 모델 실행
 - **SearXNG**: 로컬 웹 검색
 - **Docker**: 샌드박스 및 보조 서비스
-- **user_data**: 설정, 로그, 세션, AnythingLLM 데이터 등 영속 데이터
+- **user_data**: 설정, 세션, AnythingLLM 데이터 등 계정별 영속 데이터
+- **logs**: 실행 로그와 Agent trace를 모으는 계정별 로그 폴더
 
 ## 개발자 실행
 
@@ -816,12 +839,12 @@ URL인지**까지 확인하므로, 검색을 한 번 호출하고 나머지를 �
 
 ## 로그
 
-Agent 세션마다 `user_data/logs/agent_trace_*.jsonl` 이 하나 생성됩니다.
+Agent 세션마다 `C:\\LocalAI\\users\\<계정>\\logs\\agent_trace_*.jsonl` 이 하나 생성됩니다.
 **Setup / Repair → 유지보수 → [기존 설정]** 의 로그 기록을 끄면 프롬프트·모델 출력·
 명령·도구 인자 같은 세부 입출력이 기록되지 않습니다(수명주기와 실패 원인은 계속 남습니다).
 비밀값은 항상 마스킹되며, 오래된 트레이스 파일은 자동으로 정리됩니다.
 
-실행마다 `user_data/logs/launcher_<시각>.log` 도 하나 생깁니다. 데스크톱 셸이 종료
+실행마다 `C:\\LocalAI\\users\\<계정>\\logs\\launcher_<시각>.log` 도 하나 생깁니다. 데스크톱 셸이 종료
 hook 을 설치하게 되면서 이 파일이 **창을 열 때마다** 쌓이게 됐으므로, 트레이스와 같은
 방식으로 최근 20개만 남깁니다. 쓰고 있는 파일과 크래시 기록(`launcher_fatal.log`)은
 지우지 않습니다.

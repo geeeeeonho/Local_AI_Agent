@@ -76,12 +76,7 @@ def test_an_unverifiable_store_still_does_not_block_the_user(tmp_path, monkeypat
     assert svc.ensure_running(boot_timeout=1) is True
 
 
-def test_a_disagreeing_store_is_reported_not_treated_as_a_dead_server(tmp_path, monkeypatch):
-    """Where the models sit does not decide whether the server can be used.
-
-    It decides where a download would land, so it is said out loud - and the
-    store the server really serves from is named when it can be found.
-    """
+def test_an_unidentified_server_on_a_different_store_is_rejected(tmp_path, monkeypatch):
     svc = service(tmp_path)
     unidentified(monkeypatch, svc)
     monkeypatch.setattr(svc, 'inspect_store', lambda timeout=5: (
@@ -89,7 +84,7 @@ def test_a_disagreeing_store_is_reported_not_treated_as_a_dead_server(tmp_path, 
     said = []
     for level in ('_ok', '_info', '_warn', '_err'):
         monkeypatch.setattr(svc, level, lambda message, _l=level: said.append(message))
-    assert svc.ensure_running(boot_timeout=1) is True
+    assert svc.ensure_running(boot_timeout=1) is False
     assert any('real-store' in message for message in said), said
 
 
@@ -471,6 +466,41 @@ def test_every_service_is_asked_to_stop_even_after_one_refuses(tmp_path):
 
 # ── the default network mode prepares out loud ───────────────────────────
 
+def test_cleanup_can_be_suppressed_after_session_release_and_rearmed(monkeypatch):
+    from launcher.core import lifelog
+
+    monkeypatch.setattr(lifelog, "_cleanup_callbacks", [])
+    monkeypatch.setattr(lifelog, "_sweep_cleanup_callbacks", [])
+    monkeypatch.setattr(lifelog, "_final_cleanup_callbacks", [])
+    monkeypatch.setattr(lifelog, "_cleanups_ran", False)
+
+    seen = []
+    lifelog.register_cleanup(lambda: seen.append("ran"))
+    lifelog.suppress_exit_cleanups()
+    lifelog.shutdown_then_exit()
+    assert seen == []
+
+    lifelog.rearm_exit_cleanups()
+    lifelog.shutdown_then_exit()
+    assert seen == ["ran"]
+
+
+def test_agent_searxng_recreates_container_when_network_mode_changed(monkeypatch, tmp_path):
+    from launcher import searxng_runtime
+
+    monkeypatch.setenv("NET_MODE", "warp")
+    monkeypatch.setattr(searxng_runtime, "_CLEANUP_REGISTERED", False)
+    monkeypatch.setattr(searxng_runtime, "is_running", lambda: True)
+    monkeypatch.setattr(searxng_runtime, "running_mode", lambda: "tor")
+    removed = []
+    monkeypatch.setattr(searxng_runtime, "remove", lambda: removed.append("old"))
+    monkeypatch.setattr(searxng_runtime, "_ensure_net", lambda: None)
+    monkeypatch.setattr(searxng_runtime, "image_exists", lambda: False)
+
+    assert searxng_runtime.start(tmp_path) is False
+    assert removed == ["old"]
+
+
 def test_warp_preparation_reports_progress_and_takes_a_cancel(tmp_path):
     """WARP is the default mode and its start can run past two minutes. Every
     word of it went to a log file and to print(), which reaches nobody under
@@ -503,6 +533,7 @@ def test_searxng_registers_the_teardown_every_other_runtime_had(monkeypatch, tmp
     from launcher.core import lifelog
     monkeypatch.setattr(searxng_runtime, '_CLEANUP_REGISTERED', False)
     monkeypatch.setattr(searxng_runtime, 'is_running', lambda: True)
+    monkeypatch.setattr(searxng_runtime, 'running_mode', lambda: 'block')
     registered = []
     monkeypatch.setattr(lifelog, 'register_cleanup', lambda fn, **kw: registered.append(fn))
     assert searxng_runtime.start(tmp_path) is True

@@ -40,7 +40,7 @@ def parse_args(app,argv=None):
 def main(app='studio',argv=None):
     args=parse_args(app,argv)
     from services.system.bootstrap import (run_module_entry, initialize_language,
-                                           install_exit_hooks, run_exit_cleanups)
+                                           install_exit_hooks)
     installer_flags=[]
     for flag in ('install','skip_model','skip_sandbox','skip_build','skip_search'):
         if getattr(args,flag):installer_flags.append('--'+flag.replace('_','-'))
@@ -79,8 +79,4 @@ def main(app='studio',argv=None):
         return 3
     finally:
         if services is not None:
-            services.close()
-        # Runs the callbacks services.close() does not own — the WARP and Tor
-        # containers among them. atexit would eventually do this; doing it here
-        # keeps the teardown inside the shutdown the user is waiting on.
-        run_exit_cleanups()
+            services.finalize()

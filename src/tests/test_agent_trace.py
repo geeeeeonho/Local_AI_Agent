@@ -10,7 +10,7 @@ def _trace_dir():
     rather than at the runtime root that the machine shares.
     """
     import project_paths
-    return project_paths.user_data_dir() / "logs"
+    return project_paths.logs_dir()
 
 
 def test_redact_masks_nested_secrets_and_sensitive_text():
@@ -39,7 +39,7 @@ def test_redact_masks_nested_secrets_and_sensitive_text():
     assert "[REDACTED]" in rendered
 
 
-def test_agent_trace_writes_flush_safe_jsonl_under_user_data_logs(tmp_path, monkeypatch):
+def test_agent_trace_writes_flush_safe_jsonl_under_account_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
     trace = AgentTrace(
         mode="sandbox",

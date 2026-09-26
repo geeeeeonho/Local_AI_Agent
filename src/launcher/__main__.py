@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from project_paths import (ENV_DIR, PROJECT_ROOT, RUNTIME_ROOT,
-                           USER_DATA_DIR)
+                           USER_DATA_DIR, LOGS_DIR)
 
 HERE = PROJECT_ROOT
 ENV = ENV_DIR
@@ -81,10 +81,9 @@ def _create_presenter_with_fallback(requested_mode: str):
 
 
 def _fatal_log_path() -> Path:
-    """치명적 예외 트레이스백을 저장할 경로."""
-    log_dir = ENV / "logs" if ENV.exists() else RUNTIME_ROOT
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir / "launcher_fatal.log"
+    """치명적 예외 트레이스백을 현재 Windows 계정 로그에 저장한다."""
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    return LOGS_DIR / "launcher_fatal.log"
 
 
 def _write_fatal(exc: BaseException, ctx: str = ""):
@@ -169,7 +168,7 @@ def main():
     # >>> DOCKER_AUTOCLEAN_v1 - 종료 시 도커 안전 정리 (플래그 켜진 경우)
     try:
         from launcher.core import docker_maint as _dm
-        if _dm.register_auto_prune(ENV):
+        if _dm.register_auto_prune(USER_DATA_DIR):
             _trace("도커 자동정리 등록 완료")
     except Exception as _dce:
         _trace("도커 자동정리 등록 실패: " + str(_dce))
@@ -182,17 +181,6 @@ def main():
         _trace("언어 초기화 완료")
     except Exception as _le:
         _trace("언어 초기화 예외: " + str(_le))
-
-    # 과거 레이아웃의 설정 파일을 정본 user_data/settings 로 한 번 병합한다.
-    # 소스 트리 안으로 junction 을 만들던 호환 단계는 제거되었다.
-    try:
-        from launcher import settings_store as _settings_store
-        if _settings_store.migrate_legacy_settings(HERE):
-            _trace("설정 마이그레이션 확인 완료")
-        else:
-            _trace("설정 마이그레이션 실패 — 기본값으로 계속")
-    except Exception as _se:
-        _trace("설정 마이그레이션 예외: " + str(_se))
 
     # ── 설치 폴더 확인 ──
     _trace("설치 폴더 확인 직전 ENV=" + str(ENV))

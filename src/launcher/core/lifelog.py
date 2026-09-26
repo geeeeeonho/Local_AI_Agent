@@ -9,7 +9,7 @@ v6.1 변경:
 
 핵심 책임
 ─────────
-1. 런타임 루트의 logs/ 폴더에 세션 로그 기록
+1. 현재 계정의 users/<account>/logs 폴더에 세션 로그 기록
 2. 매 줄마다 flush + os.fsync
 3. 모든 종료 경로에서 호출되는 cleanup hook 등록
 """
@@ -17,30 +17,19 @@ from __future__ import annotations
 
 
 def _llm_session_log_dir():
-    """세션 로그가 가는 곳 — 런타임 루트의 ``logs``.
-
-    예전에는 소스 트리를 거슬러 올라가며 ``llm_environment`` 나 ``RUN.bat`` 를
-    찾아 그 옆에 로그를 썼다. 실행 위치에 따라 로그가 세 군데로 흩어졌고,
-    아무것도 못 찾으면 현재 작업 디렉터리를 오염시켰다. 이제 경로는
-    ``project_paths`` 한 곳에서 나오고, ``LLM_ENV_DIR`` 만 예전처럼 우선한다.
-    """
-    import os
+    """Return the current Windows account's private log directory."""
     from pathlib import Path
-    ov = os.environ.get("LLM_ENV_DIR")
-    if ov:
-        b = Path(ov)
-        d = b / "logs" if b.name != "logs" else b
-    else:
-        try:
-            import project_paths
-            d = project_paths.logs_dir()
-        except Exception:
-            d = Path.cwd() / "logs"
+    try:
+        import project_paths
+        d = project_paths.logs_dir()
+    except Exception:
+        d = Path.cwd() / "logs"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
     return d
+
 import atexit
 import datetime
 import os
@@ -61,6 +50,8 @@ __all__ = [
     "log_session",
     "open_session_log",
     "shutdown_then_exit",
+    "suppress_exit_cleanups",
+    "rearm_exit_cleanups",
     "force_kill_container",
     "get_log_dir",
 ]
@@ -407,6 +398,25 @@ def shutdown_then_exit() -> None:
     _run_all_cleanups("gui_close")
 
 
+def suppress_exit_cleanups() -> None:
+    """Mark callbacks consumed without running them.
+
+    Used only when another Windows account already owns the machine-wide
+    runtime lock. Running this process's stale shared-container callbacks then
+    would tear down the other account's active runtime.
+    """
+    global _cleanups_ran
+    with _lock:
+        _cleanups_ran = True
+
+
+def rearm_exit_cleanups() -> None:
+    """Allow registered callbacks to run for a newly acquired runtime lease."""
+    global _cleanups_ran
+    with _lock:
+        _cleanups_ran = False
+
+
 # ─────────────────────────────────────────────
 #  v6.1: 개별 hook 설치 함수 (각각 try/except 로 isolation)
 # ─────────────────────────────────────────────
@@ -487,11 +497,11 @@ def _install_win_console_handler() -> None:
 #  install_global_hooks (v6.1)
 # ─────────────────────────────────────────────
 def install_global_hooks(project_root: Path) -> None:
-    """``project_root`` is the runtime root: the folder holding ``logs``."""
     """모든 hook 을 설치. __main__ 에서 한 번만 호출.
 
-    v6.1 변경: 각 단계마다 로그 -> 실패 시 정확한 위치 식별.
-    개별 hook 은 try/except 로 isolation.
+    ``project_root`` is retained for diagnostics only. Logs always go to the
+    current account's canonical ``project_paths.logs_dir()`` so one Windows
+    account never writes another account's runtime records.
     """
     global _installed, _project_root, _log_dir
 
@@ -503,11 +513,8 @@ def install_global_hooks(project_root: Path) -> None:
                 return
             _installed = True
             _project_root = Path(project_root).resolve()
-            # The argument is the runtime root, and the session log is the
-            # root's own `logs`. This module used to keep the main log under
-            # user_data while writing each session's file under the managed
-            # environment, so "where are the logs" had two answers.
-            _log_dir = _project_root / "logs"
+            # Runtime binaries are shared, but logs are personal usage data.
+            _log_dir = _llm_session_log_dir().resolve()
             try:
                 _log_dir.mkdir(parents=True, exist_ok=True)
             except OSError as e:

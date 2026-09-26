@@ -8,7 +8,9 @@ machine-wide LocalAI root::
 
 The launcher always supplies OLLAMA_MODELS to the broker it starts, so Ollama's
 per-user default does not split the model library across Windows accounts.
-A user-provided OLLAMA_MODELS remains an explicit override.
+A user-provided OLLAMA_MODELS is inspected only as a possible location of an
+already-running external/misconfigured server; it does not redefine LocalAI's
+managed model store.
 
 This module resolves paths only. It does not migrate old installations.
 """
@@ -83,14 +85,21 @@ def _same_windows_path(left, right) -> bool:
 
 
 def models_dir(environ=None) -> Path:
-    """Explicit user override, otherwise the LocalAI machine-wide store."""
-    configured = configured_models_dir(environ)
-    return configured if configured is not None else SHARED_MODELS_DIR
+    """The LocalAI-managed machine-wide store.
+
+    ``environ`` is accepted for API compatibility only. A per-user
+    ``OLLAMA_MODELS`` may describe an external running Ollama and is therefore
+    kept in ``store_candidates()``, but it cannot move LocalAI's managed
+    library.
+    """
+    del environ
+    return SHARED_MODELS_DIR
 
 
-def models_dir_is_shared(environ=None) -> bool:
-    """True when the resolved store is the machine-shared one under the install."""
-    return models_dir(environ) == SHARED_MODELS_DIR
+def models_dir_is_shared(environ=None, path=None) -> bool:
+    """True when the actual/resolved store is the LocalAI machine-shared one."""
+    candidate = models_dir(environ) if path is None else Path(path)
+    return _same_windows_path(candidate, SHARED_MODELS_DIR)
 
 
 def is_per_user_store(path, environ=None) -> bool:
@@ -135,8 +144,8 @@ def install_candidates(environ=None):
     local = environ.get('LOCALAPPDATA')
     seen, out = set(), []
     for candidate in (
-        _expanded(local) / 'Programs' / 'Ollama' if local else None,
         PROJECT_INSTALL_DIR,
+        _expanded(local) / 'Programs' / 'Ollama' if local else None,
         Path(r'C:\Program Files\Ollama'),
         home(environ) / '.ollama' / 'bin',
     ):
@@ -182,8 +191,8 @@ SETUP_URL = 'https://github.com/ollama/ollama/releases/latest/download/OllamaSet
 def setup_command(installer: Path, target: Path) -> list:
     """Silent install of the official Ollama into ``target``.
 
-    /DIR only moves the program files. Models keep resolving by Ollama's own
-    rule, which is the point: the location stays Ollama's to decide.
+    /DIR only moves the program files. LocalAI separately injects
+    ``OLLAMA_MODELS=C:\\LocalAI\\models`` into the managed broker.
     """
     return [str(installer), '/DIR=' + str(target), '/VERYSILENT', '/NORESTART']
 
@@ -191,12 +200,9 @@ def setup_command(installer: Path, target: Path) -> list:
 def find_executable(environ=None, extra=(), fallback=()) -> Path | None:
     """An Ollama already on this machine, or None.
 
-    Checked before installing anything, so a machine that already runs Ollama
-    keeps the install it has instead of gaining a second one.
-
-    ``fallback`` is searched last. The portable copy this project used to unzip
-    into its own folder goes there: an officially installed Ollama is the one
-    other programs and other accounts on the machine talk to, so it wins.
+    Diagnostic/helper search with the LocalAI-managed directory first.
+    Production installation and service startup still pin their executable
+    directly to ``PROJECT_INSTALL_DIR`` and never substitute an external copy.
     """
     import shutil
     environ = os.environ if environ is None else environ

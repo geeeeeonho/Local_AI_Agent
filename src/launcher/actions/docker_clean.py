@@ -16,6 +16,14 @@ def _maint():
 
 
 def run(env: Path, p: Presenter) -> None:
+    # The toggle is a user preference, not shared runtime state. Older callers
+    # still pass the managed environment path, so resolve the canonical private
+    # root here instead of persisting a flag under C:\LocalAI\environment.
+    try:
+        from project_paths import USER_DATA_DIR
+        state_root = USER_DATA_DIR
+    except Exception:
+        state_root = Path(env)
     m = _maint()
     p.section("도커 정리")
 
@@ -31,7 +39,7 @@ def run(env: Path, p: Presenter) -> None:
 
     exited = m.list_our_leftovers()
     networks = m.list_our_networks()
-    auto_on = m.autoclean_enabled(env)
+    auto_on = m.autoclean_enabled(state_root)
 
     opts = [
         Option(id="exited", risk=RISK_SAFE,
@@ -78,7 +86,7 @@ def run(env: Path, p: Presenter) -> None:
     # 자동정리 토글 (플래그)
     want_auto = "auto" in sel
     if want_auto != auto_on:
-        m.set_autoclean(env, want_auto)
+        m.set_autoclean(state_root, want_auto)
         p.ok("종료 시 자동 정리 " + ("켜짐" if want_auto else "꺼짐"))
 
     risky = [k for k in ("images_all", "volumes") if k in sel]

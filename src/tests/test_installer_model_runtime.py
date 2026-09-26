@@ -32,3 +32,106 @@ def test_model_download_uses_localai_shared_broker(monkeypatch, tmp_path):
     assert model.download(paths) == []
     assert seen["exe"] == official
     assert not (paths["ollama"] / "ollama.exe").exists()
+
+
+
+def test_official_installer_inherits_shared_model_store(monkeypatch, tmp_path):
+    from installer.steps import ollama as step
+    from installer import utils
+
+    target = tmp_path / "LocalAI" / "ollama"
+    target.mkdir(parents=True)
+    store = tmp_path / "LocalAI" / "models"
+    installer = tmp_path / "OllamaSetup.exe"
+
+    class Handle:
+        name = str(installer)
+        def close(self):
+            pass
+
+    class Result:
+        returncode = 0
+
+    seen = {}
+    monkeypatch.setattr(step, "_is_windows", lambda: True)
+    monkeypatch.setattr(step.tempfile, "NamedTemporaryFile", lambda **kwargs: Handle())
+    monkeypatch.setattr(utils, "download_with_progress",
+                        lambda url, destination, label: Path(destination).write_bytes(b"setup"))
+
+    def run(command, **kwargs):
+        seen["command"] = command
+        seen["env"] = kwargs["env"]
+        (target / "ollama.exe").write_bytes(b"managed")
+        return Result()
+
+    monkeypatch.setattr(step.subprocess, "run", run)
+
+    found = step.install_official(target, store)
+    assert found == target / "ollama.exe"
+    assert seen["env"]["OLLAMA_MODELS"] == str(store)
+    assert seen["env"]["OLLAMA_NO_CLOUD"] == "1"
+    assert seen["env"]["OLLAMA_HOST"].endswith(":11434")
+    assert any(str(target) in part for part in seen["command"])
+
+
+def test_official_install_never_falls_back_to_external_executable(monkeypatch, tmp_path):
+    from installer.steps import ollama as step
+    from installer import utils
+
+    target = tmp_path / "LocalAI" / "ollama"
+    target.mkdir(parents=True)
+    store = tmp_path / "LocalAI" / "models"
+    installer = tmp_path / "OllamaSetup.exe"
+
+    class Handle:
+        name = str(installer)
+        def close(self):
+            pass
+
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(step, "_is_windows", lambda: True)
+    monkeypatch.setattr(step.tempfile, "NamedTemporaryFile", lambda **kwargs: Handle())
+    monkeypatch.setattr(utils, "download_with_progress",
+                        lambda url, destination, label: Path(destination).write_bytes(b"setup"))
+    monkeypatch.setattr(step.subprocess, "run", lambda *a, **k: Result())
+
+    assert step.install_official(target, store) is None
+
+
+
+def test_managed_ollama_disables_login_autostart(monkeypatch, tmp_path):
+    from installer.steps import ollama as step
+
+    appdata = tmp_path / "AppData" / "Roaming"
+    shortcut = (
+        appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Ollama.lnk"
+    )
+    shortcut.parent.mkdir(parents=True)
+    shortcut.write_text("shortcut", encoding="utf-8")
+
+    monkeypatch.setattr(step, "_is_windows", lambda: True)
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    assert step.disable_login_autostart() is True
+    assert not shortcut.exists()
+
+
+
+def test_disable_login_autostart_removes_ollama_shortcut(monkeypatch, tmp_path):
+    from installer.steps import ollama as step
+
+    startup = (
+        tmp_path / "Microsoft" / "Windows" / "Start Menu"
+        / "Programs" / "Startup"
+    )
+    startup.mkdir(parents=True)
+    shortcut = startup / "Ollama.lnk"
+    shortcut.write_bytes(b"shortcut")
+
+    monkeypatch.setattr(step, "_is_windows", lambda: True)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    assert step.disable_login_autostart() is True
+    assert not shortcut.exists()

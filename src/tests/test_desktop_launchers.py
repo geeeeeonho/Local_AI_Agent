@@ -56,8 +56,11 @@ def test_module_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
     from services.system import bootstrap
     from services.network.ownership import RuntimeOwner
     import project_paths
-    monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
-    competing=RuntimeOwner(tmp_path/'cache'/'desktop-runtime.lock')
+    lock = tmp_path / 'environment' / 'desktop-runtime.lock'
+    lock.parent.mkdir(parents=True)
+    lock.write_bytes(b'\0')
+    monkeypatch.setattr(project_paths,'RUNTIME_LOCK_PATH',lock)
+    competing=RuntimeOwner(lock)
     observed=[]
     def check_locked(*a,**k):
         with pytest.raises(RuntimeError):competing.acquire()
@@ -72,11 +75,56 @@ def test_module_entry_owns_runtime_until_cleanup_finishes(monkeypatch,tmp_path):
 def test_module_entry_restores_argv_on_exception(monkeypatch,tmp_path):
     from services.system import bootstrap
     import project_paths
-    monkeypatch.setattr(project_paths,'USER_DATA_DIR',tmp_path)
+    lock = tmp_path / 'environment' / 'desktop-runtime.lock'
+    lock.parent.mkdir(parents=True)
+    lock.write_bytes(b'\0')
+    monkeypatch.setattr(project_paths,'RUNTIME_LOCK_PATH',lock)
     original=sys.argv
     monkeypatch.setattr(bootstrap.runpy,'run_module',lambda *a,**k:(_ for _ in ()).throw(ValueError('bad')))
     with pytest.raises(ValueError):bootstrap.run_module_entry('installer',[])
     assert sys.argv is original
+
+
+def test_runtime_owner_blocks_a_second_account_on_the_same_machine_lock(tmp_path):
+    from services.network.ownership import RuntimeOwner
+    lock = tmp_path / "LocalAI" / "environment" / "desktop-runtime.lock"
+    first = RuntimeOwner(lock)
+    second = RuntimeOwner(lock)
+    first.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="busy"):
+            second.acquire()
+    finally:
+        first.release()
+    second.acquire()
+    second.release()
+
+
+def test_agent_default_workspace_is_current_accounts_workspace(monkeypatch, tmp_path):
+    from launcher.agent import setup_flow
+    from launcher.agent import folder_policy
+    from launcher import settings_store
+    import project_paths
+
+    expected = tmp_path / "LocalAI" / "users" / "Tester" / "workspace"
+    monkeypatch.setattr(project_paths, "workspace_dir", lambda: expected)
+    monkeypatch.setattr(folder_policy, "list_allowed", lambda: [])
+    monkeypatch.setattr(
+        settings_store,
+        "load",
+        lambda: NS(last_workspace=""),
+    )
+
+    seen = {}
+
+    class Presenter:
+        def prompt_path(self, *, title, default, last_used=None, must_exist=False):
+            seen["default"] = Path(default)
+            return Path(default)
+
+    result = setup_flow.ask_workspace(Presenter(), tmp_path / "environment")
+    assert result == expected
+    assert seen["default"] == expected
 
 
 def chat_backend(tmp_path,ids,monkeypatch=None,installed=('chosen:latest',)):

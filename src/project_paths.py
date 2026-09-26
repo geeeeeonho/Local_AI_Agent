@@ -27,7 +27,7 @@ corrupts.
 Shared machine assets are all below the runtime root:
 ``environment``, ``ollama`` and ``models``. Ollama's own per-user default is
 not used for the managed broker; LocalAI starts it with the shared model path.
-An explicit deployment/user model override still wins.
+Only LocalAI's explicit deployment override may move the managed model store.
 
 Off Windows there is no C: drive to install into, so a development checkout is
 its own runtime root and the same layout appears inside it.
@@ -103,13 +103,16 @@ def _on_windows() -> bool:
 
 
 def model_dir() -> Path:
-    """Shared LocalAI model store, unless deployment explicitly overrides it."""
+    """Shared LocalAI model store.
+
+    ``OLLAMA_MODELS`` is an Ollama process setting, not the LocalAI layout
+    source of truth. Reading a per-user value here would split a machine-wide
+    install back into different stores for different Windows accounts.
+    ``LLM_MODEL_DIR`` remains the explicit deployment/test override.
+    """
     value = os.environ.get("LLM_MODEL_DIR")
     if value:
         return Path(value).expanduser().resolve()
-    configured = ollama_paths.configured_models_dir()
-    if configured is not None:
-        return configured
     return runtime_dir() / runtime_root.MODELS
 
 
@@ -118,6 +121,7 @@ RUNTIME_ROOT = runtime_dir()
 
 # Shared by every account on the machine.
 ENV_DIR = env_dir()
+RUNTIME_LOCK_PATH = ENV_DIR / "desktop-runtime.lock"
 ACCOUNTS_DIR = accounts_dir()
 
 # This account's alone.
@@ -126,8 +130,8 @@ USER_DATA_DIR = user_data_dir()
 LOGS_DIR = logs_dir()
 WORKSPACE_DIR = workspace_dir()
 
-# One shared model library per machine. An explicit deployment/user override
-# still wins, but a fresh install resolves to <runtime root>\models.
+# One shared model library per machine. An explicit LocalAI deployment override
+# still wins, but ordinary installs always resolve to <runtime root>\models.
 MODEL_STORAGE_DIR = model_dir()
 
 

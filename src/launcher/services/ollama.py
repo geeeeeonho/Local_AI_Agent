@@ -101,13 +101,16 @@ class OllamaService:
             # 보고하면 상태 화면이 거짓말을 한다.
             return True
         if self._listener_is_managed(pid) and self._state_matches(pid):
-            return True
+            return self._managed_store_usable()
         executable = self._process_executable(pid)
         if executable is None:
-            return True
+            # Identity/store inspection can be unavailable across Windows
+            # accounts. Do not call a responsive broker stopped unless a
+            # mismatch is actually proven.
+            return self._managed_store_usable()
         # A shared broker can have been started by another Windows account,
         # whose private runtime-state file is intentionally invisible here.
-        return _same_path(executable, self.exe)
+        return _same_path(executable, self.exe) and self._managed_store_usable()
 
     def known_executables(self) -> tuple:
         """Executable paths LocalAI is allowed to manage."""
@@ -255,6 +258,20 @@ class OllamaService:
             return "실행 중이지만 설치된 로컬 모델이 없습니다 · 모델 화면에서 먼저 받으세요"
         return "모델 저장소를 확인하지 못했습니다: %s" % self.model_dir
 
+    def _managed_store_usable(self) -> bool:
+        """Whether the responding broker is safe for the LocalAI single store.
+
+        Unknown is allowed because process/store inspection can be blocked by
+        Windows permissions. A proven mismatch is not: model downloads would
+        otherwise land in one account's old store while the UI indexes another.
+        """
+        situation, _detail = self.inspect_store()
+        if situation in (self.STORE_NOT_READ, self.OTHER_STORE):
+            self._report_store()
+            self._err("공용 Ollama가 C:\\LocalAI\\models 기준 저장소를 사용하지 않습니다.")
+            self._info("Setup의 Ollama 관리에서 저장소를 맞춘 뒤 다시 실행하세요.")
+            return False
+        return True
     def _report_store(self) -> None:
         """Say where the models are. A mismatch is news, not a failure.
 
@@ -281,23 +298,21 @@ class OllamaService:
         elif situation == self.OTHER_STORE:
             found = detail.get('found')
             if found:
-                self._warn("실행 중인 Ollama 는 %s 를 씁니다. 그 모델을 그대로 사용합니다." % found)
-                self._info("이 프로그램이 새로 받을 위치는 %s 입니다. 한곳으로 모으려면 "
-                           "OLLAMA_MODELS 를 맞추고 Ollama 를 재시작하세요." % self.model_dir)
+                self._warn("실행 중인 Ollama 는 %s 를 씁니다." % found)
+                self._info("LocalAI 공용 저장소 %s 로 맞춘 뒤 Ollama 를 재시작해야 합니다."
+                           % self.model_dir)
             else:
                 self._warn("실행 중인 Ollama 의 모델이 %s 에서 보이지 않습니다. "
-                           "서버가 제공하는 모델을 그대로 사용합니다." % self.model_dir)
+                           "LocalAI 공용 저장소와 일치하지 않습니다." % self.model_dir)
         else:
-            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다. 그대로 사용합니다.")
+            self._warn("실행 중인 Ollama 의 모델 저장소를 확인하지 못했습니다.")
 
     def _accept_unidentified_server(self) -> bool:
-        """포트 주인을 식별하지 못했을 때도 응답하는 서버는 쓸 수 있는 서버다.
-
-        신원을 못 밝히는 이유는 대부분 PowerShell 이 느리거나 권한이 없어서다.
-        저장소가 다르다는 것은 거부 사유가 아니라 알려 줄 사실이다.
-        """
-        self._warn("포트 %s 소유 프로세스를 확인하지 못했습니다 — 응답 중인 "
-                   "Ollama 를 그대로 사용합니다." % config.OLLAMA_PORT)
+        """Use an unidentified listener only when no store mismatch is proven."""
+        self._warn("포트 %s 소유 프로세스를 확인하지 못했습니다 — 저장소 일치 여부를 "
+                   "추가 확인합니다." % config.OLLAMA_PORT)
+        if not self._managed_store_usable():
+            return False
         self._report_store()
         self._warn_if_cloud_enabled()
         return True
@@ -597,36 +612,35 @@ class OllamaService:
         return False
 
     def persist_store_setting(self) -> str:
-        """Make this store the one every future Ollama start reads.
+        """Best-effort machine-scope compatibility for Ollama outside LocalAI.
 
-        Passing OLLAMA_MODELS to the server we launch covers that one process
-        and nothing else. The Startup entry Windows runs at login does not
-        inherit it, so after a reboot the models stop being visible - which is
-        the whole failure, and it comes back every reboot until the value is
-        written somewhere Windows keeps.
+        The managed broker always receives OLLAMA_MODELS in its child
+        environment, so LocalAI itself does not need a registry value. Never
+        overwrite a user's personal OLLAMA_MODELS as a fallback; that setting
+        may intentionally belong to a separately launched Ollama.
         """
         try:
             from integrations.ollama import sharing
         except Exception:
             return ''
         try:
-            scope = sharing.publish_variable(self.model_dir)
+            written = sharing.publish_machine_variable(self.model_dir)
         except Exception:
             return ''
-        if scope == 'machine':
-            self._ok("모델 경로를 시스템 설정에 저장했습니다: %s" % self.model_dir)
-        elif scope == 'user':
-            self._ok("모델 경로를 이 계정 설정에 저장했습니다: %s" % self.model_dir)
-        else:
-            self._warn("모델 경로를 Windows 설정에 저장하지 못했습니다. "
-                       "직접 %s 를 실행하세요." % self.store_fix_command())
-        return scope
+        if written:
+            self._ok("외부 Ollama 호환용 모델 경로를 시스템 설정에 저장했습니다: %s"
+                     % self.model_dir)
+            return 'machine'
+        self._warn("시스템 범위 OLLAMA_MODELS 를 저장하지 못했습니다. "
+                   "LocalAI 공용 broker는 실행 시 경로를 직접 받아 계속 동작합니다.")
+        return ''
 
     def restart_for_store(self, stop_timeout: int = 8) -> bool:
         """Restart the running Ollama so it reads the store we resolved.
 
-        Only for the one situation that needs it: a server in a known location
-        that is serving nothing while the store holds models. Ollama takes
+        Explicit maintenance may repair either proven mismatch: the broker is
+        not reading our populated store, or it is serving models from another
+        directory. Ollama takes
         OLLAMA_MODELS from its environment at startup and there is no way to
         change it in a running process, so the models stay invisible until it
         is restarted - which is what happens when Windows relaunches Ollama
@@ -636,7 +650,7 @@ class OllamaService:
         touched. This one is serving nothing, and the caller asked for it.
         """
         situation, detail = self.inspect_store()
-        if situation != self.STORE_NOT_READ:
+        if situation not in (self.STORE_NOT_READ, self.OTHER_STORE):
             self._info("지금은 다시 시작할 이유가 없습니다: " + self.describe_store())
             return situation in (self.READY, self.NOTHING_INSTALLED)
 
@@ -670,13 +684,19 @@ class OllamaService:
             self._warn("Ollama 트레이 앱을 종료하지 못했습니다. 다시 살아날 수 있습니다.")
         if not self.ensure_running():
             return False
-        found = self.local_models()
-        if not found:
-            self._err("다시 시작했지만 여전히 모델이 보이지 않습니다.")
-            self._info(self.describe_store())
-            return False
-        self._ok("다시 시작 완료 · 로컬 모델 %d개" % len(found))
-        return True
+        situation, detail = self.inspect_store()
+        if situation == self.READY:
+            count = len(detail.get("served") or ())
+            self._ok("다시 시작 완료 · 로컬 모델 %d개" % count)
+            return True
+        if situation == self.NOTHING_INSTALLED:
+            # Fresh setup is allowed to repair the broker before the first
+            # model pull. Empty shared storage is correct here, not a failure.
+            self._ok("다시 시작 완료 · 공용 모델 저장소가 비어 있습니다.")
+            return True
+        self._err("다시 시작했지만 공용 모델 저장소를 정상적으로 읽지 못합니다.")
+        self._info(self.describe_store())
+        return False
 
     def register_exit_cleanup(self) -> bool:
         """Compatibility hook; the machine-shared broker survives window exit.
@@ -738,10 +758,11 @@ class OllamaService:
             # An official install may be the user's Windows service.
             ours = self._launched_by_us(pid)
             if not ours:
-                # The machine-wide LocalAI broker may have been started by a
-                # different Windows account. Its per-account state file is
-                # intentionally invisible here, so absence of our state record
-                # must never be treated as ownership or permission to restart it.
+                # Another Windows account may have started the same canonical
+                # broker. Reuse it only if it is not provably reading a
+                # different model library.
+                if not self._managed_store_usable():
+                    return False
                 self._ok("이미 실행 중인 공용 Ollama 를 사용합니다: " + str(executable))
                 self._report_store()
                 self._warn_if_cloud_enabled()

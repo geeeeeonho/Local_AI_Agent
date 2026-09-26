@@ -58,7 +58,7 @@ def runtime_interpreter_home(project_root: Path | None = None) -> Path:
         base = project_paths.user_data_dir()
     else:
         base = Path(project_root).resolve() / "user_data"
-    path = base / "open_interpreter"
+    path = base / "interpreter" / "host"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
