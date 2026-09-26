@@ -1,23 +1,17 @@
-"""Whether every account on this machine can actually use the model store.
+"""Policy for sharing the LocalAI-managed model library across accounts.
 
-The store lives at ``C:\\LocalAI\\models`` so one copy serves the whole machine
-rather than one copy per Windows profile. Putting it there is not enough:
+The managed library lives at ``C:\\LocalAI\\models``. Every LocalAI broker is
+started with that path explicitly, so per-user or machine-scope
+``OLLAMA_MODELS`` registry values do not decide LocalAI sharing.
 
-  * another account's Ollama reads ``OLLAMA_MODELS`` from its own environment,
-    and with no machine-scope value it falls back to that account's
-    ``%USERPROFILE%\\.ollama\\models`` and re-downloads tens of gigabytes;
-  * a machine-scope value is overridden by a user-scope one, so an account
-    that set its own keeps pointing somewhere else;
-  * and the files still have to be readable by ``BUILTIN\\Users``.
+For LocalAI accounts, sharing requires two facts:
 
-Setting the machine-scope variable needs administrator rights, so it can
-simply fail during setup. Until now the program reported "모든 계정 공용"
-whenever the path had the right shape, which is a claim about a string, not
-about the machine - a user whose setup ran without admin was told the store
-was shared when no other account could see a single file.
+* the library is the machine-wide LocalAI store, not a profile-local path;
+* ``BUILTIN\\Users`` can read the files.
 
-This module decides what those facts mean. Reading them is someone else's
-job, so the rule stays testable without a registry or an ACL.
+Registry values remain on ``Sharing`` as external-Ollama diagnostics only.
+They help explain what a separately launched Ollama CLI/Tray might do, but are
+not blockers for the LocalAI-managed broker.
 """
 from __future__ import annotations
 
@@ -33,9 +27,10 @@ VARIABLE = 'OLLAMA_MODELS'
 # UI turns them into sentences, and tests name them.
 NOT_SHARED_PATH = 'not_shared_path'      # the store is not the machine-wide one
 PER_USER_PATH = 'per_user_path'          # it sits inside one profile
-VARIABLE_MISSING = 'variable_missing'    # no machine-scope value: they look elsewhere
-VARIABLE_ELSEWHERE = 'variable_elsewhere'  # machine-scope value names another store
-USER_OVERRIDE = 'user_override'          # this account's own value hides it
+# Retained as stable diagnostic keys for external-Ollama compatibility.
+VARIABLE_MISSING = 'variable_missing'
+VARIABLE_ELSEWHERE = 'variable_elsewhere'
+USER_OVERRIDE = 'user_override'
 NOT_READABLE = 'not_readable'            # BUILTIN\Users cannot read the files
 
 
