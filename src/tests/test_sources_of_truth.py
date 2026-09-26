@@ -33,7 +33,7 @@ def test_network_mode_enum_has_one_runtime_definition():
     assert definitions == ["src/launcher/network_policy.py"]
 
 
-def test_host_permission_translator_is_an_explicit_transition_boundary():
+def test_host_permission_translator_is_an_explicit_runtime_boundary():
     path = SRC_ROOT / "launcher" / "agent" / "host_permissions.py"
     assert path.is_file()
     text = path.read_text(encoding="utf-8")

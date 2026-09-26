@@ -15,7 +15,7 @@ def test_custom_session_helpers_are_not_runtime_owned():
     The retired helpers are gone, and so is any directory traversal that could
     grow a second session store beside Open Interpreter's thread IDs. The check
     reads the parsed module rather than raw text so the module docstring and the
-    user-facing README.txt can keep explaining the policy.
+    runtime README.txt can keep explaining the policy.
     """
     text = _text("src/launcher/core/user_data.py")
     for name in (
@@ -44,13 +44,13 @@ def test_gui_compatibility_shims_are_gone():
     assert (REPO_ROOT / "src/launcher/presenter/gui/__init__.py").is_file()
 
 
-def test_legacy_agent_event_adapter_is_gone():
+def test_retired_agent_event_adapter_is_gone():
     text = _text("src/launcher/agent/events.py")
     assert "_LEGACY_TYPES" not in text
     assert "from_legacy_message" not in text
 
 
-def test_active_openwebui_runtime_identifiers_are_absent():
+def test_retired_openwebui_runtime_identifiers_are_absent():
     forbidden = (
         "OPEN_WEBUI_PORT",
         "OPEN_WEBUI_URL",

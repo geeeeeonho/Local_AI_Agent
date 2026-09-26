@@ -9,7 +9,7 @@ class Mode(str, Enum):
 
 
 def fixture(tmp_path):
-    from integrations.legacy.desktop import LegacyBackend
+    from integrations.desktop import DesktopBackend
     calls=[]
     # Mirror launcher.config's real names only. A stub that invents a constant
     # is how the desktop shipped a chat_start that crashed on a name the real
@@ -33,7 +33,7 @@ def fixture(tmp_path):
         'launcher.searxng_runtime':NS(image_exists=lambda: True,
              start=lambda *a,**k: calls.append(('search',a,k)) or True),
     }
-    backend=LegacyBackend(tmp_path/'env',tmp_path/'models',tmp_path,importer=modules.__getitem__)
+    backend=DesktopBackend(tmp_path/'env',tmp_path/'models',tmp_path,importer=modules.__getitem__)
     return backend, modules, calls
 
 
@@ -82,9 +82,9 @@ def test_embedded_setup_reuses_the_desktop_language(monkeypatch, tmp_path):
 
 def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
     import inspect
-    from integrations.legacy.desktop import LegacyBackend
+    from integrations.desktop import DesktopBackend
 
-    source=inspect.getsource(LegacyBackend.run_setup)
+    source=inspect.getsource(DesktopBackend.run_setup)
     assert 'CREATE_NEW_CONSOLE' not in source
     assert 'CREATE_NO_WINDOW' in source
     assert 'stdout' in source and 'subprocess.PIPE' in source
@@ -124,7 +124,7 @@ def test_warp_failure_is_not_converted_to_direct(tmp_path):
     assert ('mode','direct') not in c
 
 
-def test_search_passes_explicit_mode_without_starting_legacy_proxies(tmp_path,monkeypatch):
+def test_search_passes_explicit_mode_without_starting_extra_proxies(tmp_path,monkeypatch):
     b,m,c=fixture(tmp_path)
     cfg=m['launcher.config']
     cfg.SEARXNG_IMAGE='search-image';cfg.LLM_NETWORK='net';cfg.SEARXNG_HOST_PORT=8888;cfg.SEARXNG_CONTAINER_PORT=8080

@@ -1,4 +1,4 @@
-"""새 데스크톱 계층이 '이름' 으로 찾아가는 구 런처 경로는 실제로 존재해야 한다.
+"""데스크톱 계층이 문자열로 찾아가는 런타임 이름은 실제로 존재해야 한다.
 
 `importlib` 으로 만드는 모듈 경로와 `cfg.NAME` 같은 상수 이름은
 `compileall` 에도, AST import 검사에도, 가짜 모듈을 주입하는 단위 테스트에도
@@ -23,11 +23,11 @@ from pathlib import Path
 import pytest
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
-ADAPTER = SRC_ROOT / "integrations" / "legacy" / "desktop.py"
+INTEGRATION = SRC_ROOT / "integrations" / "desktop.py"
 
 
-def _adapter_tree():
-    return ast.parse(ADAPTER.read_text(encoding="utf-8"))
+def _integration_tree():
+    return ast.parse(INTEGRATION.read_text(encoding="utf-8"))
 
 
 def _module_exists(name: str) -> bool:
@@ -42,11 +42,11 @@ def _module_exists(name: str) -> bool:
 
 
 def test_every_maintenance_key_maps_to_a_real_action_module():
-    from integrations.legacy.desktop import LegacyBackend
+    from integrations.desktop import DesktopBackend
     from services.system.desktop import SetupService
 
-    assert set(LegacyBackend.MAINTENANCE_MODULES) == set(SetupService.MAINTENANCE_KEYS)
-    for key, module in LegacyBackend.MAINTENANCE_MODULES.items():
+    assert set(DesktopBackend.MAINTENANCE_MODULES) == set(SetupService.MAINTENANCE_KEYS)
+    for key, module in DesktopBackend.MAINTENANCE_MODULES.items():
         assert _module_exists(module), f"{key} -> {module} (모듈 없음)"
         assert hasattr(importlib.import_module(module), "run"), module
 
@@ -70,11 +70,11 @@ def test_setup_view_only_offers_allowlisted_maintenance_keys():
     assert offered <= set(SetupService.MAINTENANCE_KEYS)
 
 
-def test_adapter_only_binds_cfg_to_the_real_launcher_config():
+def test_integration_only_binds_cfg_to_the_real_launcher_config():
     """`cfg` 는 이 파일에서 언제나 launcher.config 여야 아래 검사가 성립한다."""
     bindings = [
         node.value
-        for node in ast.walk(_adapter_tree())
+        for node in ast.walk(_integration_tree())
         if isinstance(node, ast.Assign)
         and any(isinstance(t, ast.Name) and t.id == "cfg" for t in node.targets)
     ]
@@ -84,11 +84,11 @@ def test_adapter_only_binds_cfg_to_the_real_launcher_config():
         assert [ast.literal_eval(arg) for arg in value.args] == ["launcher.config"]
 
 
-def test_adapter_reads_only_constants_that_launcher_config_defines():
+def test_integration_reads_only_constants_that_launcher_config_defines():
     config = importlib.import_module("launcher.config")
     names = sorted({
         node.attr
-        for node in ast.walk(_adapter_tree())
+        for node in ast.walk(_integration_tree())
         if isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name) and node.value.id == "cfg"
     })

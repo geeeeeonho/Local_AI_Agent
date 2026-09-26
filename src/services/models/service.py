@@ -5,7 +5,7 @@ from core.events import EventBus
 from core.persistence import file_lock
 from integrations.ollama.client import is_cloud_tag, local_model_name, model_name
 from project_paths import model_mutation_lock_path
-from . import index
+from launcher.models import model_files as index
 
 
 class ModelService:

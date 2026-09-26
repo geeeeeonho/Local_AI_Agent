@@ -125,15 +125,15 @@ def test_a_library_that_is_there_is_counted(tmp_path, monkeypatch):
 def test_a_closed_installer_window_is_not_a_hex_number(tmp_path):
     """3221225786 is 0xC000013A, STATUS_CONTROL_C_EXIT: the console was closed.
     Printing the number was the entire diagnosis the user got."""
-    from integrations.legacy.desktop import LegacyBackend
-    message = LegacyBackend.setup_exit_message(3221225786)
+    from integrations.desktop import DesktopBackend
+    message = DesktopBackend.setup_exit_message(3221225786)
     assert '창이 닫혔' in message
     assert '3221225786' in message
 
 
 def test_an_unknown_code_is_shown_in_a_form_that_can_be_looked_up(tmp_path):
-    from integrations.legacy.desktop import LegacyBackend
-    assert '0xC0000005' in LegacyBackend.setup_exit_message(0xC0000005)
+    from integrations.desktop import DesktopBackend
+    assert '0xC0000005' in DesktopBackend.setup_exit_message(0xC0000005)
 
 
 # ── installed, but the server is not reading them ────────────────────────
