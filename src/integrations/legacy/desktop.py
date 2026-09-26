@@ -649,23 +649,3 @@ class LegacyBackend:
         if code:
             raise RuntimeError(self.setup_exit_message(code))
         return code
-
-
-    @classmethod
-    def setup_exit_message(cls, code):
-        known = cls.SETUP_EXIT_REASONS.get(int(code))
-        if known:
-            return known + ' (코드 %d)' % int(code)
-        return 'Setup 이 코드 %d (0x%08X) 로 끝났습니다.' % (int(code), int(code) & 0xFFFFFFFF)
-
-    def run_setup(self):
-        environment = os.environ.copy()
-        environment['PYTHONPATH'] = str(self.root / 'src')
-        kwargs = {'cwd': self.root, 'env': environment}
-        if os.name == 'nt':
-            kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
-        # Explicit Setup action only. No shell and no detached untracked install.
-        result = subprocess.run(self.setup_command(), **kwargs)
-        if result.returncode:
-            raise RuntimeError(self.setup_exit_message(result.returncode))
-        return result.returncode
