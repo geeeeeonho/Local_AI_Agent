@@ -36,10 +36,12 @@ def test_explicit_root_takes_shared_assets_with_it(monkeypatch, tmp_path):
     assert project_paths.model_dir() == root / "models"
 
 
-def test_user_model_override_is_still_respected():
+def test_user_ollama_models_is_diagnostic_not_the_managed_store():
     from core import ollama_paths
     moved = {"OLLAMA_MODELS": r"D:\ai-models"}
-    assert str(ollama_paths.models_dir(moved)) == r"D:\ai-models"
+    assert str(ollama_paths.configured_models_dir(moved)) == r"D:\ai-models"
+    assert ollama_paths.models_dir(moved) == ollama_paths.SHARED_MODELS_DIR
+    assert ollama_paths.store_candidates(moved)[0] == ollama_paths.configured_models_dir(moved)
 
 
 def test_service_explicitly_points_ollama_at_shared_store(tmp_path, monkeypatch):
