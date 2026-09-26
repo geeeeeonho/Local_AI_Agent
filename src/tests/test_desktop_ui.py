@@ -301,6 +301,19 @@ def test_no_control_is_squeezed_to_nothing_at_the_minimum_window_size(ui):
     assert starved==[],'쓸 수 없을 만큼 눌린 컨트롤:\n  '+'\n  '.join(starved)
 
 
+def test_chat_button_clicks_do_not_get_page_auto_scroll_focus_hooks(ui):
+    w,svc,backend=ui
+    w.navigate('chat');pump(w)
+    nodes=[];every_widget(w.pages['chat'],nodes)
+    buttons=[node for node in nodes
+             if node.winfo_class()=='TButton'
+             and str(node.cget('text')).startswith('Chat 시작')]
+    assert buttons, 'Chat 시작 button not found'
+    assert buttons[0].bind('<FocusIn>') in ('', None), (
+        'button focus must not move the surrounding Chat page'
+    )
+
+
 def test_the_wheel_handler_is_not_stacked_again_on_every_refresh(ui):
     """The catalogue rebinds after each redraw; add='+' used to keep the old
     handler too, so one notch eventually scrolled several pages at once."""

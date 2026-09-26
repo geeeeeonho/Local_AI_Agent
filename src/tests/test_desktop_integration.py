@@ -52,6 +52,34 @@ def test_setup_command_reflects_choices_without_a_second_ui(tmp_path):
     assert '--skip-search' in command
 
 
+def test_embedded_setup_inherits_desktop_language_without_prompt(tmp_path):
+    from installer.i18n import get_language, set_language
+
+    b,m,calls=fixture(tmp_path)
+    previous=get_language()
+    try:
+        set_language('ko')
+        command=b.setup_command({})
+        assert command[command.index('--lang') + 1]=='ko'
+    finally:
+        set_language(previous)
+
+
+def test_embedded_setup_reuses_the_desktop_language(monkeypatch, tmp_path):
+    b,m,calls=fixture(tmp_path)
+    import installer.i18n as i18n
+    monkeypatch.setattr(i18n, 'get_language', lambda: 'ko')
+
+    command=b.setup_command({
+        'sandbox':True,
+        'build':True,
+        'search':True,
+    })
+
+    lang_index=command.index('--lang')
+    assert command[lang_index + 1]=='ko'
+
+
 def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
     import inspect
     from integrations.legacy.desktop import LegacyBackend
@@ -61,6 +89,15 @@ def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
     assert 'CREATE_NO_WINDOW' in source
     assert 'stdout' in source and 'subprocess.PIPE' in source
     assert 'stderr' in source and 'subprocess.STDOUT' in source
+
+
+def test_checkbox_panels_never_install_global_mousewheel_handlers():
+    import inspect
+    from launcher.presenter.gui.panels import CheckboxPanel
+
+    source=inspect.getsource(CheckboxPanel)
+    assert 'bind_all' not in source
+    assert 'bind_wheel_tree' in source
 
 
 def test_docker_build_action_never_spawns_a_progress_console():

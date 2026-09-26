@@ -143,7 +143,13 @@ def _prepare_interpreter_home(package_home: Path) -> tuple[bool, str]:
     subtree explicitly and verify a real write before invoking PowerShell.
     """
     package_home = Path(package_home)
-    package_home.mkdir(parents=True, exist_ok=True)
+    try:
+        package_home.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return False, (
+            "Open Interpreter 사용자 폴더를 만들 수 없습니다: "
+            + str(package_home) + " (" + str(exc) + ")"
+        )
 
     if os.name == "nt":
         try:
@@ -188,6 +194,26 @@ def _prepare_interpreter_home(package_home: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _directory_writable(path: Path) -> bool:
+    path = Path(path)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    probe = path / (".localai-write-probe-%d" % os.getpid())
+    try:
+        with probe.open("xb") as stream:
+            stream.write(b"ok")
+        probe.unlink()
+        return True
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 def install_open_interpreter(
     paths: Dict[str, Path], profile: Optional[SafetyProfile] = None
 ) -> bool:
@@ -197,8 +223,6 @@ def install_open_interpreter(
 
     bin_dir = paths.get("open_interpreter_bin", paths["env"] / "open_interpreter" / "bin")
     package_home = paths.get("open_interpreter_home", paths["env"] / "open_interpreter" / "home")
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    package_home.mkdir(parents=True, exist_ok=True)
 
     writable, detail = _prepare_interpreter_home(package_home)
     if not writable:
@@ -217,6 +241,17 @@ def install_open_interpreter(
         return True
     if current:
         utils.info(f"Open Interpreter update: {current} -> {OPEN_INTERPRETER_VERSION}")
+
+    if not _directory_writable(bin_dir):
+        utils.err(
+            "공용 Open Interpreter 실행환경을 수정할 권한이 없습니다: " + str(bin_dir)
+        )
+        utils.warn(
+            "일반 사용자는 이미 설치된 공용 실행환경을 사용할 수 있지만, "
+            "설치/업데이트는 관리자 또는 이 LocalAI 공용 환경을 만든 계정에서 "
+            "Setup을 한 번 실행해야 합니다."
+        )
+        return False
 
     install_env = dict(os.environ)
     install_env["OPEN_INTERPRETER_INSTALL_DIR"] = str(bin_dir)
@@ -239,8 +274,18 @@ def install_open_interpreter(
                 command,
                 env=install_env,
                 check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 creationflags=0x08000000 if os.name == "nt" else 0,
             )
+            for line in (result.stdout or "").splitlines():
+                if line.strip():
+                    utils.info("Open Interpreter: " + line.strip())
+            for line in (result.stderr or "").splitlines():
+                if line.strip():
+                    utils.warn("Open Interpreter: " + line.strip())
             if result.returncode != 0:
                 utils.err(f"Open Interpreter standalone install failed: rc={result.returncode}")
                 return False

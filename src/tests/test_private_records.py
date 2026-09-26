@@ -159,6 +159,25 @@ def test_a_folder_that_is_already_private_is_not_rewritten(monkeypatch, tmp_path
     assert not any('/inheritance:r' in command for command in ran)
 
 
+def test_private_but_unwritable_folder_is_repaired(monkeypatch, tmp_path):
+    folder = tmp_path / 'account'
+    folder.mkdir()
+    ran = fake_icacls(monkeypatch, LOCKED)
+    writable = iter([False, True])
+    monkeypatch.setattr(
+        privacy,
+        'current_user_can_write',
+        lambda path: next(writable),
+    )
+
+    assert privacy.ensure_private(
+        folder,
+        windows=True,
+        environ={'USERNAME': 'Tester'},
+    ) is True
+    assert any('/inheritance:r' in command for command in ran), ran
+
+
 def test_a_folder_open_to_everyone_is_locked_and_checked_again(monkeypatch, tmp_path):
     folder = tmp_path / 'account'
     folder.mkdir()
@@ -245,9 +264,24 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
 
     grants_to_users = [c for c in ran
                        if '/grant' in c and any(sddl.USERS_SID in p for p in c)]
-    assert grants_to_users, 'every account still has to be able to read the models'
-    assert all(str(models) in command for command in grants_to_users), \
-        'and that grant is on the store, never on the records'
+    assert grants_to_users, 'shared assets must remain usable by standard accounts'
+
+    model_grants = [c for c in grants_to_users if str(models) in c]
+    users_parent_grants = [c for c in grants_to_users if str(account.parent) in c]
+
+    assert model_grants, 'every account still has to be able to read the models'
+    assert any('(OI)(CI)(RX)' in part for command in model_grants for part in command)
+
+    assert users_parent_grants, 'a standard account must be able to create users/<itself>'
+    assert all('(OI)' not in part and '(CI)' not in part
+               for command in users_parent_grants for part in command), \
+        'the parent creation grant must never inherit into private account data'
+
+    assert not any(str(account) in command and '/grant' in command
+                   and any(sddl.USERS_SID in p for p in command)
+                   for command in ran), \
+        'BUILTIN Users must never receive a grant on users/<account> itself'
+
     locked = [c for c in ran if '/inheritance:r' in c]
     assert locked and all(str(account) in command for command in locked)
 

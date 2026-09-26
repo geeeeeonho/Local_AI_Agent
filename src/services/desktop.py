@@ -20,6 +20,78 @@ from services.system.desktop import SetupService, SystemService
 
 
 class DesktopServices:
+    @staticmethod
+    def _prepare_private_state(data: Path) -> None:
+        """Repair small per-account state folders before any JsonStore opens.
+
+        A stale lock created by an elevated/older run can deny the normal token
+        even when the account root itself is correctly private. Runtime/settings/
+        projects are small control-state trees, so recursively normalising their
+        ACLs here is cheap. Ephemeral locks deliberately live in the fresh
+        user_data/runtime tree instead of reusing legacy cache lock files.
+        """
+        data = Path(data)
+        account = data.parent
+        try:
+            account.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise RuntimeError(
+                "이 Windows 계정의 LocalAI 폴더를 만들 권한이 없습니다: %s. "
+                "관리자 또는 기존 설치 계정에서 Setup을 한 번 실행해 "
+                "C:\\LocalAI\\users 공용 부모 권한을 갱신하세요." % account
+            ) from exc
+        if __import__('os').name != 'nt':
+            data.mkdir(parents=True, exist_ok=True)
+            for name in ('runtime', 'settings', 'projects'):
+                (data / name).mkdir(parents=True, exist_ok=True)
+            return
+
+        privacy = None
+        try:
+            from integrations.windows import privacy as privacy_module
+            privacy = privacy_module
+            # Fix the account DACL before creating children. This matters for a
+            # normal user who just created users/<account> through the parent-
+            # only creation grant.
+            privacy.ensure_private(account)
+        except Exception:
+            pass
+
+        try:
+            data.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            try:
+                if privacy is None:
+                    raise RuntimeError("Windows ACL helper is unavailable")
+                privacy.make_private(account)
+                data.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    "현재 계정의 user_data 폴더를 쓸 수 없습니다: %s" % data
+                ) from exc
+
+        for name in ('runtime', 'settings', 'projects'):
+            folder = data / name
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except PermissionError:
+                try:
+                    if privacy is None:
+                        raise RuntimeError("Windows ACL helper is unavailable")
+                    privacy.make_private(data)
+                    folder.mkdir(parents=True, exist_ok=True)
+                except Exception as exc:
+                    raise RuntimeError(
+                        "현재 계정의 상태 폴더를 쓸 수 없습니다: %s" % folder
+                    ) from exc
+            if privacy is not None:
+                try:
+                    # Always cover existing children too: the exact failure seen in
+                    # production is runtime-state.json.lock, not the directory.
+                    privacy.make_private(folder)
+                except Exception:
+                    pass
+
     def __init__(self, *, project_root, env, model_dir, data=None, backend=None):
         self.project_root, self.env, self.model_dir = map(Path, (project_root, env, model_dir))
         # ``create_services`` passes the runtime root's user_data, because the
@@ -38,10 +110,17 @@ class DesktopServices:
         self.projects = ProjectRegistry(self.data / 'projects' / 'registry.json')
         self.owner = RuntimeOwner(self.env / "desktop-runtime.lock")
         self.network = NetworkManager(backend, self.owner, self.events)
-        self.inference = InferenceService(runtime=backend.inference, events=self.events,
-            state=RuntimeState(self.data / 'cache' / 'runtime-state.json'))
-        self.models = ModelService(self.inference, events=self.events,
-            lock_path=self.data / 'cache' / 'model-mutation.lock')
+        control = self.data / 'runtime'
+        self.inference = InferenceService(
+            runtime=backend.inference,
+            events=self.events,
+            state=RuntimeState(control / 'runtime-state.json'),
+        )
+        self.models = ModelService(
+            self.inference,
+            events=self.events,
+            lock_path=control / 'model-mutation.lock',
+        )
         self.search = SearchService(backend, self.network, self.events)
         self.chat = ChatService(backend, self.inference, self.network, self.search, self.events)
         self.agent = AgentLauncher(backend, self.network, self.events)
@@ -148,5 +227,6 @@ class DesktopServices:
 def create_services():
     from project_paths import (PROJECT_ROOT, ENV_DIR, MODEL_STORAGE_DIR,
                                USER_DATA_DIR)
+    DesktopServices._prepare_private_state(USER_DATA_DIR)
     return DesktopServices(project_root=PROJECT_ROOT, env=ENV_DIR,
                            model_dir=MODEL_STORAGE_DIR, data=USER_DATA_DIR)

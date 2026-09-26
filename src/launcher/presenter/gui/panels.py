@@ -172,13 +172,23 @@ class CheckboxPanel(_BasePanel):
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
-        canvas.bind_all("<MouseWheel>",
-                        lambda e: canvas.yview_scroll(int(-e.delta / 120),
-                                                     "units"))
+        def wheel(event):
+            delta = getattr(event, "delta", 0)
+            if not delta:
+                return
+            canvas.yview_scroll(int(-delta / 120), "units")
+            return "break"
+
+        def bind_wheel_tree(widget):
+            widget.bind("<MouseWheel>", wheel, add="+")
+            for child in widget.winfo_children():
+                bind_wheel_tree(child)
 
         self._var_map: dict = {}
         for opt in options:
             self._render_option(inner, opt)
+
+        bind_wheel_tree(self.frame)
 
         # 버튼
         btns = tk.Frame(self.frame, bg=Theme.BG)
