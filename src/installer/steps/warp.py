@@ -9,6 +9,7 @@ Docker 이미지 pull 만 수행(컨테이너는 만들지 않음, 이름만 예
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict
@@ -37,7 +38,13 @@ HOST_PORT = int(_c("WARP_PORT", 1080))
 def _docker(*args, timeout=600):
     try:
         return subprocess.run(
-            ["docker", *args], capture_output=True, text=True, timeout=timeout,
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            creationflags=0x08000000 if os.name == "nt" else 0,
         )
     except Exception:
         return None
