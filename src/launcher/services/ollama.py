@@ -686,13 +686,19 @@ class OllamaService:
             self._warn("Ollama 트레이 앱을 종료하지 못했습니다. 다시 살아날 수 있습니다.")
         if not self.ensure_running():
             return False
-        found = self.local_models()
-        if not found:
-            self._err("다시 시작했지만 여전히 모델이 보이지 않습니다.")
-            self._info(self.describe_store())
-            return False
-        self._ok("다시 시작 완료 · 로컬 모델 %d개" % len(found))
-        return True
+        situation, detail = self.inspect_store()
+        if situation == self.READY:
+            count = len(detail.get("served") or ())
+            self._ok("다시 시작 완료 · 로컬 모델 %d개" % count)
+            return True
+        if situation == self.NOTHING_INSTALLED:
+            # Fresh setup is allowed to repair the broker before the first
+            # model pull. Empty shared storage is correct here, not a failure.
+            self._ok("다시 시작 완료 · 공용 모델 저장소가 비어 있습니다.")
+            return True
+        self._err("다시 시작했지만 공용 모델 저장소를 정상적으로 읽지 못합니다.")
+        self._info(self.describe_store())
+        return False
 
     def register_exit_cleanup(self) -> bool:
         """Compatibility hook; the machine-shared broker survives window exit.
