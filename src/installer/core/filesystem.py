@@ -135,7 +135,14 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     # A standard account may have permission to create users/<account> but no
     # inherited write grant inside it. As the creator/owner it can rewrite the
     # DACL, so do that immediately before making user_data/logs/workspace.
-    account.mkdir(parents=True, exist_ok=True)
+    try:
+        account.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise RuntimeError(
+            "이 Windows 계정의 개인 폴더를 만들 권한이 없습니다: %s. "
+            "관리자 또는 기존 설치 계정에서 Setup을 실행해 "
+            "C:\\LocalAI\\users 권한을 먼저 갱신하세요." % account
+        ) from exc
     ensure_private_account(account)
 
     paths = {
