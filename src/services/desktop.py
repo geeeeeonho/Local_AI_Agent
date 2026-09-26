@@ -63,7 +63,6 @@ class DesktopServices:
         # "this whole install lives here", which is how tests and portable
         # runs express themselves, so that root keeps its own user_data.
         self.data = Path(data) if data is not None else self.project_root / 'user_data'
-        self._prepare_private_state(self.data)
         if backend is None:
             from integrations.legacy.desktop import LegacyBackend
             backend = LegacyBackend(self.env, self.model_dir, self.project_root,
@@ -191,5 +190,6 @@ class DesktopServices:
 def create_services():
     from project_paths import (PROJECT_ROOT, ENV_DIR, MODEL_STORAGE_DIR,
                                USER_DATA_DIR)
+    DesktopServices._prepare_private_state(USER_DATA_DIR)
     return DesktopServices(project_root=PROJECT_ROOT, env=ENV_DIR,
                            model_dir=MODEL_STORAGE_DIR, data=USER_DATA_DIR)
