@@ -29,7 +29,6 @@ INTERPRETER_KINDS = ("sandbox", "host")
 
 _LAYOUT = (
     "settings",
-    "logs",
     "chat",
     "interpreter/sandbox",
     "interpreter/host",
@@ -61,7 +60,13 @@ def settings_dir() -> Path:
 
 
 def logs_dir() -> Path:
-    return _sub("logs")
+    """Return the one canonical per-account log directory."""
+    d = project_paths.logs_dir()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return d
 
 
 def chat_dir() -> Path:
@@ -78,7 +83,6 @@ _README = (
     "This user_data directory is preserved when the program exits.\n"
     "\n"
     "  settings/            product settings\n"
-    "  logs/                execution/session logs\n"
     "  chat/                chat-related persistent data\n"
     "  interpreter/sandbox/ Open Interpreter sandbox runtime state/assets\n"
     "  interpreter/host/    Open Interpreter host runtime state/assets\n"
