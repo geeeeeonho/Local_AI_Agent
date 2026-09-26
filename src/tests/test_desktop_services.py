@@ -80,16 +80,37 @@ def test_composition_is_side_effect_free_until_requested(tmp_path):
     assert svc.model_dir == backend.inference.model_dir
 
 
-def test_ephemeral_state_locks_do_not_reuse_legacy_cache(tmp_path):
+def test_private_runtime_state_and_shared_model_lock_are_separated(tmp_path):
     svc, backend = make(tmp_path)
 
     state_path = svc.inference.state.store.path
     model_lock = svc.models.lock_path
 
     assert state_path == tmp_path / 'user_data' / 'runtime' / 'runtime-state.json'
-    assert model_lock == tmp_path / 'user_data' / 'runtime' / 'model-mutation.lock'
+    assert model_lock == tmp_path / 'models' / '.localai' / 'model-mutation.lock'
     assert 'cache' not in state_path.parts
-    assert 'cache' not in model_lock.parts
+    assert 'user_data' not in model_lock.parts
+
+
+def test_two_accounts_using_one_store_share_the_same_model_lock(tmp_path):
+    from services.desktop import DesktopServices
+    backend_a = Backend(tmp_path)
+    backend_b = Backend(tmp_path)
+    env = tmp_path / 'environment'
+    env.mkdir(exist_ok=True)
+
+    alice = DesktopServices(
+        project_root=tmp_path, env=env, model_dir=backend_a.inference.model_dir,
+        data=tmp_path / 'users' / 'Alice' / 'user_data', backend=backend_a,
+    )
+    bob = DesktopServices(
+        project_root=tmp_path, env=env, model_dir=backend_b.inference.model_dir,
+        data=tmp_path / 'users' / 'Bob' / 'user_data', backend=backend_b,
+    )
+
+    assert alice.data != bob.data
+    assert alice.models.lock_path == bob.models.lock_path
+    assert alice.models.lock_path == tmp_path / 'models' / '.localai' / 'model-mutation.lock'
 
 
 def test_health_does_not_start_or_repair_services(tmp_path):
