@@ -148,7 +148,7 @@ class ModelService:
         """Where models land, and whether there is room for more there.
 
         Reported against the nearest existing ancestor when the store itself has
-        not been created yet, because a fresh machine has no C:\\LLM_Models but
+        not been created yet, because a fresh machine has no C:\\LocalAI\\models but
         does have the drive it will live on.
         """
         import shutil
@@ -176,7 +176,7 @@ class ModelService:
             # Ollama's own default sits in one account's profile. Saying which
             # kind of store this is tells the user whether the machine's other
             # Windows accounts will see the same models.
-            'shared': ollama_paths.models_dir_is_shared(),
+            'shared': ollama_paths.models_dir_is_shared(path=path),
             'per_user': ollama_paths.is_per_user_store(path),
         }
 
