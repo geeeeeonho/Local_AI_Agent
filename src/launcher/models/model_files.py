@@ -112,7 +112,8 @@ def default_csv_path(model_dir) -> Path:
     per-account truth. Callers surface the failure and keep the previous shared
     snapshot intact.
     """
-    return Path(model_dir) / CSV_NAME
+    import project_paths
+    return project_paths.model_files_path(model_dir)
 
 
 def write_csv(model_dir, path=None, rows: Optional[Iterable[FileRow]] = None
