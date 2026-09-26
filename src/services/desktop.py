@@ -46,8 +46,11 @@ class DesktopServices:
         self.chat = ChatService(backend, self.inference, self.network, self.search, self.events)
         self.agent = AgentLauncher(backend, self.network, self.events)
         self.system = SystemService(backend)
-        self.setup = SetupService(backend, self.models, self.network, self.settings,
-            active=lambda: self.chat.attempted or self.agent.opened)
+        self.setup = SetupService(
+            backend, self.models, self.network, self.settings,
+            active=lambda: self.chat.attempted or self.agent.opened,
+            events=self.events,
+        )
         self._close_lock = threading.RLock()
         self._finalized = False
 

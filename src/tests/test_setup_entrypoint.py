@@ -13,6 +13,7 @@ def _args(**overrides):
         "skip_build": False,
         "skip_search": False,
         "lang": None,
+        "embedded": False,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -39,6 +40,7 @@ def test_installer_accepts_documented_install_and_skip_flags():
     assert args.install is True
     assert args.skip_model and args.skip_sandbox and args.skip_build and args.skip_search
     assert args.lang == "ko"
+    assert args.embedded is False
 
 
 def test_installer_no_longer_owns_the_manage_ui():

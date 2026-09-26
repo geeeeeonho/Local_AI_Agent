@@ -31,10 +31,11 @@ class SetupService:
     # One tuple, referenced by both spellings, so the two cannot drift.
     MAINTENANCE_KEYS = MAINTENANCE_OPERATIONS
 
-    def __init__(self, backend, models, network, settings, *, active=None):
+    def __init__(self, backend, models, network, settings, *, active=None, events=None):
         self.backend, self.models = backend, models
         self.network, self.settings = network, settings
         self.active = active if active is not None else lambda: False
+        self.events = events
 
     def require_idle(self):
         if self.active():
@@ -58,10 +59,29 @@ class SetupService:
         self.ensure_model_runtime(download=False)
         return self.models.remove_model(name)
 
-    def repair(self):
+    def repair(self, options=None, *, cancel=None):
+        """Run installer/repair from the desktop without spawning a UI/console."""
         self.require_idle()
+        acquired_here = not self.network.owner.owned
         self.network.owner.acquire()
-        return self.backend.run_setup()
+
+        def log(message):
+            if self.events is not None:
+                self.events.emit('runtime.progress', {
+                    'service': 'setup',
+                    'message': str(message),
+                })
+
+        try:
+            return self.backend.run_setup(options or {}, log=log, cancel=cancel)
+        finally:
+            if acquired_here:
+                try:
+                    from launcher.core import lifelog
+                    lifelog.suppress_exit_cleanups()
+                except Exception:
+                    pass
+                self.network.owner.release()
 
     def maintenance(self, key, presenter):
         self.require_idle()

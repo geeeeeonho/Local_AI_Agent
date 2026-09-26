@@ -80,6 +80,7 @@ def _check_docker():
         subprocess.run(
             ["docker", "--version"],
             capture_output=True, check=True, timeout=10,
+            creationflags=0x08000000 if os.name == "nt" else 0,
         )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         raise DockerNotAvailable("Docker not installed")
@@ -88,6 +89,7 @@ def _check_docker():
         subprocess.run(
             ["docker", "info"],
             capture_output=True, check=True, timeout=10,
+            creationflags=0x08000000 if os.name == "nt" else 0,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         raise DockerNotAvailable("Docker daemon not responding")
@@ -177,7 +179,10 @@ def install(
         cmd.append(str(paths["sandbox"]))
 
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(
+                cmd, check=True,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
             utils.ok(t("install.image_build_ok"))
         except subprocess.CalledProcessError:
             utils.err(t("install.image_build_fail"))

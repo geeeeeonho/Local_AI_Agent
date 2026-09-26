@@ -200,8 +200,8 @@ def parse(app, argv):
 
 
 def test_setup_flags_select_setup_from_any_launcher():
-    # The shared parser owns routing. Install/skip flags use the installer,
-    # while --manage opens the current Setup desktop app.
+    # The shared parser owns routing. Install/skip/manage all select the same
+    # Setup desktop; only python -m installer is the headless console path.
     for argv in (['--install'], ['--manage'], ['--skip-model'], ['--skip-search']):
         assert parse('studio', argv).app == 'setup', argv
     assert parse('studio', ['--install']).install
@@ -218,6 +218,13 @@ def test_naming_a_different_application_with_installation_flags_is_refused():
 def test_run_bat_only_forces_console_for_console_flows():
     run = (ROOT / 'RUN.bat').read_text()
     force_line = next(line for line in run.splitlines() if 'findstr' in line.lower())
-    for flag in ('--install', '--skip-', '--help', '--tui'):
+    for flag in ('--help', '--tui'):
         assert flag in force_line, flag
-    assert '--manage' not in force_line
+    for flag in ('--install', '--skip-', '--manage'):
+        assert flag not in force_line, flag
+
+
+def test_install_flags_no_longer_handoff_to_a_second_installer_ui():
+    source = (ROOT / 'src' / 'apps' / 'shared' / 'entry.py').read_text(encoding='utf-8')
+    assert "run_module_entry('installer'" not in source
+    assert 'window.root.after(150, window.repair)' in source

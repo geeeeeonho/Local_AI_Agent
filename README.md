@@ -38,19 +38,23 @@ LocalAI는 Ollama를 `C:\LocalAI\ollama`에서 직접 관리하고 시작할 때
 ### 1. 설치 또는 관리
 
 ```bat
-RUN.bat --install   :: 설치 / 재설치
-RUN.bat --manage    :: 현재 Setup 관리 화면
+RUN.bat --install   :: Setup UI를 열고 설치 / 재설치 시작
+RUN.bat --manage    :: Setup UI 열기 (자동 실행 없음)
 ```
 
-두 경로의 역할은 분리되어 있습니다.
+두 경로는 **같은 Setup UI**를 사용합니다. 차이는 `--install`이 창이 열린 뒤 설치/복구를
+자동으로 시작하고, `--manage`는 사용자가 옵션을 확인한 뒤 직접 실행한다는 점뿐입니다.
 
-**모델 관리 UI는 하나뿐입니다.** 설치기 콘솔은 Ollama·Docker·도구 같은 공용 런타임만 준비하고,
-모델 선택/설치/삭제는 Setup의 **Models** 화면에서 처리합니다. 다운로드 중에는 같은 화면에
-모델명, 상태, 진행률, 받은 용량이 표시되며 별도 선택창을 띄우지 않습니다.
+**설치와 모델 관리의 사용자 UI는 하나입니다.** Setup 화면에서 Sandbox / Docker build /
+Search(SearXNG+Tor) 선택을 하고, Ollama·AnythingLLM·Open Interpreter·WARP를 포함한 설치
+진행 로그는 같은 창의 Activity 영역에 실시간으로 표시됩니다. 별도 설치 콘솔이나 진행창을
+띄우지 않습니다. 모델 선택/설치/삭제도 **Models** 화면에서 처리하며 다운로드 모델명,
+진행률과 받은 용량을 같은 창에서 확인합니다.
 
-- `--install` → 현재 단일 루트 구조 기준 공용 런타임 설치/재설치 흐름입니다. 모델 선택·다운로드는 팝업을 띄우지 않고 `RUN.bat --manage`의 **Models** 화면에서만 진행합니다. 예전 경로를 자동 이전하거나 병합하지 않습니다.
-- `--manage` → 현재 데스크톱 Setup 화면. 모델·공용 저장소·네트워크·런타임 유지보수를 관리합니다. `RUN.bat --app setup`과 같은 관리 화면입니다.
-- 설치기 자체가 예전 별도 관리 GUI로 자동 전환하지 않습니다.
+- `--install` → Setup UI를 열고 현재 체크 상태로 설치/복구를 자동 시작합니다.
+- `--manage` → 같은 Setup UI를 열되 자동 실행하지 않습니다.
+- `python -m installer` → GUI가 필요 없는 진단/자동화용 콘솔 진입점입니다.
+- 새 설치는 예전 경로를 자동 검색·이동·병합하지 않습니다.
 
 기존 `INSTALL.bat`, `MANAGE.bat`, `SETUP.bat`은 더 이상 루트 실행기로 사용하지 않습니다.
 

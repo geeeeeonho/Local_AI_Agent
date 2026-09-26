@@ -135,6 +135,59 @@ def _installed_interpreter_version(exe: Path) -> str | None:
     return match.group(1) if match else None
 
 
+def _prepare_interpreter_home(package_home: Path) -> tuple[bool, str]:
+    """Make this account's interpreter package home writable before install.
+
+    A previous interrupted/elevated install can leave only install.lock with a
+    restrictive ACL. The account root may still look private, so repair this
+    subtree explicitly and verify a real write before invoking PowerShell.
+    """
+    package_home = Path(package_home)
+    package_home.mkdir(parents=True, exist_ok=True)
+
+    if os.name == "nt":
+        try:
+            from integrations.windows import privacy
+            # Reapply recursively even when the parent account already passed
+            # the privacy check; this is specifically about stale child ACLs.
+            privacy.make_private(package_home)
+        except Exception:
+            pass
+
+    lock = package_home / "packages" / "standalone" / "install.lock"
+    if lock.exists():
+        try:
+            lock.unlink()
+            utils.info("Open Interpreter 이전 install.lock 제거: " + str(lock))
+        except PermissionError:
+            if os.name == "nt":
+                try:
+                    from integrations.windows import privacy
+                    privacy.make_private(package_home)
+                    lock.unlink()
+                    utils.info("Open Interpreter install.lock 권한 복구 후 제거: " + str(lock))
+                except Exception as exc:
+                    return False, (
+                        "Open Interpreter install.lock에 접근할 수 없습니다: "
+                        + str(lock) + " (" + str(exc) + ")"
+                    )
+            else:
+                return False, "Open Interpreter install.lock에 접근할 수 없습니다: " + str(lock)
+        except OSError as exc:
+            return False, "Open Interpreter install.lock 정리 실패: " + str(exc)
+
+    probe = package_home / ".localai-write-probe"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        return False, (
+            "Open Interpreter 사용자 폴더에 쓸 수 없습니다: "
+            + str(package_home) + " (" + str(exc) + ")"
+        )
+    return True, ""
+
+
 def install_open_interpreter(
     paths: Dict[str, Path], profile: Optional[SafetyProfile] = None
 ) -> bool:
@@ -146,6 +199,16 @@ def install_open_interpreter(
     package_home = paths.get("open_interpreter_home", paths["env"] / "open_interpreter" / "home")
     bin_dir.mkdir(parents=True, exist_ok=True)
     package_home.mkdir(parents=True, exist_ok=True)
+
+    writable, detail = _prepare_interpreter_home(package_home)
+    if not writable:
+        utils.err(detail)
+        utils.warn(
+            "Setup에서 현재 계정의 Open Interpreter 사용자 폴더 권한을 "
+            "복구한 뒤 다시 시도하세요."
+        )
+        return False
+
     exe = bin_dir / "interpreter.exe"
 
     current = _installed_interpreter_version(exe)
@@ -172,7 +235,12 @@ def install_open_interpreter(
                 "-ExecutionPolicy", "Bypass",
                 "-File", str(script),
             ]
-            result = subprocess.run(command, env=install_env, check=False)
+            result = subprocess.run(
+                command,
+                env=install_env,
+                check=False,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
             if result.returncode != 0:
                 utils.err(f"Open Interpreter standalone install failed: rc={result.returncode}")
                 return False

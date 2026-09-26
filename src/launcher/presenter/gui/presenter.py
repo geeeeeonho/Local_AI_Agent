@@ -22,7 +22,6 @@ from tkinter import filedialog
 from typing import Callable, Dict, List, Optional, Set
 
 from ..base import MenuItem, Option, Presenter
-from .dialogs import confirm_dangerous as _confirm_dangerous
 from .dialogs import prompt_text as _prompt_text_dialog
 from .panels import CheckboxPanel, HomePanel, LogPanel
 from .window import MainWindow
@@ -634,26 +633,28 @@ class TkPresenter(Presenter):
     def confirm_dangerous(
         self, label: str, description: str, risk: int,
     ) -> bool:
-        import threading
-
-        if threading.current_thread() is threading.main_thread():
-            return _confirm_dangerous(
-                self._window.root, label, description, risk,
-            )
-
-        # 백그라운드: 메인 스레드에서 다이얼로그
-        done = threading.Event()
-        holder = {"ok": False}
-
-        def _do():
-            holder["ok"] = _confirm_dangerous(
-                self._window.root, label, description, risk,
-            )
-            done.set()
-
-        self._window.root.after(0, _do)
-        done.wait()
-        return holder["ok"]
+        """Confirm risk inside the current application panel, never a popup."""
+        badge = "위험" if risk >= 2 else "주의"
+        choice = self.show_menu(
+            title=label,
+            subtitle=description,
+            items=[
+                MenuItem(
+                    key="yes",
+                    title="계속 진행",
+                    description="위 내용을 확인했고 이 작업을 실행합니다.",
+                    badge=badge,
+                    badge_kind="danger" if risk >= 2 else "warn",
+                ),
+                MenuItem(
+                    key="no",
+                    title="취소",
+                    description="변경하지 않고 이전 화면으로 돌아갑니다.",
+                    separator_above=True,
+                ),
+            ],
+        )
+        return choice == "yes"
 
     # ─────────────────────────────────────────
     #  진입점 (entrypoint) API

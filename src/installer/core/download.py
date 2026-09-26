@@ -18,19 +18,36 @@ def download_with_progress(url: str, dest: Path, label: str = ""):
     info(f"  → {dest}")
 
     stream = sys.stdout
+    try:
+        interactive = bool(stream is not None and stream.isatty())
+    except (AttributeError, OSError, ValueError):
+        interactive = False
+    last_bucket = {"value": -1}
 
     def report(blocknum, blocksize, totalsize):
         if stream is None or totalsize <= 0:
             return
-        d = blocknum * blocksize
+        d = min(blocknum * blocksize, totalsize)
         pct = min(100, d * 100 / totalsize)
         mb_n = d / (1024 ** 2)
         mb_t = totalsize / (1024 ** 2)
         filled = int(30 * pct / 100)
         bar = "█" * filled + "░" * (30 - filled)
-        stream.write(
-            f"\r  [{bar}] {pct:5.1f}%  {mb_n:7.1f}/{mb_t:7.1f} MB"
-        )
+        if interactive:
+            stream.write(
+                f"\r  [{bar}] {pct:5.1f}%  {mb_n:7.1f}/{mb_t:7.1f} MB"
+            )
+        else:
+            # A GUI installer reads this pipe line-by-line. Throttle to one
+            # update per percent instead of turning every urlretrieve block
+            # callback into a queued UI event.
+            bucket = int(pct)
+            if bucket == last_bucket["value"] and pct < 100:
+                return
+            last_bucket["value"] = bucket
+            stream.write(
+                f"  [{bar}] {pct:5.1f}%  {mb_n:7.1f}/{mb_t:7.1f} MB\n"
+            )
         stream.flush()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
