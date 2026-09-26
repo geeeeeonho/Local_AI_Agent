@@ -61,10 +61,10 @@ class OllamaService:
         # The broker is machine-shared under <runtime root>\ollama. Keep the
         # old attribute name because lifecycle code treats it as "ours".
         self.portable_exe = project_paths.OLLAMA_INSTALL_DIR / ollama_paths.PORTABLE_EXECUTABLE
-        # Prefer an Ollama the machine already has. The portable copy this
-        # project used to unzip into its own folder is now only a fallback.
-        self.exe = ollama_paths.find_executable(
-            fallback=(self.portable_exe.parent,)) or self.portable_exe
+        # The shared LocalAI broker is the canonical executable. A separately
+        # installed per-user/system Ollama is never silently substituted,
+        # because then another Windows account can see a different broker/store.
+        self.exe = self.portable_exe
         # Which server *this account* started, and its output. The managed
         # environment beside it is shared by every account on the machine, so
         # recording a pid there let a second signed-in user read the first
@@ -112,16 +112,9 @@ class OllamaService:
         executable = self._process_executable(pid)
         if executable is None:
             return True
-        if not self._is_known(executable):
-            return False
-        if _same_path(executable, self.portable_exe) and not self._state_matches(pid):
-            # Our own portable server with settings we no longer track. It is
-            # not ready to use until ensure_running restarts it.
-            return False
-        # A known Ollama that answers is running. Which store it reads is a
-        # separate question, reported next to the status rather than folded
-        # into it - "stopped" was the wrong word for "keeps its files elsewhere".
-        return True
+        # A shared broker can have been started by another Windows account,
+        # whose private runtime-state file is intentionally invisible here.
+        return _same_path(executable, self.exe)
 
     def _migration_pending(self) -> bool:
         """Fresh-install layout has no automatic legacy-store migration."""
@@ -775,9 +768,9 @@ class OllamaService:
                 # Chat 과 Agent 를 통째로 막아 버렸다. 신원을 못 밝히면 신원 대신
                 # 증거를 본다 — 저장소가 일치하는지 서버에 직접 묻는다.
                 return self._accept_unidentified_server()
-            if not self._is_known(executable):
+            if not _same_path(executable, self.exe):
                 self._err(
-                    "포트 %s가 알 수 없는 Ollama에 의해 사용 중입니다: %s"
+                    "포트 %s가 LocalAI 공용 Ollama가 아닌 프로세스에 의해 사용 중입니다: %s"
                     % (config.OLLAMA_PORT, executable)
                 )
                 self._err("해당 Ollama를 종료한 뒤 다시 실행하세요.")
