@@ -70,7 +70,7 @@ RUN.bat --tui              :: 이전 터미널 런처
 Studio 는 Tk 가 있는 Python 3.11+ 를 씁니다. GUI를 사용할 수 없는 환경에서는
 `RUN.bat --tui` 로 이전 터미널 런처를 쓸 수 있습니다.
 
-설치와 관리는 같은 `RUN.bat`에서 선택하지만, 설치/복구와 관리 UI는 서로 다른 책임으로 유지합니다. 기존 개별 실행기와 `RUN_TUI.bat`은 제거되었습니다.
+설치와 관리는 같은 `RUN.bat`에서 선택하지만, 설치/재설치와 관리 UI는 서로 다른 책임으로 유지합니다. 기존 개별 실행기와 `RUN_TUI.bat`은 제거되었습니다.
 
 ### 첫 실행
 
@@ -229,7 +229,6 @@ WORKSPACE_DIR       -> <ACCOUNT_ROOT>\workspace
   통째로 막았습니다.** 지금은 서버에 직접 물어 모델 저장소가 일치하면 그대로 쓰고,
   저장소가 실제로 다를 때만 거부합니다. "알려진 위치 + 저장소 확인 불가" 를 이미 허용하고
   있으므로, "신원 확인 불가 + 저장소 일치" 를 거부할 이유가 없습니다.
-- 설치 중 레거시 모델을 옮길 때는 우리가 띄운 서버만 종료해 Windows 파일 잠금을 피한 뒤 이동하고 다시 시작합니다.
 - GUI 상태바와 서비스 메뉴도 단순 포트 응답이 아니라 이 소유권 판단을 씁니다.
 
 ### 모델이 어디 있는지는 "쓸 수 있는지" 와 다른 질문입니다
@@ -950,25 +949,22 @@ hook 을 설치하게 되면서 이 파일이 **창을 열 때마다** 쌓이게
 
 ## 데이터 보존
 
-데이터는 한 번 이동합니다 — 체크아웃 밖, 런타임 루트로. 그 뒤로는 체크아웃을
-옮기든 지우든 다시 받든 그대로 남습니다.
+새 설치에서는 처음부터 공용 데이터와 개인 데이터를 나눠 저장합니다. 자동 이전
+단계는 없습니다.
 
 ```text
-<checkout>/llm_environment/   ->  C:\LocalAI\environment/        (공용)
-C:\LocalAI\models              ->  C:\LocalAI\models               (공용)
-<checkout>/user_data/         ->  C:\LocalAI\users\<계정>\user_data/
-C:\LocalAI\user_data           ->  C:\LocalAI\users\<계정>\user_data/
-C:\LocalAI\logs                ->  C:\LocalAI\users\<계정>\logs/
-<environment>/agent/workspace ->  C:\LocalAI\users\<계정>\workspace/
+C:\LocalAI\environment\          공용 실행환경
+C:\LocalAI\ollama\               공용 Ollama 중계기
+C:\LocalAI\models\               공용 모델
+C:\LocalAI\users\<계정>\
+  user_data\                      개인 설정·대화·프로젝트·벡터 저장소
+  logs\                           개인 로그
+  workspace\                      개인 작업 파일
 ```
 
-이동은 `RUN.bat --install`(설치/복구)에서만 일어나고, 옮긴 뒤 개수와 용량을
-확인해 보고합니다. 옮기기 전에는 데스크톱이 "예전 위치에 설치 데이터가 남아
-있습니다" 라고 알리고 [설치 / 복구] 버튼을 바로 옆에 띄웁니다 — 이미 받아 둔
-수십 GB 를 "준비 안 됨" 으로 오해해 다시 받는 일이 없도록.
-
-특히 `user_data/settings/user_config.json`, Agent trace, 인터프리터 세션, 폴더 정책 등은 모두 **내 계정** 폴더(`C:\LocalAI\users\<계정>\user_data`)를 기준으로 사용합니다.
-대용량 모델은 공용인 `C:\LocalAI\models` 에 한 벌만 있어, 체크아웃을 복사하거나 업데이트해도, 계정을 추가해도 중복되지 않습니다.
+체크아웃을 복사하거나 다시 받아도 공용 환경과 모델은 중복 생성하지 않습니다.
+각 Windows 계정의 `RUN.bat`은 같은 공용 런타임을 바라보되, 설정·Agent trace·
+인터프리터 세션·AnythingLLM 데이터 등은 자기 계정 폴더만 사용합니다.
 
 ## 이전 상세 README
 
