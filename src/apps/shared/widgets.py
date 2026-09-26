@@ -219,11 +219,17 @@ class ScrollArea:
             total = max(1, self.body.winfo_height())
             self.canvas.yview_moveto((self.canvas.canvasy(0) + offset) / total)
 
-    #: Widgets that scroll themselves. The page must not steal their wheel:
-    #: a Treeview inside a scrolled page used to scroll the page instead of
-    #: its own rows, which is exactly the "the wheel goes somewhere else"
-    #: complaint.
+    #: Widgets that scroll themselves. The page must not steal their wheel.
     SELF_SCROLLING = (ttk.Combobox, ttk.Treeview, tk.Text, tk.Listbox)
+
+    #: Only controls that need keyboard focus assistance may auto-scroll.
+    #: Buttons/checkbuttons are intentionally excluded: a mouse click giving a
+    #: button focus must not drag the whole Chat/Setup page down underneath the
+    #: pointer.
+    FOCUS_SCROLLING = (
+        ttk.Entry, ttk.Combobox, ttk.Treeview,
+        tk.Entry, tk.Text, tk.Listbox,
+    )
 
     def bind_content(self):
         """(Re)bind wheel and focus handling for everything now in this area.
@@ -241,7 +247,8 @@ class ScrollArea:
                 if not isinstance(widget, self.SELF_SCROLLING):
                     for sequence in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
                         widget.bind(sequence, self._wheel, add='+')
-                widget.bind('<FocusIn>', self._focus, add='+')
+                if isinstance(widget, self.FOCUS_SCROLLING):
+                    widget.bind('<FocusIn>', self._focus, add='+')
             for child in widget.winfo_children():
                 visit(child)
         # Widgets destroyed since the last pass must not keep their names alive.
