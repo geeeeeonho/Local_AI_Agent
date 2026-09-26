@@ -31,6 +31,7 @@ def _parse_args(argv=None):
     p.add_argument("--skip-search",  action="store_true")
     p.add_argument("--lang",         default=None,
                    help="ko or en (default: ask user / use saved)")
+    p.add_argument("--embedded", action="store_true", help=argparse.SUPPRESS)
     return p.parse_args(argv)
 
 
@@ -134,23 +135,21 @@ def _run_install(args) -> int:
         skipped_components.append("searxng")
         utils.warn(t("install.searxng_skip_optional"))
 
-    # Tor is optional but user-selectable. Prepare it explicitly rather than
-    # hiding its pull inside the SearXNG installer.
-    try:
-        if tor.install(paths):
-            components.append("tor")
-        elif not args.skip_search:
-            # SearXNG settings route all outbound search through llm_tor:9050,
-            # so Tor is required when search was requested.
+    # Search is one UI choice. When it is unchecked, both SearXNG and its
+    # Tor relay stay untouched instead of silently installing half the feature.
+    if not args.skip_search:
+        try:
+            if tor.install(paths):
+                components.append("tor")
+            else:
+                failed_components.append("tor")
+                utils.warn("Tor 이미지를 준비하지 못해 SearXNG 검색 경로가 완전하지 않습니다.")
+        except Exception as exc:
             failed_components.append("tor")
-            utils.warn("Tor 이미지를 준비하지 못해 SearXNG 검색 경로가 완전하지 않습니다.")
-        else:
-            skipped_components.append("tor")
-            utils.warn("Tor 이미지는 준비되지 않았습니다. 다른 네트워크 모드는 계속 사용할 수 있습니다.")
-    except Exception as exc:
-        target = failed_components if not args.skip_search else skipped_components
-        target.append("tor")
-        utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
+            utils.warn("Tor 이미지 준비 중 오류: " + repr(exc))
+    else:
+        skipped_components.append("tor")
+        utils.info("Tor 준비 생략 — Search가 선택되지 않았습니다.")
 
     # WARP is the default network mode and its HTTP bridge reuses either the
     # sandbox image or the SearXNG image. Run this after both image-producing
@@ -173,13 +172,14 @@ def _run_install(args) -> int:
     )
     if failed_components:
         utils.warn("일부 필수 구성요소가 준비되지 않았습니다: " + ", ".join(failed_components))
-        utils.warn("RUN.bat --manage 에서 상태를 확인하거나 RUN.bat --install 로 복구하세요.")
+        utils.warn("Setup UI에서 상태를 확인하고 필요한 항목을 다시 실행하세요.")
     utils.finalize_summary(paths, HERE)
 
-    try:
-        input("\n" + t("common.exit_prompt"))
-    except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
-        pass
+    if not args.embedded:
+        try:
+            input("\n" + t("common.exit_prompt"))
+        except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
+            pass
     return 0
 
 
