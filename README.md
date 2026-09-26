@@ -8,7 +8,7 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 
 ```text
 C:\LocalAI\
-├─ environment\          공용 — 관리형 런타임 · 컨테이너 설정 · 스크립트
+├─ environment\          공용 — 관리형 런타임 · 설치 템플릿 · 스크립트
 ├─ ollama\               공용 — LocalAI가 관리하는 Ollama 중계기
 ├─ models\               공용 — 모든 Windows 계정이 함께 쓰는 모델 저장소
 └─ users\
@@ -108,7 +108,8 @@ Ollama는 LocalAI의 **로컬 모델 중계기**입니다. 모델 API는 Ollama�
 11434 포트를 점유하면 임의 종료하지 않고 설치/실행을 중단합니다.
 
 **개인 데이터는 공유하지 않습니다.** AnythingLLM 저장소, Open Interpreter HOME,
-설정, 프로젝트, 로그와 작업공간은 현재 계정의
+설정·프로젝트·대화·컨테이너 파생 설정은 `user_data`, 실행/Agent trace는 `logs`,
+작업 파일은 `workspace`로 나눠 모두 현재 계정의
 `C:\LocalAI\users\<계정>` 아래에서만 사용합니다.
 
 ### 모델 확인은 한 경로로만
@@ -752,7 +753,8 @@ Excel 에서 한글이 깨지지 않도록 UTF-8 BOM 으로 씁니다.
 - **Ollama**: 로컬 모델 실행
 - **SearXNG**: 로컬 웹 검색
 - **Docker**: 샌드박스 및 보조 서비스
-- **user_data**: 설정, 로그, 세션, AnythingLLM 데이터 등 영속 데이터
+- **user_data**: 설정, 세션, AnythingLLM 데이터 등 계정별 영속 데이터
+- **logs**: 실행 로그와 Agent trace를 모으는 계정별 로그 폴더
 
 ## 개발자 실행
 
