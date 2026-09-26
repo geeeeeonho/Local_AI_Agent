@@ -10,7 +10,10 @@ version validation)는 각 runtime이 계속 소유한다.
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
@@ -60,6 +63,114 @@ class DockerService:
             return subprocess.run(command, **options)
         except (OSError, subprocess.SubprocessError):
             return None
+
+    @staticmethod
+    def run_stream(
+        args: Iterable[object],
+        *,
+        logger=None,
+        timeout: float = 1200,
+        cancel_check=None,
+    ) -> Optional[int]:
+        """Run Docker hidden while forwarding stdout/stderr line-by-line."""
+        command = [str(part) for part in args]
+        if not command or command[0].lower() != "docker":
+            command.insert(0, "docker")
+
+        options = dict(_NO_WINDOW_KW)
+        options.update({
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+        })
+        try:
+            process = subprocess.Popen(command, **options)
+        except OSError:
+            return None
+
+        lines = queue.Queue()
+        finished = object()
+
+        def pump():
+            try:
+                for line in process.stdout or ():
+                    lines.put(line.rstrip("\r\n"))
+            finally:
+                lines.put(finished)
+
+        threading.Thread(
+            target=pump, daemon=True, name="localai-docker-output"
+        ).start()
+
+        def emit(message):
+            if logger is None:
+                return
+            try:
+                if callable(logger):
+                    logger(message)
+                else:
+                    logger.info(message)
+            except Exception:
+                pass
+
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        reader_done = False
+        while True:
+            if cancel_check is not None and cancel_check():
+                emit("Docker 작업 취소 요청")
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                return None
+            if time.monotonic() >= deadline:
+                emit("Docker 작업 시간 초과")
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                return None
+            try:
+                item = lines.get(timeout=0.1)
+            except queue.Empty:
+                item = None
+            if item is finished:
+                reader_done = True
+            elif item:
+                emit(str(item))
+            if process.poll() is not None and reader_done:
+                return int(process.returncode or 0)
+
+    @staticmethod
+    def build_image_stream(
+        tag: str,
+        context: os.PathLike | str,
+        *,
+        dockerfile: os.PathLike | str | None = None,
+        build_args: Mapping[str, object] | None = None,
+        logger=None,
+        timeout: float = 1200,
+        cancel_check=None,
+    ) -> Optional[int]:
+        args = ["build", "-t", str(tag)]
+        if dockerfile is not None:
+            args += ["-f", str(Path(dockerfile))]
+        for key, value in sorted((build_args or {}).items()):
+            args += ["--build-arg", f"{key}={value}"]
+        args.append(str(Path(context)))
+        return DockerService.run_stream(
+            args, logger=logger, timeout=timeout, cancel_check=cancel_check)
 
     # ── generic primitives ──────────────────────────────────────────
     @staticmethod
