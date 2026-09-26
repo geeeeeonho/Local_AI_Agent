@@ -173,7 +173,7 @@ def test_users_parent_allows_standard_accounts_to_create_only_their_child(monkey
     assert ensure_accounts_parent_access(users, windows=True) is True
     assert calls == [[
         "icacls", str(users), "/grant",
-        "*S-1-5-32-545:(RX,WD,AD)", "/Q",
+        "*S-1-5-32-545:(RD,X,AD,RA,REA)", "/Q",
     ]]
     assert all("(OI)" not in part and "(CI)" not in part for part in calls[0]), (
         "the Users grant must not inherit into private account folders"
