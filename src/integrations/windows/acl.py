@@ -31,7 +31,7 @@ def run(command, timeout=20):
     bytes with mbcs on Windows and always replace undecodable bytes.
     """
     try:
-        encoding = "mbcs" if os.name == "nt" else "utf-8"
+        encoding = "mbcs" if on_windows() else "utf-8"
         return subprocess.run(
             command,
             capture_output=True,
