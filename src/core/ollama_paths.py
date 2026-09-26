@@ -52,7 +52,7 @@ def _ollama_var(value):
     """Read a variable the way Ollama reads it.
 
     Ollama's envconfig.Var trims whitespace and then strips surrounding quotes,
-    so OLLAMA_MODELS="C:\\Ollama\\models" - quotes and all, which is easy to end up
+    so OLLAMA_MODELS="C:\\LocalAI\\models" - quotes and all, which is easy to end up
     with from a Windows dialog or a batch file - resolves to the bare path.
     Keeping the quotes would send this project looking in a directory that does
     not exist while Ollama serves happily from the real one.
@@ -113,7 +113,7 @@ def store_candidates(environ=None):
     treating the two as one is what made an ordinary machine unusable: install
     Ollama the official way, never set OLLAMA_MODELS, and its models sit in
     ``<home>/.ollama/models`` while this project resolves the shared
-    ``C:\\Ollama\\models``. The two disagree, and the disagreement was read as
+    ``C:\\LocalAI\\models``. The two disagree, and the disagreement was read as
     "that server is pointed somewhere else" - which it is, at its own default.
     """
     environ = os.environ if environ is None else environ
