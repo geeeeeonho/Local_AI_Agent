@@ -39,6 +39,22 @@ def test_shared_broker_started_by_another_account_is_reused_not_restarted(monkey
     assert killed == []
 
 
+def test_shared_broker_from_another_account_is_rejected_on_proven_store_mismatch(monkeypatch, tmp_path):
+    svc = _service(tmp_path)
+    running_as(monkeypatch, svc, svc.exe, pid=31337, state=False)
+    monkeypatch.setattr(svc, "_launched_by_us", lambda _pid: False)
+    monkeypatch.setattr(
+        svc,
+        "inspect_store",
+        lambda timeout=5: (svc.OTHER_STORE, {"found": str(tmp_path / "other-models")}),
+    )
+    killed = []
+    monkeypatch.setattr(svc, "_terminate_listener", lambda pid: killed.append(pid) or True)
+
+    assert svc.ensure_running() is False
+    assert killed == []
+
+
 def test_prepare_install_leaves_running_shared_broker_alone(monkeypatch, tmp_path):
     svc = _service(tmp_path)
     running_as(monkeypatch, svc, svc.exe, pid=31337, state=False)
