@@ -45,6 +45,7 @@ def main(app='studio',argv=None):
     for flag in ('install','skip_model','skip_sandbox','skip_build','skip_search'):
         if getattr(args,flag):installer_flags.append('--'+flag.replace('_','-'))
     if args.tui:
+        language=['--lang',args.lang] if args.lang else []
         return run_module_entry('launcher',['--tui',*language])
     services=None
     try:
