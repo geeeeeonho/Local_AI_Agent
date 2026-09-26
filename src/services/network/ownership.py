@@ -49,6 +49,11 @@ class RuntimeOwner:
                 raise RuntimeError('Managed runtime is busy in another LocalAI window. '
                                    'Close its session before changing runtimes here.') from exc
             self._file = handle
+            try:
+                from launcher.core import lifelog
+                lifelog.rearm_exit_cleanups()
+            except Exception:
+                pass
 
     def release(self):
         with self._lock:
