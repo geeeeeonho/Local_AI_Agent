@@ -6,6 +6,7 @@ import pytest
 from installer.core.filesystem import (
     create_environment,
     ensure_shared_model_access,
+    ensure_shared_runtime_lock_access,
     write_install_manifest,
 )
 from launcher.services.ollama import OllamaService
@@ -82,7 +83,9 @@ def test_create_environment_builds_shared_and_private_sides(tmp_path, monkeypatc
     assert paths["user_data"] == account / "user_data"
     assert paths["logs"] == account / "logs"
     assert paths["workspace"] == account / "workspace"
-    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter"
+    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter" / "host"
+    assert paths["runtime_lock"] == env / "desktop-runtime.lock"
+    assert paths["runtime_lock"].is_file()
 
 
 def test_create_environment_does_not_scan_or_move_old_model_folders(tmp_path, monkeypatch):
@@ -124,6 +127,38 @@ def test_shared_runtime_access_grants_read_execute_to_environment_and_ollama(mon
     broker = tmp_path / "LocalAI" / "ollama"
     assert filesystem.ensure_shared_runtime_access((env, broker), windows=True) is True
     assert touched == [env, broker]
+
+def test_shared_runtime_lock_grants_only_file_read_write(monkeypatch, tmp_path):
+    lock = tmp_path / "LocalAI" / "environment" / "desktop-runtime.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_bytes(b"\0")
+    calls = []
+
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "integrations.windows.acl.run",
+        lambda command, **kwargs: calls.append(list(command)) or Result(),
+    )
+    assert ensure_shared_runtime_lock_access(lock, windows=True) is True
+    assert calls == [[
+        "icacls", str(lock), "/grant",
+        "*S-1-5-32-545:(R,W)", "/Q",
+    ]]
+
+
+def test_publish_shared_model_dir_updates_current_process_immediately(monkeypatch, tmp_path):
+    from installer.core import filesystem
+    store = tmp_path / "LocalAI" / "models"
+    monkeypatch.delenv("OLLAMA_MODELS", raising=False)
+    monkeypatch.setattr(
+        "integrations.ollama.sharing.publish_machine_variable",
+        lambda path, **kwargs: True,
+    )
+    assert filesystem.publish_shared_model_dir(store, windows=True) is True
+    assert filesystem.os.environ["OLLAMA_MODELS"] == str(store)
+
 
 def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
