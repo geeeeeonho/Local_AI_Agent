@@ -105,15 +105,8 @@ class Sharing:
             found.append(PER_USER_PATH)
         elif not self.intended_shared:
             found.append(NOT_SHARED_PATH)
-        if self.windows:
-            if self.machine_value == '':
-                found.append(VARIABLE_MISSING)
-            elif self.machine_value and not _same(self.machine_value, self.path, self.windows):
-                found.append(VARIABLE_ELSEWHERE)
-            if self.user_value and not _same(self.user_value, self.path, self.windows):
-                found.append(USER_OVERRIDE)
-            if self.readable_by_users is False:
-                found.append(NOT_READABLE)
+        if self.windows and self.readable_by_users is False:
+            found.append(NOT_READABLE)
         return tuple(found)
 
     @property
@@ -128,7 +121,7 @@ class Sharing:
             return False
         if not self.windows:
             return True
-        if self.machine_value is None or self.readable_by_users is None:
+        if self.readable_by_users is None:
             return None
         return True
 
@@ -137,13 +130,11 @@ class Sharing:
         """Can the program fix this itself, given the rights to do it?
 
         Offered when something is wrong that we may fix, and also when we
-        could not read the facts: both steps are idempotent and neither grants
-        anything beyond read access, so trying is better than a screen that
-        says it does not know and offers nothing. Not offered for the blockers
-        that are somebody's decision rather than a fault - a store the caller
-        chose, or this account's own OLLAMA_MODELS.
+        could not read the ACL: the read-access repair is idempotent. Registry
+        OLLAMA_MODELS values are not part of LocalAI's sharing decision because
+        the managed broker receives its model path explicitly.
         """
-        fixable = {VARIABLE_MISSING, VARIABLE_ELSEWHERE, NOT_READABLE}
+        fixable = {NOT_READABLE}
         blockers = set(self.blockers)
         if blockers:
             return blockers <= fixable
