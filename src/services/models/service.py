@@ -217,6 +217,8 @@ class ModelService:
         from integrations.ollama import sharing
         state = sharing.read(self.model_dir)
         return {'path': state.path, 'every_account': state.every_account,
+                'readable_by_users': state.readable_by_users,
+                'manageable_by_users': state.manageable_by_users,
                 'blockers': list(state.blockers), 'repairable': state.repairable,
                 'reasons': list(sharing.describe(state))}
 
@@ -224,10 +226,13 @@ class ModelService:
         """Grant shared model-management access. Idempotent."""
         from integrations.ollama import sharing
         result = sharing.repair(self.model_dir)
+        after = result['after']
         payload = {'path': result['path'], 'every_account': result['every_account'],
+                   'readable_by_users': after.readable_by_users,
+                   'manageable_by_users': after.manageable_by_users,
                    'blockers': list(result['blockers']),
                    'repaired': list(result['repaired']), 'failed': list(result['failed']),
-                   'reasons': list(sharing.describe(result['after']))}
+                   'reasons': list(sharing.describe(after))}
         self.events.emit('models.sharing', payload)
         return payload
 
