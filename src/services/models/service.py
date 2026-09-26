@@ -32,7 +32,7 @@ class ModelService:
     def _change(self, name, operation):
         name = model_name(name) if operation == 'remove' else local_model_name(name)
         try:
-            with file_lock(self.lock_path):
+            with file_lock(self.lock_path, timeout=0):
                 self.inference.ensure_ready()
                 try:
                     if operation == 'install':
