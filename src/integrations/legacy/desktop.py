@@ -575,6 +575,7 @@ class LegacyBackend:
         environment['PYTHONPATH'] = str(self.root / 'src')
         environment['PYTHONUTF8'] = '1'
         environment['PYTHONIOENCODING'] = 'utf-8'
+        environment['PYTHONUNBUFFERED'] = '1'
         kwargs = {
             'cwd': self.root,
             'env': environment,
@@ -594,9 +595,28 @@ class LegacyBackend:
         finished = object()
 
         def read_output():
+            # Install/download tools use both newline logs and carriage-return
+            # progress bars. Treat either delimiter as a UI update so a 1.5GB
+            # download does not look frozen until its final newline.
+            buffer = []
             try:
-                for line in process.stdout or ():
-                    lines.put(line.rstrip('\r\n'))
+                stream = process.stdout
+                if stream is not None:
+                    while True:
+                        char = stream.read(1)
+                        if not char:
+                            break
+                        if char in ('\r', '\n'):
+                            if buffer:
+                                lines.put(''.join(buffer))
+                                buffer.clear()
+                        else:
+                            buffer.append(char)
+                            if len(buffer) >= 4096:
+                                lines.put(''.join(buffer))
+                                buffer.clear()
+                    if buffer:
+                        lines.put(''.join(buffer))
             finally:
                 lines.put(finished)
 
