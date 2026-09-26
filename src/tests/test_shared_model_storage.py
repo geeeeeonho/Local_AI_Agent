@@ -37,6 +37,26 @@ def test_explicit_root_takes_shared_assets_with_it(monkeypatch, tmp_path):
     assert project_paths.model_dir() == root / "models"
 
 
+def test_model_control_paths_are_shared_not_account_scoped(monkeypatch, tmp_path):
+    import project_paths
+    root = tmp_path / "LocalAI"
+    monkeypatch.setenv("LOCAL_AI_ROOT", str(root))
+    monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
+
+    monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Alice")
+    alice_data = project_paths.user_data_dir()
+    alice_registry = project_paths.model_registry_path()
+    alice_lock = project_paths.model_mutation_lock_path()
+
+    monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Bob")
+    bob_data = project_paths.user_data_dir()
+
+    assert alice_data != bob_data
+    assert alice_registry == project_paths.model_registry_path() == root / "models" / ".localai" / "registry.json"
+    assert alice_lock == project_paths.model_mutation_lock_path() == root / "models" / ".localai" / "model-mutation.lock"
+    assert project_paths.model_files_path() == root / "models" / "MODEL_FILES.csv"
+
+
 def test_user_ollama_models_is_diagnostic_not_the_managed_store():
     from core import ollama_paths
     moved = {"OLLAMA_MODELS": r"D:\ai-models"}
@@ -89,6 +109,11 @@ def test_create_environment_builds_shared_and_private_sides(tmp_path, monkeypatc
     assert paths["open_interpreter_home"] == account / "user_data" / "interpreter" / "host"
     assert paths["runtime_lock"] == env / "desktop-runtime.lock"
     assert paths["runtime_lock"].is_file()
+    assert paths["model_control"] == models / ".localai"
+    assert paths["model_registry"] == models / ".localai" / "registry.json"
+    assert paths["model_mutation_lock"] == models / ".localai" / "model-mutation.lock"
+    assert json.loads(paths["model_registry"].read_text(encoding="utf-8")) == {}
+    assert paths["model_mutation_lock"].is_file()
 
 
 def test_create_environment_does_not_scan_or_move_old_model_folders(tmp_path, monkeypatch):
@@ -212,7 +237,7 @@ def test_publish_shared_model_dir_updates_current_process_immediately(monkeypatc
     assert filesystem.os.environ["OLLAMA_MODELS"] == str(store)
 
 
-def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_path):
+def test_shared_model_access_grants_builtin_users_modify(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     calls = []
@@ -230,7 +255,7 @@ def test_shared_model_access_grants_builtin_users_read_execute(monkeypatch, tmp_
     assert ensure_shared_model_access(model_dir, windows=True) is True
     assert calls[0][0] == [
         "icacls", str(model_dir), "/grant",
-        "*S-1-5-32-545:(OI)(CI)(RX)", "/T", "/Q",
+        "*S-1-5-32-545:(OI)(CI)(M)", "/T", "/Q",
     ]
 
 
