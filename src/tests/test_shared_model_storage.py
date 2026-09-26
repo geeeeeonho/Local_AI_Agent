@@ -7,6 +7,7 @@ from installer.core.filesystem import (
     create_environment,
     ensure_shared_model_access,
     ensure_shared_runtime_lock_access,
+    ensure_accounts_parent_access,
     write_install_manifest,
 )
 from launcher.services.ollama import OllamaService
@@ -155,6 +156,29 @@ def test_shared_runtime_access_grants_read_execute_to_environment_and_ollama(mon
     broker = tmp_path / "LocalAI" / "ollama"
     assert filesystem.ensure_shared_runtime_access((env, broker), windows=True) is True
     assert touched == [env, broker]
+
+def test_users_parent_allows_standard_accounts_to_create_only_their_child(monkeypatch, tmp_path):
+    users = tmp_path / "LocalAI" / "users"
+    users.mkdir(parents=True)
+    calls = []
+
+    class Result:
+        returncode = 0
+
+    monkeypatch.setattr(
+        "integrations.windows.acl.run",
+        lambda command, **kwargs: calls.append(list(command)) or Result(),
+    )
+
+    assert ensure_accounts_parent_access(users, windows=True) is True
+    assert calls == [[
+        "icacls", str(users), "/grant",
+        "*S-1-5-32-545:(RX,WD,AD)", "/Q",
+    ]]
+    assert all("(OI)" not in part and "(CI)" not in part for part in calls[0]), (
+        "the Users grant must not inherit into private account folders"
+    )
+
 
 def test_shared_runtime_lock_grants_only_file_read_write(monkeypatch, tmp_path):
     lock = tmp_path / "LocalAI" / "environment" / "desktop-runtime.lock"
