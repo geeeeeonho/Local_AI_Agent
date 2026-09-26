@@ -106,25 +106,13 @@ def _writable(path: Path) -> bool:
 
 
 def default_csv_path(model_dir) -> Path:
-    """가능하면 모델 저장소 옆에, 쓰기 권한이 없으면 user_data 로.
+    """The one machine-wide CSV beside the shared model store.
 
-    저장소는 여러 사용자가 공유하도록 읽기/실행만 열어 두는 경우가 있어
-    (README '경로 정책' 참고) 쓰기가 막힐 수 있다.
+    A permission failure is a setup/ACL error, not a reason to create a second
+    per-account truth. Callers surface the failure and keep the previous shared
+    snapshot intact.
     """
-    root = Path(model_dir)
-    if _writable(root):
-        return root / CSV_NAME
-    try:
-        from launcher.core import user_data
-        fallback = user_data.root() / "models"
-    except Exception:
-        import project_paths
-        fallback = project_paths.user_data_dir() / "models"
-    try:
-        fallback.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    return fallback / CSV_NAME
+    return Path(model_dir) / CSV_NAME
 
 
 def write_csv(model_dir, path=None, rows: Optional[Iterable[FileRow]] = None
