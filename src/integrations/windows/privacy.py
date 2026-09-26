@@ -75,6 +75,27 @@ def is_private(path, *, windows=None) -> Optional[bool]:
     return None
 
 
+def current_user_can_write(path) -> bool:
+    """Prove this process can create and remove a file in the private folder."""
+    path = Path(path)
+    if not path.exists() or not path.is_dir():
+        return False
+    probe = path / (".localai-write-probe-%d" % os.getpid())
+    try:
+        with probe.open("xb") as stream:
+            stream.write(b"ok")
+        probe.unlink()
+        return True
+    except FileExistsError:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+        return False
+    except OSError:
+        return False
+
+
 def make_private(path, *, windows=None, environ=None) -> bool:
     """Break inheritance and leave only the owner, SYSTEM and Administrators.
 
@@ -102,11 +123,17 @@ def ensure_private(path, *, windows=None, environ=None) -> Optional[bool]:
     start.
     """
     already = is_private(path, windows=windows)
-    if already is True:
+    # "Nobody else can read it" is only half the contract. An account folder
+    # left by an elevated/different installer can be private while the signed-in
+    # user cannot write runtime-state.json.lock inside it.
+    if already is True and current_user_can_write(path):
         return True
     if not make_private(path, windows=windows, environ=environ):
-        return already
-    return is_private(path, windows=windows)
+        return already if already is not True else False
+    final = is_private(path, windows=windows)
+    if final is True and not current_user_can_write(path):
+        return False
+    return final
 
 
 def describe(path, *, windows=None) -> str:
@@ -121,5 +148,5 @@ def describe(path, *, windows=None) -> str:
 
 
 __all__ = ['SYSTEM_SID', 'ADMINISTRATORS_SID', 'CREATOR_OWNER_SID',
-           'owner_token', 'grants', 'is_private', 'make_private',
-           'ensure_private', 'describe']
+           'owner_token', 'grants', 'is_private', 'current_user_can_write',
+           'make_private', 'ensure_private', 'describe']
