@@ -46,8 +46,10 @@ class DesktopServices:
                 (data / name).mkdir(parents=True, exist_ok=True)
             return
 
+        privacy = None
         try:
-            from integrations.windows import privacy
+            from integrations.windows import privacy as privacy_module
+            privacy = privacy_module
             # Fix the account DACL before creating children. This matters for a
             # normal user who just created users/<account> through the parent-
             # only creation grant.
@@ -59,6 +61,8 @@ class DesktopServices:
             data.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             try:
+                if privacy is None:
+                    raise RuntimeError("Windows ACL helper is unavailable")
                 privacy.make_private(account)
                 data.mkdir(parents=True, exist_ok=True)
             except Exception as exc:
@@ -72,18 +76,21 @@ class DesktopServices:
                 folder.mkdir(parents=True, exist_ok=True)
             except PermissionError:
                 try:
+                    if privacy is None:
+                        raise RuntimeError("Windows ACL helper is unavailable")
                     privacy.make_private(data)
                     folder.mkdir(parents=True, exist_ok=True)
                 except Exception as exc:
                     raise RuntimeError(
                         "현재 계정의 상태 폴더를 쓸 수 없습니다: %s" % folder
                     ) from exc
-            try:
-                # Always cover existing children too: the exact failure seen in
-                # production is runtime-state.json.lock, not the directory.
-                privacy.make_private(folder)
-            except Exception:
-                pass
+            if privacy is not None:
+                try:
+                    # Always cover existing children too: the exact failure seen in
+                    # production is runtime-state.json.lock, not the directory.
+                    privacy.make_private(folder)
+                except Exception:
+                    pass
 
     def __init__(self, *, project_root, env, model_dir, data=None, backend=None):
         self.project_root, self.env, self.model_dir = map(Path, (project_root, env, model_dir))
