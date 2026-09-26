@@ -20,6 +20,40 @@ from services.system.desktop import SetupService, SystemService
 
 
 class DesktopServices:
+    @staticmethod
+    def _prepare_private_state(data: Path) -> None:
+        """Repair small per-account state folders before any JsonStore opens.
+
+        A stale lock created by an elevated/older run can deny the normal token
+        even when the account root itself is correctly private. Cache/settings/
+        projects are small control-state trees, so recursively normalising their
+        ACLs here is cheap and prevents Chat startup from failing on .lock files.
+        """
+        data = Path(data)
+        account = data.parent
+        account.mkdir(parents=True, exist_ok=True)
+        data.mkdir(parents=True, exist_ok=True)
+        if __import__('os').name != 'nt':
+            for name in ('cache', 'settings', 'projects'):
+                (data / name).mkdir(parents=True, exist_ok=True)
+            return
+
+        try:
+            from integrations.windows import privacy
+            privacy.ensure_private(account)
+        except Exception:
+            pass
+
+        for name in ('cache', 'settings', 'projects'):
+            folder = data / name
+            folder.mkdir(parents=True, exist_ok=True)
+            try:
+                # Always cover existing children too: the exact failure seen in
+                # production is runtime-state.json.lock, not the directory.
+                privacy.make_private(folder)
+            except Exception:
+                pass
+
     def __init__(self, *, project_root, env, model_dir, data=None, backend=None):
         self.project_root, self.env, self.model_dir = map(Path, (project_root, env, model_dir))
         # ``create_services`` passes the runtime root's user_data, because the
@@ -28,6 +62,7 @@ class DesktopServices:
         # "this whole install lives here", which is how tests and portable
         # runs express themselves, so that root keeps its own user_data.
         self.data = Path(data) if data is not None else self.project_root / 'user_data'
+        self._prepare_private_state(self.data)
         if backend is None:
             from integrations.legacy.desktop import LegacyBackend
             backend = LegacyBackend(self.env, self.model_dir, self.project_root,
