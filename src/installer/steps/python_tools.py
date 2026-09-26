@@ -188,6 +188,23 @@ def _prepare_interpreter_home(package_home: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _directory_writable(path: Path) -> bool:
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / (".localai-write-probe-%d" % os.getpid())
+    try:
+        with probe.open("xb") as stream:
+            stream.write(b"ok")
+        probe.unlink()
+        return True
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 def install_open_interpreter(
     paths: Dict[str, Path], profile: Optional[SafetyProfile] = None
 ) -> bool:
@@ -218,6 +235,17 @@ def install_open_interpreter(
     if current:
         utils.info(f"Open Interpreter update: {current} -> {OPEN_INTERPRETER_VERSION}")
 
+    if not _directory_writable(bin_dir):
+        utils.err(
+            "공용 Open Interpreter 실행환경을 수정할 권한이 없습니다: " + str(bin_dir)
+        )
+        utils.warn(
+            "일반 사용자는 이미 설치된 공용 실행환경을 사용할 수 있지만, "
+            "설치/업데이트는 관리자 또는 이 LocalAI 공용 환경을 만든 계정에서 "
+            "Setup을 한 번 실행해야 합니다."
+        )
+        return False
+
     install_env = dict(os.environ)
     install_env["OPEN_INTERPRETER_INSTALL_DIR"] = str(bin_dir)
     install_env["OPEN_INTERPRETER_RELEASE"] = OPEN_INTERPRETER_VERSION
@@ -239,8 +267,18 @@ def install_open_interpreter(
                 command,
                 env=install_env,
                 check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 creationflags=0x08000000 if os.name == "nt" else 0,
             )
+            for line in (result.stdout or "").splitlines():
+                if line.strip():
+                    utils.info("Open Interpreter: " + line.strip())
+            for line in (result.stderr or "").splitlines():
+                if line.strip():
+                    utils.warn("Open Interpreter: " + line.strip())
             if result.returncode != 0:
                 utils.err(f"Open Interpreter standalone install failed: rc={result.returncode}")
                 return False
