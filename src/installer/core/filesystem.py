@@ -72,6 +72,24 @@ def ensure_shared_runtime_access(paths, windows: Optional[bool] = None) -> bool:
             ok_all = False
     return ok_all
 
+def ensure_accounts_parent_access(users_root: Path, windows: Optional[bool] = None) -> bool:
+    """Allow any local account to create its own child under C:\LocalAI\users.
+
+    The grant is parent-only: it does not carry into account folders. Each
+    users/<account> child immediately breaks inheritance and grants only that
+    account, SYSTEM and Administrators full control.
+    """
+    from integrations.windows import acl
+    from integrations.ollama.sharing import BUILTIN_USERS_SID
+    if not acl.on_windows(windows):
+        return True
+    result = acl.run([
+        "icacls", str(users_root), "/grant",
+        "*%s:(RX,WD,AD)" % BUILTIN_USERS_SID, "/Q",
+    ])
+    return result is not None and result.returncode == 0
+
+
 def ensure_shared_runtime_lock_access(lock_path: Path, windows: Optional[bool] = None) -> bool:
     """Allow every local account to open the one machine-wide runtime lock.
 
@@ -105,6 +123,15 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     env = Path(env)
     models = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
     account = Path(account_root) if account_root is not None else ACCOUNT_ROOT
+
+    # The shared parent must be creatable by a second standard Windows account,
+    # otherwise only the installer/admin account can ever get its own private
+    # users/<account> folder.
+    users_root = account.parent
+    users_root.mkdir(parents=True, exist_ok=True)
+    if not ensure_accounts_parent_access(users_root):
+        warn("다른 Windows 계정의 사용자 폴더 생성 권한을 설정하지 못했습니다: %s" % users_root)
+
     paths = {
         "env":                   env,
         "ollama":                OLLAMA_INSTALL_DIR,
