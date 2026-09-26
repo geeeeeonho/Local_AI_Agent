@@ -36,13 +36,6 @@ def _same_path(left: Path, right: Path) -> bool:
     )
 
 
-def _dir_has_entries(path: Path) -> bool:
-    try:
-        return path.is_dir() and any(path.iterdir())
-    except OSError:
-        return False
-
-
 class OllamaService:
     """프로젝트가 설치한 Ollama 포터블 서비스 제어."""
 
@@ -116,28 +109,9 @@ class OllamaService:
         # whose private runtime-state file is intentionally invisible here.
         return _same_path(executable, self.exe)
 
-    def _migration_pending(self) -> bool:
-        """Fresh-install layout has no automatic legacy-store migration."""
-        return False
-
     def known_executables(self) -> tuple:
-        """Ollama binaries this machine may legitimately be running.
-
-        Broker mode: an Ollama installed officially and started by Windows is
-        not an intruder, so attaching to it is allowed. Anything outside these
-        locations still is, because its model store cannot be accounted for.
-        """
-        found = [self.exe, self.portable_exe]
-        found += [Path(folder) / name
-                  for folder in ollama_paths.install_candidates()
-                  for name in ollama_paths.executable_names()]
-        seen, out = set(), []
-        for candidate in found:
-            key = os.path.normcase(os.path.abspath(str(candidate)))
-            if key not in seen:
-                seen.add(key)
-                out.append(candidate)
-        return tuple(out)
+        """Executable paths LocalAI is allowed to manage."""
+        return (self.exe,)
 
     def _is_known(self, executable: Optional[Path]) -> bool:
         return executable is not None and any(
@@ -346,10 +320,6 @@ class OllamaService:
         if not isinstance(cloud, dict) or not isinstance(cloud.get("disabled"), bool):
             return None
         return bool(cloud["disabled"])
-
-    def legacy_stores(self) -> tuple:
-        """Fresh installation does not inspect earlier model locations."""
-        return ()
 
     def _powershell(self, script: str) -> Optional[str]:
         """Windows 프로세스 소유권 확인용 PowerShell 한 줄 실행."""
