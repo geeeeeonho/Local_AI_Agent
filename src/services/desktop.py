@@ -88,6 +88,15 @@ class DesktopServices:
             if not agent_ok or not chat_ok or not search_ok:
                 return False
             self.network.mode = None
+            # Shared WARP/Tor/SearXNG/Docker cleanup must finish while this
+            # process still owns the machine-wide runtime lock. Releasing first
+            # lets another Windows account start a new shared runtime that our
+            # delayed cleanup would then stop underneath it.
+            try:
+                from launcher.core import lifelog
+                lifelog.shutdown_then_exit()
+            except Exception:
+                pass
             self.owner.release()
             return True
 
