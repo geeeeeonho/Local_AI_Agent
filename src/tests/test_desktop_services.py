@@ -119,10 +119,23 @@ def test_second_account_cannot_mutate_models_while_shared_lock_is_held(tmp_path)
     from core.persistence import file_lock
     services, backend = make(tmp_path)
     lock = services.models.lock_path
+    held = threading.Event()
+    release = threading.Event()
 
-    with file_lock(lock):
+    def hold_lock():
+        with file_lock(lock):
+            held.set()
+            release.wait(timeout=5)
+
+    owner = threading.Thread(target=hold_lock, daemon=True)
+    owner.start()
+    assert held.wait(timeout=2)
+    try:
         with pytest.raises(RuntimeError, match='다른 LocalAI 창'):
             services.models.remove_model('test:latest')
+    finally:
+        release.set()
+        owner.join(timeout=2)
 
     assert ('remove', 'test:latest') not in backend.calls
     services.close()
