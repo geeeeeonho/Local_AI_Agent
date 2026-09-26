@@ -250,10 +250,12 @@ def start_service(paths: Dict[str, Path]):
     persist_store(paths)
     svc = _service(paths["env"], paths["models"])
     if svc.ensure_running(boot_timeout=30):
+        disable_login_autostart()
         return
     # Setup is an explicit maintenance operation and holds the machine-wide
     # runtime lock. If the canonical broker is already running on a proven
     # different store, repair that mismatch here before any model pull occurs.
     if svc.is_running() and svc.restart_for_store():
+        disable_login_autostart()
         return
     raise RuntimeError(svc.last_error or "Managed Ollama service start failed")
