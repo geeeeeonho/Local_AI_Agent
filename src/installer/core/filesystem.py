@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Optional
@@ -14,6 +15,7 @@ from .console import section, ok, warn
 
 
 INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
+RUNTIME_LOCK_NAME = "desktop-runtime.lock"
 
 
 def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) -> bool:
@@ -41,6 +43,9 @@ def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) ->
     실행 시 주입하는 값으로 계속 동작하고, 모델 화면에서 나중에 고칠 수 있다.
     """
     from integrations.ollama import sharing
+    # setx updates future processes only. Keep this setup process and every
+    # child it starts on the same store immediately as well.
+    os.environ["OLLAMA_MODELS"] = str(model_dir)
     if sharing.publish_machine_variable(model_dir, windows=windows):
         return True
     warn("시스템 범위 OLLAMA_MODELS 설정 실패")
@@ -66,6 +71,23 @@ def ensure_shared_runtime_access(paths, windows: Optional[bool] = None) -> bool:
             warn("공용 실행환경 읽기 권한 설정 실패: %s" % path)
             ok_all = False
     return ok_all
+
+def ensure_shared_runtime_lock_access(lock_path: Path, windows: Optional[bool] = None) -> bool:
+    """Allow every local account to open the one machine-wide runtime lock.
+
+    Shared binaries stay RX-only. The lock file itself needs read/write so an
+    account can take an OS byte lock without gaining permission to modify the
+    shared environment directory or replace binaries.
+    """
+    from integrations.windows import acl
+    from integrations.ollama.sharing import BUILTIN_USERS_SID
+    if not acl.on_windows(windows):
+        return True
+    result = acl.run([
+        "icacls", str(lock_path), "/grant",
+        "*%s:(R,W)" % BUILTIN_USERS_SID, "/Q",
+    ])
+    return result is not None and result.returncode == 0
 
 def create_environment(env: Path, model_dir: Optional[Path] = None,
                        account_root: Optional[Path] = None) -> Dict[str, Path]:
@@ -95,7 +117,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
         "workspace":             account / "workspace",
         "open_interpreter":      env / "open_interpreter",
         "open_interpreter_bin":  env / "open_interpreter" / "bin",
-        "open_interpreter_home": account / USER_DATA_DIRNAME / "interpreter",
+        "open_interpreter_home": account / USER_DATA_DIRNAME / "interpreter" / "host",
         "searxng":               env / "searxng",
         "scripts":               env / "scripts",
         "logs":                  account / LOGS_DIRNAME,
@@ -119,6 +141,17 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
 
     # 공용 런타임/Ollama는 모든 계정이 실행할 수 있고, 모델도 한 벌을 공유한다.
     ensure_shared_runtime_access((env, paths["ollama"]))
+
+    runtime_lock = env / RUNTIME_LOCK_NAME
+    try:
+        if not runtime_lock.exists():
+            runtime_lock.write_bytes(b"\0")
+        if not ensure_shared_runtime_lock_access(runtime_lock):
+            warn("공용 런타임 잠금 파일 권한 설정 실패: %s" % runtime_lock)
+    except OSError as exc:
+        warn("공용 런타임 잠금 파일 준비 실패: %s (%s)" % (runtime_lock, exc))
+    paths["runtime_lock"] = runtime_lock
+
     if model_dir is None:
         ensure_shared_model_access(models)
         publish_shared_model_dir(models)
