@@ -17,7 +17,8 @@ STORE = r'C:\LocalAI\models'
 
 def state(**kw):
     base = dict(path=STORE, intended_shared=True, machine_value=STORE,
-                user_value='', readable_by_users=True, windows=True)
+                user_value='', readable_by_users=True, manageable_by_users=True,
+                windows=True)
     base.update(kw)
     return Sharing(**base)
 
@@ -56,6 +57,13 @@ def test_a_store_inside_a_profile_is_never_machine_wide():
 
 def test_unreadable_files_block_it_even_with_the_variable_set():
     assert state(readable_by_users=False).blockers == (policy.NOT_READABLE,)
+
+
+def test_old_read_only_acl_is_not_full_model_sharing():
+    found = state(manageable_by_users=False)
+    assert found.blockers == (policy.NOT_MANAGEABLE,)
+    assert found.every_account is False
+    assert found.repairable is True
 
 
 def test_only_unreadable_acl_state_makes_localai_sharing_unknown():
@@ -108,7 +116,8 @@ class FakeWinreg:
 
 # What `icacls <dir> /save` writes: the name, then the DACL in SDDL. Our own
 # repair produces the second line; BU is BUILTIN\Users in every language.
-GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
+GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1301bf;;;BU)'
+READ_ONLY = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
 NOT_GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)'
 
 
@@ -146,6 +155,18 @@ def test_a_machine_set_up_by_an_admin_reads_as_shared(monkeypatch, tmp_path):
     assert found.machine_value == str(store)
     assert found.readable_by_users is True
     assert found.blockers == ()
+
+
+def test_old_rx_only_store_is_detected_as_needing_upgrade(monkeypatch, tmp_path):
+    from integrations.ollama import sharing
+    store = tmp_path / 'models'
+    store.mkdir()
+    install_fake_windows(monkeypatch, store, machine=str(store), sddl=READ_ONLY)
+    found = sharing.read(store, windows=True)
+    assert found.readable_by_users is True
+    assert found.manageable_by_users is False
+    assert found.blockers == (policy.NOT_MANAGEABLE,)
+    assert found.repairable is True
 
 
 def test_missing_machine_variable_is_recorded_but_not_a_localai_blocker(monkeypatch, tmp_path):
