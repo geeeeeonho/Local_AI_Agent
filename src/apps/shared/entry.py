@@ -45,8 +45,6 @@ def main(app='studio',argv=None):
     for flag in ('install','skip_model','skip_sandbox','skip_build','skip_search'):
         if getattr(args,flag):installer_flags.append('--'+flag.replace('_','-'))
     language=['--lang',args.lang] if args.lang else []
-    if args.app=='setup' and installer_flags:
-        return run_module_entry('installer',installer_flags+language)
     if args.tui:
         return run_module_entry('launcher',['--tui',*language])
     services=None
@@ -61,7 +59,17 @@ def main(app='studio',argv=None):
         install_exit_hooks(RUNTIME_ROOT)
         services=create_services()
         initialize_language(services.project_root,args.lang)
-        DesktopWindow(args.app,services).run()
+        window=DesktopWindow(args.app,services)
+        if args.app=='setup' and installer_flags:
+            window.apply_setup_cli_options(
+                skip_sandbox=args.skip_sandbox,
+                skip_build=args.skip_build,
+                skip_search=args.skip_search,
+            )
+            # Build and paint the shell first; installation starts from the same
+            # Setup page on the next Tk turn, never in a second console.
+            window.root.after(150, window.repair)
+        window.run()
         return 0
     except KeyboardInterrupt:
         return 130
