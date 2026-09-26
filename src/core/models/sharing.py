@@ -86,8 +86,8 @@ class Sharing:
 
     ``machine_value`` and ``user_value`` are the two scopes of ``OLLAMA_MODELS``:
     ``''`` means the scope was read and holds nothing, ``None`` means it could
-    not be read at all. ``readable_by_users`` is ``None`` for the same reason,
-    and on a platform where the question does not arise.
+    not be read at all. ACL-derived read/manage values are ``None`` when the
+    descriptor cannot be read, and on platforms where the question does not arise.
     """
 
     path: str
@@ -95,9 +95,9 @@ class Sharing:
     machine_value: Optional[str] = None
     user_value: Optional[str] = None
     readable_by_users: Optional[bool] = None
-    manageable_by_users: Optional[bool] = None
     per_user_path: bool = False
     windows: bool = True
+    manageable_by_users: Optional[bool] = None
 
     @property
     def blockers(self) -> Tuple[str, ...]:
