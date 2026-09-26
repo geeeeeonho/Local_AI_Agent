@@ -124,8 +124,9 @@ class DesktopServices:
                     self._finalized = True
                     return True
             if not self._close_sessions():
-                if acquired_here:
-                    self.owner.release()
+                # Keep the lease on an unverified shutdown. Releasing it would
+                # let another account reuse the same container names while this
+                # process may still own live resources.
                 return False
             try:
                 from launcher.core import lifelog
