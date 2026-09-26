@@ -157,9 +157,11 @@ def publish_variable(model_dir: Path, *, windows=None) -> str:
 
 
 def repair(model_dir=None, *, windows=None) -> dict:
-    """Put right what can be put right, and report what is left.
+    """Repair LocalAI cross-account readability and report what is left.
 
-    Safe to run at any time and safe to run twice; both steps are idempotent.
+    Safe to run at any time and safe to run twice; the ACL step is idempotent.
+    Machine-scope OLLAMA_MODELS is an external-Ollama compatibility setting,
+    not a LocalAI sharing requirement.
     Returns the state afterwards so a caller can tell the user whether it
     worked without guessing.
     """
@@ -171,7 +173,6 @@ def repair(model_dir=None, *, windows=None) -> dict:
     done, failed = [], []
     for name, action in (
         ('readable', lambda: ensure_readable(model_dir, windows=windows)),
-        ('machine_variable', lambda: publish_machine_variable(model_dir, windows=windows)),
     ):
         (done if action() else failed).append(name)
     after = read(model_dir, windows=windows)
