@@ -49,7 +49,7 @@ def test_project_and_shared_model_paths_have_one_assignment_source():
     # guard is that one module still holds it - not which literal it holds.
     text = (SRC_ROOT / "project_paths.py").read_text(encoding="utf-8")
     assert "runtime_dir() / runtime_root.MODELS" in text
-    assert _assignment_sources("LEGACY_FORCED_MODEL_DIR") == ["src/project_paths.py"]
+    assert _assignment_sources("OLLAMA_INSTALL_DIR") == ["src/project_paths.py"]
     assert _assignment_sources("RUNTIME_ROOT") == ["src/project_paths.py"]
     assert _assignment_sources("WINDOWS_ROOT") == ["src/core/runtime_root.py"]
 
