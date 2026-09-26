@@ -50,10 +50,11 @@ def detailed_logging_enabled(project_root: Path | None = None) -> bool:
     it. Failing open (True) keeps diagnostics available when settings cannot be
     read at all.
     """
-    root = Path(project_root) if project_root is not None else _project_root()
     try:
         from launcher import settings_store
-        return bool(settings_store.load(root).logging_enabled)
+        if project_root is None:
+            return bool(settings_store.load().logging_enabled)
+        return bool(settings_store.load(Path(project_root)).logging_enabled)
     except Exception:
         return True
 
