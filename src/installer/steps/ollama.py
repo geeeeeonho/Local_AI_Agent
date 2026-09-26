@@ -1,6 +1,6 @@
 """Install and manage the LocalAI-owned machine-wide Ollama broker.
 
-Fresh installs use only C:\LocalAI\ollama and C:\LocalAI\models. A separately
+Fresh installs use only ``C:\\LocalAI\\ollama`` and ``C:\\LocalAI\\models``. A separately
 installed Ollama is never substituted for this broker.
 """
 from __future__ import annotations
