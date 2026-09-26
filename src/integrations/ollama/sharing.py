@@ -15,7 +15,8 @@ from core.models.sharing import Sharing, VARIABLE
 from integrations.windows import acl
 
 __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
-           'ensure_readable', 'publish_machine_variable', 'publish_user_variable',
+           'ensure_readable', 'ensure_manageable',
+           'publish_machine_variable', 'publish_user_variable',
            'publish_variable', 'describe']
 
 # The local Users group, by SID so it works on a non-English Windows.
@@ -113,6 +114,20 @@ def ensure_readable(model_dir: Path, *, windows=None) -> bool:
     return result is not None and result.returncode == 0
 
 
+def ensure_manageable(model_dir: Path, *, windows=None) -> bool:
+    """Grant BUILTIN\\Users inheritable Modify rights on the model store only.
+
+    Model files, manifests, the shared registry and the mutation lock are
+    machine-wide mutable state. Standard Windows accounts therefore need
+    to create, replace and delete children here. This stays separate from
+    ensure_readable because environment/ollama must remain RX-only.
+    """
+    if not acl.on_windows(windows):
+        return True
+    result = _run(['icacls', str(model_dir), '/grant',
+                   '*%s:(OI)(CI)(M)' % BUILTIN_USERS_SID, '/T', '/Q'])
+    return result is not None and result.returncode == 0
+
 def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
     """Best-effort compatibility for Ollama launched outside LocalAI.
 
@@ -156,9 +171,10 @@ def publish_variable(model_dir: Path, *, windows=None) -> str:
 
 
 def repair(model_dir=None, *, windows=None) -> dict:
-    """Repair LocalAI cross-account readability and report what is left.
+    """Repair LocalAI cross-account model management and report what is left.
 
-    Safe to run at any time and safe to run twice; the ACL step is idempotent.
+    Safe to run at any time and safe to run twice; Modify includes the read
+    access required by the sharing check and the ACL step is idempotent.
     Machine-scope OLLAMA_MODELS is an external-Ollama compatibility setting,
     not a LocalAI sharing requirement.
     Returns the state afterwards so a caller can tell the user whether it
@@ -171,7 +187,7 @@ def repair(model_dir=None, *, windows=None) -> dict:
     before = read(model_dir, windows=windows)
     done, failed = [], []
     for name, action in (
-        ('readable', lambda: ensure_readable(model_dir, windows=windows)),
+        ('manageable', lambda: ensure_manageable(model_dir, windows=windows)),
     ):
         (done if action() else failed).append(name)
     after = read(model_dir, windows=windows)
