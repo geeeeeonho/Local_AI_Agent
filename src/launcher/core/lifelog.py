@@ -27,7 +27,6 @@ import atexit
 import datetime
 import os
 import signal
-import subprocess
 import sys
 import threading
 import traceback
@@ -304,60 +303,6 @@ def _run_all_cleanups(reason: str = "?") -> None:
 
 
 # ─────────────────────────────────────────────
-#  컨테이너 강제 격멸
-# ─────────────────────────────────────────────
-def force_kill_container(name: str, timeout: int = 2) -> bool:
-    if not name:
-        return False
-    log("CLEANUP", "컨테이너 격멸 시도: " + name)
-    no_window = {}
-    if os.name == "nt":
-        no_window["creationflags"] = 0x08000000
-
-    try:
-        r = subprocess.run(
-            ["docker", "stop", "-t", str(timeout), name],
-            capture_output=True, timeout=timeout + 5, **no_window
-        )
-        if r.returncode == 0:
-            log("OK", "docker stop 성공: " + name)
-            _docker_rm(name)
-            return True
-        log("WARN", "docker stop 실패 (" + name + "): rc=" + str(r.returncode))
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        log("WARN", "docker stop 예외: " + str(e))
-
-    try:
-        r = subprocess.run(
-            ["docker", "kill", name],
-            capture_output=True, timeout=5, **no_window
-        )
-        if r.returncode == 0:
-            log("OK", "docker kill 성공: " + name)
-            _docker_rm(name)
-            return True
-        log("FAIL", "docker kill 실패: rc=" + str(r.returncode))
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        log("FAIL", "docker kill 예외: " + str(e))
-
-    return False
-
-
-def _docker_rm(name: str) -> None:
-    no_window = {}
-    if os.name == "nt":
-        no_window["creationflags"] = 0x08000000
-    try:
-        subprocess.run(
-            ["docker", "rm", "-f", name],
-            capture_output=True, timeout=5, **no_window
-        )
-        log("OK", "docker rm -f 완료: " + name)
-    except Exception as e:
-        log("WARN", "docker rm 예외: " + str(e))
-
-
-# ─────────────────────────────────────────────
 #  종료 hook 들
 # ─────────────────────────────────────────────
 def _atexit_hook() -> None:
@@ -537,13 +482,10 @@ def install_global_hooks(project_root: Path) -> None:
 
     log("OK", "전역 종료 hook 설치 단계 모두 통과")
 
-# >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리
 def register_cache_cleanup(data_root) -> None:
     """종료 시 chat/cache 와 잔여 .tmp 를 자동 정리하도록 등록.
 
-    ``data_root`` 는 정리 대상인 user_data 폴더 자체다. 예전에는 프로젝트
-    루트를 받아 여기서 ``/user_data`` 를 다시 붙였는데, 런타임 루트가 생긴
-    뒤로는 그 조합이 존재하지 않는 폴더를 가리킨다.
+    ``data_root`` 는 현재 Windows 계정의 user_data 폴더 자체다.
 
     임베딩/모델 다운로드(오프라인에서 재다운로드 비쌈)는 보존한다.
     """
@@ -595,4 +537,3 @@ def register_cache_cleanup(data_root) -> None:
 
     register_cleanup(_do)
     log("INFO", "캐시 정리 cleanup 등록됨")
-# <<< CACHE_CLEANUP_v1

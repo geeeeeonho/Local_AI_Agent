@@ -8,8 +8,8 @@
   - 자동(종료 시): 우리 exited 컨테이너 + dangling 이미지만 (빠르고 안전)
   - 수동([10]):   위 + 빌드 캐시 + (위험)미사용 이미지/볼륨 선택
 
-과거 채팅 UI 컨테이너 식별자는 실행 기능이 아니라 업그레이드 후 남은 자원을
-정리하기 위한 migration-only 패턴으로만 유지한다.
+컨테이너 소유권은 LocalAI가 실제로 생성하는 고유 이름/접두사로만 판단한다.
+공용 Docker 이미지 이름만 같다는 이유로 외부 컨테이너를 삭제하지 않는다.
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from typing import List, Tuple
 
 from launcher.services.docker import DockerService
 
-MARKER = "DOCKER_MAINT_v1"
 FLAG_NAME = "docker_autoclean.flag"
 
 def _owned_container_names() -> tuple[set[str], tuple[str, ...]]:
@@ -95,7 +94,7 @@ def list_our_leftovers(states=LEFTOVER_STATES) -> List[str]:
                 parts = line.split("\t")
                 if len(parts) < 2:
                     continue
-                nm, im = parts[0].strip(), parts[1].strip()
+                nm = parts[0].strip()
                 if not nm or nm in out:
                     continue
                 if _is_owned_container(nm):
@@ -279,10 +278,10 @@ def register_exit_sweep(state_root) -> bool:
     try:
         from launcher.core import lifelog as _ll
 
-        wants_images = autoclean_enabled(state_root)
-
         def _do():
             try:
+                # Read at shutdown so a same-session toggle applies immediately.
+                wants_images = autoclean_enabled(state_root)
                 result = safe_auto_prune() if wants_images else sweep_our_leftovers()
                 _ll.log("CLEANUP", "도커 정리: 컨테이너 %s · 네트워크 %s%s" % (
                     result.get("containers", 0), result.get("networks", 0),
@@ -291,8 +290,7 @@ def register_exit_sweep(state_root) -> bool:
                 _ll.log("WARN", "도커 정리 예외: " + str(exc))
 
         _ll.register_cleanup(_do, stage="sweep")
-        _ll.log("INFO", "도커 종료 정리 등록됨 (이미지 정리: "
-                + ("켜짐" if wants_images else "꺼짐") + ")")
+        _ll.log("INFO", "도커 종료 정리 등록됨")
         _SWEEP_REGISTERED = True
         return True
     except Exception:
@@ -300,7 +298,7 @@ def register_exit_sweep(state_root) -> bool:
 
 
 __all__ = [
-    "MARKER", "FLAG_NAME", "LEFTOVER_STATES", "docker_available", "system_df",
+"FLAG_NAME", "LEFTOVER_STATES", "docker_available", "system_df",
     "list_our_leftovers", "list_our_networks",
     "prune_exited_ours", "prune_our_networks", "prune_dangling_images",
     "prune_build_cache", "prune_unused_images", "prune_volumes",

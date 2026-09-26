@@ -76,14 +76,11 @@ class DesktopBackend:
         self._health = None          # (monotonic, result)
 
     def describe_records_privacy(self):
-        """One line when this account's records are open to other accounts.
+        """Report when this account's private record tree has a bad ACL.
 
-        The model store next door is deliberately readable by everyone on the
-        PC - that is how a second Windows account avoids re-downloading tens of
-        gigabytes - and a folder created under it inherits that grant. So the
-        records folder is not private by being in the right place, and a user
-        who is never told cannot know that the household's other account can
-        read their chat history.
+        The model store is deliberately shared, but users/<account> is a
+        separate sibling subtree and must remain private to that account,
+        SYSTEM and Administrators.
         """
         paths = self.load('project_paths')
         privacy = self.load('integrations.windows.privacy')
@@ -292,7 +289,7 @@ class DesktopBackend:
             raise RuntimeError('Ambiguous Chat container ownership.')
         return identifiers[0] if identifiers else None
 
-    # The retained launcher reads this through getattr with a default; copying
+    # The launcher reads this through getattr with a default; copying
     # the lookup without the default turned a missing constant into a crash.
     def chat_start(self, model, log, cancel):
         runtime = self.load('launcher.anythingllm_runtime')

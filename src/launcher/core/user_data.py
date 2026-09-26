@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
-"""user_data — persistent data root management (USER_DATA_v1).
+"""Per-account data under <runtime root>/users/<account>/user_data.
 
-``<runtime root>/user_data`` is the single product-owned location for settings,
-logs, chat data, and interpreter runtime state. The root itself is decided in
-one place, ``project_paths``; composing it here as "project root + user_data"
-is how the desktop shell and the installer ended up writing to two different
-folders on the same machine. Open Interpreter thread IDs are the Agent session
-source of truth; this module does not create or scan any product-owned
-per-session state file.
+The root is decided only by project_paths. Open Interpreter thread IDs are the
+Agent session source of truth; this module does not create or scan a second
+product-owned per-session store.
 """
 from __future__ import annotations
 
@@ -90,8 +86,6 @@ _README = (
     "  interpreter/host/    Open Interpreter host runtime state/assets\n"
     "\n"
     "Agent session identity and resume are owned by Open Interpreter thread IDs.\n"
-    "Per-session JSON files left by older versions are not treated as active\n"
-    "sessions and are not deleted automatically.\n"
 )
 
 

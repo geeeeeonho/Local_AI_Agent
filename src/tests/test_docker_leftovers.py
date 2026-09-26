@@ -110,6 +110,23 @@ def test_the_flag_is_what_adds_the_machine_wide_image_prune(docker, monkeypatch)
     assert pruned == ['images']
 
 
+def test_exit_sweep_reads_the_latest_toggle_value(docker, monkeypatch, tmp_path):
+    from launcher.core import lifelog
+    callbacks = []
+    monkeypatch.setattr(lifelog, 'register_cleanup',
+                        lambda fn, **kw: callbacks.append(fn))
+    monkeypatch.setattr(docker.module, 'autoclean_enabled', lambda root: True)
+    pruned = []
+    monkeypatch.setattr(docker.module, 'safe_auto_prune',
+                        lambda: pruned.append('images') or {
+                            'containers': 0, 'networks': 0, 'images': '0B'
+                        })
+    assert docker.module.register_exit_sweep(tmp_path)
+    assert callbacks
+    callbacks[0]()
+    assert pruned == ['images']
+
+
 def test_every_shell_registers_the_same_exit_sweep(monkeypatch, tmp_path):
     from services.system import bootstrap
     from launcher.core import docker_maint

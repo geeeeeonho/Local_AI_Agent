@@ -10,13 +10,7 @@ def _text(relative: str) -> str:
 
 
 def test_custom_session_helpers_are_not_runtime_owned():
-    """user_data may *describe* the retired session files, never handle them.
-
-    The retired helpers are gone, and so is any directory traversal that could
-    grow a second session store beside Open Interpreter's thread IDs. The check
-    reads the parsed module rather than raw text so the module docstring and the
-    runtime README.txt can keep explaining the policy.
-    """
+    """No helper may recreate a second session store beside OI thread IDs."""
     text = _text("src/launcher/core/user_data.py")
     for name in (
         "new_session_id",
