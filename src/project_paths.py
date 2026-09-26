@@ -121,6 +121,7 @@ RUNTIME_ROOT = runtime_dir()
 
 # Shared by every account on the machine.
 ENV_DIR = env_dir()
+RUNTIME_LOCK_PATH = ENV_DIR / "desktop-runtime.lock"
 ACCOUNTS_DIR = accounts_dir()
 
 # This account's alone.
