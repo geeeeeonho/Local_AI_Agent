@@ -82,7 +82,7 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
         return None
     target = Path(target or ollama_paths.PROJECT_INSTALL_DIR)
 
-    # Do not stage the installer beside C:\\Ollama. A normal desktop process
+    # Do not stage the installer beside C:\\LocalAI\\ollama. A normal desktop process
     # may not be allowed to create files at the drive root even though the
     # official installer itself can negotiate what it needs. A closed temporary
     # file also works under pythonw.exe, where there is no console.
