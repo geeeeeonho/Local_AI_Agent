@@ -14,7 +14,7 @@ def test_environment_contains_shared_binary_and_private_interpreter_home(tmp_pat
     )
     assert paths["open_interpreter"] == env / "open_interpreter"
     assert paths["open_interpreter_bin"] == env / "open_interpreter" / "bin"
-    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter"
+    assert paths["open_interpreter_home"] == account / "user_data" / "interpreter" / "host"
 
 
 def test_install_script_and_release_are_pinned():
