@@ -1,8 +1,7 @@
-"""ollama — 공식 Ollama 탐지/설치와 관리형 서비스 수명주기.
+"""Install and manage the LocalAI-owned machine-wide Ollama broker.
 
-이 프로젝트는 Ollama 를 중간 매개체로 씁니다. 그래서 Ollama 를 프로젝트 안에
-따로 품지 않고, 기계에 이미 있으면 그걸 쓰고 없을 때만 공식 설치기를 돌립니다.
-모델 위치는 어느 쪽이든 Ollama 가 정합니다(``core.ollama_paths``).
+Fresh installs use only C:\LocalAI\ollama and C:\LocalAI\models. A separately
+installed Ollama is never substituted for this broker.
 """
 from __future__ import annotations
 
@@ -49,7 +48,7 @@ def _service(env: Path, model_dir: Path) -> OllamaService:
 
 
 def prepare_install(env: Path, model_dir: Path) -> None:
-    """레거시 모델 이동 전에 관리형 Ollama를 멈추고 외부 충돌을 차단."""
+    """Ensure port 11434 is not owned by an unrelated Ollama before setup."""
     svc = _service(Path(env), Path(model_dir))
     if not svc.prepare_install():
         raise RuntimeError(svc.last_error or "Another Ollama service is using the configured port")
@@ -78,12 +77,12 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
-def install_official(target: Optional[Path] = None) -> Optional[Path]:
-    """공식 설치기를 /DIR 로 돌려 Ollama 를 설치하고 실행 파일을 돌려준다.
+def install_official(target: Optional[Path] = None, model_dir: Optional[Path] = None) -> Optional[Path]:
+    """Run OllamaSetup into the LocalAI broker directory.
 
-    설치 위치만 정하고 모델 위치는 건드리지 않는다 — 그건 Ollama 몫이다.
-    Program Files 로는 넣지 않는다. 공식 설치기가 per-machine 파일과 per-user
-    레지스트리가 섞인 상태를 만든다고 보고돼 있다.
+    Pass OLLAMA_MODELS explicitly to the installer process as defense in depth:
+    if the installer starts its tray/server before setup returns, that process
+    must already inherit the LocalAI shared model store.
     """
     if not _is_windows():
         utils.warn("공식 Ollama 설치기는 Windows 전용입니다.")
@@ -109,9 +108,15 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
 
         utils.info("공식 Ollama 를 설치합니다: " + str(target))
         try:
+            child_env = os.environ.copy()
+            if model_dir is not None:
+                child_env["OLLAMA_MODELS"] = str(Path(model_dir))
             result = subprocess.run(
                 ollama_paths.setup_command(installer, target),
-                check=False, creationflags=config.WIN_CREATE_NO_WINDOW)
+                check=False,
+                env=child_env,
+                creationflags=config.WIN_CREATE_NO_WINDOW,
+            )
         except OSError as exc:
             utils.warn("공식 설치기 실행 실패: " + str(exc))
             return None
@@ -119,9 +124,17 @@ def install_official(target: Optional[Path] = None) -> Optional[Path]:
         if result.returncode != 0:
             utils.warn("공식 설치기가 코드 %s 로 끝났습니다." % result.returncode)
             return None
-        found = ollama_paths.find_executable(extra=(target,))
+        found = None
+        for name in ollama_paths.executable_names():
+            candidate = target / name
+            try:
+                if candidate.is_file():
+                    found = candidate
+                    break
+            except OSError:
+                continue
         if found is None:
-            utils.warn("설치 후에도 ollama 실행 파일을 찾지 못했습니다.")
+            utils.warn("설치 후에도 LocalAI 공용 경로에서 ollama 실행 파일을 찾지 못했습니다.")
         return found
     finally:
         try:
@@ -139,7 +152,7 @@ def install(paths: Dict[str, Path]) -> Path:
         utils.ok(t("install.ollama_already", path=str(existing)))
         return existing
 
-    official = install_official(paths["ollama"])
+    official = install_official(paths["ollama"], paths["models"])
     if official is not None:
         utils.ok(t("install.ollama_done", path=str(official)))
         return official
@@ -174,11 +187,7 @@ def is_running() -> bool:
 
 
 def env_for(paths: Dict[str, Path]) -> dict:
-    """모델 관리 CLI가 서버와 같은 저장소/호스트를 보게 한다.
-
-    저장소를 여기서 강제하지 않는다. 서비스와 같은 규칙을 쓰므로 Ollama 가
-    스스로 고른 위치(사용자가 이미 옮겨 둔 위치 포함)를 그대로 따른다.
-    """
+    """Environment for model-management CLI calls against the shared store."""
     return _service(paths["env"], paths["models"]).env_vars()
 
 
@@ -202,5 +211,11 @@ def start_service(paths: Dict[str, Path]):
     utils.section(t("install.ollama_service_section"))
     persist_store(paths)
     svc = _service(paths["env"], paths["models"])
-    if not svc.ensure_running(boot_timeout=30):
-        raise RuntimeError(svc.last_error or "Managed Ollama service start failed")
+    if svc.ensure_running(boot_timeout=30):
+        return
+    # Setup is an explicit maintenance operation and holds the machine-wide
+    # runtime lock. If the canonical broker is already running on a proven
+    # different store, repair that mismatch here before any model pull occurs.
+    if svc.is_running() and svc.restart_for_store():
+        return
+    raise RuntimeError(svc.last_error or "Managed Ollama service start failed")
