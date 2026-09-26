@@ -19,16 +19,15 @@ RUNTIME_LOCK_NAME = "desktop-runtime.lock"
 
 
 def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) -> bool:
-    """다른 로컬 사용자도 공용 모델을 읽을 수 있도록 최소 권한을 보장한다.
+    """모든 로컬 사용자가 공용 모델을 설치/삭제할 권한을 보장한다.
 
-    정본은 ``integrations.ollama.sharing`` 이다. 설치 때 한 번만이 아니라
-    나중에도 확인·복구할 수 있어야 해서 그쪽으로 옮겼고, 여기서는 설치
-    화면이 쓰는 이름만 유지한다.
+    environment/ollama는 RX 전용을 유지하고, 실제로 공유 변경되는 models에만
+    BUILTIN\\Users Modify를 부여한다.
     """
     from integrations.ollama import sharing
-    if sharing.ensure_readable(model_dir, windows=windows):
+    if sharing.ensure_manageable(model_dir, windows=windows):
         return True
-    warn("공용 모델 폴더 읽기 권한 설정 실패")
+    warn("공용 모델 폴더 수정 권한 설정 실패")
     return False
 
 
@@ -179,8 +178,33 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
             raise
         ok(f"  {name:<20} → {p}")
 
-    # 공용 런타임/Ollama는 모든 계정이 실행할 수 있고, 모델도 한 벌을 공유한다.
+    # 공용 런타임/Ollama는 실행만 공유한다. models만 모든 계정이
+    # 설치/삭제할 수 있는 machine-wide mutable state다.
     ensure_shared_runtime_access((env, paths["ollama"]))
+
+    # Canonical LocalAI store: widen only this subtree before creating the
+    # shared control files, so a standard second account can repair/use it.
+    if model_dir is None:
+        ensure_shared_model_access(models)
+
+    model_control = models / ".localai"
+    registry = model_control / "registry.json"
+    mutation_lock = model_control / "model-mutation.lock"
+    try:
+        model_control.mkdir(parents=True, exist_ok=True)
+        if not registry.exists():
+            # Do not silently choose one account's legacy registry.
+            registry.write_text("{}\n", encoding="utf-8")
+        if not mutation_lock.exists():
+            mutation_lock.write_bytes(b"\0")
+    except OSError as exc:
+        raise RuntimeError(
+            "공용 모델 관리 폴더를 준비할 수 없습니다: %s (%s)" %
+            (model_control, exc)
+        ) from exc
+    paths["model_control"] = model_control
+    paths["model_registry"] = registry
+    paths["model_mutation_lock"] = mutation_lock
 
     runtime_lock = env / RUNTIME_LOCK_NAME
     try:
@@ -193,7 +217,6 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     paths["runtime_lock"] = runtime_lock
 
     if model_dir is None:
-        ensure_shared_model_access(models)
         publish_shared_model_dir(models)
     return paths
 
@@ -275,7 +298,7 @@ def write_install_manifest(
         "model_storage": str(paths["models"].resolve()),
         "account_path": str(paths["account"].resolve()),
         "model_storage_access": (
-            "builtin-users-read-execute-requested; existing-acl-preserved"
+            "builtin-users-modify-requested; existing-acl-preserved"
         ),
         "components": list(components),
         "failed_components": list(failed_components),
