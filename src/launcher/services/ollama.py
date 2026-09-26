@@ -718,35 +718,6 @@ class OllamaService:
         """
         return True
 
-    def _register_exit_cleanup_legacy(self) -> bool:
-        """Old per-window cleanup implementation, retained only for reference."""
-        if OllamaService._cleanup_registered:
-            return True
-        try:
-            from ..core import lifelog
-        except Exception:
-            try:
-                from launcher.core import lifelog  # type: ignore
-            except Exception:
-                return False
-
-        def _do() -> None:
-            try:
-                lifelog.log("CLEANUP", "Ollama 서비스 정리 (이 창이 시작한 서버)")
-            except Exception:
-                pass
-            try:
-                self.stop_managed()
-            except Exception:
-                pass
-
-        try:
-            lifelog.register_cleanup(_do)
-        except Exception:
-            return False
-        OllamaService._cleanup_registered = True
-        return True
-
     # ── 시작 ──
     def _launch(self) -> int:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
