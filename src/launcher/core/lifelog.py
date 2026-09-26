@@ -51,6 +51,7 @@ __all__ = [
     "open_session_log",
     "shutdown_then_exit",
     "suppress_exit_cleanups",
+    "rearm_exit_cleanups",
     "force_kill_container",
     "get_log_dir",
 ]
@@ -407,6 +408,13 @@ def suppress_exit_cleanups() -> None:
     global _cleanups_ran
     with _lock:
         _cleanups_ran = True
+
+
+def rearm_exit_cleanups() -> None:
+    """Allow registered callbacks to run for a newly acquired runtime lease."""
+    global _cleanups_ran
+    with _lock:
+        _cleanups_ran = False
 
 
 # ─────────────────────────────────────────────
