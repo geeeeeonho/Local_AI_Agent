@@ -37,6 +37,41 @@ def fixture(tmp_path):
     return backend, modules, calls
 
 
+def test_setup_command_reflects_choices_without_a_second_ui(tmp_path):
+    b,m,calls=fixture(tmp_path)
+    command=b.setup_command({
+        'sandbox':False,
+        'build':False,
+        'search':False,
+        'lang':'ko',
+    })
+    assert '--embedded' in command
+    assert '--lang' in command and 'ko' in command
+    assert '--skip-sandbox' in command
+    assert '--skip-build' in command
+    assert '--skip-search' in command
+
+
+def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
+    import inspect
+    from integrations.legacy.desktop import LegacyBackend
+
+    source=inspect.getsource(LegacyBackend.run_setup)
+    assert 'CREATE_NEW_CONSOLE' not in source
+    assert 'CREATE_NO_WINDOW' in source
+    assert 'stdout' in source and 'subprocess.PIPE' in source
+    assert 'stderr' in source and 'subprocess.STDOUT' in source
+
+
+def test_docker_build_action_never_spawns_a_progress_console():
+    import inspect
+    from launcher.actions import docker_image
+
+    source=inspect.getsource(docker_image.run)
+    assert 'CREATE_NEW_CONSOLE' not in source
+    assert 'build_image_stream' in source
+
+
 def test_block_calls_canonical_quiescence_without_injected_run(tmp_path):
     """Quiescence first, then publish. A mode that failed to prepare is not the
     active mode, so ``set_mode`` may only follow a successful preparation."""
