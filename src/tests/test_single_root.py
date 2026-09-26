@@ -131,6 +131,25 @@ def wired_paths():
     ]
 
 
+def test_agent_searxng_uses_private_writable_copy(monkeypatch, tmp_path):
+    root = tmp_path / "LocalAI"
+    env = root / "environment"
+    source = env / "searxng" / "config"
+    source.mkdir(parents=True)
+    (source / "settings.yml").write_text("search:\n  safe_search: 0\n", encoding="utf-8")
+    monkeypatch.setenv("LOCAL_AI_ROOT", str(root))
+    monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Tester")
+
+    from launcher import searxng_runtime
+    cfg = searxng_runtime._cfg_dir(env)
+
+    assert cfg == root / "users" / "Tester" / "user_data" / "cache" / "searxng"
+    assert cfg != source
+    assert (cfg / "settings.yml").read_text(encoding="utf-8") == (
+        source / "settings.yml"
+    ).read_text(encoding="utf-8")
+
+
 def test_every_feature_reads_or_writes_inside_the_one_root():
     import project_paths
     root = Path(project_paths.RUNTIME_ROOT).resolve()
