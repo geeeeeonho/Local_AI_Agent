@@ -101,6 +101,40 @@ def test_health_refresh_is_quiet_and_activity_log_is_taller(ui):
     assert 'health completed' not in contents
 
 
+def test_setup_choices_run_in_the_same_window_and_stream_activity(ui):
+    w,svc,backend=ui
+    w.navigate('setup')
+    w.setup_sandbox.set(False)
+    w.setup_build.set(False)
+    w.setup_search.set(True)
+
+    w.repair()
+    pump(w,lambda:not w.runner.busy('setup.repair'))
+
+    assert ('setup', {'sandbox':False,'build':False,'search':True}) in backend.calls
+    activity=w.activity.get('1.0','end-1c')
+    assert 'installer: shared runtime' in activity
+    assert '완료' in w.setup_status.get()
+    assert str(w.setup_start_button.cget('state'))=='normal'
+    assert str(w.setup_cancel_button.cget('state'))=='disabled'
+    assert svc.owner.owned is False
+
+
+def test_cli_setup_flags_are_reflected_in_the_same_setup_form(ui):
+    w,svc,backend=ui
+    w.apply_setup_cli_options(
+        skip_sandbox=True,
+        skip_build=False,
+        skip_search=True,
+    )
+    assert w.setup_options()=={
+        'sandbox':False,
+        'build':False,
+        'search':False,
+    }
+    assert str(w.setup_build_check.cget('state'))=='disabled'
+
+
 def test_manual_health_refresh_reports_a_useful_summary(ui):
     w,_,_=ui
     w.refresh_health(fresh=True)
