@@ -118,6 +118,32 @@ def test_create_environment_does_not_scan_or_move_old_model_folders(tmp_path, mo
 
 
 
+def test_localized_windows_console_output_does_not_use_python_utf8(monkeypatch):
+    from integrations.windows import acl
+
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        seen["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(acl, "on_windows", lambda windows=None: True)
+    monkeypatch.setattr(acl.subprocess, "run", fake_run)
+
+    result = acl.run(["setx", "OLLAMA_MODELS", r"C:\LocalAI\models", "/M"])
+
+    assert result.returncode == 0
+    assert seen["kwargs"]["encoding"] == "mbcs"
+    assert seen["kwargs"]["errors"] == "replace"
+    assert seen["kwargs"]["text"] is True
+
+
 def test_shared_runtime_access_grants_read_execute_to_environment_and_ollama(monkeypatch, tmp_path):
     from installer.core import filesystem
     touched = []
