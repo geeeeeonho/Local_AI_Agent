@@ -9,7 +9,8 @@ from typing import Dict, Iterable, Optional
 
 from project_paths import (ACCOUNT_ROOT, ENV_DIRNAME, LOGS_DIRNAME,
                            MODEL_STORAGE_DIR, OLLAMA_INSTALL_DIR,
-                           USER_DATA_DIRNAME)
+                           USER_DATA_DIRNAME, model_control_dir,
+                           model_registry_path, model_mutation_lock_path)
 
 from .console import section, ok, warn
 
@@ -32,14 +33,11 @@ def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) 
 
 
 def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) -> bool:
-    """다른 Windows 계정도 같은 저장소를 보도록 시스템 환경변수에 기록한다.
+    """외부 Ollama CLI/Tray도 공용 저장소를 보기 쉽게 환경변수를 기록한다.
 
-    읽기 권한만으로는 부족하다. 다른 계정의 Ollama 는 자기 프로필 밑
-    ``.ollama\\models`` 를 보므로, 시스템 범위 ``OLLAMA_MODELS`` 가 있어야
-    같은 모델을 가리킨다.
-
-    관리자 권한이 필요하다. 실패해도 설치를 중단하지 않는다 — 이 계정에서는
-    실행 시 주입하는 값으로 계속 동작하고, 모델 화면에서 나중에 고칠 수 있다.
+    LocalAI가 관리하는 broker는 실행할 때 모델 경로를 직접 주입하므로 이 값에
+    의존하지 않는다. 시스템 범위 기록은 관리자 권한이 필요하며 실패해도 설치를
+    중단하지 않는다.
     """
     from integrations.ollama import sharing
     # setx updates future processes only. Keep this setup process and every
@@ -187,9 +185,9 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     if model_dir is None:
         ensure_shared_model_access(models)
 
-    model_control = models / ".localai"
-    registry = model_control / "registry.json"
-    mutation_lock = model_control / "model-mutation.lock"
+    model_control = model_control_dir(models)
+    registry = model_registry_path(models)
+    mutation_lock = model_mutation_lock_path(models)
     try:
         model_control.mkdir(parents=True, exist_ok=True)
         if not registry.exists():
