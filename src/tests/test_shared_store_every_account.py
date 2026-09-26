@@ -1,11 +1,8 @@
-"""C:\\LocalAI\\models only serves the whole machine if the machine says so.
+"""C:\\LocalAI\\models is shared by LocalAI when the path and ACL are shared.
 
-Putting the store outside a profile is half of it. Another account's Ollama
-reads OLLAMA_MODELS from its own environment; with no machine-scope value it
-falls back to that account's %USERPROFILE%\\.ollama\\models and re-downloads
-the library. Publishing that value needs administrator rights, so setup can
-simply have failed - and the program used to report "모든 계정 공용" from the
-shape of the path alone, telling those users something false.
+LocalAI injects the managed model path into every broker it starts. Registry
+OLLAMA_MODELS values are still inspected for external Ollama compatibility,
+but they do not decide whether LocalAI accounts share the library.
 """
 import types
 from pathlib import Path
@@ -32,24 +29,22 @@ def test_a_fully_set_up_machine_shares_the_store():
     assert state().blockers == ()
 
 
-def test_setup_without_admin_is_not_reported_as_shared():
-    """setx /M failed, so every other account looks in its own profile."""
+def test_missing_machine_variable_does_not_split_localai_accounts():
     found = state(machine_value='')
-    assert found.every_account is False
-    assert found.blockers == (policy.VARIABLE_MISSING,)
-    assert found.repairable is True
+    assert found.every_account is True
+    assert found.blockers == ()
 
 
-def test_a_machine_value_naming_another_store_is_a_blocker():
+def test_machine_variable_elsewhere_is_external_ollama_information_only():
     found = state(machine_value=r'D:\somewhere\else')
-    assert found.blockers == (policy.VARIABLE_ELSEWHERE,)
+    assert found.blockers == ()
+    assert found.every_account is True
 
 
-def test_a_user_scope_value_hides_the_machine_one():
-    """That is this account's own setting, so the program must not overwrite it."""
+def test_user_scope_value_does_not_override_localai_managed_broker():
     found = state(user_value=r'E:\my\models')
-    assert found.blockers == (policy.USER_OVERRIDE,)
-    assert found.repairable is False, 'a personal setting is not ours to delete'
+    assert found.blockers == ()
+    assert found.every_account is True
 
 
 def test_a_store_inside_a_profile_is_never_machine_wide():
@@ -63,9 +58,8 @@ def test_unreadable_files_block_it_even_with_the_variable_set():
     assert state(readable_by_users=False).blockers == (policy.NOT_READABLE,)
 
 
-def test_a_fact_we_could_not_read_is_unknown_not_success():
-    """A wrong "yes" costs a second account the whole library again."""
-    assert state(machine_value=None).every_account is None
+def test_only_unreadable_acl_state_makes_localai_sharing_unknown():
+    assert state(machine_value=None).every_account is True
     assert state(readable_by_users=None).every_account is None
 
 
@@ -154,30 +148,30 @@ def test_a_machine_set_up_by_an_admin_reads_as_shared(monkeypatch, tmp_path):
     assert found.blockers == ()
 
 
-def test_a_machine_set_up_without_admin_names_the_missing_variable(monkeypatch, tmp_path):
+def test_missing_machine_variable_is_recorded_but_not_a_localai_blocker(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
     install_fake_windows(monkeypatch, store, machine=None)
     found = sharing.read(store, windows=True)
     assert found.machine_value == '', 'unset, not unreadable'
-    assert found.blockers == (policy.VARIABLE_MISSING,)
-    assert sharing.describe(found) and '관리자' in sharing.describe(found)[0]
+    assert found.blockers == ()
+    assert found.every_account is True
+    assert sharing.describe(found) == ()
 
 
-def test_repair_grants_read_and_publishes_the_variable(monkeypatch, tmp_path):
+def test_repair_grants_read_without_requiring_registry_mutation(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
     ran = install_fake_windows(monkeypatch, store, machine=str(store))
     result = sharing.repair(store, windows=True)
-    commands = [c[0] for c in ran]
-    assert 'icacls' in commands and 'setx' in commands
-    grant = next(c for c in ran if c[0] == 'icacls' and '/grant' in c)
+    commands = [cmd[0] for cmd in ran]
+    assert 'icacls' in commands
+    assert 'setx' not in commands
+    grant = next(cmd for cmd in ran if cmd[0] == 'icacls' and '/grant' in cmd)
     assert '*S-1-5-32-545:(OI)(CI)(RX)' in grant, 'read and execute only'
     assert '/T' in grant
-    publish = next(c for c in ran if c[0] == 'setx')
-    assert publish == ['setx', 'OLLAMA_MODELS', str(store), '/M']
     assert result['failed'] == ()
 
 
@@ -196,7 +190,7 @@ def test_a_failed_repair_says_so_rather_than_claiming_success(monkeypatch, tmp_p
     from integrations.ollama import sharing
     install_fake_windows(monkeypatch, tmp_path, machine=None, returncode=1)
     result = sharing.repair(tmp_path, windows=True)
-    assert set(result['failed']) == {'readable', 'machine_variable'}
+    assert set(result['failed']) == {'readable'}
     assert result['every_account'] is not True
 
 
@@ -210,16 +204,16 @@ def test_the_environment_this_process_injected_is_not_mistaken_for_the_machine(m
 
 # ── and the screen says what is true ─────────────────────────────────────
 
-def test_the_screen_stops_claiming_shared_when_it_is_not(monkeypatch, tmp_path):
+def test_the_screen_reports_localai_sharing_even_without_machine_variable(monkeypatch, tmp_path):
     from services.models.service import ModelService
     from integrations.ollama import sharing
     service = ModelService(types.SimpleNamespace(model_dir=tmp_path, client=object()))
     monkeypatch.setattr(sharing, 'read',
                         lambda path, **k: state(machine_value=''))
     report = service.sharing()
-    assert report['every_account'] is False and report['repairable'] is True
-    assert report['blockers'] == [policy.VARIABLE_MISSING]
-    assert report['reasons'], 'a blocker the user cannot read is not a warning'
+    assert report['every_account'] is True
+    assert report['blockers'] == []
+    assert report['reasons'] == []
 
 
 # ── reading an ACL without depending on the display language ─────────────
