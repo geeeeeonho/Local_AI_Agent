@@ -61,18 +61,20 @@ def _registry_value(root, key) -> Optional[str]:
         return None
 
 
-def _readable_by_users(model_dir: Path) -> Optional[bool]:
-    """Can BUILTIN\\Users read the store? None when the answer is unavailable."""
+def _users_access(model_dir: Path) -> tuple[Optional[bool], Optional[bool]]:
+    """Return (readable, manageable) for BUILTIN\\Users from one ACL read."""
     if not model_dir.exists():
-        return None
+        return None, None
     text = acl.saved_sddl(model_dir)
     if text is None:
-        return None
+        return None, None
     for line in text.splitlines():
-        answer = policy.readable_from_sddl(line.strip())
-        if answer is not None:
-            return answer
-    return None
+        descriptor = line.strip()
+        readable = policy.readable_from_sddl(descriptor)
+        manageable = policy.manageable_from_sddl(descriptor)
+        if readable is not None or manageable is not None:
+            return readable, manageable
+    return None, None
 
 
 def read(model_dir=None, *, windows=None) -> Sharing:
@@ -88,12 +90,14 @@ def read(model_dir=None, *, windows=None) -> Sharing:
                        per_user_path=ollama_paths.is_per_user_store(model_dir),
                        windows=False)
     import winreg
+    readable, manageable = _users_access(model_dir)
     return Sharing(
         path=str(model_dir),
         intended_shared=model_dir == ollama_paths.SHARED_MODELS_DIR,
         machine_value=_registry_value(winreg.HKEY_LOCAL_MACHINE, _MACHINE_KEY),
         user_value=_registry_value(winreg.HKEY_CURRENT_USER, _USER_KEY),
-        readable_by_users=_readable_by_users(model_dir),
+        readable_by_users=readable,
+        manageable_by_users=manageable,
         per_user_path=ollama_paths.is_per_user_store(model_dir),
         windows=True,
     )
@@ -215,6 +219,8 @@ _MESSAGES = {
         '개인 설정이므로 프로그램이 지우지 않습니다.',
     policy.NOT_READABLE:
         '다른 계정에 읽기 권한이 없습니다.',
+    policy.NOT_MANAGEABLE:
+        '다른 계정에 모델 설치·삭제를 위한 수정 권한이 없습니다. 설치 / 복구에서 권한을 갱신하세요.',
 }
 
 
