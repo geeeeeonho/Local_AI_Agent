@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import queue
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from types import SimpleNamespace
@@ -47,6 +48,7 @@ class DesktopWindow:
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
         self._chat_progress = [];self._chat_starting = False
+        self._setup_cancel = threading.Event()
         self.chat_state = tk.StringVar(master=self.root,
             value='준비 안 됨 · [Chat 시작]을 누르면 Network → Ollama → AnythingLLM 순으로 확인합니다.')
         self.agent_state = tk.StringVar(master=self.root,
@@ -891,15 +893,96 @@ class DesktopWindow:
         # but do not flood the shared activity log with "health .../completed".
         self.run_task('health',lambda:self.services.system.health(fresh=fresh),display,mutate=False,announce=False)
 
+    def reset_setup_options(self):
+        if hasattr(self,'setup_sandbox'):
+            self.setup_sandbox.set(True)
+            self.setup_build.set(True)
+            self.setup_search.set(True)
+            self.setup_build_check.configure(state='normal')
+            self.setup_status.set('대기 · 기본 설치 구성을 선택했습니다.')
+
+    def setup_options(self):
+        sandbox=bool(getattr(self,'setup_sandbox',tk.BooleanVar(value=True)).get())
+        build=bool(getattr(self,'setup_build',tk.BooleanVar(value=True)).get()) and sandbox
+        search=bool(getattr(self,'setup_search',tk.BooleanVar(value=True)).get())
+        return {'sandbox':sandbox,'build':build,'search':search}
+
+    def apply_setup_cli_options(self, *, skip_sandbox=False, skip_build=False,
+                                skip_search=False):
+        """Reflect RUN.bat --install/--skip-* choices in the one Setup form."""
+        if not hasattr(self,'setup_sandbox'):
+            return
+        self.setup_sandbox.set(not bool(skip_sandbox))
+        self.setup_build.set(not bool(skip_build) and not bool(skip_sandbox))
+        self.setup_search.set(not bool(skip_search))
+        self.setup_build_check.configure(
+            state='normal' if self.setup_sandbox.get() else 'disabled')
+
+    def cancel_setup(self):
+        if not self.runner.busy('setup.repair'):
+            return
+        self._setup_cancel.set()
+        if hasattr(self,'setup_status'):
+            self.setup_status.set('취소 요청 중 · 설치 프로세스를 안전하게 종료하고 있습니다.')
+        if hasattr(self,'setup_cancel_button'):
+            self.setup_cancel_button.configure(state='disabled')
+        self.log('Setup: 취소 요청을 전달했습니다.')
+
     def repair(self):
         if self.services.chat.started or self.services.agent.opened:
             self.log('Stop active sessions before Setup / Repair.',level='error');return
-        if not messagebox.askyesno('Setup / Repair','Run the existing installer in a separate console?\nReview its prompts before installing or migrating data.',parent=self.root):return
+        if self.runner.busy('setup.repair'):
+            self.log('설치 / 복구가 이미 진행 중입니다.');return
+
+        options=self.setup_options()
+        self._setup_cancel.clear()
+        if hasattr(self,'setup_start_button'):
+            self.setup_start_button.configure(state='disabled')
+        if hasattr(self,'setup_cancel_button'):
+            self.setup_cancel_button.configure(state='normal')
+        if hasattr(self,'setup_status'):
+            parts=['Sandbox '+('ON' if options['sandbox'] else 'OFF'),
+                   'Build '+('ON' if options['build'] else 'OFF'),
+                   'Search '+('ON' if options['search'] else 'OFF')]
+            self.setup_status.set('진행 중 · '+' · '.join(parts))
+
+        # Setup work is exactly the moment users need the activity stream. Open
+        # it for this session without changing their saved fold preference.
+        if not getattr(self,'_activity_visible',True):
+            self._activity_visible=True
+            self._apply_activity_visibility()
+
+        self.log('Setup: 같은 창에서 설치 / 복구를 시작합니다.')
+        self.log('Setup options: '+str(options))
+
+        def work():
+            return self.services.setup.repair(
+                options, cancel=self._setup_cancel.is_set)
+
+        def unlock():
+            if hasattr(self,'setup_start_button'):
+                self.setup_start_button.configure(state='normal')
+            if hasattr(self,'setup_cancel_button'):
+                self.setup_cancel_button.configure(state='disabled')
+
         def done(_result):
-            self.log('설치 / 복구가 끝났습니다. 상태를 다시 확인합니다.')
+            unlock()
+            self._setup_cancel.clear()
+            if hasattr(self,'setup_status'):
+                self.setup_status.set('완료 · 설치 / 복구가 끝났습니다. 상태를 다시 확인합니다.')
+            self.log('설치 / 복구 완료 · 상태를 다시 확인합니다.')
             self.refresh_health(fresh=True)
-        self.run_task('setup.repair',self.services.setup.repair,done,
-                      error=lambda exc:self.refresh_health(fresh=True))
+
+        def failed(exc):
+            unlock()
+            cancelled=self._setup_cancel.is_set()
+            self._setup_cancel.clear()
+            if hasattr(self,'setup_status'):
+                self.setup_status.set(('취소됨 · ' if cancelled else '실패 · ')+str(exc))
+            self.refresh_health(fresh=True)
+
+        self.run_task('setup.repair',work,done,error=failed)
+
 
     def maintenance(self,key,host='setup'):
         if self.services.chat.started or self.services.agent.opened:
