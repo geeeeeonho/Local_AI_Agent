@@ -50,7 +50,17 @@ class Backend:
     def chat_stop(self): self.calls.append(('chat_stop',)); return True
     def maintenance(self, key, presenter): self.calls.append(('maintenance', key))
     def create_presenter(self, window): return SimpleNamespace(_window=window)
-    def setup_command(self): return ['python', '-m', 'installer', '--install']
+    def setup_command(self, options=None):
+        return ['python', '-m', 'installer', '--install', '--embedded']
+    def run_setup(self, options=None, log=None, cancel=None):
+        options = dict(options or {})
+        self.calls.append(('setup', options))
+        if log:
+            log('installer: shared runtime')
+            log('installer: done')
+        if cancel and cancel():
+            raise RuntimeError('설치 / 복구가 취소되었습니다.')
+        return 0
 
 
 def make(tmp_path):
@@ -184,6 +194,26 @@ def test_same_window_cannot_switch_live_network(tmp_path):
         svc.network.prepare('block')
     assert ('prepare', 'block') not in backend.calls
     svc.close()
+
+
+def test_setup_repair_streams_events_and_releases_machine_lease(tmp_path):
+    svc, backend = make(tmp_path)
+    seen = []
+    svc.events.subscribe(
+        'runtime.progress',
+        lambda event: seen.append(dict(event.payload)),
+    )
+
+    result = svc.setup.repair(
+        {'sandbox': False, 'build': False, 'search': True},
+        cancel=lambda: False,
+    )
+
+    assert result == 0
+    assert ('setup', {'sandbox': False, 'build': False, 'search': True}) in backend.calls
+    assert any(item.get('service') == 'setup' and 'shared runtime' in item.get('message', '')
+               for item in seen)
+    assert svc.owner.owned is False
 
 
 def test_setup_is_only_entry_for_explicit_model_downloads(tmp_path):
