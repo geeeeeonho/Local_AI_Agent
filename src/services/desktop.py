@@ -36,8 +36,7 @@ class DesktopServices:
         self.events = EventBus()
         self.settings = SettingsStore(self.data / 'settings' / 'localai.json')
         self.projects = ProjectRegistry(self.data / 'projects' / 'registry.json')
-        from project_paths import RUNTIME_LOCK_PATH
-        self.owner = RuntimeOwner(RUNTIME_LOCK_PATH)
+        self.owner = RuntimeOwner(self.env / "desktop-runtime.lock")
         self.network = NetworkManager(backend, self.owner, self.events)
         self.inference = InferenceService(runtime=backend.inference, events=self.events,
             state=RuntimeState(self.data / 'cache' / 'runtime-state.json'))
