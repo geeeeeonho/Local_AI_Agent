@@ -347,7 +347,7 @@ def _registry_path():
     that account silently win over every other account.
     """
     import project_paths
-    return str(project_paths.MODEL_REGISTRY_PATH)
+    return str(project_paths.model_registry_path())
 
 
 def _valid_tier(t):
