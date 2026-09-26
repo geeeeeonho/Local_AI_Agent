@@ -69,6 +69,8 @@ def test_official_installer_inherits_shared_model_store(monkeypatch, tmp_path):
     found = step.install_official(target, store)
     assert found == target / "ollama.exe"
     assert seen["env"]["OLLAMA_MODELS"] == str(store)
+    assert seen["env"]["OLLAMA_NO_CLOUD"] == "1"
+    assert seen["env"]["OLLAMA_HOST"].endswith(":11434")
     assert any(str(target) in part for part in seen["command"])
 
 
@@ -111,6 +113,25 @@ def test_managed_ollama_disables_login_autostart(monkeypatch, tmp_path):
 
     monkeypatch.setattr(step, "_is_windows", lambda: True)
     monkeypatch.setenv("APPDATA", str(appdata))
+
+    assert step.disable_login_autostart() is True
+    assert not shortcut.exists()
+
+
+
+def test_disable_login_autostart_removes_ollama_shortcut(monkeypatch, tmp_path):
+    from installer.steps import ollama as step
+
+    startup = (
+        tmp_path / "Microsoft" / "Windows" / "Start Menu"
+        / "Programs" / "Startup"
+    )
+    startup.mkdir(parents=True)
+    shortcut = startup / "Ollama.lnk"
+    shortcut.write_bytes(b"shortcut")
+
+    monkeypatch.setattr(step, "_is_windows", lambda: True)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
 
     assert step.disable_login_autostart() is True
     assert not shortcut.exists()
