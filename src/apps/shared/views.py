@@ -194,25 +194,81 @@ def settings(parent,w):
 
 
 def setup(parent,w):
-    r=row(parent);button(r,'설치 / 복구 시작',w.repair,kind='Manage')
-    button(r,'상태 확인',lambda:w.refresh_health(fresh=True))
-    note(parent,'설치기는 별도 콘솔에서 열리며 완료될 때까지 이 창이 추적합니다.\n'
-         '관리형 세션을 먼저 종료하세요. 기존 설치·모델 경로를 유지합니다.')
+    w.setup_status = tk.StringVar(
+        master=w.root,
+        value='대기 · 설치 옵션을 고른 뒤 같은 창에서 실행합니다.',
+    )
+    w.setup_sandbox = tk.BooleanVar(master=w.root, value=True)
+    w.setup_build = tk.BooleanVar(master=w.root, value=True)
+    w.setup_search = tk.BooleanVar(master=w.root, value=True)
+
+    status_line(parent, w.setup_status)
+
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
+    card.pack(fill='x',pady=(8,14))
+    ttk.Label(card,text='설치 / 복구 구성',style='Manage.Card.TLabel',
+              font=('Segoe UI',12,'bold')).pack(anchor='w')
+    ttk.Label(
+        card,
+        text='Ollama · AnythingLLM · Open Interpreter · WARP는 기본 공용 런타임으로 준비합니다. '
+             '아래 선택은 부가 Docker/Search 구성입니다.',
+        style='Manage.CardMuted.TLabel',wraplength=720,justify='left',
+    ).pack(anchor='w',pady=(6,12))
+
+    options=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    options.pack(fill='x')
+
+    def sync_build_choice():
+        enabled=w.setup_sandbox.get()
+        if not enabled:
+            w.setup_build.set(False)
+        w.setup_build_check.configure(state='normal' if enabled else 'disabled')
+
+    ttk.Checkbutton(
+        options,text='Sandbox 실행 환경 준비',
+        variable=w.setup_sandbox,command=sync_build_choice,
+        style='Card.TCheckbutton',
+    ).pack(anchor='w',pady=3)
+    w.setup_build_check=ttk.Checkbutton(
+        options,text='Sandbox Docker 이미지 빌드',
+        variable=w.setup_build,style='Card.TCheckbutton',
+    )
+    w.setup_build_check.pack(anchor='w',padx=(24,0),pady=3)
+    ttk.Checkbutton(
+        options,text='웹 검색 준비 (SearXNG + Tor)',
+        variable=w.setup_search,style='Card.TCheckbutton',
+    ).pack(anchor='w',pady=3)
+
+    controls=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    controls.pack(fill='x',pady=(14,0))
+    w.setup_start_button=button(
+        controls,'설치 / 복구 실행',w.repair,accent=True,kind='Manage')
+    w.setup_cancel_button=button(
+        controls,'실행 중단',w.cancel_setup,kind='Danger')
+    w.setup_cancel_button.configure(state='disabled')
+    button(controls,'기본 선택',w.reset_setup_options)
+
+    note(parent,'별도 설치 콘솔이나 선택창을 열지 않습니다. 진행 로그는 이 창 아래 Activity에 '
+         '실시간으로 표시됩니다. 모델은 Models 화면에서 같은 방식으로 선택/다운로드합니다.')
+
     if 'models' in w.spec.pages:
-        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18);card.pack(fill='x',pady=(4,14))
+        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
+        card.pack(fill='x',pady=(4,14))
         ttk.Label(card,text='모델 설치와 삭제',style='Manage.Card.TLabel',
                   font=('Segoe UI',12,'bold')).pack(anchor='w')
-        ttk.Label(card,text='모델은 "모델" 화면 한 곳에서 고르고, 지금 무엇이 선택되는지와 함께 봅니다.',
+        ttk.Label(card,text='모델 선택 · 설치 · 삭제 · 다운로드 진행률은 Models 한 화면에서 처리합니다.',
                   style='Manage.CardMuted.TLabel',wraplength=700).pack(anchor='w',pady=(6,12))
-        ttk.Button(card,text='모델 화면 열기',style='Manage.TButton',
+        ttk.Button(card,text='Models 열기',style='Manage.TButton',
                    command=lambda:w.navigate('models')).pack(anchor='w')
+
     ttk.Label(parent,text='유지보수',style='Section.TLabel').pack(anchor='w',pady=(8,8))
     r=row(parent)
     for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),
-                     ('searxng_action','Search 관리'),('settings_action','기존 설정'),
-                     ('ollama_action','Ollama 확인')]:
+                     ('searxng_action','Search 관리'),('ollama_action','Ollama 확인')]:
         button(r,text,lambda k=key:w.maintenance(k))
-    note(parent,'유지보수 작업은 기존 런처의 액션을 그대로 실행하고, 그 로그를 아래에 보여 줍니다.')
+    button(r,'설정 화면',lambda:w.navigate('settings'))
+    note(parent,'유지보수 메뉴와 체크 선택도 이 Setup 페이지 안에 표시됩니다. '
+         '실행 결과는 동일한 로그 영역에 기록됩니다.')
     w.hosts['setup']=PanelHost(parent)
 
 
