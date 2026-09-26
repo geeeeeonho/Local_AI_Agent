@@ -8,7 +8,7 @@ set "PYTHONPATH=%~dp0src;%PYTHONPATH%"
 cd /d "%~dp0"
 
 set "FORCE_CONSOLE="
-echo %* | findstr /I /C:"--tui" /C:"--install" /C:"--skip-" /C:"--help" >nul 2>&1 && set "FORCE_CONSOLE=1"
+echo %* | findstr /I /C:"--tui" /C:"--help" >nul 2>&1 && set "FORCE_CONSOLE=1"
 
 if defined FORCE_CONSOLE goto RUN_CONSOLE
 
