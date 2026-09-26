@@ -1,18 +1,18 @@
 from pathlib import Path
 
 
-def test_model_download_uses_detected_ollama_not_only_portable_slot(monkeypatch, tmp_path):
+def test_model_download_uses_localai_shared_broker(monkeypatch, tmp_path):
     from installer.steps import model
     from launcher.models import model_catalog, model_files
 
-    official = tmp_path / "Ollama" / "ollama.exe"
+    official = tmp_path / "LocalAI" / "ollama" / "ollama.exe"
     official.parent.mkdir()
     official.write_bytes(b"official")
 
     paths = {
-        "env": tmp_path / "llm_environment",
-        "ollama": tmp_path / "llm_environment" / "ollama_runtime",
-        "models": tmp_path / "Ollama" / "models",
+        "env": tmp_path / "LocalAI" / "environment",
+        "ollama": tmp_path / "LocalAI" / "ollama",
+        "models": tmp_path / "LocalAI" / "models",
     }
 
     seen = {}
