@@ -160,7 +160,7 @@ def test_missing_machine_variable_is_recorded_but_not_a_localai_blocker(monkeypa
     assert sharing.describe(found) == ()
 
 
-def test_repair_grants_read_without_requiring_registry_mutation(monkeypatch, tmp_path):
+def test_repair_grants_modify_without_requiring_registry_mutation(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
@@ -170,27 +170,27 @@ def test_repair_grants_read_without_requiring_registry_mutation(monkeypatch, tmp
     assert 'icacls' in commands
     assert 'setx' not in commands
     grant = next(cmd for cmd in ran if cmd[0] == 'icacls' and '/grant' in cmd)
-    assert '*S-1-5-32-545:(OI)(CI)(RX)' in grant, 'read and execute only'
+    assert '*S-1-5-32-545:(OI)(CI)(M)' in grant, 'shared model management requires modify'
     assert '/T' in grant
     assert result['failed'] == ()
 
 
-def test_models_pulled_later_are_covered_by_the_grant(monkeypatch, tmp_path):
-    """(OI)(CI) is inheritable, so tomorrow's blobs are readable too."""
+def test_models_pulled_later_are_manageable_by_every_account(monkeypatch, tmp_path):
+    """(OI)(CI) is inheritable, so tomorrow's blobs/manifests stay manageable."""
     from integrations.ollama import sharing
     ran = install_fake_windows(monkeypatch, tmp_path, machine=str(tmp_path))
-    sharing.ensure_readable(tmp_path, windows=True)
+    sharing.ensure_manageable(tmp_path, windows=True)
     grant = ran[0]
-    assert '(OI)(CI)(RX)' in ' '.join(grant), grant
-    assert not any('(F)' in part or ':(M)' in part for part in grant), \
-        'other accounts read the models; they do not get to replace them'
+    assert '(OI)(CI)(M)' in ' '.join(grant), grant
+    assert not any('(F)' in part for part in grant), \
+        'standard accounts may manage models but do not receive full control'
 
 
 def test_a_failed_repair_says_so_rather_than_claiming_success(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     install_fake_windows(monkeypatch, tmp_path, machine=None, returncode=1)
     result = sharing.repair(tmp_path, windows=True)
-    assert set(result['failed']) == {'readable'}
+    assert set(result['failed']) == {'manageable'}
     assert result['every_account'] is not True
 
 
