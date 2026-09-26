@@ -88,9 +88,10 @@ def models_dir(environ=None) -> Path:
     return configured if configured is not None else SHARED_MODELS_DIR
 
 
-def models_dir_is_shared(environ=None) -> bool:
-    """True when the resolved store is the machine-shared one under the install."""
-    return models_dir(environ) == SHARED_MODELS_DIR
+def models_dir_is_shared(environ=None, path=None) -> bool:
+    """True when the actual/resolved store is the LocalAI machine-shared one."""
+    candidate = models_dir(environ) if path is None else Path(path)
+    return _same_windows_path(candidate, SHARED_MODELS_DIR)
 
 
 def is_per_user_store(path, environ=None) -> bool:
