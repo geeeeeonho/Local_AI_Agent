@@ -177,6 +177,7 @@ def test_install_manifest_records_shared_root_and_private_account(tmp_path, monk
 
     monkeypatch.setattr(filesystem, "MODEL_STORAGE_DIR", models)
     monkeypatch.setattr(filesystem, "OLLAMA_INSTALL_DIR", broker)
+    monkeypatch.setattr(filesystem, "ensure_shared_runtime_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "ensure_shared_model_access", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "publish_shared_model_dir", lambda *a, **k: True)
     monkeypatch.setattr(filesystem, "ensure_private_account", lambda *a, **k: True)
