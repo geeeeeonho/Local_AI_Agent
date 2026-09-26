@@ -78,12 +78,19 @@ def test_modules_that_write_use_canonical_path_helpers():
     assert offenders == [], "런타임 경로를 직접 조립하는 곳:\n  " + "\n  ".join(offenders)
 
 
-def test_user_chosen_model_store_remains_an_explicit_override(monkeypatch, tmp_path):
+def test_per_user_ollama_models_does_not_split_localai_store(monkeypatch, tmp_path):
     monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
     monkeypatch.setenv("OLLAMA_MODELS", str(tmp_path / "their-drive"))
     monkeypatch.setenv("LOCAL_AI_ROOT", str(tmp_path / "LocalAI"))
     import project_paths
-    assert project_paths.model_dir() == tmp_path / "their-drive"
+    assert project_paths.model_dir() == tmp_path / "LocalAI" / "models"
+
+
+def test_localai_model_override_is_explicit_and_product_scoped(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_MODEL_DIR", str(tmp_path / "managed-models"))
+    monkeypatch.setenv("OLLAMA_MODELS", str(tmp_path / "stale-user-store"))
+    import project_paths
+    assert project_paths.model_dir() == tmp_path / "managed-models"
 
 
 def wired_paths():
@@ -103,6 +110,7 @@ def wired_paths():
         ("models", project_paths.MODEL_STORAGE_DIR),
         ("ollama", project_paths.OLLAMA_INSTALL_DIR),
         ("environment", env),
+        ("runtime lock", project_paths.RUNTIME_LOCK_PATH),
         ("user_data", user_data.root()),
         ("session logs", lifelog._llm_session_log_dir()),
         ("agent traces", user_data.logs_dir()),
@@ -138,7 +146,7 @@ def test_every_feature_reads_or_writes_inside_the_one_root():
 def test_wiring_check_covers_shared_and_private_runtime_assets():
     names = {name for name, _ in wired_paths()}
     for required in (
-        "models", "ollama", "environment", "user_data", "anythingllm storage",
+        "models", "ollama", "environment", "runtime lock", "user_data", "anythingllm storage",
         "interpreter home", "ollama run log", "session logs",
     ):
         assert required in names
