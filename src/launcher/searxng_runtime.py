@@ -229,6 +229,18 @@ def is_running() -> bool:
     return bool(r and r.returncode == 0 and CONTAINER in (r.stdout or ""))
 
 
+def running_mode():
+    r = _run([
+        "inspect", "-f",
+        '{{index .Config.Labels "localai.search.mode"}}',
+        CONTAINER,
+    ], timeout=20)
+    if not (r and r.returncode == 0):
+        return None
+    value = (r.stdout or "").strip()
+    return value or None
+
+
 def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None, log=None, cancel_check=None) -> bool:
     import socket
     end = time.time() + timeout
@@ -249,13 +261,18 @@ def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None, log=None, cancel_check=None
 
 
 def start(env, log_path=None, with_tor=True, log=None, cancel_check=None) -> bool:
-    """SearXNG 기동. 이미 떠 있으면 True. 이미지/설정 없으면 False."""
+    """SearXNG 기동. 현재 네트워크 모드와 맞는 컨테이너만 재사용한다."""
     _register_exit_cleanup()
-    if is_running():
-        return True
-    _ensure_net()
-
     _net_mode = __import__("os").environ.get("NET_MODE", "warp").strip().lower()
+    if is_running():
+        active = running_mode()
+        if active == _net_mode:
+            return True
+        _log(log_path, "INFO",
+             "기존 SearXNG 네트워크 모드가 달라 재생성합니다: %s -> %s"
+             % (active or "unknown", _net_mode), log)
+        remove()
+    _ensure_net()
     if _net_mode != "tor":
         try:
             from . import warp_runtime  # type: ignore
@@ -303,6 +320,7 @@ def start(env, log_path=None, with_tor=True, log=None, cancel_check=None) -> boo
     r = _run([
         "run", "-d", "--rm",
         "--name", CONTAINER,
+        "--label", "localai.search.mode=" + _net_mode,
         "--network", NETWORK,
         "-p", "127.0.0.1:%d:%d" % (int(HOST_PORT), CONTAINER_PORT),
         "-v", "%s:/etc/searxng" % str(cfg),
