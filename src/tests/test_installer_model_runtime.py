@@ -96,3 +96,21 @@ def test_official_install_never_falls_back_to_external_executable(monkeypatch, t
     monkeypatch.setattr(step.subprocess, "run", lambda *a, **k: Result())
 
     assert step.install_official(target, store) is None
+
+
+
+def test_managed_ollama_disables_login_autostart(monkeypatch, tmp_path):
+    from installer.steps import ollama as step
+
+    appdata = tmp_path / "AppData" / "Roaming"
+    shortcut = (
+        appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Ollama.lnk"
+    )
+    shortcut.parent.mkdir(parents=True)
+    shortcut.write_text("shortcut", encoding="utf-8")
+
+    monkeypatch.setattr(step, "_is_windows", lambda: True)
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    assert step.disable_login_autostart() is True
+    assert not shortcut.exists()
