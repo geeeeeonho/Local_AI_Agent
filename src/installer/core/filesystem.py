@@ -50,6 +50,23 @@ def publish_shared_model_dir(model_dir: Path, windows: Optional[bool] = None) ->
     return False
 
 
+
+def ensure_shared_runtime_access(paths, windows: Optional[bool] = None) -> bool:
+    """Allow every local account to read/execute the shared runtime and broker.
+
+    User-created state never lives in these folders; it belongs below
+    users/<account>. Granting BUILTIN\\Users RX here makes a second Windows
+    account able to use the installed environment and Ollama without giving it
+    permission to replace those shared binaries.
+    """
+    from integrations.ollama import sharing
+    ok_all = True
+    for path in paths:
+        if not sharing.ensure_readable(Path(path), windows=windows):
+            warn("공용 실행환경 읽기 권한 설정 실패: %s" % path)
+            ok_all = False
+    return ok_all
+
 def create_environment(env: Path, model_dir: Optional[Path] = None,
                        account_root: Optional[Path] = None) -> Dict[str, Path]:
     """새 설치용 공용 런타임과 이 계정의 개인 폴더를 생성한다.
@@ -100,7 +117,8 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
             raise
         ok(f"  {name:<20} → {p}")
 
-    # 기본 모델 저장소는 모든 Windows 계정이 같은 한 벌을 읽는다.
+    # 공용 런타임/Ollama는 모든 계정이 실행할 수 있고, 모델도 한 벌을 공유한다.
+    ensure_shared_runtime_access((env, paths["ollama"]))
     if model_dir is None:
         ensure_shared_model_access(models)
         publish_shared_model_dir(models)
