@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import secrets
 import subprocess
 from pathlib import Path
@@ -137,7 +138,11 @@ def install(paths: Dict[str, Path]) -> bool:
     utils.info(t("install.searxng_pulling", image=IMAGE))
     utils.warn(t("install.searxng_pull_size"))
     try:
-        subprocess.run(["docker", "pull", IMAGE], check=True)
+        subprocess.run(
+            ["docker", "pull", IMAGE],
+            check=True,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
         utils.ok(t("install.searxng_pull_ok"))
     except (OSError, subprocess.CalledProcessError):
         utils.err(t("install.searxng_pull_fail"))
