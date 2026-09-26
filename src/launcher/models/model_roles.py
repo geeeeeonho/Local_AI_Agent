@@ -264,7 +264,7 @@ TIERS = {
     ],
 }
 
-# 예전 역할 이름 -> 지금 이름. user_data/models/registry.json 에 옛 키를 적어 둔
+# 예전 역할 이름 -> 지금 이름. shared registry.json 에 옛 키가 있어도 받아 준다.
 # 사용자가 조용히 무시당하지 않도록 받아 준다.
 ROLE_ALIASES = {"context": "office"}
 
@@ -338,16 +338,16 @@ def _flatten_tiers(_tiers):
     return _out
 
 
-# >>> MODEL_REGISTRY_v1 - user_data/models/registry.json 으로 티어 덮어쓰기/추가
+# >>> MODEL_REGISTRY_v1 - shared models/.localai/registry.json overrides/additions
 def _registry_path():
-    """<런타임 루트>/user_data/models/registry.json.
+    """Machine-wide model role registry beside the shared model store.
 
-    예전에는 이 파일 위치에서 두 단계를 거슬러 올라가 경로를 만들었는데, 그
-    결과는 소스 트리 안의 ``src/user_data`` 였다. 아무도 쓰지 않는 자리라서,
-    사용자가 적어 둔 registry.json 이 조용히 무시됐다.
+    Personal legacy registries are intentionally not imported automatically:
+    choosing one Windows account's old values as the machine truth would make
+    that account silently win over every other account.
     """
     import project_paths
-    return str(project_paths.user_data_dir() / "models" / "registry.json")
+    return str(project_paths.model_registry_path())
 
 
 def _valid_tier(t):

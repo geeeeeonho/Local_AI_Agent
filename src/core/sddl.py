@@ -37,7 +37,12 @@ OTHER_ACCOUNTS = (USERS_SDDL, USERS_SID, EVERYONE_SDDL, EVERYONE_SID,
 
 # Access-mask bits that matter for "can another account read this file".
 FILE_READ_DATA = 0x1
+FILE_WRITE_DATA = 0x2
+FILE_APPEND_DATA = 0x4
+FILE_DELETE_CHILD = 0x40
+DELETE = 0x10000
 GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
 GENERIC_ALL = 0x10000000
 
 # SDDL rights aliases, expanded to their masks. Execute-only aliases are here
@@ -66,6 +71,51 @@ def mask(text: str) -> int:
 
 def grants_read(value: int) -> bool:
     return bool(value & (FILE_READ_DATA | GENERIC_READ | GENERIC_ALL))
+
+
+def grants_modify(value: int) -> bool:
+    """Enough rights to create/replace/delete shared model-store children."""
+    if value & GENERIC_ALL:
+        return True
+    readable = grants_read(value)
+    writable = bool(value & (FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE))
+    deletable = bool(value & (DELETE | FILE_DELETE_CHILD))
+    return readable and writable and deletable
+
+
+def modify_access(sddl: str, accounts) -> Optional[bool]:
+    """Can any of accounts modify children, per this descriptor?
+
+    LocalAI grants the Windows Modify preset. The saved SDDL commonly expands
+    that preset to a numeric mask, so inspect rights rather than localized
+    icacls display text. An explicit deny that intersects the required access
+    wins over an allow.
+    """
+    if not isinstance(sddl, str) or 'D:' not in sddl:
+        return None
+    body = sddl[sddl.index('D:'):]
+    aces = re.findall(r'\(([^()]*)\)', body)
+    if not aces:
+        return None
+    wanted = {str(name).upper() for name in accounts}
+    allowed = False
+    for ace in aces:
+        parts = ace.split(';')
+        if len(parts) < 6:
+            continue
+        kind, _flags, rights, _obj, _inherit, account = (p.strip() for p in parts[:6])
+        if account.upper() not in wanted:
+            continue
+        value = mask(rights)
+        if kind.upper().startswith('D') and (
+            grants_read(value)
+            or value & (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_DELETE_CHILD
+                        | DELETE | GENERIC_WRITE | GENERIC_ALL)
+        ):
+            return False
+        if kind.upper().startswith('A') and grants_modify(value):
+            allowed = True
+    return allowed
 
 
 def read_access(sddl: str, accounts) -> Optional[bool]:
@@ -100,5 +150,7 @@ def read_access(sddl: str, accounts) -> Optional[bool]:
 __all__ = ['USERS_SDDL', 'USERS_SID', 'EVERYONE_SDDL', 'AUTHENTICATED_SDDL',
            'INTERACTIVE_SDDL', 'EVERYONE_SID', 'AUTHENTICATED_SID',
            'INTERACTIVE_SID', 'OTHER_ACCOUNTS',
-           'FILE_READ_DATA', 'GENERIC_READ', 'GENERIC_ALL',
-           'mask', 'grants_read', 'read_access']
+           'FILE_READ_DATA', 'FILE_WRITE_DATA', 'FILE_APPEND_DATA',
+           'FILE_DELETE_CHILD', 'DELETE', 'GENERIC_READ', 'GENERIC_WRITE',
+           'GENERIC_ALL', 'mask', 'grants_read', 'grants_modify',
+           'read_access', 'modify_access']

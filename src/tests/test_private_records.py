@@ -1,9 +1,9 @@
 """Models shared by the machine; what a person does with them, theirs alone.
 
 Those two live one folder apart under the same root, and they want opposite
-permissions. The store is deliberately readable by ``BUILTIN\\Users`` so a
-second Windows account uses the models instead of re-downloading forty
-gigabytes. A folder created underneath inherits that grant - so the records
+permissions. The model store deliberately grants ``BUILTIN\\Users`` Modify so a
+second Windows account can install/remove the same models instead of maintaining
+its own copy. A folder created underneath inherits that grant - so the records
 folder is not private by being in the right place, and the household's other
 account could open the chat history, the project list and every agent trace.
 
@@ -269,8 +269,8 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
     model_grants = [c for c in grants_to_users if str(models) in c]
     users_parent_grants = [c for c in grants_to_users if str(account.parent) in c]
 
-    assert model_grants, 'every account still has to be able to read the models'
-    assert any('(OI)(CI)(RX)' in part for command in model_grants for part in command)
+    assert model_grants, 'every account still has to be able to manage the models'
+    assert any('(OI)(CI)(M)' in part for command in model_grants for part in command)
 
     assert users_parent_grants, 'a standard account must be able to create users/<itself>'
     assert all('(OI)' not in part and '(CI)' not in part

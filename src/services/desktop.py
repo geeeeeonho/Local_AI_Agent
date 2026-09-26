@@ -27,8 +27,9 @@ class DesktopServices:
         A stale lock created by an elevated/older run can deny the normal token
         even when the account root itself is correctly private. Runtime/settings/
         projects are small control-state trees, so recursively normalising their
-        ACLs here is cheap. Ephemeral locks deliberately live in the fresh
-        user_data/runtime tree instead of reusing legacy cache lock files.
+        ACLs here is cheap. Per-account runtime/settings/project locks stay in
+        this private tree; the model mutation lock is machine-wide beside the
+        shared model store and is deliberately not prepared here.
         """
         data = Path(data)
         account = data.parent
@@ -119,7 +120,6 @@ class DesktopServices:
         self.models = ModelService(
             self.inference,
             events=self.events,
-            lock_path=control / 'model-mutation.lock',
         )
         self.search = SearchService(backend, self.network, self.events)
         self.chat = ChatService(backend, self.inference, self.network, self.search, self.events)

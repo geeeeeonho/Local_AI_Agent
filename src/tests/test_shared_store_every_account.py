@@ -17,7 +17,8 @@ STORE = r'C:\LocalAI\models'
 
 def state(**kw):
     base = dict(path=STORE, intended_shared=True, machine_value=STORE,
-                user_value='', readable_by_users=True, windows=True)
+                user_value='', readable_by_users=True, manageable_by_users=True,
+                windows=True)
     base.update(kw)
     return Sharing(**base)
 
@@ -56,6 +57,13 @@ def test_a_store_inside_a_profile_is_never_machine_wide():
 
 def test_unreadable_files_block_it_even_with_the_variable_set():
     assert state(readable_by_users=False).blockers == (policy.NOT_READABLE,)
+
+
+def test_old_read_only_acl_is_not_full_model_sharing():
+    found = state(manageable_by_users=False)
+    assert found.blockers == (policy.NOT_MANAGEABLE,)
+    assert found.every_account is False
+    assert found.repairable is True
 
 
 def test_only_unreadable_acl_state_makes_localai_sharing_unknown():
@@ -108,7 +116,8 @@ class FakeWinreg:
 
 # What `icacls <dir> /save` writes: the name, then the DACL in SDDL. Our own
 # repair produces the second line; BU is BUILTIN\Users in every language.
-GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
+GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1301bf;;;BU)'
+READ_ONLY = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
 NOT_GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)'
 
 
@@ -145,7 +154,20 @@ def test_a_machine_set_up_by_an_admin_reads_as_shared(monkeypatch, tmp_path):
     found = sharing.read(store, windows=True)
     assert found.machine_value == str(store)
     assert found.readable_by_users is True
+    assert found.manageable_by_users is True
     assert found.blockers == ()
+
+
+def test_old_rx_only_store_is_detected_as_needing_upgrade(monkeypatch, tmp_path):
+    from integrations.ollama import sharing
+    store = tmp_path / 'models'
+    store.mkdir()
+    install_fake_windows(monkeypatch, store, machine=str(store), sddl=READ_ONLY)
+    found = sharing.read(store, windows=True)
+    assert found.readable_by_users is True
+    assert found.manageable_by_users is False
+    assert found.blockers == (policy.NOT_MANAGEABLE,)
+    assert found.repairable is True
 
 
 def test_missing_machine_variable_is_recorded_but_not_a_localai_blocker(monkeypatch, tmp_path):
@@ -160,7 +182,7 @@ def test_missing_machine_variable_is_recorded_but_not_a_localai_blocker(monkeypa
     assert sharing.describe(found) == ()
 
 
-def test_repair_grants_read_without_requiring_registry_mutation(monkeypatch, tmp_path):
+def test_repair_grants_modify_without_requiring_registry_mutation(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
@@ -170,27 +192,27 @@ def test_repair_grants_read_without_requiring_registry_mutation(monkeypatch, tmp
     assert 'icacls' in commands
     assert 'setx' not in commands
     grant = next(cmd for cmd in ran if cmd[0] == 'icacls' and '/grant' in cmd)
-    assert '*S-1-5-32-545:(OI)(CI)(RX)' in grant, 'read and execute only'
+    assert '*S-1-5-32-545:(OI)(CI)(M)' in grant, 'shared model management requires modify'
     assert '/T' in grant
     assert result['failed'] == ()
 
 
-def test_models_pulled_later_are_covered_by_the_grant(monkeypatch, tmp_path):
-    """(OI)(CI) is inheritable, so tomorrow's blobs are readable too."""
+def test_models_pulled_later_are_manageable_by_every_account(monkeypatch, tmp_path):
+    """(OI)(CI) is inheritable, so tomorrow's blobs/manifests stay manageable."""
     from integrations.ollama import sharing
     ran = install_fake_windows(monkeypatch, tmp_path, machine=str(tmp_path))
-    sharing.ensure_readable(tmp_path, windows=True)
+    sharing.ensure_manageable(tmp_path, windows=True)
     grant = ran[0]
-    assert '(OI)(CI)(RX)' in ' '.join(grant), grant
-    assert not any('(F)' in part or ':(M)' in part for part in grant), \
-        'other accounts read the models; they do not get to replace them'
+    assert '(OI)(CI)(M)' in ' '.join(grant), grant
+    assert not any('(F)' in part for part in grant), \
+        'standard accounts may manage models but do not receive full control'
 
 
 def test_a_failed_repair_says_so_rather_than_claiming_success(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     install_fake_windows(monkeypatch, tmp_path, machine=None, returncode=1)
     result = sharing.repair(tmp_path, windows=True)
-    assert set(result['failed']) == {'readable'}
+    assert set(result['failed']) == {'manageable'}
     assert result['every_account'] is not True
 
 
@@ -235,6 +257,19 @@ def test_the_screen_reports_localai_sharing_even_without_machine_variable(monkey
 ])
 def test_the_acl_is_read_from_sddl_not_a_localized_name(sddl, expected):
     assert policy.readable_from_sddl(sddl) is expected
+
+
+@pytest.mark.parametrize('sddl,expected', [
+    (GRANTED, True),
+    (READ_ONLY, False),
+    ('D:AI(A;OICI;FA;;;BU)', True),
+    ('D:AI(A;OICI;FW;;;BU)', False),
+    ('D:AI(D;OICI;FA;;;BU)(A;OICI;0x1301bf;;;BU)', False),
+    (NOT_GRANTED, False),
+    ('not an sddl at all', None),
+])
+def test_modify_access_is_read_from_the_acl_mask(sddl, expected):
+    assert policy.manageable_from_sddl(sddl) is expected
 
 
 def test_a_korean_windows_reads_the_same_as_an_english_one(monkeypatch, tmp_path):

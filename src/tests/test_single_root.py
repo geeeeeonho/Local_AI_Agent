@@ -108,6 +108,10 @@ def wired_paths():
     service = OllamaService(env, model_dir=project_paths.MODEL_STORAGE_DIR)
     return [
         ("models", project_paths.MODEL_STORAGE_DIR),
+        ("model control", project_paths.MODEL_CONTROL_DIR),
+        ("model registry", project_paths.MODEL_REGISTRY_PATH),
+        ("model mutation lock", project_paths.MODEL_MUTATION_LOCK),
+        ("model csv canonical", project_paths.MODEL_FILES_PATH),
         ("ollama", project_paths.OLLAMA_INSTALL_DIR),
         ("environment", env),
         ("runtime lock", project_paths.RUNTIME_LOCK_PATH),
@@ -126,8 +130,8 @@ def wired_paths():
         ("desktop settings", SettingsStore().store.path),
         ("folder policy", folder_policy._store_path()),
         ("project registry", ProjectRegistry().store.path),
-        ("model registry", Path(model_roles._registry_path())),
-        ("model csv", model_files.default_csv_path(project_paths.MODEL_STORAGE_DIR)),
+        ("model registry resolver", Path(model_roles._registry_path())),
+        ("model csv resolver", model_files.default_csv_path(project_paths.MODEL_STORAGE_DIR)),
     ]
 
 
@@ -165,7 +169,8 @@ def test_every_feature_reads_or_writes_inside_the_one_root():
 def test_wiring_check_covers_shared_and_private_runtime_assets():
     names = {name for name, _ in wired_paths()}
     for required in (
-        "models", "ollama", "environment", "runtime lock", "user_data", "anythingllm storage",
+        "models", "model control", "model registry", "model mutation lock", "model csv canonical",
+        "ollama", "environment", "runtime lock", "user_data", "anythingllm storage",
         "interpreter home", "ollama run log", "session logs",
     ):
         assert required in names

@@ -15,7 +15,8 @@ from core.models.sharing import Sharing, VARIABLE
 from integrations.windows import acl
 
 __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
-           'ensure_readable', 'publish_machine_variable', 'publish_user_variable',
+           'ensure_readable', 'ensure_manageable',
+           'publish_machine_variable', 'publish_user_variable',
            'publish_variable', 'describe']
 
 # The local Users group, by SID so it works on a non-English Windows.
@@ -60,18 +61,20 @@ def _registry_value(root, key) -> Optional[str]:
         return None
 
 
-def _readable_by_users(model_dir: Path) -> Optional[bool]:
-    """Can BUILTIN\\Users read the store? None when the answer is unavailable."""
+def _users_access(model_dir: Path) -> tuple[Optional[bool], Optional[bool]]:
+    """Return (readable, manageable) for BUILTIN\\Users from one ACL read."""
     if not model_dir.exists():
-        return None
+        return None, None
     text = acl.saved_sddl(model_dir)
     if text is None:
-        return None
+        return None, None
     for line in text.splitlines():
-        answer = policy.readable_from_sddl(line.strip())
-        if answer is not None:
-            return answer
-    return None
+        descriptor = line.strip()
+        readable = policy.readable_from_sddl(descriptor)
+        manageable = policy.manageable_from_sddl(descriptor)
+        if readable is not None or manageable is not None:
+            return readable, manageable
+    return None, None
 
 
 def read(model_dir=None, *, windows=None) -> Sharing:
@@ -87,12 +90,14 @@ def read(model_dir=None, *, windows=None) -> Sharing:
                        per_user_path=ollama_paths.is_per_user_store(model_dir),
                        windows=False)
     import winreg
+    readable, manageable = _users_access(model_dir)
     return Sharing(
         path=str(model_dir),
         intended_shared=model_dir == ollama_paths.SHARED_MODELS_DIR,
         machine_value=_registry_value(winreg.HKEY_LOCAL_MACHINE, _MACHINE_KEY),
         user_value=_registry_value(winreg.HKEY_CURRENT_USER, _USER_KEY),
-        readable_by_users=_readable_by_users(model_dir),
+        readable_by_users=readable,
+        manageable_by_users=manageable,
         per_user_path=ollama_paths.is_per_user_store(model_dir),
         windows=True,
     )
@@ -112,6 +117,20 @@ def ensure_readable(model_dir: Path, *, windows=None) -> bool:
                    '*%s:(OI)(CI)(RX)' % BUILTIN_USERS_SID, '/T', '/Q'])
     return result is not None and result.returncode == 0
 
+
+def ensure_manageable(model_dir: Path, *, windows=None) -> bool:
+    """Grant BUILTIN\\Users inheritable Modify rights on the model store only.
+
+    Model files, manifests, the shared registry and the mutation lock are
+    machine-wide mutable state. Standard Windows accounts therefore need
+    to create, replace and delete children here. This stays separate from
+    ensure_readable because environment/ollama must remain RX-only.
+    """
+    if not acl.on_windows(windows):
+        return True
+    result = _run(['icacls', str(model_dir), '/grant',
+                   '*%s:(OI)(CI)(M)' % BUILTIN_USERS_SID, '/T', '/Q'])
+    return result is not None and result.returncode == 0
 
 def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
     """Best-effort compatibility for Ollama launched outside LocalAI.
@@ -156,9 +175,10 @@ def publish_variable(model_dir: Path, *, windows=None) -> str:
 
 
 def repair(model_dir=None, *, windows=None) -> dict:
-    """Repair LocalAI cross-account readability and report what is left.
+    """Repair LocalAI cross-account model management and report what is left.
 
-    Safe to run at any time and safe to run twice; the ACL step is idempotent.
+    Safe to run at any time and safe to run twice; Modify includes the read
+    access required by the sharing check and the ACL step is idempotent.
     Machine-scope OLLAMA_MODELS is an external-Ollama compatibility setting,
     not a LocalAI sharing requirement.
     Returns the state afterwards so a caller can tell the user whether it
@@ -171,7 +191,7 @@ def repair(model_dir=None, *, windows=None) -> dict:
     before = read(model_dir, windows=windows)
     done, failed = [], []
     for name, action in (
-        ('readable', lambda: ensure_readable(model_dir, windows=windows)),
+        ('manageable', lambda: ensure_manageable(model_dir, windows=windows)),
     ):
         (done if action() else failed).append(name)
     after = read(model_dir, windows=windows)
@@ -199,6 +219,8 @@ _MESSAGES = {
         '개인 설정이므로 프로그램이 지우지 않습니다.',
     policy.NOT_READABLE:
         '다른 계정에 읽기 권한이 없습니다.',
+    policy.NOT_MANAGEABLE:
+        '다른 계정에 모델 설치·삭제를 위한 수정 권한이 없습니다. 설치 / 복구에서 권한을 갱신하세요.',
 }
 
 

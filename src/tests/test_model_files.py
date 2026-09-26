@@ -158,6 +158,11 @@ class CsvTests(unittest.TestCase):
         out = mf.write_csv(self.root)
         self.assertTrue(out.read_bytes().startswith(b"\xef\xbb\xbf"))
 
+
+    def test_default_csv_path_is_always_the_shared_store(self):
+        self.assertEqual(mf.default_csv_path(self.root), self.root / mf.CSV_NAME)
+
+
     def test_refresh_is_safe_when_the_store_cannot_be_read(self):
         self.assertIsNone(mf.refresh(Path(self._tmp.name) / "missing" / "x" / "y"))
 

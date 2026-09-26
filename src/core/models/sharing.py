@@ -7,7 +7,7 @@ started with that path explicitly, so per-user or machine-scope
 For LocalAI accounts, sharing requires two facts:
 
 * the library is the machine-wide LocalAI store, not a profile-local path;
-* ``BUILTIN\\Users`` can read the files.
+* ``BUILTIN\\Users`` can read and modify the model store.
 
 Registry values remain on ``Sharing`` as external-Ollama diagnostics only.
 They help explain what a separately launched Ollama CLI/Tray might do, but are
@@ -32,6 +32,7 @@ VARIABLE_MISSING = 'variable_missing'
 VARIABLE_ELSEWHERE = 'variable_elsewhere'
 USER_OVERRIDE = 'user_override'
 NOT_READABLE = 'not_readable'            # BUILTIN\Users cannot read the files
+NOT_MANAGEABLE = 'not_manageable'        # BUILTIN\Users cannot install/remove
 
 
 def _same(left, right, windows: bool = True) -> bool:
@@ -74,14 +75,19 @@ def readable_from_sddl(descriptor: str) -> Optional[bool]:
     return sddl.read_access(descriptor, (USERS_SDDL, USERS_SID))
 
 
+def manageable_from_sddl(descriptor: str) -> Optional[bool]:
+    """Can BUILTIN\\Users manage model-store children? None if unparsable."""
+    return sddl.modify_access(descriptor, (USERS_SDDL, USERS_SID))
+
+
 @dataclass(frozen=True)
 class Sharing:
     """What is true about the store, and what that means for other accounts.
 
     ``machine_value`` and ``user_value`` are the two scopes of ``OLLAMA_MODELS``:
     ``''`` means the scope was read and holds nothing, ``None`` means it could
-    not be read at all. ``readable_by_users`` is ``None`` for the same reason,
-    and on a platform where the question does not arise.
+    not be read at all. ACL-derived read/manage values are ``None`` when the
+    descriptor cannot be read, and on platforms where the question does not arise.
     """
 
     path: str
@@ -91,6 +97,7 @@ class Sharing:
     readable_by_users: Optional[bool] = None
     per_user_path: bool = False
     windows: bool = True
+    manageable_by_users: Optional[bool] = None
 
     @property
     def blockers(self) -> Tuple[str, ...]:
@@ -102,6 +109,8 @@ class Sharing:
             found.append(NOT_SHARED_PATH)
         if self.windows and self.readable_by_users is False:
             found.append(NOT_READABLE)
+        elif self.windows and self.manageable_by_users is False:
+            found.append(NOT_MANAGEABLE)
         return tuple(found)
 
     @property
@@ -116,7 +125,7 @@ class Sharing:
             return False
         if not self.windows:
             return True
-        if self.readable_by_users is None:
+        if self.readable_by_users is None or self.manageable_by_users is None:
             return None
         return True
 
@@ -125,11 +134,11 @@ class Sharing:
         """Can the program fix this itself, given the rights to do it?
 
         Offered when something is wrong that we may fix, and also when we
-        could not read the ACL: the read-access repair is idempotent. Registry
+        could not read the ACL: the model-access repair is idempotent. Registry
         OLLAMA_MODELS values are not part of LocalAI's sharing decision because
         the managed broker receives its model path explicitly.
         """
-        fixable = {NOT_READABLE}
+        fixable = {NOT_READABLE, NOT_MANAGEABLE}
         blockers = set(self.blockers)
         if blockers:
             return blockers <= fixable

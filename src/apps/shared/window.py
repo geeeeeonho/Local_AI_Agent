@@ -719,11 +719,11 @@ class DesktopWindow:
             self.sharing_summary.set(self.SHARING_UNKNOWN);return
         every=state.get('every_account')
         if every is True:
-            text='이 PC의 모든 Windows 계정이 같은 모델을 씁니다.'
+            text='이 PC의 모든 Windows 계정이 같은 모델 저장소를 함께 관리합니다.'
         elif every is None:
             text=self.SHARING_UNKNOWN
         else:
-            text='이 계정에서만 쓸 수 있습니다. '+' '.join(state.get('reasons') or ())
+            text='공용 모델 관리 설정이 완전하지 않습니다. '+' '.join(state.get('reasons') or ())
         self.sharing_summary.set(text)
         button=getattr(self,'sharing_button',None)
         if button is not None:

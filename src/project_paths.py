@@ -116,6 +116,28 @@ def model_dir() -> Path:
     return runtime_dir() / runtime_root.MODELS
 
 
+def model_control_dir(storage_dir=None) -> Path:
+    """Shared control state for one LocalAI-managed model library."""
+    root = model_dir() if storage_dir is None else Path(storage_dir)
+    return root / ".localai"
+
+
+def model_registry_path(storage_dir=None) -> Path:
+    """Shared role/selection registry. Never falls back to one account."""
+    return model_control_dir(storage_dir) / "registry.json"
+
+
+def model_mutation_lock_path(storage_dir=None) -> Path:
+    """One cross-process lock for every install/remove touching the shared store."""
+    return model_control_dir(storage_dir) / "model-mutation.lock"
+
+
+def model_files_path(storage_dir=None) -> Path:
+    """The one machine-wide human-readable model file index."""
+    root = model_dir() if storage_dir is None else Path(storage_dir)
+    return root / "MODEL_FILES.csv"
+
+
 PROJECT_ROOT = project_root()
 RUNTIME_ROOT = runtime_dir()
 
@@ -130,9 +152,14 @@ USER_DATA_DIR = user_data_dir()
 LOGS_DIR = logs_dir()
 WORKSPACE_DIR = workspace_dir()
 
-# One shared model library per machine. An explicit LocalAI deployment override
-# still wins, but ordinary installs always resolve to <runtime root>\models.
+# One shared model library and one shared control plane per machine. An explicit
+# LocalAI deployment override still wins, but ordinary installs resolve to
+# <runtime root>\models and keep every model-management record below it.
 MODEL_STORAGE_DIR = model_dir()
+MODEL_CONTROL_DIR = model_control_dir(MODEL_STORAGE_DIR)
+MODEL_REGISTRY_PATH = model_registry_path(MODEL_STORAGE_DIR)
+MODEL_MUTATION_LOCK = model_mutation_lock_path(MODEL_STORAGE_DIR)
+MODEL_FILES_PATH = model_files_path(MODEL_STORAGE_DIR)
 
 
 # Folder names under the runtime root, for the callers that compose a path
