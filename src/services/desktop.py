@@ -33,18 +33,22 @@ class DesktopServices:
         data = Path(data)
         account = data.parent
         account.mkdir(parents=True, exist_ok=True)
-        data.mkdir(parents=True, exist_ok=True)
         if __import__('os').name != 'nt':
+            data.mkdir(parents=True, exist_ok=True)
             for name in ('runtime', 'settings', 'projects'):
                 (data / name).mkdir(parents=True, exist_ok=True)
             return
 
         try:
             from integrations.windows import privacy
+            # Fix the account DACL before creating children. This matters for a
+            # normal user who just created users/<account> through the parent-
+            # only creation grant.
             privacy.ensure_private(account)
         except Exception:
             pass
 
+        data.mkdir(parents=True, exist_ok=True)
         for name in ('runtime', 'settings', 'projects'):
             folder = data / name
             folder.mkdir(parents=True, exist_ok=True)
