@@ -12,7 +12,14 @@ class ModelService:
         self.inference = inference
         self.model_dir, self.client = inference.model_dir, inference.client
         self.events = events if events is not None else EventBus()
-        self.lock_path = Path(lock_path) if lock_path is not None else self.model_dir.parent / ".localai-ollama-setup.lock"
+        # The bytes being changed are machine-wide, so the lock must be too.
+        # Keep an explicit override for focused tests/embedders, but the default
+        # always lives inside the same shared model store it protects.
+        self.lock_path = (
+            Path(lock_path)
+            if lock_path is not None
+            else Path(self.model_dir) / ".localai" / "model-mutation.lock"
+        )
 
     def list_models(self):
         self.inference.ensure_ready()
@@ -24,23 +31,40 @@ class ModelService:
 
     def _change(self, name, operation):
         name = model_name(name) if operation == 'remove' else local_model_name(name)
-        with file_lock(self.lock_path):
-            self.inference.ensure_ready()
-            try:
-                if operation == 'install':
-                    self.client.pull(name, progress=lambda value:
-                        self.events.emit('runtime.progress', {**value, 'service': 'models', 'model': name}))
-                else:
-                    self.client.remove(name)
-            except Exception as exc:
-                self.events.emit('runtime.error', {'service': 'models', 'model': name, 'detail': str(exc)})
-                raise
-            finally:
-                # A failed/interrupted pull may still have changed on-disk state.
-                out = self.refresh_index()
-            result = {'model': name, 'operation': operation, 'index_refreshed': out is not None}
-            self.events.emit('model.changed', result)
-            return result
+        try:
+            with file_lock(self.lock_path):
+                self.inference.ensure_ready()
+                try:
+                    if operation == 'install':
+                        self.client.pull(name, progress=lambda value:
+                            self.events.emit('runtime.progress', {**value, 'service': 'models', 'model': name}))
+                    else:
+                        self.client.remove(name)
+                except Exception as exc:
+                    self.events.emit('runtime.error', {'service': 'models', 'model': name, 'detail': str(exc)})
+                    raise
+                finally:
+                    # A failed/interrupted pull may still have changed on-disk state.
+                    out = self.refresh_index()
+                result = {'model': name, 'operation': operation, 'index_refreshed': out is not None}
+                self.events.emit('model.changed', result)
+                return result
+        except TimeoutError as exc:
+            message = "다른 LocalAI 창에서 모델 관리 작업이 진행 중입니다."
+            self.events.emit('runtime.error', {
+                'service': 'models', 'model': name, 'detail': message,
+            })
+            raise RuntimeError(message) from exc
+        except PermissionError as exc:
+            message = (
+                "공용 모델 관리 경로를 쓸 권한이 없습니다: %s. "
+                "Setup의 설치 / 복구를 실행해 모델 저장소 권한을 갱신하세요."
+                % self.lock_path.parent
+            )
+            self.events.emit('runtime.error', {
+                'service': 'models', 'model': name, 'detail': message,
+            })
+            raise RuntimeError(message) from exc
 
     def install_model(self, name):
         """Explicit management download, not an agent/session network operation."""
@@ -196,7 +220,7 @@ class ModelService:
                 'reasons': list(sharing.describe(state))}
 
     def repair_sharing(self):
-        """Grant read access and publish the machine-scope variable. Idempotent."""
+        """Grant shared model-management access. Idempotent."""
         from integrations.ollama import sharing
         result = sharing.repair(self.model_dir)
         payload = {'path': result['path'], 'every_account': result['every_account'],
