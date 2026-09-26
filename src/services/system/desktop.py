@@ -76,6 +76,11 @@ class SetupService:
             return self.backend.run_setup(options or {}, log=log, cancel=cancel)
         finally:
             if acquired_here:
+                try:
+                    from launcher.core import lifelog
+                    lifelog.suppress_exit_cleanups()
+                except Exception:
+                    pass
                 self.network.owner.release()
 
     def maintenance(self, key, presenter):
