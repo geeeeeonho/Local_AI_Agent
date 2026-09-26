@@ -202,6 +202,8 @@ class DesktopWindow:
         service=data.get('service')
         if event.topic=='runtime.progress' and service=='models':
             self.update_model_transfer(data)
+        if text and event.topic=='runtime.progress' and service=='setup' and hasattr(self,'setup_status'):
+            self.setup_status.set('진행 중 · '+str(text)[:170])
         if text and event.topic=='runtime.progress' and (
                 service=='chat' or self._chat_starting):
             label=str(text) if service in (None,'chat') else str(service)+': '+str(text)
@@ -902,9 +904,9 @@ class DesktopWindow:
             self.setup_status.set('대기 · 기본 설치 구성을 선택했습니다.')
 
     def setup_options(self):
-        sandbox=bool(getattr(self,'setup_sandbox',tk.BooleanVar(value=True)).get())
-        build=bool(getattr(self,'setup_build',tk.BooleanVar(value=True)).get()) and sandbox
-        search=bool(getattr(self,'setup_search',tk.BooleanVar(value=True)).get())
+        sandbox=bool(self.setup_sandbox.get()) if hasattr(self,'setup_sandbox') else True
+        build=(bool(self.setup_build.get()) if hasattr(self,'setup_build') else True) and sandbox
+        search=bool(self.setup_search.get()) if hasattr(self,'setup_search') else True
         return {'sandbox':sandbox,'build':build,'search':search}
 
     def apply_setup_cli_options(self, *, skip_sandbox=False, skip_build=False,
@@ -957,7 +959,9 @@ class DesktopWindow:
 
         def work():
             return self.services.setup.repair(
-                options, cancel=self._setup_cancel.is_set)
+                options,
+                cancel=lambda: self._setup_cancel.is_set() or self.runner.cancel.is_set(),
+            )
 
         def unlock():
             if hasattr(self,'setup_start_button'):
@@ -993,7 +997,9 @@ class DesktopWindow:
 
     def request_close(self):
         if self.closing:return
-        self.closing=True;self.runner.cancel.set();self._polling=False
+        self.closing=True
+        self._setup_cancel.set()
+        self.runner.cancel.set();self._polling=False
         session=self.services.agent.session
         if session is not None:
             session.closing.set()
