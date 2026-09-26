@@ -509,44 +509,32 @@ class OllamaService:
 
     # ── 설치 전 정리 ──
     def prepare_install(self, stop_timeout: int = 5) -> bool:
-        """설치/마이그레이션 전에 관리형 서버만 종료한다.
+        """Validate that setup will not collide with an unrelated Ollama.
 
-        외부 Ollama가 11434를 사용 중이면 강제 종료하지 않는다. 그 서버가 어떤
-        ``OLLAMA_MODELS`` 값으로 시작됐는지 보장할 수 없으므로 설치를 중단한다.
+        Fresh installs no longer migrate model files, so there is no reason to
+        stop the shared broker merely to run setup again. If the listener is
+        the LocalAI-managed executable, another Windows account may be using it;
+        reuse it and leave it running. Only an unrelated listener blocks setup.
         """
+        del stop_timeout
         if not self.is_running():
             self._remove_runtime_state()
             return True
 
         pid = self._listener_pid()
         executable = self._process_executable(pid) if pid is not None else None
-        if pid is None or executable is None or not _same_path(executable, self.exe):
-            shown = str(executable) if executable is not None else "확인 불가"
-            self._err(
-                "포트 %s에서 다른 Ollama가 실행 중입니다: %s"
-                % (config.OLLAMA_PORT, shown)
-            )
-            self._err("해당 Ollama를 종료한 뒤 RUN.bat --install을 다시 실행하세요.")
-            return False
+        if pid is None or executable is None:
+            self._warn("포트 소유 프로세스를 확인하지 못했습니다. 응답 중인 Ollama 를 그대로 둡니다.")
+            return True
+        if _same_path(executable, self.exe):
+            self._info("공용 LocalAI Ollama 가 이미 실행 중입니다. 종료하지 않고 재사용합니다.")
+            return True
 
-        self._info("모델 저장소 정리를 위해 관리형 Ollama를 잠시 종료합니다.")
-        # The tray application owns the server process and starts a
-        # replacement within milliseconds of the listener being killed. That
-        # replacement re-opens the model store, and the migration's rename
-        # then fails with a sharing violation on Windows - the models stay
-        # where they were and setup reports success.
-        self.stop_supervisor()
-        if not self._terminate_listener(pid):
-            return False
-
-        deadline = time.monotonic() + max(1, stop_timeout)
-        while time.monotonic() < deadline:
-            if not self.is_running():
-                self._remove_runtime_state()
-                return True
-            time.sleep(0.1)
-
-        self._err("관리형 Ollama 종료를 확인하지 못했습니다.")
+        self._err(
+            "포트 %s에서 다른 Ollama가 실행 중입니다: %s"
+            % (config.OLLAMA_PORT, executable)
+        )
+        self._err("해당 Ollama를 종료한 뒤 RUN.bat --install을 다시 실행하세요.")
         return False
 
     def _terminate_listener(self, pid: int) -> bool:
@@ -804,14 +792,13 @@ class OllamaService:
             # The portable copy lives in this project's own folder, so nothing
             # else on the machine runs it: restarting it is restarting ours.
             # An official install may be the user's Windows service.
-            ours = (self._launched_by_us(pid)
-                    or _same_path(executable, self.portable_exe))
+            ours = self._launched_by_us(pid)
             if not ours:
-                # A server in a known location that is answering is a server we
-                # can use. Which directory it reads decides where downloads go,
-                # not whether Chat and Agent may run, and refusing over it left
-                # every officially installed Ollama unusable.
-                self._ok("이미 실행 중인 Ollama 를 사용합니다: " + str(executable))
+                # The machine-wide LocalAI broker may have been started by a
+                # different Windows account. Its per-account state file is
+                # intentionally invisible here, so absence of our state record
+                # must never be treated as ownership or permission to restart it.
+                self._ok("이미 실행 중인 공용 Ollama 를 사용합니다: " + str(executable))
                 self._report_store()
                 self._warn_if_cloud_enabled()
                 return True
