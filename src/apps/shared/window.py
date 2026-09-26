@@ -231,6 +231,8 @@ class DesktopWindow:
             amount=''
             if status.lower()=='success':
                 self.model_progress.configure(value=100)
+            elif status.lower() in ('pulling manifest','받는 중','삭제 중'):
+                self.model_progress.configure(value=0)
         digest=str(data.get('digest') or '')
         layer=(' · '+digest[:18]) if digest else ''
         pct=(f" · {percent:.1f}%" if percent is not None else '')
@@ -642,8 +644,10 @@ class DesktopWindow:
         # to the activity log, where a long answer costs nothing.
         counts=' · '.join(f"{label} {len(plan.get(key) or ())}개"
                           for key,label in catalog['levels'])
-        self.choice_plan.set(f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 "
-                             f"3단계를 미리 체크했습니다 · {counts} · 자세한 목록은 기록에")
+        self._choice_plan_default=(
+            f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 "
+            f"3단계를 미리 체크했습니다 · {counts} · 자세한 목록은 기록에")
+        self.choice_plan.set(self._choice_plan_default)
         self.log('선택 계획 · 여유 메모리는 오르내리므로 세 단계를 모두 둡니다:')
         for part in parts:
             self.log('  '+part)
@@ -693,6 +697,8 @@ class DesktopWindow:
         self._model_confirm_signature=None
         if hasattr(self,'apply_button'):
             self.apply_button.configure(text='선택대로 적용')
+        if hasattr(self,'_choice_plan_default'):
+            self.choice_plan.set(self._choice_plan_default)
         self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
                                 f"   ·   삭제 예정 {len(plan['remove'])}개")
         self.choice_storage.set(self.storage_line(plan))
