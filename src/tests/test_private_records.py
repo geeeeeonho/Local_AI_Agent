@@ -159,6 +159,25 @@ def test_a_folder_that_is_already_private_is_not_rewritten(monkeypatch, tmp_path
     assert not any('/inheritance:r' in command for command in ran)
 
 
+def test_private_but_unwritable_folder_is_repaired(monkeypatch, tmp_path):
+    folder = tmp_path / 'account'
+    folder.mkdir()
+    ran = fake_icacls(monkeypatch, LOCKED)
+    writable = iter([False, True])
+    monkeypatch.setattr(
+        privacy,
+        'current_user_can_write',
+        lambda path: next(writable),
+    )
+
+    assert privacy.ensure_private(
+        folder,
+        windows=True,
+        environ={'USERNAME': 'Tester'},
+    ) is True
+    assert any('/inheritance:r' in command for command in ran), ran
+
+
 def test_a_folder_open_to_everyone_is_locked_and_checked_again(monkeypatch, tmp_path):
     folder = tmp_path / 'account'
     folder.mkdir()
