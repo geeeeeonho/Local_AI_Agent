@@ -327,18 +327,24 @@ def container_proxy_env(value) -> dict[str, str]:
 
 
 def _quiesce_inactive_proxy(mode: NetworkMode, log=None) -> bool:
-    """Remove the opposite managed proxy left by an earlier/crashed session."""
-    if mode not in (NetworkMode.WARP, NetworkMode.TOR):
+    """Remove managed proxy relays not used by the selected mode."""
+    if mode is NetworkMode.BLOCK:
         return True
     cfg = _config()
     if mode is NetworkMode.WARP:
         stale = (
             ("Tor", str(getattr(cfg, "TOR_CONTAINER", "llm_tor"))),
         )
-    else:
+    elif mode is NetworkMode.TOR:
         stale = (
             ("WARP HTTP bridge", str(getattr(cfg, "HTTP_BRIDGE_CONTAINER", "llm_httpbridge"))),
             ("WARP", str(getattr(cfg, "WARP_CONTAINER", "llm_warp"))),
+        )
+    else:  # Direct
+        stale = (
+            ("WARP HTTP bridge", str(getattr(cfg, "HTTP_BRIDGE_CONTAINER", "llm_httpbridge"))),
+            ("WARP", str(getattr(cfg, "WARP_CONTAINER", "llm_warp"))),
+            ("Tor", str(getattr(cfg, "TOR_CONTAINER", "llm_tor"))),
         )
     try:
         from .services.docker import DockerService
@@ -374,7 +380,7 @@ def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None =
     which prevents one readiness probe from changing later policy decisions.
     """
     mode = normalize_mode(value)
-    if mode in (NetworkMode.DIRECT, NetworkMode.BLOCK):
+    if mode is NetworkMode.BLOCK:
         return True
     if not _quiesce_inactive_proxy(mode, log=log):
         if log is not None:
@@ -383,6 +389,8 @@ def prepare_runtime(value, *, env_path=None, log: Callable[[str], None] | None =
             except Exception:
                 pass
         return False
+    if mode is NetworkMode.DIRECT:
+        return True
     try:
         if mode is NetworkMode.WARP:
             try:
