@@ -50,6 +50,7 @@ __all__ = [
     "log_session",
     "open_session_log",
     "shutdown_then_exit",
+    "suppress_exit_cleanups",
     "force_kill_container",
     "get_log_dir",
 ]
@@ -394,6 +395,18 @@ def _windows_console_handler(ctrl_type) -> int:
 def shutdown_then_exit() -> None:
     log("CLEANUP", "shutdown_then_exit 호출")
     _run_all_cleanups("gui_close")
+
+
+def suppress_exit_cleanups() -> None:
+    """Mark callbacks consumed without running them.
+
+    Used only when another Windows account already owns the machine-wide
+    runtime lock. Running this process's stale shared-container callbacks then
+    would tear down the other account's active runtime.
+    """
+    global _cleanups_ran
+    with _lock:
+        _cleanups_ran = True
 
 
 # ─────────────────────────────────────────────
