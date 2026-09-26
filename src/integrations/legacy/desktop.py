@@ -7,9 +7,11 @@ service boundary, and must not weaken their fail-closed behavior.
 from pathlib import Path
 import importlib
 import os
+import queue
 import secrets
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from core.calls import invoke
@@ -513,24 +515,101 @@ class LegacyBackend:
             raise ValueError('unknown maintenance operation: ' + str(key))
         return self.load(module).run(self.env, presenter)
 
-    def setup_command(self):
+    def setup_command(self, options=None):
+        """Build the hidden installer command from choices already made in UI."""
+        options = dict(options or {})
         executable = Path(sys.executable)
         if executable.name.lower() == 'pythonw.exe':
             executable = executable.with_name('python.exe')
-        return [str(executable), '-m', 'installer', '--install']
+        command = [str(executable), '-m', 'installer', '--install', '--embedded']
+        language = str(options.get('lang') or '').strip().lower()
+        if language in ('ko', 'en'):
+            command += ['--lang', language]
+        if not options.get('sandbox', True):
+            command.append('--skip-sandbox')
+        if not options.get('build', True):
+            command.append('--skip-build')
+        if not options.get('search', True):
+            command.append('--skip-search')
+        return command
 
-    #: Exit codes Windows produces for something other than "the work failed".
-    #: A raw 3221225786 in the activity log is not a diagnosis; it is 0xC000013A,
-    #: which is what closing the installer's console window looks like.
-    SETUP_EXIT_REASONS = {
-        3221225786: '설치 창이 닫혔습니다 (Ctrl+C 또는 창 닫기). 설치는 진행되지 않았습니다.',
-        3221225794: '설치기를 시작하지 못했습니다 (필요한 DLL 초기화 실패).',
-        1602: '설치를 사용자가 취소했습니다.',
-        1223: '설치를 사용자가 취소했습니다.',
-        740: '설치기에 관리자 권한이 필요합니다.',
-    }
-    #: Codes that mean the user stopped it, not that it went wrong.
-    SETUP_CANCELLED = (3221225786, 1602, 1223)
+    def run_setup(self, options=None, log=None, cancel=None):
+        """Run Setup invisibly and stream every line into the desktop UI.
+
+        The installer stays a separate process so a broken dependency install
+        cannot corrupt the Tk process, but it owns no console/window. Its stdout
+        and every child command inheriting stdout are piped back to the one
+        LocalAI activity log.
+        """
+        environment = os.environ.copy()
+        environment['PYTHONPATH'] = str(self.root / 'src')
+        environment['PYTHONUTF8'] = '1'
+        environment['PYTHONIOENCODING'] = 'utf-8'
+        kwargs = {
+            'cwd': self.root,
+            'env': environment,
+            'stdin': subprocess.DEVNULL,
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.STDOUT,
+            'text': True,
+            'encoding': 'utf-8',
+            'errors': 'replace',
+            'bufsize': 1,
+        }
+        if os.name == 'nt':
+            kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+
+        process = subprocess.Popen(self.setup_command(options), **kwargs)
+        lines = queue.Queue()
+        finished = object()
+
+        def read_output():
+            try:
+                for line in process.stdout or ():
+                    lines.put(line.rstrip('\r\n'))
+            finally:
+                lines.put(finished)
+
+        threading.Thread(
+            target=read_output, daemon=True, name='localai-setup-output'
+        ).start()
+
+        reader_done = False
+        while True:
+            if cancel is not None and cancel():
+                if log:
+                    log('설치 / 복구 취소 요청 — 실행 중인 설치 프로세스를 종료합니다.')
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                raise RuntimeError('설치 / 복구가 취소되었습니다.')
+
+            try:
+                item = lines.get(timeout=0.1)
+            except queue.Empty:
+                item = None
+            if item is finished:
+                reader_done = True
+            elif item and log:
+                log(str(item))
+
+            code = process.poll()
+            if code is not None and reader_done:
+                break
+
+        code = int(process.returncode or 0)
+        if code:
+            raise RuntimeError(self.setup_exit_message(code))
+        return code
+
 
     @classmethod
     def setup_exit_message(cls, code):
