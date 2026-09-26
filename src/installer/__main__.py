@@ -9,7 +9,6 @@ from project_paths import (ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT,
                            RUNTIME_ROOT)
 from installer import utils, resources, lang_setup
 from installer.steps import ollama
-from installer.steps import model
 from installer.steps import python_tools
 from installer.steps import sandbox
 from installer.steps import searxng
@@ -36,41 +35,14 @@ def _parse_args(argv=None):
 
 
 # ── 디스크 예산 ────────────────────────────────────────────────────
-_RUNTIME_GB = 5.0        # Ollama / Python 도구 / 샌드박스 이미지 등 모델 외 용량
-_FALLBACK_FLOOR_GB = 20  # 카탈로그를 못 읽을 때의 보수적 하한
+# Base installation no longer downloads models. Model choice/download belongs
+# to the integrated Setup > Models page, so the installer only reserves space
+# for runtimes and images here.
+_RUNTIME_GB = 5.0
 
 
-def _model_disk_budget(skip_model: bool):
-    """(하드 최소 GB, 이 PC 의 권장 세트까지 담는 데 필요한 GB)."""
-    if skip_model:
-        return int(_RUNTIME_GB), 0.0
-    try:
-        from launcher.models import model_catalog as cat
-    except Exception:
-        return _FALLBACK_FLOOR_GB, 0.0
-    try:
-        floor = cat.download_gb(cat.plan_by_level().get("low") or ())
-        plan = cat.download_gb(cat.recommended_for(cat.MEMORY_BUDGET_GB))
-    except Exception:
-        return _FALLBACK_FLOOR_GB, 0.0
-    return int(_RUNTIME_GB + floor) + 1, _RUNTIME_GB + plan
-
-
-def _warn_if_plan_does_not_fit(plan_gb: float) -> None:
-    if not plan_gb:
-        return
-    import shutil
-    target = MODEL_STORAGE_DIR if MODEL_STORAGE_DIR.exists() else MODEL_STORAGE_DIR.parent
-    try:
-        free = shutil.disk_usage(target).free / (1024 ** 3)
-    except OSError:
-        return
-    if free < plan_gb:
-        utils.warn(
-            "권장 모델 세트는 약 %.0fGB 인데 %s 의 여유는 %.0fGB 입니다. "
-            "모델 선택 창에서 일부를 빼거나, 다 받은 뒤 [모델 관리]에서 정리하세요."
-            % (plan_gb, target, free)
-        )
+def _base_disk_budget() -> int:
+    return int(_RUNTIME_GB) + 1
 
 
 def _run_install(args) -> int:
@@ -82,9 +54,7 @@ def _run_install(args) -> int:
 
     utils.preflight_windows()
     utils.preflight_python()
-    _floor_gb, _plan_gb = _model_disk_budget(args.skip_model)
-    utils.preflight_disk(MODEL_STORAGE_DIR.parent, need_gb=_floor_gb)
-    _warn_if_plan_does_not_fit(_plan_gb)
+    utils.preflight_disk(MODEL_STORAGE_DIR.parent, need_gb=_base_disk_budget())
 
     utils.section(t("install.resources_section"))
     spec = resources.detect(ENV)
@@ -116,20 +86,14 @@ def _run_install(args) -> int:
     ollama.start_service(paths)
     components.append("ollama")
 
-    if not args.skip_model:
-        prepared_models = model.download(paths)
-        if prepared_models is None:
-            failed_components.append("models")
-            utils.warn("로컬 모델 준비가 완료되지 않았습니다. Setup의 모델 화면에서 다시 적용할 수 있습니다.")
-        elif prepared_models:
-            components.append("models")
-        else:
-            # The user explicitly chose no models/cancelled the selection.
-            # That is not an installation failure.
-            skipped_components.append("models")
+    # Model selection/download is intentionally not part of the console
+    # installer anymore. The desktop Models page is the single source of truth:
+    # selection, disk plan, install/remove and progress all stay in one window.
+    skipped_components.append("models")
+    if args.skip_model:
+        utils.info("모델 다운로드 생략 (--skip-model)")
     else:
-        skipped_components.append("models")
-        utils.warn("Model download skipped (--skip-model)")
+        utils.info("모델은 설치 완료 후 RUN.bat --manage > Models에서 선택하고 받습니다.")
 
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")

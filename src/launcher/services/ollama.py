@@ -343,6 +343,8 @@ class OllamaService:
         kwargs = {
             "capture_output": True,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
             # 5초는 백신이 붙은 Windows 에서 PowerShell 이 처음 뜨는 시간보다
             # 짧다. 시간 초과가 곧 "포트 주인을 모른다" 가 되어 멀쩡한 Ollama 를
             # 낯선 서버로 오인하게 만들었다.
@@ -350,6 +352,13 @@ class OllamaService:
             "check": False,
         }
         kwargs["creationflags"] = config.WIN_CREATE_NO_WINDOW
+        # RUN.bat enables Python UTF-8 mode. Force PowerShell's redirected
+        # stdout to the same encoding as well, otherwise a Korean Windows ANSI
+        # code page can crash subprocess' reader thread while returning a path.
+        script = (
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+            + script
+        )
         try:
             result = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],

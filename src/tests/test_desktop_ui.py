@@ -399,6 +399,74 @@ def test_the_agent_page_has_the_same_line(ui):
     assert 'Agent 시작' in w.agent_state.get(),w.agent_state.get()
 
 
+def test_model_download_progress_is_rendered_inside_the_models_page(ui):
+    from types import SimpleNamespace
+
+    w,svc,backend=ui
+    w.navigate('models')
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+
+    w._handle_event(SimpleNamespace(
+        topic='runtime.progress',
+        payload={
+            'service':'models',
+            'model':'demo:latest',
+            'status':'pulling layer',
+            'completed':25,
+            'total':100,
+        },
+    ))
+    pump(w)
+
+    assert float(w.model_progress['value'])==25.0
+    assert 'demo:latest' in w.model_progress_text.get()
+    assert '25.0%' in w.model_progress_text.get()
+
+
+def test_model_delete_confirmation_stays_inline_without_messagebox(ui,monkeypatch):
+    from tkinter import messagebox
+
+    w,svc,backend=ui
+    w.navigate('models')
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+    monkeypatch.setattr(
+        messagebox,
+        'askyesno',
+        lambda *a,**k: pytest.fail('model management must not open a confirmation window'),
+    )
+
+    w._catalog={
+        'models':[{'tag':'demo:latest','installed':True}],
+        'extra_installed':[],
+        'recommended':[],
+        'plan':{},
+        'levels':(),
+        'budget_gb':8.0,
+    }
+    plan={
+        'install':[],
+        'remove':['demo:latest'],
+        'download_gb':0.0,
+        'fits':True,
+        'free_gb':100.0,
+        'storage':{
+            'path':str(svc.model_dir),
+            'exists':True,
+            'shared':True,
+            'per_user':False,
+        },
+    }
+    svc.models.plan_changes=lambda tags,installed=None:plan
+    w.choice_vars={}
+    w.apply_selection()
+
+    assert w._model_confirm_signature==((),('demo:latest',))
+    assert '확인' in str(w.apply_button.cget('text'))
+    assert '한 번 더' in w.model_progress_text.get()
+
+
 def test_the_apply_button_is_the_button_and_not_the_row_it_sits_in(ui):
     """ttk accepts state() on a frame without complaint, so storing the row in
     place of the button left "선택대로 적용" enabled with nothing to apply."""

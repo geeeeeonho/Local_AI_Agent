@@ -4,9 +4,10 @@ This replaces the split between the retained launcher's "installed model info"
 and "model management" menu items. Both answered half a question, so choosing a
 model meant reading one screen and typing a tag into another.
 
-Checked means "should exist", the same contract the installer's selection
-dialog uses: check to install, uncheck an installed model to remove it. Nothing
-here deletes blob files directly; Ollama still owns the store.
+Checked means "should exist": check to install, uncheck an installed model to
+remove it. This is the only interactive model manager; installation no longer
+opens a second selection dialog. Nothing here deletes blob files directly;
+Ollama still owns the store.
 """
 import tkinter as tk
 from tkinter import ttk
@@ -137,6 +138,18 @@ def _apply_row(parent, w):
     return frame
 
 
+def _progress_row(parent, w):
+    """Inline model transfer status; no separate download window."""
+    frame = ttk.Frame(parent)
+    bar = ttk.Progressbar(frame, mode='determinate', maximum=100)
+    bar.pack(side='left', fill='x', expand=True)
+    text = ttk.Label(frame, textvariable=w.model_progress_text,
+                     style='Muted.TLabel', width=38, anchor='w')
+    text.pack(side='left', padx=(10, 0))
+    w.model_progress = bar
+    return frame
+
+
 def _summary_row(parent, w):
     """What the catalog says, and where the store is, on one line.
 
@@ -238,6 +251,8 @@ def _choose(parent, w):
     # because that row was three lines tall and the list under it was one.
     w.choice_plan = tk.StringVar(master=w.root, value='')
     w.apply_button = layout.fixed(lambda box: _apply_row(box, w)).buttons[0]
+    w.model_progress_text = tk.StringVar(master=w.root, value='대기')
+    layout.fixed(lambda box: _progress_row(box, w), pad=(0, 6))
     # One line, not three. The rule is the whole explanation; the rest was
     # detail that cost the list two more rows every time the screen opened.
     layout.fixed(lambda box: _note(box,

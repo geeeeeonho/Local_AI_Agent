@@ -24,14 +24,26 @@ def on_windows(windows=None) -> bool:
 
 
 def run(command, timeout=20):
-    """Run one console tool without flashing a window. None if it cannot run."""
+    """Run a Windows console tool without decode-thread crashes.
+
+    RUN.bat enables Python UTF-8 mode, but localized Windows tools such as
+    icacls and setx still write using the active ANSI code page. Decode those
+    bytes with mbcs on Windows and always replace undecodable bytes.
+    """
     try:
-        return subprocess.run(command, capture_output=True, text=True,
-                              timeout=timeout, check=False,
-                              creationflags=NO_WINDOW if os.name == 'nt' else 0)
+        encoding = "mbcs" if on_windows() else "utf-8"
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding=encoding,
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            creationflags=NO_WINDOW if os.name == "nt" else 0,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
-
 
 def succeeded(result) -> bool:
     return result is not None and result.returncode == 0

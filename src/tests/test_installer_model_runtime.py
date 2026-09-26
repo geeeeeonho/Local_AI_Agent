@@ -1,39 +1,14 @@
 from pathlib import Path
 
 
-def test_model_download_uses_localai_shared_broker(monkeypatch, tmp_path):
-    from installer.steps import model
-    from launcher.models import model_catalog, model_files
+def test_console_installer_does_not_own_model_selection():
+    from installer import __main__ as setup_main
+    import inspect
 
-    official = tmp_path / "LocalAI" / "ollama" / "ollama.exe"
-    official.parent.mkdir()
-    official.write_bytes(b"official")
-
-    paths = {
-        "env": tmp_path / "LocalAI" / "environment",
-        "ollama": tmp_path / "LocalAI" / "ollama",
-        "models": tmp_path / "LocalAI" / "models",
-    }
-
-    seen = {}
-
-    monkeypatch.setattr(model.ollama, "find_existing", lambda _paths: official)
-    monkeypatch.setattr(model.ollama, "env_for", lambda _paths: {})
-
-    def installed(exe, env):
-        seen["exe"] = Path(exe)
-        return set()
-
-    monkeypatch.setattr(model, "_installed", installed)
-    monkeypatch.setattr(model, "_load_models", lambda: [])
-    monkeypatch.setattr(model_catalog, "all_entries", lambda: [])
-    monkeypatch.setattr(model_files, "refresh", lambda _path: None)
-
-    assert model.download(paths) == []
-    assert seen["exe"] == official
-    assert not (paths["ollama"] / "ollama.exe").exists()
-
-
+    source = inspect.getsource(setup_main)
+    assert "model.download" not in source
+    assert "model_select_gui" not in source
+    assert "RUN.bat --manage > Models" in source
 
 def test_official_installer_inherits_shared_model_store(monkeypatch, tmp_path):
     from installer.steps import ollama as step

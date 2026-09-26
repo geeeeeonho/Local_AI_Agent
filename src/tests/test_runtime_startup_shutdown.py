@@ -51,6 +51,35 @@ def unidentified(monkeypatch, svc):
     monkeypatch.setattr(svc, '_process_executable', lambda _pid: None)
 
 
+def test_powershell_probe_forces_utf8_output(monkeypatch, tmp_path):
+    from launcher.services import ollama as module
+
+    svc = service(tmp_path)
+    seen = {}
+
+    class Result:
+        returncode = 0
+        stdout = r"C:\LocalAI\ollama\ollama.exe"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        seen["command"] = list(command)
+        seen["kwargs"] = kwargs
+        return Result()
+
+    monkeypatch.setattr(module.os, "name", "nt")
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    value = svc._powershell("[Console]::Out.Write('ok')")
+
+    assert value == Result.stdout
+    assert seen["kwargs"]["encoding"] == "utf-8"
+    assert seen["kwargs"]["errors"] == "replace"
+    script = seen["command"][-1]
+    assert "OutputEncoding" in script
+    assert script.endswith("[Console]::Out.Write('ok')")
+
+
 # ── Ollama: an unreadable port owner is not a hostile one ────────────────
 
 def test_a_serving_ollama_is_used_when_the_port_owner_cannot_be_read(tmp_path, monkeypatch):
