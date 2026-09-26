@@ -56,7 +56,7 @@ class Backend:
 def make(tmp_path):
     from services.desktop import DesktopServices
     backend = Backend(tmp_path)
-    env = tmp_path / 'llm_environment'
+    env = tmp_path / 'environment'
     env.mkdir(exist_ok=True)
     svc = DesktopServices(project_root=tmp_path, env=env,
         model_dir=backend.inference.model_dir, backend=backend)
@@ -263,7 +263,7 @@ def test_storage_reports_the_store_and_its_free_space(tmp_path):
 
 
 def test_a_store_that_does_not_exist_yet_measures_its_future_drive(tmp_path):
-    """A fresh Windows machine has no C:\\LLM_Models but does have the drive."""
+    """A fresh machine may not have its model directory yet, but its drive exists."""
     services, _ = make(tmp_path)
     try:
         services.models.model_dir = tmp_path / 'not' / 'created' / 'yet'
