@@ -788,8 +788,8 @@ class DesktopWindow:
                 done['failed'].append(('prepare','Ollama',str(exc)))
                 return done
             for tag in plan['remove']:
-                if hasattr(self,'model_progress_text'):
-                    self.root.after(0,lambda t=tag:self.model_progress_text.set('삭제 중 · '+t))
+                self.services.events.emit('runtime.progress', {
+                    'service':'models','model':tag,'status':'삭제 중'})
                 try:self.services.setup.remove_model(tag);done['remove'].append(tag)
                 except Exception as exc:done['failed'].append(('remove',tag,str(exc)))
             for tag in plan['install']:
@@ -822,7 +822,6 @@ class DesktopWindow:
                 self.model_progress.configure(value=0)
             if hasattr(self,'model_progress_text'):
                 self.model_progress_text.set('실패 · '+str(exc))
-            self.log('models.apply: '+str(exc),level='error')
 
         self.run_task('models.apply',work,finished,error=failed)
 
