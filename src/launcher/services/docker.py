@@ -224,8 +224,19 @@ class DockerService:
             r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
             r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
         ]
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if local_appdata:
+            # Current Docker Desktop per-user install location.
+            candidates.append(
+                os.path.join(
+                    local_appdata,
+                    "Programs", "DockerDesktop", "Docker Desktop.exe",
+                )
+            )
         user_profile = os.environ.get("USERPROFILE", "")
         if user_profile:
+            # Retain the older candidate for machines installed by previous
+            # Docker Desktop releases/custom packaging.
             candidates.append(
                 os.path.join(
                     user_profile,
