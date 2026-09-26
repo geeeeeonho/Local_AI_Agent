@@ -523,6 +523,12 @@ class LegacyBackend:
             executable = executable.with_name('python.exe')
         command = [str(executable), '-m', 'installer', '--install', '--embedded']
         language = str(options.get('lang') or '').strip().lower()
+        if language not in ('ko', 'en'):
+            try:
+                from installer.i18n import get_language
+                language = str(get_language()).strip().lower()
+            except Exception:
+                language = ''
         if language in ('ko', 'en'):
             command += ['--lang', language]
         if not options.get('sandbox', True):
