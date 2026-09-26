@@ -55,6 +55,9 @@ def test_retired_openwebui_runtime_identifiers_are_absent():
         "OPEN_WEBUI_PORT",
         "OPEN_WEBUI_URL",
         "LOCAL_AI_CHAT_ENGINE",
+        "OPENWEBUI_",
+        "open_webui",
+        "openwebui",
     )
     for root in (REPO_ROOT / "src/launcher", REPO_ROOT / "src/installer"):
         for path in root.rglob("*.py"):

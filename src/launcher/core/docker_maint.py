@@ -2,7 +2,7 @@
 """docker_maint — 도커 누적 정리 헬퍼 (stdlib).
 
 반복 빌드/실행으로 쌓이는 것: 중지된 컨테이너, dangling 이미지, 빌드 캐시,
-미사용 볼륨. [10] 도커 정리 액션과 종료 시 자동정리(register_auto_prune)가 공유.
+미사용 볼륨. [10] 도커 정리 액션과 종료 시 자동정리(register_exit_sweep)가 공유.
 
 안전 정책:
   - 자동(종료 시): 우리 exited 컨테이너 + dangling 이미지만 (빠르고 안전)
@@ -21,32 +21,33 @@ from launcher.services.docker import DockerService
 MARKER = "DOCKER_MAINT_v1"
 FLAG_NAME = "docker_autoclean.flag"
 
-_ACTIVE_NAME_PATTERNS = ("llm_agent_", "ai_box_", "llm_ollama", "llm_searxng", "searxng")
-_ACTIVE_IMAGE_PATTERNS = ("llm-agent-sandbox", "llm_agent_sandbox", "ai_box_sandbox", "searxng")
-
-_LEGACY_OPENWEBUI_NAME_PATTERNS = ("llm_openwebui", "open_webui")
-_LEGACY_OPENWEBUI_IMAGE_PATTERNS = ("open_webui", "openwebui")
-
-_NAME_PATTERNS = _ACTIVE_NAME_PATTERNS + _LEGACY_OPENWEBUI_NAME_PATTERNS
-_IMAGE_PATTERNS = _ACTIVE_IMAGE_PATTERNS + _LEGACY_OPENWEBUI_IMAGE_PATTERNS
-
-
-def _patterns() -> Tuple[tuple, tuple]:
-    names = list(_NAME_PATTERNS)
-    images = list(_IMAGE_PATTERNS)
+def _owned_container_names() -> tuple[set[str], tuple[str, ...]]:
+    """Return exact names and prefixes that LocalAI itself creates."""
+    exact = {
+        "llm_searxng", "llm_anythingllm", "llm_tor",
+        "llm_warp", "llm_httpbridge",
+    }
+    prefixes = {"llm_agent_"}
     try:
-        from launcher import config as _cfg
-        pfx = getattr(_cfg, "SANDBOX_CONTAINER_PREFIX", None)
-        if pfx and pfx not in names:
-            names.append(pfx)
-        img = getattr(_cfg, "SANDBOX_IMAGE", None)
-        if img:
-            base = img.split(":")[0]
-            if base not in images:
-                images.append(base)
+        from launcher import config as cfg
+        for key in (
+            "SEARXNG_CONTAINER", "ANYTHINGLLM_CONTAINER", "TOR_CONTAINER",
+            "WARP_CONTAINER", "HTTP_BRIDGE_CONTAINER",
+        ):
+            value = str(getattr(cfg, key, "") or "").strip()
+            if value:
+                exact.add(value)
+        prefix = str(getattr(cfg, "SANDBOX_CONTAINER_PREFIX", "") or "").strip()
+        if prefix:
+            prefixes.add(prefix)
     except Exception:
         pass
-    return tuple(names), tuple(images)
+    return exact, tuple(sorted(prefixes))
+
+
+def _is_owned_container(name: str) -> bool:
+    exact, prefixes = _owned_container_names()
+    return name in exact or any(name.startswith(prefix) for prefix in prefixes)
 
 
 def _run(cmd: List[str], timeout: int = 60):
@@ -83,7 +84,6 @@ LEFTOVER_STATES = ("exited", "created", "dead")
 
 def list_our_leftovers(states=LEFTOVER_STATES) -> List[str]:
     """우리 패턴에 매칭되는, 실행 중이 아닌 컨테이너 이름 목록."""
-    names, images = _patterns()
     out: List[str] = []
     for state in states:
         try:
@@ -98,16 +98,11 @@ def list_our_leftovers(states=LEFTOVER_STATES) -> List[str]:
                 nm, im = parts[0].strip(), parts[1].strip()
                 if not nm or nm in out:
                     continue
-                if any(p and p in nm for p in names) or any(p and p in im for p in images):
+                if _is_owned_container(nm):
                     out.append(nm)
         except Exception:
             continue
     return out
-
-
-def list_our_exited() -> List[str]:
-    """Kept for callers that only ever meant "stopped containers of ours"."""
-    return list_our_leftovers()
 
 
 def list_our_networks() -> List[str]:
@@ -264,7 +259,7 @@ def set_autoclean(env, on: bool) -> None:
 _SWEEP_REGISTERED = False
 
 
-def register_exit_sweep(env) -> bool:
+def register_exit_sweep(state_root) -> bool:
     """Clean up after ourselves when the program exits.
 
     Two different things used to be one opt-in flag nobody could reach from the
@@ -284,7 +279,7 @@ def register_exit_sweep(env) -> bool:
     try:
         from launcher.core import lifelog as _ll
 
-        wants_images = autoclean_enabled(env)
+        wants_images = autoclean_enabled(state_root)
 
         def _do():
             try:
@@ -304,32 +299,11 @@ def register_exit_sweep(env) -> bool:
         return False
 
 
-def register_auto_prune(env) -> bool:
-    """Older name kept for the terminal launcher's entrypoint."""
-    return register_exit_sweep(env)
-
-
 __all__ = [
     "MARKER", "FLAG_NAME", "LEFTOVER_STATES", "docker_available", "system_df",
-    "list_our_exited", "list_our_leftovers", "list_our_networks",
+    "list_our_leftovers", "list_our_networks",
     "prune_exited_ours", "prune_our_networks", "prune_dangling_images",
     "prune_build_cache", "prune_unused_images", "prune_volumes",
     "sweep_our_leftovers", "safe_auto_prune",
     "autoclean_enabled", "set_autoclean", "register_exit_sweep",
-    "register_auto_prune",
 ]
-
-
-# >>> ANYTHINGLLM_v1 (PATCH_ANYTHINGLLM.py)  ANYTHINGLLM_REV=8
-try:
-    from launcher import config as _cfg_al
-    _al_name = getattr(_cfg_al, "ANYTHINGLLM_CONTAINER", "llm_anythingllm")
-    _al_image = str(getattr(_cfg_al, "ANYTHINGLLM_IMAGE",
-                            "mintplexlabs/anythingllm:latest")).split(":")[0]
-    if _al_name and _al_name not in _NAME_PATTERNS:
-        _NAME_PATTERNS = tuple(list(_NAME_PATTERNS) + [_al_name])
-    if _al_image and _al_image not in _IMAGE_PATTERNS:
-        _IMAGE_PATTERNS = tuple(list(_IMAGE_PATTERNS) + [_al_image])
-except Exception:
-    pass
-# <<< ANYTHINGLLM_v1

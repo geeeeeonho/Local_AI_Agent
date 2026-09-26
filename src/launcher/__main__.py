@@ -108,53 +108,24 @@ def _write_fatal(exc: BaseException, ctx: str = ""):
 def main():
     args = parse_args()
 
-    # v6_lifelog: 모든 종료 경로에서 로그 보존 + 컨테이너 정리
     try:
-        from launcher.core import lifelog as _ll
-        # The runtime root owns user_data and the session log.
-        _ll.install_global_hooks(RUNTIME_ROOT)
-    except Exception as _e:
-        print("[WARN] lifelog 초기화 실패: " + str(_e), file=sys.stderr)
+        from services.system.bootstrap import install_exit_hooks
+        if not install_exit_hooks(RUNTIME_ROOT):
+            print("[WARN] 종료 정리 hook 초기화 실패", file=sys.stderr)
+    except Exception as exc:
+        print("[WARN] 종료 정리 hook 초기화 실패: " + str(exc), file=sys.stderr)
 
-    # v6_2_trace: main() 전체 단계 추적
     def _trace(stage):
         try:
-            from launcher.core import lifelog as _ll2
-            _ll2.log("TRACE", "[main] " + stage)
+            from launcher.core import lifelog
+            lifelog.log("TRACE", "[main] " + stage)
         except Exception:
             try:
                 print("[TRACE main] " + stage, file=sys.stderr)
             except Exception:
                 pass
 
-    _trace("진입 — lifelog 설치 직후")
-
-    # v6_3_comprehensive: Ollama 모델 메모리 정리 cleanup 등록
-    try:
-        from launcher.core import lifelog as _ll3
-        if hasattr(_ll3, "register_ollama_cleanup"):
-            _ll3.register_ollama_cleanup()
-            _trace("Ollama cleanup 등록 완료")
-    except Exception as _oe:
-        _trace("Ollama cleanup 등록 실패: " + str(_oe))
-
-    # v6_4_orphan: 도커 고아 컨테이너 정리 cleanup 등록
-    try:
-        from launcher.core import lifelog as _ll4
-        if hasattr(_ll4, "register_orphan_container_cleanup_auto"):
-            # v6_7_final: config 자동 감지 우선
-            _ll4.register_orphan_container_cleanup_auto()
-        elif hasattr(_ll4, "register_orphan_container_cleanup"):
-            # v6.5 fallback
-            _ll4.register_orphan_container_cleanup(
-                name_patterns=("ai_box_", "llm_agent_", "open_webui",
-                               "searxng", "ollama"),
-                image_patterns=("ai_box_sandbox", "llm-agent-sandbox",
-                                "open_webui", "searxng", "ollama"),
-            )
-            _trace("고아 컨테이너 cleanup 등록 완료")
-    except Exception as _oe:
-        _trace("고아 컨테이너 cleanup 등록 실패: " + str(_oe))
+    _trace("진입 — 종료 hook 설치 직후")
 
     # >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리 등록
     try:
@@ -164,14 +135,6 @@ def main():
             _trace("캐시 정리 cleanup 등록 완료")
     except Exception as _cce:
         _trace("캐시 정리 cleanup 등록 실패: " + str(_cce))
-
-    # >>> DOCKER_AUTOCLEAN_v1 - 종료 시 도커 안전 정리 (플래그 켜진 경우)
-    try:
-        from launcher.core import docker_maint as _dm
-        if _dm.register_auto_prune(USER_DATA_DIR):
-            _trace("도커 자동정리 등록 완료")
-    except Exception as _dce:
-        _trace("도커 자동정리 등록 실패: " + str(_dce))
 
     # ── 언어/설정 초기화 ──
     _trace("언어 초기화 직전")

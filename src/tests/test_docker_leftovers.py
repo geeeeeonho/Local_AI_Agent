@@ -62,6 +62,14 @@ def test_somebody_elses_container_is_not_ours_to_remove(docker):
     assert 'their_postgres' in docker.state['containers']
 
 
+def test_public_image_name_does_not_make_a_foreign_container_ours(docker):
+    docker.state['containers'] = {
+        'their_search': ('exited', 'searxng/searxng:latest'),
+        'their_chat': ('exited', 'mintplexlabs/anythingllm:latest'),
+    }
+    assert docker.module.list_our_leftovers() == []
+
+
 def test_only_an_empty_network_of_ours_is_removed(docker):
     from launcher import config, network_policy
     block = network_policy.block_network_name()
@@ -102,8 +110,7 @@ def test_the_flag_is_what_adds_the_machine_wide_image_prune(docker, monkeypatch)
     assert pruned == ['images']
 
 
-def test_the_desktop_shell_registers_the_sweep_it_never_ran(monkeypatch, tmp_path):
-    """register_auto_prune existed, and only launcher/__main__ called it."""
+def test_every_shell_registers_the_same_exit_sweep(monkeypatch, tmp_path):
     from services.system import bootstrap
     from launcher.core import docker_maint
     import project_paths

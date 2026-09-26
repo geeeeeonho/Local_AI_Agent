@@ -508,7 +508,7 @@ class DockerService:
 
         try:
             # 컨테이너를 멈추는 정리들이 모두 끝난 뒤에 데몬을 내려야 한다.
-            lifelog.register_cleanup(_do, last=True)
+            lifelog.register_cleanup(_do, stage="daemon")
         except Exception:
             return
         DockerService._shutdown_registered = True

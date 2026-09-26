@@ -1,11 +1,4 @@
-"""lifelog — 통합 로그 시스템 + 모든 종료 경로 hook (v6_1_hotfix).
-
-v6.1 변경:
-  - 각 hook 설치 단계마다 로그 -> 실패 시 정확한 위치 식별
-  - pythonw.exe 환경 자동 감지 -> SetConsoleCtrlHandler skip
-  - signal.signal 메인 스레드 강제 검증
-  - fatal traceback 을 logs/lifelog_fatal.log 에 별도 기록
-  - ctypes 호출 격리 (콜백 등록 자체 segfault 위험)
+"""lifelog — 통합 로그 시스템과 프로세스 종료 hook.
 
 핵심 책임
 ─────────
@@ -52,7 +45,6 @@ __all__ = [
     "shutdown_then_exit",
     "suppress_exit_cleanups",
     "rearm_exit_cleanups",
-    "force_kill_container",
     "get_log_dir",
 ]
 
@@ -265,16 +257,13 @@ def log_session(fh: Optional[TextIO], level: str, msg: str) -> None:
 # ─────────────────────────────────────────────
 #  정리 콜백 관리
 # ─────────────────────────────────────────────
-def register_cleanup(fn: Callable[[], None], *, stage: str = "runtime",
-                     last: bool = False) -> None:
+def register_cleanup(fn: Callable[[], None], *, stage: str = "runtime") -> None:
     """종료 정리 콜백을 단계와 함께 등록한다 (:data:`CLEANUP_STAGES` 참고).
 
     순서를 등록 시각에 맡기면, 정리를 하나 추가하는 것만으로 조용히 깨진다.
     찌꺼기 청소는 컨테이너가 멈춘 뒤에, 데몬 종료는 그 둘 다 끝난 뒤에 돌아야
-    한다. ``last=True`` 는 ``stage="daemon"`` 의 예전 이름이다.
+    한다.
     """
-    if last:
-        stage = "daemon"
     if stage not in CLEANUP_STAGES:
         raise ValueError("unknown cleanup stage: " + str(stage))
     buckets = {"runtime": _cleanup_callbacks, "sweep": _sweep_cleanup_callbacks,
@@ -418,7 +407,7 @@ def rearm_exit_cleanups() -> None:
 
 
 # ─────────────────────────────────────────────
-#  v6.1: 개별 hook 설치 함수 (각각 try/except 로 isolation)
+#  current: 개별 hook 설치 함수 (각각 try/except 로 isolation)
 # ─────────────────────────────────────────────
 def _install_atexit() -> None:
     log("INFO", "[hook 1/4] atexit 설치 시도")
@@ -494,7 +483,7 @@ def _install_win_console_handler() -> None:
 
 
 # ─────────────────────────────────────────────
-#  install_global_hooks (v6.1)
+#  install_global_hooks (current)
 # ─────────────────────────────────────────────
 def install_global_hooks(project_root: Path) -> None:
     """모든 hook 을 설치. __main__ 에서 한 번만 호출.
@@ -530,7 +519,7 @@ def install_global_hooks(project_root: Path) -> None:
 
     # 이 시점부터 log() 사용 가능
     try:
-        log("INFO", "lifelog 초기화 완료 (v6.1)")
+        log("INFO", "lifelog 초기화 완료 (current)")
         log("INFO", "프로젝트 루트: " + str(_project_root))
         log("INFO", "로그 디렉터리: " + str(_log_dir))
         log("INFO", "Python 실행파일: " + sys.executable)
@@ -548,366 +537,6 @@ def install_global_hooks(project_root: Path) -> None:
 
     log("OK", "전역 종료 hook 설치 단계 모두 통과")
 
-# v6_3_comprehensive: Ollama 메모리 관리 함수
-
-
-# ─────────────────────────────────────────────
-#  v6_3_comprehensive: Ollama 메모리 관리
-# ─────────────────────────────────────────────
-def unload_ollama_model(model_tag: str = "", host: str = "http://127.0.0.1:11434") -> bool:
-    """Ollama 에서 모델을 메모리에서 즉시 unload.
-
-    /api/generate 를 keep_alive=0 으로 호출하면 그 모델이 즉시 unload 됨.
-    model_tag 가 빈 문자열이면 /api/ps 로 적재된 모델 목록 받아 모두 unload.
-
-    Returns True if at least one model unloaded.
-    """
-    import json as _json
-    import urllib.request as _urlreq
-    import urllib.error as _urlerr
-
-    log("CLEANUP", "Ollama 메모리 정리 시도")
-
-    targets = []
-    if model_tag:
-        targets = [model_tag]
-    else:
-        # /api/ps 로 적재된 모델 목록 조회
-        try:
-            req = _urlreq.Request(host + "/api/ps", method="GET")
-            with _urlreq.urlopen(req, timeout=3) as resp:
-                data = _json.loads(resp.read().decode("utf-8"))
-            for entry in data.get("models", []):
-                name = entry.get("name") or entry.get("model")
-                if name:
-                    targets.append(name)
-            log("INFO", "적재된 모델 " + str(len(targets)) + "개 발견: " + ", ".join(targets))
-        except (_urlerr.URLError, OSError, ValueError) as e:
-            log("WARN", "Ollama /api/ps 조회 실패: " + str(e))
-            return False
-
-    if not targets:
-        log("INFO", "적재된 Ollama 모델 없음 — 정리 불필요")
-        return True
-
-    success = 0
-    for name in targets:
-        try:
-            payload = _json.dumps({
-                "model": name,
-                "keep_alive": 0,
-                "prompt": "",
-            }).encode("utf-8")
-            req = _urlreq.Request(
-                host + "/api/generate",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with _urlreq.urlopen(req, timeout=5) as resp:
-                _ = resp.read()
-            log("OK", "Ollama 모델 unload: " + name)
-            success += 1
-        except (_urlerr.URLError, OSError, ValueError) as e:
-            log("WARN", "모델 " + name + " unload 실패: " + str(e))
-
-    return success > 0
-
-
-def register_ollama_cleanup(model_tag: str = "", host: str = "http://127.0.0.1:11434") -> None:
-    """종료 시 Ollama 모델을 자동 unload 하도록 cleanup 등록."""
-    def _do():
-        try:
-            unload_ollama_model(model_tag, host)
-        except Exception as e:
-            log("WARN", "Ollama unload cleanup 예외: " + str(e))
-
-    register_cleanup(_do)
-    log("INFO", "Ollama 메모리 정리 cleanup 등록됨")
-
-# v6_4_orphan: 도커 컨테이너 강제 정리 함수
-
-
-# ─────────────────────────────────────────────
-#  v6_4_orphan: 도커 컨테이너 강제 정리
-# ─────────────────────────────────────────────
-def cleanup_orphan_containers(
-    name_patterns: tuple = ("ai_box_", "open_webui", "searxng", "ollama"),
-    image_patterns: tuple = ("ai_box_sandbox", "open_webui", "searxng", "ollama"),
-) -> int:
-    """v6_5_image: docker ps 로 우리 컨테이너 모두 강제 정리.
-
-    매칭 로직: 컨테이너 이름이 name_patterns 중 하나를 포함하거나
-              이미지 이름이 image_patterns 중 하나를 포함하면 정리 대상.
-
-    종료 시 자동 호출 — docker --rm 이 동작 안 했거나 강제 종료 등으로
-    살아남은 컨테이너를 강제 정리.
-
-    또한 docker ps -a (exited 포함) 도 조회해서 진단 정보로 출력.
-
-    Returns: 정리된 컨테이너 수.
-    """
-    log("CLEANUP", "v6.5 고아 컨테이너 검색 시작")
-    log("CLEANUP", "  이름 패턴: " + ", ".join(name_patterns))
-    log("CLEANUP", "  이미지 패턴: " + ", ".join(image_patterns))
-
-    no_window = {}
-    if os.name == "nt":
-        no_window["creationflags"] = 0x08000000
-
-    # 1) docker ps (실행 중) — 이름 + 이미지 + 상태 모두 수집
-    rows = []
-    try:
-        r = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}"],
-            capture_output=True, timeout=5, text=True, **no_window
-        )
-        if r.returncode != 0:
-            log("WARN", "docker ps 실패: rc=" + str(r.returncode)
-                + ", stderr=" + (r.stderr or "").strip()[:200])
-            return 0
-        for line in r.stdout.splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                name = parts[0].strip()
-                image = parts[1].strip()
-                status = parts[2].strip() if len(parts) > 2 else ""
-                if name:
-                    rows.append((name, image, status))
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        log("WARN", "docker ps 예외: " + str(e))
-        return 0
-
-    log("INFO", "실행 중 도커 컨테이너 " + str(len(rows)) + "개")
-    if not rows:
-        log("INFO", "정리할 컨테이너 없음")
-        # exited 컨테이너 진단도 함께
-        _diagnose_exited_containers(no_window, name_patterns, image_patterns)
-        return 0
-
-    # 모든 컨테이너 정보 로그 출력 (진단)
-    for name, image, status in rows:
-        log("INFO", "  [발견] name=" + name + " image=" + image + " status=" + status)
-
-    # 2) 매칭 — 이름 OR 이미지
-    targets = []
-    skipped = []
-    for name, image, status in rows:
-        matched_by = None
-        for pat in name_patterns:
-            if pat and pat in name:
-                matched_by = "name(" + pat + ")"
-                break
-        if matched_by is None:
-            for pat in image_patterns:
-                if pat and pat in image:
-                    matched_by = "image(" + pat + ")"
-                    break
-
-        if matched_by:
-            targets.append((name, image, matched_by))
-        else:
-            skipped.append((name, image))
-
-    if skipped:
-        log("INFO", "정리 안함 (외부 컨테이너): " + str(len(skipped)) + "개")
-        for name, image in skipped:
-            log("INFO", "  [skip] name=" + name + " image=" + image)
-
-    if not targets:
-        log("INFO", "정리 대상 컨테이너 없음 — 우리 컨테이너 패턴에 매칭 안됨")
-        log("INFO", "  사용자: 만약 위 [발견] 항목이 우리 컨테이너라면")
-        log("INFO", "  patch v6.5 의 name_patterns/image_patterns 에 추가 필요")
-        _diagnose_exited_containers(no_window, name_patterns, image_patterns)
-        return 0
-
-    log("CLEANUP", "정리 대상 " + str(len(targets)) + "개")
-    for name, image, mb in targets:
-        log("CLEANUP", "  [target] name=" + name + " (matched by " + mb + ")")
-
-    # 3) 각각 격멸
-    killed = 0
-    for name, image, _mb in targets:
-        try:
-            r = subprocess.run(
-                ["docker", "stop", "-t", "2", name],
-                capture_output=True, timeout=8, **no_window
-            )
-            if r.returncode == 0:
-                log("OK", "docker stop: " + name)
-            else:
-                subprocess.run(
-                    ["docker", "kill", name],
-                    capture_output=True, timeout=5, **no_window
-                )
-                log("OK", "docker kill: " + name)
-
-            subprocess.run(
-                ["docker", "rm", "-f", name],
-                capture_output=True, timeout=5, **no_window
-            )
-            killed += 1
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-            log("FAIL", "정리 실패 (" + name + "): " + str(e))
-
-    log("CLEANUP", "도커 컨테이너 정리 완료: " + str(killed) + "/" + str(len(targets)))
-    _diagnose_exited_containers(no_window, name_patterns, image_patterns)
-    return killed
-
-
-def _diagnose_exited_containers(no_window, name_patterns, image_patterns) -> None:
-    """진단용 — exited 우리 컨테이너 목록만 로그에 출력 (정리 안함).
-
-    종료 후 docker ps -a 에 남은 exited 컨테이너가 있으면 사용자에게 알림.
-    """
-    try:
-        r = subprocess.run(
-            ["docker", "ps", "-a", "--filter", "status=exited",
-             "--format", "{{.Names}}\t{{.Image}}"],
-            capture_output=True, timeout=5, text=True, **no_window
-        )
-        if r.returncode != 0:
-            return
-        our_exited = []
-        for line in r.stdout.splitlines():
-            parts = line.split("\t")
-            if len(parts) < 2:
-                continue
-            name = parts[0].strip()
-            image = parts[1].strip()
-            matched = False
-            for pat in name_patterns:
-                if pat and pat in name:
-                    matched = True; break
-            if not matched:
-                for pat in image_patterns:
-                    if pat and pat in image:
-                        matched = True; break
-            if matched:
-                our_exited.append((name, image))
-        if our_exited:
-            log("INFO", "exited 우리 컨테이너 " + str(len(our_exited)) + "개 (이미 죽음, 정리 불필요)")
-            for name, image in our_exited:
-                log("INFO", "  [exited] name=" + name + " image=" + image)
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
-
-
-
-def register_orphan_container_cleanup(
-    name_patterns: tuple = ("ai_box_", "open_webui", "searxng", "ollama"),
-    image_patterns: tuple = ("ai_box_sandbox", "open_webui", "searxng", "ollama"),
-) -> None:
-    """종료 시 모든 우리 도커 컨테이너 강제 정리 cleanup 등록."""
-    def _do():
-        try:
-            cleanup_orphan_containers(name_patterns, image_patterns)
-        except Exception as e:
-            log("WARN", "orphan cleanup 예외: " + str(e))
-
-    register_cleanup(_do)
-    log("INFO", "고아 컨테이너 정리 cleanup 등록됨 (패턴: " + ", ".join(name_patterns) + ")")
-
-# v6_7_final: config 자동 감지 패턴
-
-
-# ─────────────────────────────────────────────
-#  v6_7_final: config 기반 패턴 자동 감지
-# ─────────────────────────────────────────────
-def _detect_container_patterns() -> tuple:
-    """config 모듈에서 실제 컨테이너 prefix/image 를 읽어 패턴 튜플 반환.
-
-    Returns:
-        (name_patterns, image_patterns) — 각각 tuple of str
-    """
-    name_patterns = []
-    image_patterns = []
-
-    # config 에서 직접 읽기
-    try:
-        from launcher import config as _cfg
-        # SANDBOX_CONTAINER_PREFIX (예: "llm_agent_")
-        prefix = getattr(_cfg, "SANDBOX_CONTAINER_PREFIX", None)
-        if prefix:
-            name_patterns.append(prefix.rstrip("_") + "_")
-            log("INFO", "config.SANDBOX_CONTAINER_PREFIX 감지: " + prefix)
-        # SANDBOX_IMAGE (예: "llm-agent-sandbox")
-        image = getattr(_cfg, "SANDBOX_IMAGE", None)
-        if image:
-            # 태그 (:latest) 제거
-            image_base = image.split(":")[0]
-            image_patterns.append(image_base)
-            log("INFO", "config.SANDBOX_IMAGE 감지: " + image_base)
-        # 추가 컨테이너 이름들
-        for key in ("OLLAMA_CONTAINER_NAME", "OPENWEBUI_CONTAINER_NAME",
-                    "SEARXNG_CONTAINER_NAME", "OLLAMA_IMAGE",
-                    "OPENWEBUI_IMAGE", "SEARXNG_IMAGE"):
-            val = getattr(_cfg, key, None)
-            if val:
-                if "IMAGE" in key:
-                    image_patterns.append(val.split(":")[0])
-                else:
-                    name_patterns.append(val)
-                log("INFO", "config." + key + " 감지: " + val)
-    except Exception as e:
-        log("WARN", "config 자동 감지 실패: " + str(e))
-
-    # Fallback 패턴 (항상 추가 — 안전망)
-    fallback_names = ["ai_box_", "llm_agent_", "llm_ollama", "llm_openwebui",
-                      "llm_searxng", "open_webui", "searxng", "ollama"]
-    fallback_images = ["ai_box_sandbox", "llm-agent-sandbox", "llm_agent_sandbox",
-                       "open_webui", "openwebui", "searxng", "ollama"]
-    for p in fallback_names:
-        if p not in name_patterns:
-            name_patterns.append(p)
-    for p in fallback_images:
-        if p not in image_patterns:
-            image_patterns.append(p)
-
-    log("INFO", "최종 이름 패턴 " + str(len(name_patterns)) + "개")
-    log("INFO", "최종 이미지 패턴 " + str(len(image_patterns)) + "개")
-    return tuple(name_patterns), tuple(image_patterns)
-
-
-def register_orphan_container_cleanup_auto() -> None:
-    """v6_7_final: config 자동 감지로 패턴 결정 후 cleanup 등록."""
-    try:
-        names, images = _detect_container_patterns()
-    except Exception as e:
-        log("WARN", "auto-detect 실패, 정적 패턴 fallback: " + str(e))
-        names = ("ai_box_", "llm_agent_", "open_webui", "searxng", "ollama")
-        images = ("ai_box_sandbox", "llm-agent-sandbox",
-                  "open_webui", "searxng", "ollama")
-
-    def _do():
-        try:
-            cleanup_orphan_containers(names, images)
-        except Exception as e:
-            log("WARN", "auto orphan cleanup 예외: " + str(e))
-
-    register_cleanup(_do)
-    log("INFO", "v6.7 고아 컨테이너 정리 cleanup 등록됨 (자동 감지)")
-    log("INFO", "  이름: " + ", ".join(names))
-    log("INFO", "  이미지: " + ", ".join(images))
-
-# v6_9_visibility
-
-
-# ─────────────────────────────────────────────
-#  v6_9_visibility: Ollama 모델 사전 warm-up
-# ─────────────────────────────────────────────
-# v7_1_unified: 호스트 프로세스 정리
-
-
-# ─────────────────────────────────────────────
-#  v7_1_unified: 호스트 interpreter 프로세스 정리
-# ─────────────────────────────────────────────
-# v7_5_dockercheck
-
-
-# ─────────────────────────────────────────────
-#  v7_5_dockercheck: Docker 데몬 상태 확인
-# ─────────────────────────────────────────────
 # >>> CACHE_CLEANUP_v1 - 종료 시 캐시 자동 정리
 def register_cache_cleanup(data_root) -> None:
     """종료 시 chat/cache 와 잔여 .tmp 를 자동 정리하도록 등록.

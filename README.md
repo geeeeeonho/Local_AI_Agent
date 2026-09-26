@@ -556,8 +556,7 @@ Ollama 가 필요하면 자기 PC 에서 위 진단을 한 번 돌려 보세요.
 모델 선택의 기본 정본은 `TIERS` 이고, 역할별 공용 재정의는
 `C:\LocalAI\models\.localai\registry.json` 의 `replace` / `add` 로 합니다.
 `ROLES[*].model / fallback` 은 화면 표시용이며 임포트 시점에 최종 TIERS의 1·2단계로
-덮어써집니다. 예전 `user_data\models\registry.json`은 자동 병합하지 않고 legacy
-데이터로 남겨 둡니다.
+덮어써집니다. 예전 `user_data\models\registry.json`은 자동 병합하지 않고 이전 데이터로 남겨 둡니다.
 
 ### 메모리 예산과 3단계
 

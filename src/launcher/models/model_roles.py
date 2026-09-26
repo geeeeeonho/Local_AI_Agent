@@ -641,7 +641,7 @@ def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.
         any_m = sorted(inst)[0]
         return any_m, "역할 매칭 없음 → 설치된 " + any_m + " 사용"
 
-    return None, "설치된 모델이 없습니다 — SETUP.bat --manage 에서 받으세요"
+    return None, "설치된 모델이 없습니다 — RUN.bat --manage 에서 받으세요"
 # <<< MODEL_INSTALLED_MATCH_v1
 # <<< MODEL_ROLLBACK_v1
 

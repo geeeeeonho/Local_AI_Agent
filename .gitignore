@@ -18,21 +18,11 @@ llm_environment/
 /users/
 
 # ─────────────────────────────────────────────
-#  개인 설정 / 레거시 호환 경로
+#  체크아웃 내부 사용자 데이터는 항상 런타임 산출물
 # ─────────────────────────────────────────────
-# 정본은 user_data/settings/user_config.json.
-# 아래 두 경로는 이전 버전 잔재 및 agent_runner 호환 경계이므로 추적하지 않는다.
-/launcher/settings/
-/launcher/agent/settings/
+/user_data/
+/src/user_data/
 .webui_secret_key
-
-# ─────────────────────────────────────────────
-#  통합 사용자 데이터 (user_data/)
-# ─────────────────────────────────────────────
-/user_data/*
-!/user_data/.gitkeep
-!/user_data/README
-!/user_data/README.*
 
 # ─────────────────────────────────────────────
 #  Python
@@ -126,25 +116,11 @@ blobs/
 .docker/
 
 # ─────────────────────────────────────────────
-#  사용자 작업 데이터
+#  사용자 작업/런타임 데이터
 # ─────────────────────────────────────────────
-agent/workspace/*
-!agent/workspace/.gitkeep
-!agent/workspace/README.txt
-chat_ui/data/
 *.db
 *.sqlite
 *.sqlite3
-
-# ─────────────────────────────────────────────
-#  경로 통합 이전 잔재 + 런타임 산출물
-# ─────────────────────────────────────────────
-/launcher/user_data/
-
-# 테스트가 project_root 를 src/ 로 잡고 돌면 여기에 설정이 생긴다. 정본은
-# 루트의 user_data/ 이므로 이쪽은 언제나 부산물이다.
-/src/user_data/
 session_*.json
-!**/.gitkeep
 mcp_tools.json
 .path_unify_manifest.json
