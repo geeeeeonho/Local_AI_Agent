@@ -96,9 +96,9 @@ def test_container_ollama_probe_targets_host_gateway_and_selected_model(monkeypa
 
 
 def _backend_with_models(*names):
-    from integrations.legacy.desktop import LegacyBackend
+    from integrations.desktop import DesktopBackend
 
-    backend = object.__new__(LegacyBackend)
+    backend = object.__new__(DesktopBackend)
     backend.inference = SimpleNamespace(
         client=SimpleNamespace(list_models=lambda: [{"name": name} for name in names])
     )
