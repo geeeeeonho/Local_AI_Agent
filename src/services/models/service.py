@@ -135,7 +135,7 @@ class ModelService:
     def current_stack(self, *, free_gb=None, installed=None):
         """What each role would actually load right now, and whether it is here.
 
-        The choice comes from the retained ladder resolver, not a second copy of
+        The choice comes from the canonical ladder resolver, not a second copy of
         that policy; this only reports it alongside on-disk presence.
         """
         from launcher.models import model_catalog as catalog
