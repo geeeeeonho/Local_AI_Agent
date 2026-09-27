@@ -9,7 +9,7 @@ class InferenceService:
         if runtime is None:
             import importlib
             from project_paths import ENV_DIR, MODEL_STORAGE_DIR
-            from integrations.legacy.desktop import ManagedInference
+            from integrations.desktop import ManagedInference
             runtime = ManagedInference(ENV_DIR, MODEL_STORAGE_DIR, importlib.import_module)
         self.runtime = runtime
         self.client, self.model_dir = runtime.client, runtime.model_dir
