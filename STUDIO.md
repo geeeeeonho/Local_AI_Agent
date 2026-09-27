@@ -86,7 +86,7 @@ output, file sidebar, model controls, stop/restart and approvals use the retaine
 Agent panel. A Project folder is only a dialog default: it never grants Host or
 Sandbox access automatically. Host Block remains rejected.
 
-Models is one screen with three tabs, replacing the retained launcher's split
+Models is one screen with three tabs, replacing the launcher's split
 between "installed model info" and "model management" and the first desktop's
 free-text tag field.
 
@@ -146,7 +146,7 @@ retained maintenance actions.
 ## Ownership, policy and shutdown
 
 Network preferences resolve Session > Project > App > Global, falling back to
-the retained launcher's current mode when no new global setting exists. A
+the launcher's current mode when no new global setting exists. A
 selected Project is read again before session startup. Changing preferences
 does not reconfigure an existing session's network mid-operation.
 
@@ -207,60 +207,47 @@ Ollama and proxy runtimes are not indiscriminately killed on every window close.
 
 ## Paths and scope
 
-`src/project_paths.py` is the single assignment source for every path the
-product uses - project-local `llm_environment`, existing `user_data`, and the
-model store. Core reads it rather than defining a second copy.
+`src/project_paths.py` is the single source of truth for product paths.
 
-Ollama is the intermediary rather than something this project contains. It owns
-downloading, storing and serving; an Ollama already on the machine is used as-is,
-and only an absent one is installed, officially, with `/DIR=C:\Ollama`. The store
-is `C:\Ollama\models`, inside that install and shared by every Windows account,
-because Ollama's own default lives in one user profile and a second account would
-re-download everything. An `OLLAMA_MODELS` the user set themselves always wins:
-overriding that was exactly what the old forced `C:\LLM_Models` got wrong, and
-that store is now migrated out of rather than written to.
+On Windows the writable runtime is rooted at `C:\LocalAI`:
 
-This was checked against a real ollama binary built from source rather than
-from documentation. Pointed at a store by `OLLAMA_MODELS`, Ollama lists a model
-placed there; started without it, the same server reports an empty library
-because it looks in the user profile - the per-user problem, reproduced. Two
-servers under different home directories sharing one `OLLAMA_MODELS` both serve
-the same model, and the second home holds no blobs at all: one copy, two
-accounts. This project's own resolver, `env_vars`, disk index and store-agreement
-check were then run against that live server and agreed with it on every point.
+```text
+C:\LocalAI\
+  environment\                  shared runtime environment
+  ollama\                       shared Ollama install/broker
+  models\                       shared model store
+    MODEL_FILES.csv
+    .localai\
+      registry.json
+      model-mutation.lock
+  users\<account>\             private account boundary
+    user_data\
+    logs\
+    workspace\
+```
 
-The one divergence the exercise found is fixed: Ollama's `envconfig.Var` strips
-surrounding quotes as well as whitespace, so `OLLAMA_MODELS="C:\Ollama\models"`
-- quotes included, which a Windows dialog or batch file makes easy - resolves to
-the bare path. This project kept the quotes, so it would have reported an empty
-store and blocked startup against a perfectly healthy server. The parser now
-matches `envconfig.Var` exactly, compared case by case against the real Go
-function, and tests pin it.
+The source checkout is not a runtime data store. Moving or re-downloading the
+checkout does not move the shared runtime or another account's private records.
 
-A server this process did not launch is no longer refused on sight. It is
-accepted when it runs from a known install and is demonstrably reading the same
-store - what it serves on `/api/tags` has to exist in the on-disk index - and
-it is never terminated, because it may be the user's own Windows service. Only
-the portable copy in this project's folder stays ours to restart. Ownership is
-decided by the pid in our runtime state file, not by the binary path, since the
-official install is now the binary we would launch ourselves.
-The official Ollama install and the machine-shared store at
-`C:\Ollama\models` are shipped: Setup installs Ollama with `/DIR` when the
-machine has none, moves an earlier `C:\LLM_Models` there crash-safely, and
-publishes the machine-scope `OLLAMA_MODELS` so the other Windows accounts read
-the same copy. The shell still does not relocate user data or rebuild
-AnythingLLM/OI data, and it does not run any of the above silently - Setup
-does it, and the model screen reports and repairs the sharing afterwards.
+LocalAI starts its managed Ollama broker with `C:\LocalAI\models` explicitly.
+The model store, role registry, model inventory and model-mutation lock are
+machine-wide. Standard Windows users receive Modify rights only on `models`;
+`environment` and `ollama` remain read/execute for standard users.
+`users\<account>` remains private to that account, SYSTEM and Administrators.
 
-The layering is Apps -> Services -> transition Integrations, with UI-independent
-Core contracts. Existing reviewed launcher implementations are reused behind
-adapters; their physical relocation and the elimination of every historical
-import/direct CLI call are not claimed complete. The original DockerService
-remains the single concrete Docker CLI primitive implementation.
+Setup does not automatically scan, merge or relocate data from earlier layouts.
+Standalone Ollama CLI/Tray compatibility is best-effort through
+`OLLAMA_MODELS`; LocalAI's own broker does not depend on that environment
+setting.
 
-This is a Python-source desktop release. Four Windows EXE packages, embedded
-WebView distribution, official Ollama migration activation and user-data
-relocation are separate work, not artifacts produced by this change.
+The desktop layering is Apps -> Services -> Integrations -> launcher/runtime
+implementations, with UI-independent Core contracts. `integrations.desktop`
+is the active desktop integration boundary. `DockerService` remains the
+single concrete Docker CLI primitive implementation.
+
+This is a Python-source desktop release. Packaging into native executables or an
+embedded WebView distribution is outside this repository's current runtime
+contract.
 
 ## Validation
 
@@ -276,12 +263,10 @@ On Linux the desktop tests need a real display, such as Xvfb; they instantiate
 real Tk windows while injecting the external runtimes. A Python with no Tk at
 all skips them and still runs the rest:
 
-  with Tk:    968 passed
-  without Tk: 856 passed, 54 skipped
 
 ### Verified
 
-On a live Linux Docker daemon (29.3.1), against the real `LegacyBackend` rather
+On a live Linux Docker daemon (29.3.1), against the real `DesktopBackend` rather
 than a stand-in:
 
 - the full repository suite, on the CI Python (3.11) headless and with Tk under Xvfb;
@@ -333,9 +318,9 @@ working tree, on both a Python with Tk and one without, plus `compileall` on
 3.11 to match the workflow's interpreter. Record which of those you actually
 ran.
 
-## Transition adapter contract
+## Dynamic integration contract
 
-The desktop reaches the retained launcher through `importlib` and attribute
+The desktop reaches the launcher through `importlib` and attribute
 access, which neither `compileall` nor an AST import check can see, and which
 unit-test stubs can satisfy with names that do not exist. Two constants shipped
 that way: a context-window name that never existed and made every Chat start
