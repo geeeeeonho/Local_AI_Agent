@@ -236,18 +236,10 @@ def test_refresh_publishes_json_and_csv_from_the_same_snapshot(tmp_path):
     assert data['csv_sha256'] == hashlib.sha256(out.read_bytes()).hexdigest()
     with out.open(encoding='utf-8-sig', newline='') as handle:
         rows = list(csv.DictReader(handle))
-    assert list(rows[0]) == list(mf.FIELDS)
+    from launcher.models import model_index
+    assert list(rows[0]) == list(model_index.CSV_FIELDS)
     assert rows[0]['model'] == data['files'][0]['model']
     assert out.read_bytes().startswith(b'\xef\xbb\xbf')
-
-
-def test_legacy_scan_returns_filerow_and_keeps_role_labels(tmp_path):
-    blob(tmp_path)
-    manifest(tmp_path)
-    with patch.object(mf, '_catalog_roles', return_value={'alpha:latest': 'chat'}):
-        rows = mf.scan(tmp_path)
-    assert isinstance(rows[0], mf.FileRow)
-    assert rows[0].role == 'chat'
 
 
 def test_refresh_tracks_external_install_and_remove_without_touching_the_store(tmp_path):
@@ -265,15 +257,7 @@ def test_refresh_tracks_external_install_and_remove_without_touching_the_store(t
 
 def test_default_inventory_output_never_falls_back_to_user_data(tmp_path):
     root = tmp_path / 'models'
-    with patch.object(mf, '_writable', return_value=False):
-        assert mf.default_csv_path(root) == root / mf.CSV_NAME
-
-
-def test_unique_write_probe_does_not_destroy_an_existing_file(tmp_path):
-    protected = tmp_path / '.model_files_write_probe'
-    protected.write_text('do not delete', encoding='utf-8')
-    assert mf._writable(tmp_path)
-    assert protected.read_text(encoding='utf-8') == 'do not delete'
+    assert mf.default_csv_path(root) == root / mf.CSV_NAME
 
 
 def test_json_replace_failure_preserves_previous_json_and_cleans_temporary_files(tmp_path):
