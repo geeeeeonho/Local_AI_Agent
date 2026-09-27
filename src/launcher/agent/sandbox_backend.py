@@ -21,7 +21,7 @@ SANDBOX_SEARXNG_URL_FALLBACK = "http://llm_searxng:8080"
 #: Environment keys from the retired custom agent loop. Nothing produces them
 #: any more; they are still filtered so a stale or hand-built command cannot
 #: smuggle that payload — and its conflicting system prompt — into the runtime.
-_LEGACY_ENV_KEYS = {
+_RETIRED_ENV_KEYS = {
     "AGENT_REPL_SRC",
     "AGENT_MODEL_LADDER",
     "LITELLM_LOG",
@@ -141,7 +141,7 @@ def normalize_sandbox_command(command: tuple[str, ...] | list[str]) -> list[str]
         if token == "-e" and i + 1 < image_index:
             value = source[i + 1]
             key = _env_key(value)
-            if key in _LEGACY_ENV_KEYS or key in override_keys:
+            if key in _RETIRED_ENV_KEYS or key in override_keys:
                 i += 2
                 continue
             prefix.extend([token, value])
