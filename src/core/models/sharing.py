@@ -36,10 +36,6 @@ NOT_MANAGEABLE = 'not_manageable'
 USERS_SDDL = sddl.USERS_SDDL
 USERS_SID = sddl.USERS_SID
 
-FILE_READ_DATA = sddl.FILE_READ_DATA
-GENERIC_READ = sddl.GENERIC_READ
-GENERIC_ALL = sddl.GENERIC_ALL
-
 
 def readable_from_sddl(descriptor: str) -> Optional[bool]:
     """Can BUILTIN\\Users read, per this security descriptor? None if unparsable."""
