@@ -19,7 +19,7 @@ from test_desktop_ui import pump  # noqa: E402,F401
 
 
 class _Panel(tk.Frame):
-    """retained ChatPanel 자리. 세션이 부르는 표면만 갖춘다."""
+    """ChatPanel 자리. 세션이 부르는 표면만 갖춘다."""
 
     def __init__(self, parent, callbacks):
         super().__init__(parent)
@@ -186,7 +186,7 @@ def test_a_declined_confirmation_never_touches_models(ui, monkeypatch):
     assert not any(call[0] == 'pull' for call in backend.calls)
 
 
-def test_repair_runs_the_retained_installer_only_when_idle(ui, monkeypatch):
+def test_repair_runs_the_installer_only_when_idle(ui, monkeypatch):
     w, svc, backend = ui
     confirmed(monkeypatch)
     w.repair()
@@ -220,14 +220,14 @@ def test_a_burst_of_events_drops_history_instead_of_blocking(ui):
 
 
 def test_the_real_presenter_works_through_the_window_proxy(ui):
-    """window 가 만들어 주는 3-속성 proxy 로 retained Presenter 가 동작하는가.
+    """window 가 만들어 주는 3-속성 proxy 로 Presenter 가 동작하는가.
 
     유지보수 액션은 이 Presenter 의 info/warn/section 을 호출하고, 그 출력은
     Setup 화면의 PanelHost 안으로 들어가야 한다.
     """
-    from integrations.legacy.desktop import LegacyBackend
+    from integrations.desktop import DesktopBackend
     w, svc, _ = ui
-    svc.system.backend = LegacyBackend(svc.env, svc.model_dir, svc.project_root)
+    svc.system.backend = DesktopBackend(svc.env, svc.model_dir, svc.project_root)
     presenter = w.presenter('setup')
     presenter.info('hello from an action')
     presenter.warn('and a warning')
