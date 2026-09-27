@@ -264,11 +264,6 @@ TIERS = {
     ],
 }
 
-# 예전 역할 이름 -> 지금 이름. shared registry.json 에 옛 키가 있어도 받아 준다.
-# 사용자가 조용히 무시당하지 않도록 받아 준다.
-ROLE_ALIASES = {"context": "office"}
-
-
 def _canonical(installed):
     """설치 목록을 카탈로그 표기로 맞춘다 (대소문자 차이 흡수)."""
     try:
@@ -342,9 +337,9 @@ def _flatten_tiers(_tiers):
 def _registry_path():
     """Machine-wide model role registry beside the shared model store.
 
-    Personal legacy registries are intentionally not imported automatically:
-    choosing one Windows account's old values as the machine truth would make
-    that account silently win over every other account.
+    Per-account registries are intentionally not imported automatically:
+    choosing one Windows account's values as the machine truth would make that
+    account silently win over every other account.
     """
     import project_paths
     return str(project_paths.model_registry_path())
@@ -389,7 +384,9 @@ def load_registry(path=None):
             sec = {}
         clean = {}
         for role, tiers in sec.items():
-            role = ROLE_ALIASES.get(role, role)
+            if role not in TIERS:
+                errs.append("%s.%s 는 알 수 없는 역할입니다" % (key, role))
+                continue
             if not isinstance(tiers, list):
                 errs.append("%s.%s 가 배열이 아닙니다" % (key, role))
                 continue
