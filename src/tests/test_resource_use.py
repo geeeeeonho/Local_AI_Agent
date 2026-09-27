@@ -13,8 +13,8 @@ import pytest
 
 
 def backend(importer, tmp_path):
-    from integrations.legacy.desktop import LegacyBackend
-    return LegacyBackend(tmp_path / 'env', tmp_path / 'models', tmp_path, importer=importer)
+    from integrations.desktop import DesktopBackend
+    return DesktopBackend(tmp_path / 'env', tmp_path / 'models', tmp_path, importer=importer)
 
 
 def counting_importer(counter):
@@ -62,7 +62,7 @@ def test_a_repeated_poll_does_not_reprobe_every_service(tmp_path):
 
 
 def test_the_answer_is_reprobed_once_it_is_stale(tmp_path, monkeypatch):
-    from integrations.legacy import desktop
+    from integrations import desktop
     calls = []
     back = backend(counting_importer(calls), tmp_path)
     clock = [0.0]
