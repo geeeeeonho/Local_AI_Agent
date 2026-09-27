@@ -65,12 +65,11 @@ def read(model_dir=None, *, windows=None) -> Sharing:
 
 
 def ensure_readable(model_dir: Path, *, windows=None) -> bool:
-    """Grant BUILTIN\\Users read and execute, inheritable, keeping existing ACLs.
+    """Grant BUILTIN\\Users inheritable read/execute, keeping existing ACLs.
 
-    Read only. The store is a trust asset - it decides what the models on this
-    machine actually are - so the other accounts get to use the models, not to
-    replace them. (OI)(CI) makes the grant apply to models pulled later, not
-    just the ones present when this runs.
+    This helper is used for shared runtime/Ollama directories. The model store
+    uses ensure_manageable instead because every account may install and remove
+    shared models.
     """
     if not acl.on_windows(windows):
         return True
