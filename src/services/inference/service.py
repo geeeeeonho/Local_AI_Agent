@@ -66,6 +66,6 @@ class InferenceService:
         """Forward the progress callback only to a runtime that accepts one.
 
         A thirty-second Ollama boot with no output is indistinguishable from a
-        hang, and the retained runtimes did not all take a callback.
+        hang, and not every runtime entrypoint accepts a callback.
         """
         return invoke(self.runtime.ensure_running, log=log)
