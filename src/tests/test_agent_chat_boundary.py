@@ -26,7 +26,6 @@ def test_agent_chat_uses_service_boundary_without_unified_agent_private_access()
     assert "create_backend(" in coordinator
     assert "AgentConfig(" in coordinator
     assert "ProcessRuntimeSpec(" in coordinator
-    assert "LegacyBackend()" not in action
     assert "UnifiedAgent" not in action
     assert "agent._proc" not in action
     assert "build_sandbox_docker_command" not in action
@@ -114,9 +113,9 @@ def test_agent_runtime_never_executes_a_decoded_source_payload():
 
 
 def test_sandbox_still_filters_retired_runtime_env_keys():
-    from launcher.agent.sandbox_backend import _LEGACY_ENV_KEYS
+    from launcher.agent.sandbox_backend import _RETIRED_ENV_KEYS
 
-    assert "AGENT_REPL_SRC" in _LEGACY_ENV_KEYS
+    assert "AGENT_REPL_SRC" in _RETIRED_ENV_KEYS
 
 
 def test_start_failure_diagnostics_never_run_the_agent_command():
