@@ -10,7 +10,7 @@ def initialize_language(project_root, language=None):
 
 
 def install_exit_hooks(project_root):
-    """Install the process-wide shutdown hooks used by retained runtimes.
+    """Install the process-wide shutdown hooks used by managed runtimes.
 
     WARP, Tor and the sandbox register their container teardown through
     ``lifelog.register_cleanup``. Those callbacks are only ever run by the
