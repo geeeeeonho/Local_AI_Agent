@@ -20,6 +20,7 @@ from launcher.services.docker import DockerService
 
 FLAG_NAME = "docker_autoclean.flag"
 
+
 def _owned_container_names() -> tuple[set[str], tuple[str, ...]]:
     """Return exact names and prefixes that LocalAI itself creates."""
     exact = {
@@ -298,7 +299,7 @@ def register_exit_sweep(state_root) -> bool:
 
 
 __all__ = [
-"FLAG_NAME", "LEFTOVER_STATES", "docker_available", "system_df",
+    "FLAG_NAME", "LEFTOVER_STATES", "docker_available", "system_df",
     "list_our_leftovers", "list_our_networks",
     "prune_exited_ours", "prune_our_networks", "prune_dangling_images",
     "prune_build_cache", "prune_unused_images", "prune_volumes",
