@@ -200,7 +200,7 @@ if __name__ == "__main__":
 
 
 class DynamicIntegrationReferenceTests(unittest.TestCase):
-    """Names the transition adapter loads by string must exist for real.
+    """Names the desktop integration loads by string must exist for real.
 
     The desktop integration reaches the launcher through ``importlib`` and plain
     attribute access, so neither compileall nor the AST check above can see the
