@@ -403,7 +403,7 @@ def test_a_cancelled_agent_start_takes_the_wizard_progress_screen_down():
     assert 'clear_agent_panel' in names
 
 
-# ── the legacy Chat action ───────────────────────────────────────────────
+# ── the terminal Chat action ─────────────────────────────────────────────
 
 def test_the_chat_action_gives_searxng_the_environment_it_requires():
     """``start(env, ...)`` needs ``env``. Calling it bare raised TypeError into
