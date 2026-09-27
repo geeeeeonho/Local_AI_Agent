@@ -10,13 +10,7 @@ def _text(relative: str) -> str:
 
 
 def test_custom_session_helpers_are_not_runtime_owned():
-    """user_data may *describe* the retired session files, never handle them.
-
-    The retired helpers are gone, and so is any directory traversal that could
-    grow a second session store beside Open Interpreter's thread IDs. The check
-    reads the parsed module rather than raw text so the module docstring and the
-    user-facing README.txt can keep explaining the policy.
-    """
+    """No helper may recreate a second session store beside OI thread IDs."""
     text = _text("src/launcher/core/user_data.py")
     for name in (
         "new_session_id",
@@ -44,17 +38,20 @@ def test_gui_compatibility_shims_are_gone():
     assert (REPO_ROOT / "src/launcher/presenter/gui/__init__.py").is_file()
 
 
-def test_legacy_agent_event_adapter_is_gone():
+def test_retired_agent_event_adapter_is_gone():
     text = _text("src/launcher/agent/events.py")
     assert "_LEGACY_TYPES" not in text
     assert "from_legacy_message" not in text
 
 
-def test_active_openwebui_runtime_identifiers_are_absent():
+def test_retired_openwebui_runtime_identifiers_are_absent():
     forbidden = (
         "OPEN_WEBUI_PORT",
         "OPEN_WEBUI_URL",
         "LOCAL_AI_CHAT_ENGINE",
+        "OPENWEBUI_",
+        "open_webui",
+        "openwebui",
     )
     for root in (REPO_ROOT / "src/launcher", REPO_ROOT / "src/installer"):
         for path in root.rglob("*.py"):

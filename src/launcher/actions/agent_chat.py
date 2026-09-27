@@ -141,7 +141,7 @@ def _match_installed_model(tag: str, p: Presenter) -> str | None:
         host = "127.0.0.1:" + str(getattr(config, "OLLAMA_PORT", 11434))
         matched, note = model_roles.auto_match_installed(tag, role_name, free, host=host)
         if matched is None:
-            p.error(note or "설치된 에이전트 모델이 없습니다 — SETUP.bat에서 모델을 설치하세요.")
+            p.error(note or "설치된 에이전트 모델이 없습니다 — RUN.bat --manage에서 모델을 설치하세요.")
             return None
         if matched != tag:
             p.warn(note or ("설치된 " + matched + " 로 자동 전환"))
@@ -435,7 +435,7 @@ def run(env, p):
     if command is None:
         if is_host:
             p.error("Open Interpreter (호스트) 가 설치되지 않았습니다.")
-            p.info("샌드박스 모드를 사용하거나 SETUP.bat을 다시 실행하세요.")
+            p.info("샌드박스 모드를 사용하거나 RUN.bat --install을 다시 실행하세요.")
         else:
             p.error("에이전트 런타임 명령 조립 실패")
         p.pause()

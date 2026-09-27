@@ -600,7 +600,7 @@ class DesktopWindow:
         set_text(self.stack_detail,'\n'.join(lines))
 
     def ensure_ollama(self):
-        """Explicit managed-Ollama start/verify, with the retained diagnostics."""
+        """Explicit managed-Ollama start/verify with current diagnostics."""
         try:presenter=self.presenter('models')
         except Exception as exc:self.log(str(exc),level='error');return
         self.run_task('models.ollama',lambda:self.services.setup.maintenance('ollama_action',presenter))
@@ -864,13 +864,9 @@ class DesktopWindow:
             # Before anything is started the readiness line reports the poll,
             # so the page is never blank about why it is not ready.
             if not self.services.chat.attempted and not self._chat_starting:
-                stray=status.get('runtime_root') or status.get('records_private')
-                if isinstance(stray,str):
-                    # An install the previous release left in the checkout is
-                    # complete and working; it is simply somewhere the new
-                    # paths do not look. Saying "not ready" without saying
-                    # that sends the user off to re-download it.
-                    self.set_chat_state('Waiting',stray)
+                private_warning=status.get('records_private')
+                if isinstance(private_warning,str):
+                    self.set_chat_state('Waiting',private_warning)
                 elif status.get('ollama') is False:
                     self.set_chat_state('Waiting','Ollama 가 응답하지 않습니다 · '
                         '[Chat 시작]을 누르면 이 창이 직접 시작합니다.')

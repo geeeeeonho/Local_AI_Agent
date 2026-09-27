@@ -60,7 +60,6 @@ Search(SearXNG+Tor) 선택을 하고, Ollama·AnythingLLM·Open Interpreter·WAR
 - `python -m installer` → GUI가 필요 없는 진단/자동화용 콘솔 진입점입니다.
 - 새 설치는 예전 경로를 자동 검색·이동·병합하지 않습니다.
 
-기존 `INSTALL.bat`, `MANAGE.bat`, `SETUP.bat`은 더 이상 루트 실행기로 사용하지 않습니다.
 
 ### 2. 실행
 
@@ -75,11 +74,11 @@ RUN.bat --app studio       :: Studio
 RUN.bat --app chat         :: 대화 · 문서 · Workspace
 RUN.bat --app interpreter  :: Agent · 명령 · 승인
 RUN.bat --app setup        :: Setup 화면
-RUN.bat --tui              :: 이전 터미널 런처
+RUN.bat --tui              :: 터미널 런처
 ```
 
 Studio 는 Tk 가 있는 Python 3.11+ 를 씁니다. GUI를 사용할 수 없는 환경에서는
-`RUN.bat --tui` 로 이전 터미널 런처를 쓸 수 있습니다.
+`RUN.bat --tui` 로 터미널 런처를 쓸 수 있습니다.
 
 설치와 관리는 같은 `RUN.bat`에서 선택하지만, 설치/재설치와 관리 UI는 서로 다른 책임으로 유지합니다. 기존 개별 실행기와 `RUN_TUI.bat`은 제거되었습니다.
 
@@ -556,8 +555,7 @@ Ollama 가 필요하면 자기 PC 에서 위 진단을 한 번 돌려 보세요.
 모델 선택의 기본 정본은 `TIERS` 이고, 역할별 공용 재정의는
 `C:\LocalAI\models\.localai\registry.json` 의 `replace` / `add` 로 합니다.
 `ROLES[*].model / fallback` 은 화면 표시용이며 임포트 시점에 최종 TIERS의 1·2단계로
-덮어써집니다. 예전 `user_data\models\registry.json`은 자동 병합하지 않고 legacy
-데이터로 남겨 둡니다.
+덮어써집니다. 예전 `user_data\models\registry.json`은 자동 병합하지 않고 이전 데이터로 남겨 둡니다.
 
 ### 메모리 예산과 3단계
 
@@ -688,8 +686,8 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 | `llama3-groq-tool-use:8b` | BFCL 89.06 으로 자체 호스팅 최고점이지만 컨텍스트가 8K. 도구 결과로 컨텍스트를 쓰는 이 에이전트엔 부족 |
 | `gemma4:31b` · `qwen3-vl:32b` | 적재 상한 18.4GB 초과 — 이 예산에선 절대 안 뜬다 |
 
-역할 이름을 바꾸면 `model_roles.ROLE_ALIASES` 에 옛 이름을 등록하세요.
-공용 `models\.localai\registry.json` 에 옛 키가 있어도 alias를 통해 계속 읽습니다.
+공용 `models\.localai\registry.json` 은 현재 역할 키(`coding`, `agent`, `uncensored`, `office`, `balanced`)만 허용합니다.
+알 수 없는 역할 키는 조용히 적용하지 않고 오류로 표시합니다.
 
 ### 기본 권장 모델 세트
 
@@ -940,13 +938,3 @@ C:\LocalAI\users\<계정>\
 체크아웃을 복사하거나 다시 받아도 공용 환경과 모델은 중복 생성하지 않습니다.
 각 Windows 계정의 `RUN.bat`은 같은 공용 런타임을 바라보되, 설정·Agent trace·
 인터프리터 세션·AnythingLLM 데이터 등은 자기 계정 폴더만 사용합니다.
-
-## 이전 상세 README
-
-구조 개편 전의 긴 README는 내용 유실 없이 다음 위치에 보존했습니다.
-
-```text
-src/docs/legacy/README_before_src_refactor.md
-```
-
-과거 패치 이력이나 예전 구조를 확인할 때만 참고하세요. 현재 실행 방법은 이 루트 README를 기준으로 합니다.

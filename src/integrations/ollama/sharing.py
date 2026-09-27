@@ -1,14 +1,13 @@
 """Read and repair the LocalAI machine-shared model store.
 
-``core.models.sharing`` decides whether LocalAI accounts can read the shared
-library. Registry OLLAMA_MODELS values are still exposed here for external
-Ollama compatibility, but the LocalAI-managed broker receives its store path
-explicitly and does not depend on those registry values.
+``core.models.sharing`` decides whether LocalAI accounts can manage the shared
+library. The LocalAI broker receives its store path explicitly. Publishing
+``OLLAMA_MODELS`` remains a separate best-effort convenience for standalone
+Ollama CLI/Tray processes.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from core.models import sharing as policy
 from core.models.sharing import Sharing, VARIABLE
@@ -21,47 +20,12 @@ __all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
 
 # The local Users group, by SID so it works on a non-English Windows.
 BUILTIN_USERS_SID = policy.USERS_SID
-_MACHINE_KEY = r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
-_USER_KEY = 'Environment'
-
 # One copy of the console plumbing: the private records folder under the same
 # root asks the opposite question of the same tool.
 _run = acl.run
 
 
-def _registry_value(root, key) -> Optional[str]:
-    """A stored environment value: '' when unset, None when unreadable.
-
-    Read from the registry rather than os.environ because this process
-    inherited its environment at launch: a value written by a setup that ran
-    after it would not be visible, and a value this process injected for its
-    own child Ollama would look like a machine-wide setting.
-    """
-    try:
-        import winreg
-    except ImportError:
-        return None
-    try:
-        with winreg.OpenKey(root, key) as handle:
-            value, kind = winreg.QueryValueEx(handle, VARIABLE)
-        value = str(value)
-        # REG_EXPAND_SZ comes back with %SystemDrive% and friends still in it.
-        # That is the same store written differently, and comparing the raw
-        # text reported it as pointing somewhere else.
-        if kind == getattr(winreg, 'REG_EXPAND_SZ', 2):
-            # ntpath, not os.path: this value came out of the Windows registry
-            # and uses %VAR% syntax, which posixpath.expandvars leaves alone.
-            # Naming the platform makes the rule checkable off Windows too.
-            import ntpath
-            value = ntpath.expandvars(value)
-        return value
-    except FileNotFoundError:
-        return ''
-    except OSError:
-        return None
-
-
-def _users_access(model_dir: Path) -> tuple[Optional[bool], Optional[bool]]:
+def _users_access(model_dir: Path) -> tuple[bool | None, bool | None]:
     """Return (readable, manageable) for BUILTIN\\Users from one ACL read."""
     if not model_dir.exists():
         return None, None
@@ -89,13 +53,10 @@ def read(model_dir=None, *, windows=None) -> Sharing:
                        intended_shared=model_dir == ollama_paths.SHARED_MODELS_DIR,
                        per_user_path=ollama_paths.is_per_user_store(model_dir),
                        windows=False)
-    import winreg
     readable, manageable = _users_access(model_dir)
     return Sharing(
         path=str(model_dir),
         intended_shared=model_dir == ollama_paths.SHARED_MODELS_DIR,
-        machine_value=_registry_value(winreg.HKEY_LOCAL_MACHINE, _MACHINE_KEY),
-        user_value=_registry_value(winreg.HKEY_CURRENT_USER, _USER_KEY),
         readable_by_users=readable,
         manageable_by_users=manageable,
         per_user_path=ollama_paths.is_per_user_store(model_dir),
@@ -104,12 +65,11 @@ def read(model_dir=None, *, windows=None) -> Sharing:
 
 
 def ensure_readable(model_dir: Path, *, windows=None) -> bool:
-    """Grant BUILTIN\\Users read and execute, inheritable, keeping existing ACLs.
+    """Grant BUILTIN\\Users inheritable read/execute, keeping existing ACLs.
 
-    Read only. The store is a trust asset - it decides what the models on this
-    machine actually are - so the other accounts get to use the models, not to
-    replace them. (OI)(CI) makes the grant apply to models pulled later, not
-    just the ones present when this runs.
+    This helper is used for shared runtime/Ollama directories. The model store
+    uses ensure_manageable instead because every account may install and remove
+    shared models.
     """
     if not acl.on_windows(windows):
         return True
@@ -131,6 +91,7 @@ def ensure_manageable(model_dir: Path, *, windows=None) -> bool:
     result = _run(['icacls', str(model_dir), '/grant',
                    '*%s:(OI)(CI)(M)' % BUILTIN_USERS_SID, '/T', '/Q'])
     return result is not None and result.returncode == 0
+
 
 def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
     """Best-effort compatibility for Ollama launched outside LocalAI.
@@ -209,14 +170,6 @@ _MESSAGES = {
     policy.NOT_SHARED_PATH:
         '이 저장소는 기계 공용 위치가 아닙니다. 직접 지정한 경로라면 그대로 '
         '두어도 됩니다.',
-    policy.VARIABLE_MISSING:
-        '시스템 범위 ' + VARIABLE + ' 가 없습니다. 다른 Windows 계정의 Ollama 는 '
-        '자기 프로필을 보고 모델을 처음부터 다시 받습니다. 관리자 권한이 필요합니다.',
-    policy.VARIABLE_ELSEWHERE:
-        '시스템 범위 ' + VARIABLE + ' 가 다른 경로를 가리킵니다.',
-    policy.USER_OVERRIDE:
-        '이 계정의 사용자 범위 ' + VARIABLE + ' 가 시스템 값을 가립니다. '
-        '개인 설정이므로 프로그램이 지우지 않습니다.',
     policy.NOT_READABLE:
         '다른 계정에 읽기 권한이 없습니다.',
     policy.NOT_MANAGEABLE:

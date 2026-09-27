@@ -1,7 +1,7 @@
 """Close one account's records folder to the machine's other accounts.
 
-The model store under the same root is deliberately readable by
-``BUILTIN\\Users`` - that is how a second Windows account uses the models
+The model store under the same root deliberately grants ``BUILTIN\\Users``
+Modify - that is how a second Windows account can use and manage the models
 without downloading them again. A folder created underneath inherits that
 grant, so ``C:\\LocalAI\\users\\Someone\\user_data`` would be readable by everyone
 on the PC the moment it is created: settings, project list, chat history, the

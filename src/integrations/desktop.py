@@ -1,8 +1,8 @@
-"""Transition adapters to reviewed launcher runtimes; never import apps.
+"""Desktop integration boundary to the launcher runtimes; never import apps.
 
-This file deliberately leaves existing security and container implementations
-in place. Their eventual physical relocation is not required to use one shared
-service boundary, and must not weaken their fail-closed behavior.
+The application services use this module as the single adapter to the mature
+launcher/container implementations. It contains active runtime code, not a
+compatibility or migration layer.
 """
 from pathlib import Path
 import importlib
@@ -58,7 +58,7 @@ class ManagedInference:
         return self.endpoint
 
 
-class LegacyBackend:
+class DesktopBackend:
     def __init__(self, env, model_dir, project_root, *, data=None,
                  importer=importlib.import_module):
         self.env, self.model_dir, self.root = map(Path, (env, model_dir, project_root))
@@ -75,19 +75,12 @@ class LegacyBackend:
         self._search_runtime = None
         self._health = None          # (monotonic, result)
 
-    def runtime_root_leftovers(self):
-        """Fresh-install layout does not scan or migrate older installations."""
-        return []
-
     def describe_records_privacy(self):
-        """One line when this account's records are open to other accounts.
+        """Report when this account's private record tree has a bad ACL.
 
-        The model store next door is deliberately readable by everyone on the
-        PC - that is how a second Windows account avoids re-downloading tens of
-        gigabytes - and a folder created under it inherits that grant. So the
-        records folder is not private by being in the right place, and a user
-        who is never told cannot know that the household's other account can
-        read their chat history.
+        The model store is deliberately shared, but users/<account> is a
+        separate sibling subtree and must remain private to that account,
+        SYSTEM and Administrators.
         """
         paths = self.load('project_paths')
         privacy = self.load('integrations.windows.privacy')
@@ -96,10 +89,6 @@ class LegacyBackend:
         return ('이 PC 의 다른 Windows 계정이 내 기록(%s)을 읽을 수 있습니다 · '
                 '[설치 / 복구] 를 한 번 실행하면 이 계정 전용으로 잠급니다'
                 % paths.ACCOUNT_ROOT)
-
-    def describe_runtime_root(self):
-        """Fresh-install layout has no legacy-location warning."""
-        return None
 
     def current_mode(self):
         return self.load('launcher.network_policy').current_mode().value
@@ -141,11 +130,6 @@ class LegacyBackend:
             'chat': lambda: self.load('launcher.anythingllm_runtime').is_ready(),
             'search': lambda: self.load('launcher.services.docker').DockerService.container_running(
                 self.load('launcher.config').SEARXNG_CONTAINER),
-            # An install left where an older release put it - inside the
-            # checkout, or in Ollama's own folder - is invisible from the new
-            # root, so the window would report a perfectly good install as
-            # missing. Say where it is instead.
-            'runtime_root': self.describe_runtime_root,
             # Personal records sharing a folder with the machine's other
             # accounts is not a smaller problem than a missing install.
             'records_private': self.describe_records_privacy,
@@ -305,7 +289,7 @@ class LegacyBackend:
             raise RuntimeError('Ambiguous Chat container ownership.')
         return identifiers[0] if identifiers else None
 
-    # The retained launcher reads this through getattr with a default; copying
+    # The launcher reads this through getattr with a default; copying
     # the lookup without the default turned a missing constant into a crash.
     def chat_start(self, model, log, cancel):
         runtime = self.load('launcher.anythingllm_runtime')
@@ -400,13 +384,13 @@ class LegacyBackend:
             return True
 
     def agent_open(self, presenter, network, project, cancel=None):
-        old = self.load('launcher.actions.agent_chat')
-        if not old._ensure_gui(presenter):
+        agent_ui = self.load('launcher.actions.agent_chat')
+        if not agent_ui._ensure_gui(presenter):
             return None
         # The original selector owns profile, folder policy and Host confirmation.
         # A project path is a dialog default, never an automatic permission grant.
         presenter.workspace_default = getattr(project, 'workspace_path', '')
-        selected = old._select_setup(self.env, presenter)
+        selected = agent_ui._select_setup(self.env, presenter)
         if selected is None:
             return None
         profile, workspace, mode, model_selection, chosen_network = selected
@@ -421,7 +405,7 @@ class LegacyBackend:
                       chosen_network, cancel=cancel):
             return None
         cfg = self.load('launcher.config')
-        tag = old._match_installed_model(str(model_selection.get('tag') or cfg.MODEL_TAG), presenter)
+        tag = agent_ui._match_installed_model(str(model_selection.get('tag') or cfg.MODEL_TAG), presenter)
         if not tag:
             return None
         runtime_config = self.load('launcher.agent.runtime_config')
@@ -438,7 +422,7 @@ class LegacyBackend:
         risk = self.load('launcher.presenter.base').RISK_HIGH
         def approve(event):
             return presenter.confirm_dangerous(label='Open Interpreter approval',
-                description=old._approval_description(event, Path(workspace)), risk=risk)
+                description=agent_ui._approval_description(event, Path(workspace)), risk=risk)
         return AgentBinding(instance, factory, approve, {
             'workspace': str(workspace), 'mode': mode, 'network': chosen_network.value,
             'model': tag, 'memory': memory, 'cpus': cpus,
@@ -474,7 +458,7 @@ class LegacyBackend:
         # Lifetime is owned by AgentSession and DesktopWindow, not panel destruction.
         return panel
 
-    # The retained package re-exports two of these under *_action aliases, so a
+    # The launcher package re-exports two of these under *_action aliases, so a
     # module path built from the key alone raised ModuleNotFoundError the first
     # time a user pressed those buttons. Name the real modules here instead.
     def prepare_model_runtime(self):
@@ -514,6 +498,20 @@ class LegacyBackend:
         if module is None:
             raise ValueError('unknown maintenance operation: ' + str(key))
         return self.load(module).run(self.env, presenter)
+
+    @staticmethod
+    def setup_exit_message(code) -> str:
+        """Turn Windows process exit codes into a useful Setup failure message."""
+        raw = int(code)
+        unsigned = raw & 0xFFFFFFFF
+        hex_code = "0x%08X" % unsigned
+        if unsigned == 0xC000013A:
+            return (
+                "설치 / 복구 창이 닫혔거나 작업이 취소되었습니다 "
+                "(종료 코드 %s / %s)." % (raw, hex_code)
+            )
+        return "설치 / 복구가 종료 코드 %s (%s)로 실패했습니다." % (raw, hex_code)
+
 
     def setup_command(self, options=None):
         """Build the hidden installer command from choices already made in UI."""

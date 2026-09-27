@@ -7,9 +7,8 @@
 모듈마다 따로 조립하던 것이 설치기와 데스크톱이 서로 다른 폴더에 쓰던
 원인이었다.
 
-과거 버전의 설정 파일은 정본으로 병합한다. 이 저장소는 junction/symlink 를 만들지
-않는다. 예전에는 레거시 경로를 직접 읽는 agent_runner 를 위해 소스 트리 안으로
-junction 을 걸었지만, 그 런타임이 사라져 호환 연결도 함께 제거했다.
+설정 읽기/쓰기는 이 정본 한 곳만 사용한다. 이전 소스 트리의 설정 파일을
+자동 검색·병합·삭제하지 않는다.
 """
 from __future__ import annotations
 
@@ -35,24 +34,6 @@ _KNOWN_FIELDS = {
     "schema_version", "language", "last_workspace",
     "last_menu_choice", "logging_enabled",
 }
-_LEGACY_DIRS = (
-    Path("launcher") / "settings",
-    Path("launcher") / "agent" / "settings",
-)
-
-
-def _root(project_root: Path | None = None) -> Path:
-    if project_root is not None:
-        # Preserve an explicitly supplied root exactly as the caller expressed
-        # it. On Windows, Path.resolve() can expand an 8.3 short path such as
-        # RUNNER~1 to its long form, which changes the canonical path object's
-        # representation even though it points at the same directory.
-        # Target-comparison helpers below resolve paths explicitly when actual
-        # filesystem identity is required.
-        return Path(project_root)
-    return user_data.project_root()
-
-
 def _data_root(project_root: Path | None = None) -> Path:
     """설정이 실제로 놓이는 user_data 폴더.
 
@@ -83,65 +64,8 @@ def _write_dict(p: Path, data: dict[str, Any]) -> bool:
     return user_data.save_json(p, data)
 
 
-def _legacy_files(root: Path) -> list[Path]:
-    return [root / rel / "user_config.json" for rel in _LEGACY_DIRS]
-
-
-def _points_to_canonical(candidate: Path, canonical: Path) -> bool:
-    """레거시 경로가 링크/junction을 통해 정본 자체를 가리키는지 확인."""
-    try:
-        return candidate.resolve() == canonical.resolve()
-    except OSError:
-        return False
-
-
-def _cleanup_legacy_files(root: Path, canonical: Path) -> None:
-    """마이그레이션된 알려진 설정 파일만 제거하고 정본은 절대 지우지 않는다."""
-    for legacy in _legacy_files(root):
-        if _points_to_canonical(legacy, canonical):
-            continue
-        try:
-            if legacy.is_file() or legacy.is_symlink():
-                legacy.unlink()
-        except OSError:
-            pass
-
-
-def migrate_legacy_settings(project_root: Path | None = None) -> bool:
-    """레거시 설정을 정본으로 병합한다. 링크나 junction 은 만들지 않는다."""
-    root = _root(project_root)
-    # path() takes the caller's argument, not the resolved root: re-wrapping a
-    # resolved root would compose "<root>/user_data" a second time and send the
-    # canonical file back into the checkout.
-    canonical = path(project_root)
-    canonical_data = _read_dict(canonical) if canonical.exists() else {}
-
-    merged: dict[str, Any] = {}
-    found_legacy = False
-    for legacy in _legacy_files(root):
-        if not legacy.exists() or _points_to_canonical(legacy, canonical):
-            continue
-        found_legacy = True
-        merged.update(_read_dict(legacy))
-    merged.update(canonical_data)
-
-    if merged and canonical_data != merged:
-        if not _write_dict(canonical, merged):
-            return False
-
-    if found_legacy and canonical.exists():
-        _cleanup_legacy_files(root, canonical)
-    return True
-
-
 def _merged_data(project_root: Path | None = None) -> dict[str, Any]:
-    """Read only the canonical store.
-
-    Legacy merging is intentionally not automatic on a fresh-install product:
-    reading settings must never mutate the checkout or import state from an old
-    layout behind the user's back. ``migrate_legacy_settings`` remains an
-    explicit compatibility helper only.
-    """
+    """Read only the canonical store; never import state from old layouts."""
     canonical = path(project_root)
     return _read_dict(canonical) if canonical.exists() else {}
 

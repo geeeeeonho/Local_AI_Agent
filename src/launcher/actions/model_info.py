@@ -111,7 +111,7 @@ def _show_role_table(p) -> None:
     p.info("-" * 40)
     p.info("용도별 권장 모델")
     if not roles:
-        p.info("  모델 레지스트리를 불러오지 못했습니다 — SETUP.bat --manage 에서 확인하세요.")
+        p.info("  모델 레지스트리를 불러오지 못했습니다 — RUN.bat --manage 에서 확인하세요.")
         return
     for r in roles:
         p.info("  - " + r.label + " -> " + r.model + _actual_suffix(_mr, r))

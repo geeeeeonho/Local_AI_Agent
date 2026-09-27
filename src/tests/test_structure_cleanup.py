@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,79 +16,44 @@ REPO_ROOT = next(
 
 
 class SettingsStoreTests(unittest.TestCase):
-    def test_legacy_settings_are_merged_into_user_data(self):
+    def test_load_ignores_old_source_tree_settings(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            old_launcher = root / "launcher" / "settings"
-            old_agent = root / "launcher" / "agent" / "settings"
-            old_launcher.mkdir(parents=True)
-            old_agent.mkdir(parents=True)
-            (old_launcher / "user_config.json").write_text(
-                json.dumps({"language": "ko", "last_menu_choice": "8", "future_key": "keep-me"}),
-                encoding="utf-8",
-            )
-            (old_agent / "user_config.json").write_text(
-                json.dumps({"logging_enabled": False}), encoding="utf-8"
-            )
-
-            cfg = settings_store.load(root)
-
-            self.assertEqual(cfg.language, "ko")
-            self.assertEqual(cfg.last_menu_choice, "8")
-            self.assertFalse(cfg.logging_enabled)
-            canonical = root / "user_data" / "settings" / "user_config.json"
-            self.assertTrue(canonical.is_file())
-            saved = json.loads(canonical.read_text(encoding="utf-8"))
-            self.assertEqual(saved["language"], "ko")
-            self.assertFalse(saved["logging_enabled"])
-            self.assertEqual(saved["future_key"], "keep-me")
-
-            self.assertTrue(settings_store.save(cfg, root))
-            saved_again = json.loads(canonical.read_text(encoding="utf-8"))
-            self.assertEqual(saved_again["future_key"], "keep-me")
-
-    def test_load_does_not_create_legacy_links_as_a_side_effect(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            old_launcher = root / "launcher" / "settings"
-            old_agent = root / "launcher" / "agent" / "settings"
-            old_launcher.mkdir(parents=True)
-            old_agent.mkdir(parents=True)
-            (old_launcher / "user_config.json").write_text(
-                json.dumps({"language": "ko"}), encoding="utf-8"
-            )
-            (old_agent / "user_config.json").write_text(
-                json.dumps({"logging_enabled": False}), encoding="utf-8"
-            )
-
-            settings_store.load(root)
-
-            self.assertTrue(old_launcher.is_dir())
-            self.assertTrue(old_agent.is_dir())
-            self.assertFalse(old_launcher.is_symlink())
-            self.assertFalse(old_agent.is_symlink())
-
-    @unittest.skipIf(os.name == "nt", "symlink creation can require Windows developer mode")
-    def test_existing_legacy_link_never_deletes_canonical_settings(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            canonical_dir = root / "user_data" / "settings"
-            canonical_dir.mkdir(parents=True)
-            canonical = canonical_dir / "user_config.json"
-            canonical.write_text(
+            old = root / "launcher" / "settings"
+            old.mkdir(parents=True)
+            legacy_file = old / "user_config.json"
+            legacy_file.write_text(
                 json.dumps({"language": "ko", "logging_enabled": False}),
                 encoding="utf-8",
             )
 
-            legacy = root / "launcher" / "agent" / "settings"
-            legacy.parent.mkdir(parents=True)
-            legacy.symlink_to(canonical_dir, target_is_directory=True)
+            cfg = settings_store.load(root)
+
+            self.assertIsNone(cfg.language)
+            self.assertTrue(cfg.logging_enabled)
+            self.assertTrue(legacy_file.is_file())
+            self.assertFalse((root / "user_data" / "settings" / "user_config.json").exists())
+
+    def test_canonical_settings_win_without_touching_old_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = root / "launcher" / "agent" / "settings"
+            old.mkdir(parents=True)
+            legacy_file = old / "user_config.json"
+            legacy_file.write_text(json.dumps({"language": "ko"}), encoding="utf-8")
+
+            canonical = root / "user_data" / "settings" / "user_config.json"
+            canonical.parent.mkdir(parents=True)
+            canonical.write_text(
+                json.dumps({"language": "en", "logging_enabled": False}),
+                encoding="utf-8",
+            )
 
             cfg = settings_store.load(root)
 
-            self.assertTrue(canonical.is_file())
-            self.assertEqual(cfg.language, "ko")
+            self.assertEqual(cfg.language, "en")
             self.assertFalse(cfg.logging_enabled)
+            self.assertTrue(legacy_file.is_file())
 
     def test_save_uses_single_canonical_file(self):
         with tempfile.TemporaryDirectory() as td:
@@ -121,7 +85,7 @@ class RepositoryStructureTests(unittest.TestCase):
         for name in ("launcher", "installer", "tools", "tests", "docs"):
             self.assertTrue((REPO_ROOT / "src" / name).is_dir(), name)
             self.assertFalse((REPO_ROOT / name).exists(), name)
-        self.assertTrue((REPO_ROOT / "user_data").is_dir())
+        self.assertFalse((REPO_ROOT / "user_data").exists())
 
     def test_run_is_the_only_root_batch_entrypoint(self):
         self.assertTrue((REPO_ROOT / "RUN.bat").is_file())
@@ -147,10 +111,11 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertNotIn("manage_gui", installer_main)
         self.assertNotIn('add_argument("--manage"', installer_main)
 
-    def test_installer_uses_official_or_detected_ollama_not_only_portable_slot(self):
-        model = self._text("src/installer/steps/model.py")
-        self.assertIn("ollama.find_existing(paths)", model)
-        self.assertNotIn('exe = paths["ollama"] / "ollama.exe"', model)
+    def test_installer_uses_managed_ollama_with_official_and_portable_fallbacks(self):
+        ollama = self._text("src/installer/steps/ollama.py")
+        self.assertIn("existing = find_existing(paths)", ollama)
+        self.assertIn("official = install_official(", ollama)
+        self.assertIn("install_portable(paths)", ollama)
 
     def test_network_images_have_explicit_install_ownership(self):
         main = self._text("src/installer/__main__.py")
@@ -219,11 +184,10 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertIn("AnythingLLM", installer_init)
         self.assertIn("AnythingLLM", i18n)
 
-    def test_open_webui_identifiers_remain_only_as_explicit_legacy_cleanup(self):
-        maint = self._text("src/launcher/core/docker_maint.py")
-        self.assertIn("_LEGACY_OPENWEBUI_NAME_PATTERNS", maint)
-        self.assertIn("_LEGACY_OPENWEBUI_IMAGE_PATTERNS", maint)
-        self.assertNotIn('"llm_openwebui"', maint.split("_LEGACY_OPENWEBUI_NAME_PATTERNS", 1)[0])
+    def test_retired_openwebui_identifiers_are_not_active_cleanup_targets(self):
+        maint = self._text("src/launcher/core/docker_maint.py").lower()
+        self.assertNotIn("open_webui", maint)
+        self.assertNotIn("openwebui", maint)
 
     def test_agent_package_import_has_no_settings_side_effect(self):
         init_text = self._text("src/launcher/agent/__init__.py")
@@ -329,7 +293,7 @@ class RepositoryStructureTests(unittest.TestCase):
                                         "collection without Tk:\n  "
                                         + "\n  ".join(offenders))
 
-    def test_open_interpreter_transition_modules_are_explicit(self):
+    def test_open_interpreter_runtime_modules_are_explicit(self):
         for relative in (
             "src/launcher/agent/execution_policy.py",
             "src/launcher/agent/app_server_protocol.py",

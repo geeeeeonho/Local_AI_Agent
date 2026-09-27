@@ -62,11 +62,10 @@ def _ensure_docker(p: Presenter) -> bool:
 
 
 def _keep_chat_running() -> bool:
-    """Honor the current setting and the pre-transition AnythingLLM name."""
+    """Whether this terminal Chat session should leave its container running."""
     truthy = {"1", "true", "yes", "on"}
     current = os.environ.get("LOCAL_AI_KEEP_CHAT", "").strip().lower()
-    legacy = os.environ.get("LOCAL_AI_ANYTHINGLLM_KEEP", "").strip().lower()
-    return current in truthy or legacy in truthy
+    return current in truthy
 
 
 def run(env: Path, p: Presenter):
@@ -94,7 +93,7 @@ def run(env: Path, p: Presenter):
             if mode == network_policy.NetworkMode.BLOCK.value:
                 p.error(
                     "Block 모드에서는 새 이미지를 다운로드하지 않습니다. "
-                    "SETUP.bat에서 AnythingLLM 이미지를 먼저 설치하세요."
+                    "RUN.bat --install에서 AnythingLLM 이미지를 먼저 설치하세요."
                 )
                 return
             p.warn("AnythingLLM 이미지가 없습니다. 지금 다운로드합니다 (약 3~5GB).")
@@ -129,7 +128,7 @@ def run(env: Path, p: Presenter):
         # 하드코딩된 4096 이 늘 쓰였다.
         ctx = int(config.CHAT_CONTEXT_WINDOW)
 
-        # Legacy/TUI entrypoints must resolve against the same live Ollama
+        # TUI entrypoints resolve against the same live Ollama
         # inventory as the desktop Chat path. A static default that is not
         # installed otherwise makes a healthy AnythingLLM connection fail.
         from ..models import model_roles

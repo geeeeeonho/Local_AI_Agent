@@ -10,7 +10,7 @@ The project root exposes one launcher:
 - `RUN.bat --app setup`: LocalAI Setup.
 - `RUN.bat --install`: explicit installer flow.
 - `RUN.bat --manage`: current LocalAI Setup management app (same management UI as `--app setup`).
-- `RUN.bat --tui`: retained legacy terminal launcher.
+- `RUN.bat --tui`: terminal launcher.
 
 With `PYTHONPATH=src`, the equivalent modules are `apps.studio`, `apps.chat`,
 `apps.interpreter` and `apps.setup`. They use one parser, shared views and one
@@ -36,7 +36,7 @@ Other active windows refresh the preference on focus and during normal polling.
 An invalid/unreadable preference uses the dark fallback at startup with a warning,
 without overwriting the original file. Failed saves retain the previous theme.
 
-The shell, its raw Tk text areas and recognized retained Agent/Presenter colors
+The shell, its raw Tk text areas and recognized Agent/Presenter colors
 are themed, including warning/error tags. AnythingLLM in the browser and native
 OS dialogs keep their own appearance settings; the shell does not modify them.
 
@@ -70,28 +70,26 @@ AnythingLLM Chat UI. Chat's "Create/manage projects" action opens that UI, prepa
 Chat first if needed. No LocalAI connection record is required for normal Chat.
 There is no separate Projects navigation item or global project toolbar.
 
-The previous LocalAI Project registry is preserved as optional "Agent connection"
-linkage inside Chat's second tab. It connects an existing AnythingLLM workspace
-slug to an Agent working folder, without creating/cloning/deleting the real
-workspace. Standalone Interpreter exposes the same optional records in its
-nested Chat connection tab. The old `navigate('projects')` request routes to this
-nested editor. Existing saved IDs/fields/files and policy precedence are retained.
-A Project's workspace slug remains linkage information only; Chat's initial model can
-come from the Project. The Agent model field is a reference value; the existing
-Agent wizard still confirms its model, execution mode and folder permissions.
+Optional LocalAI Project records provide "Agent connection" linkage inside
+Chat's second tab. They connect an existing AnythingLLM workspace slug to an
+Agent working folder without creating, cloning or deleting the real workspace.
+Standalone Interpreter exposes the same records in its nested Chat connection
+tab. A Project's workspace slug remains linkage information only; Chat's initial
+model can come from the Project. The Agent model field is a reference value;
+the Agent wizard still confirms its model, execution mode and folder permissions.
 
 Agent uses the existing RuntimeCoordinator, native Open Interpreter thread IDs,
 approval descriptions and ChatSessionController. Its conversation, command
-output, file sidebar, model controls, stop/restart and approvals use the retained
+output, file sidebar, model controls, stop/restart and approvals use the
 Agent panel. A Project folder is only a dialog default: it never grants Host or
 Sandbox access automatically. Host Block remains rejected.
 
-Models is one screen with three tabs, replacing the retained launcher's split
+Models is one screen with three tabs, replacing the launcher's split
 between "installed model info" and "model management" and the first desktop's
 free-text tag field.
 
 *Current stack* names the model each role would load right now, its memory
-requirement and whether it is on disk. The choice comes from the retained ladder
+requirement and whether it is on disk. The choice comes from the canonical ladder
 resolver; this view reports it rather than adding a second selection policy.
 Selecting a role shows that role's whole ladder with per-rung disk state, so a
 role falling back to a lighter model is visible instead of surprising.
@@ -119,44 +117,40 @@ ceilings: Ollama shares blob layers between models, so the real cost is usually
 lower. Files are never deleted directly - unchecking a model hands it to Ollama,
 which knows which layers another model still needs.
 
-*Disk usage* also says whether this store really is shared with every account on
-the machine, and offers to put it right. That is a fact about the machine, not
-about the path: publishing the machine-scope OLLAMA_MODELS needs administrator
-rights and can simply have failed during setup, so the screen reads the stored
-value and the store's ACL rather than inferring from the directory name. It
-distinguishes four answers - shared, not shared with the reason, an override
-this account set for itself, and could-not-tell - and offers the repair only
-where there is something the shell may fix. A user-scope OLLAMA_MODELS is that
-account's own setting, so it is explained rather than deleted, and other
-accounts are granted read and execute, never write: the store decides what the
-models on this machine are.
+*Disk usage* also says whether the shared store is actually manageable by every
+Windows account and offers an idempotent repair. LocalAI's sharing decision is
+path + ACL: the managed store must be the machine-wide model directory and
+BUILTIN\Users must be able to read and modify its children. Modify is required
+because every account may install or remove shared models and update the shared
+registry/index under `models\.localai`. `OLLAMA_MODELS` is only a best-effort
+compatibility setting for standalone Ollama CLI/Tray and does not decide
+LocalAI sharing.
 
 Every reader of "which models are here" goes through one pipeline, with Ollama
 as the router: what it serves is what the machine can use, and the store answers
 when it is stopped. Both the screen's install state and its stack view
 deliberately ask the store alone, so they stay truthful while Ollama is stopped
 and so a screen that offers to delete files answers from the directory those
-files are in. "Ollama start / check" runs the retained service action and shows
+files are in. "Ollama start / check" runs the service action and shows
 its log in place. Model downloads use the
 local Ollama server's own network; WARP/Tor routing is not promised for these
 management downloads. Saved Setup Block intent or a currently pinned Block mode
 rejects the model download action. Setup keeps installation, repair and the
-retained maintenance actions.
+maintenance actions.
 
 ## Ownership, policy and shutdown
 
 Network preferences resolve Session > Project > App > Global, falling back to
-the retained launcher's current mode when no new global setting exists. A
+the launcher's current mode when no new global setting exists. A
 selected Project is read again before session startup. Changing preferences
 does not reconfigure an existing session's network mid-operation.
 
-One window per checkout owns managed runtime mutations via a permanent OS-backed
-lock under `user_data/cache`. That window can run Chat and Agent together with
-the same network mode; other windows may inspect state. Stop its sessions before
-another window starts or repairs managed runtimes. This is a deliberately coarse
-first desktop coordination policy, not a machine-wide multi-user service or a
-cross-checkout lock. External clients can still use Ollama's API. Old launchers
-invoked directly outside the new entrypoints do not participate in this lock.
+One LocalAI window at a time owns managed runtime mutations through the
+machine-wide OS lock at `C:\LocalAI\environment\desktop-runtime.lock`. The lock
+is shared across checkouts and Windows accounts that use the same runtime root.
+The owning window can run Chat and Agent together; another LocalAI window must
+wait before starting, stopping or repairing managed runtimes. The lock does not
+reserve Ollama's API port, so external clients may still use Ollama.
 
 Ollama does not remember the store on its own. `ollama serve` re-reads
 `OLLAMA_MODELS` at every start and keeps nothing; the Ollama desktop app does
@@ -207,60 +201,47 @@ Ollama and proxy runtimes are not indiscriminately killed on every window close.
 
 ## Paths and scope
 
-`src/project_paths.py` is the single assignment source for every path the
-product uses - project-local `llm_environment`, existing `user_data`, and the
-model store. Core reads it rather than defining a second copy.
+`src/project_paths.py` is the single source of truth for product paths.
 
-Ollama is the intermediary rather than something this project contains. It owns
-downloading, storing and serving; an Ollama already on the machine is used as-is,
-and only an absent one is installed, officially, with `/DIR=C:\Ollama`. The store
-is `C:\Ollama\models`, inside that install and shared by every Windows account,
-because Ollama's own default lives in one user profile and a second account would
-re-download everything. An `OLLAMA_MODELS` the user set themselves always wins:
-overriding that was exactly what the old forced `C:\LLM_Models` got wrong, and
-that store is now migrated out of rather than written to.
+On Windows the writable runtime is rooted at `C:\LocalAI`:
 
-This was checked against a real ollama binary built from source rather than
-from documentation. Pointed at a store by `OLLAMA_MODELS`, Ollama lists a model
-placed there; started without it, the same server reports an empty library
-because it looks in the user profile - the per-user problem, reproduced. Two
-servers under different home directories sharing one `OLLAMA_MODELS` both serve
-the same model, and the second home holds no blobs at all: one copy, two
-accounts. This project's own resolver, `env_vars`, disk index and store-agreement
-check were then run against that live server and agreed with it on every point.
+```text
+C:\LocalAI\
+  environment\                  shared runtime environment
+  ollama\                       shared Ollama install/broker
+  models\                       shared model store
+    MODEL_FILES.csv
+    .localai\
+      registry.json
+      model-mutation.lock
+  users\<account>\             private account boundary
+    user_data\
+    logs\
+    workspace\
+```
 
-The one divergence the exercise found is fixed: Ollama's `envconfig.Var` strips
-surrounding quotes as well as whitespace, so `OLLAMA_MODELS="C:\Ollama\models"`
-- quotes included, which a Windows dialog or batch file makes easy - resolves to
-the bare path. This project kept the quotes, so it would have reported an empty
-store and blocked startup against a perfectly healthy server. The parser now
-matches `envconfig.Var` exactly, compared case by case against the real Go
-function, and tests pin it.
+The source checkout is not a runtime data store. Moving or re-downloading the
+checkout does not move the shared runtime or another account's private records.
 
-A server this process did not launch is no longer refused on sight. It is
-accepted when it runs from a known install and is demonstrably reading the same
-store - what it serves on `/api/tags` has to exist in the on-disk index - and
-it is never terminated, because it may be the user's own Windows service. Only
-the portable copy in this project's folder stays ours to restart. Ownership is
-decided by the pid in our runtime state file, not by the binary path, since the
-official install is now the binary we would launch ourselves.
-The official Ollama install and the machine-shared store at
-`C:\Ollama\models` are shipped: Setup installs Ollama with `/DIR` when the
-machine has none, moves an earlier `C:\LLM_Models` there crash-safely, and
-publishes the machine-scope `OLLAMA_MODELS` so the other Windows accounts read
-the same copy. The shell still does not relocate user data or rebuild
-AnythingLLM/OI data, and it does not run any of the above silently - Setup
-does it, and the model screen reports and repairs the sharing afterwards.
+LocalAI starts its managed Ollama broker with `C:\LocalAI\models` explicitly.
+The model store, role registry, model inventory and model-mutation lock are
+machine-wide. Standard Windows users receive Modify rights only on `models`;
+`environment` and `ollama` remain read/execute for standard users.
+`users\<account>` remains private to that account, SYSTEM and Administrators.
 
-The layering is Apps -> Services -> transition Integrations, with UI-independent
-Core contracts. Existing reviewed launcher implementations are reused behind
-adapters; their physical relocation and the elimination of every historical
-import/direct CLI call are not claimed complete. The original DockerService
-remains the single concrete Docker CLI primitive implementation.
+Setup does not automatically scan, merge or relocate data from earlier layouts.
+Standalone Ollama CLI/Tray compatibility is best-effort through
+`OLLAMA_MODELS`; LocalAI's own broker does not depend on that environment
+setting.
 
-This is a Python-source desktop release. Four Windows EXE packages, embedded
-WebView distribution, official Ollama migration activation and user-data
-relocation are separate work, not artifacts produced by this change.
+The desktop layering is Apps -> Services -> Integrations -> launcher/runtime
+implementations, with UI-independent Core contracts. `integrations.desktop`
+is the active desktop integration boundary. `DockerService` remains the
+single concrete Docker CLI primitive implementation.
+
+This is a Python-source desktop release. Packaging into native executables or an
+embedded WebView distribution is outside this repository's current runtime
+contract.
 
 ## Validation
 
@@ -276,12 +257,10 @@ On Linux the desktop tests need a real display, such as Xvfb; they instantiate
 real Tk windows while injecting the external runtimes. A Python with no Tk at
 all skips them and still runs the rest:
 
-  with Tk:    968 passed
-  without Tk: 856 passed, 54 skipped
 
 ### Verified
 
-On a live Linux Docker daemon (29.3.1), against the real `LegacyBackend` rather
+On a live Linux Docker daemon (29.3.1), against the real `DesktopBackend` rather
 than a stand-in:
 
 - the full repository suite, on the CI Python (3.11) headless and with Tk under Xvfb;
@@ -333,9 +312,9 @@ working tree, on both a Python with Tk and one without, plus `compileall` on
 3.11 to match the workflow's interpreter. Record which of those you actually
 ran.
 
-## Transition adapter contract
+## Dynamic integration contract
 
-The desktop reaches the retained launcher through `importlib` and attribute
+The desktop reaches the launcher through `importlib` and attribute
 access, which neither `compileall` nor an AST import check can see, and which
 unit-test stubs can satisfy with names that do not exist. Two constants shipped
 that way: a context-window name that never existed and made every Chat start

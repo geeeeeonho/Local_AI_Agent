@@ -278,7 +278,7 @@ def test_the_daemon_is_only_stopped_after_everything_that_needs_it(monkeypatch):
     monkeypatch.setattr(lifelog, '_final_cleanup_callbacks', [])
     monkeypatch.setattr(lifelog, '_cleanups_ran', False)
     order = []
-    lifelog.register_cleanup(lambda: order.append('docker-desktop'), last=True)
+    lifelog.register_cleanup(lambda: order.append("docker-desktop"), stage="daemon")
     lifelog.register_cleanup(lambda: order.append('container'))
     lifelog.register_cleanup(lambda: order.append('ollama'))
     lifelog.shutdown_then_exit()
@@ -403,7 +403,7 @@ def test_a_cancelled_agent_start_takes_the_wizard_progress_screen_down():
     assert 'clear_agent_panel' in names
 
 
-# ── the legacy Chat action ───────────────────────────────────────────────
+# ── the terminal Chat action ─────────────────────────────────────────────
 
 def test_the_chat_action_gives_searxng_the_environment_it_requires():
     """``start(env, ...)`` needs ``env``. Calling it bare raised TypeError into

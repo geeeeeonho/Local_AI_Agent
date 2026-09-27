@@ -1,8 +1,4 @@
-"""Composition shared by Studio, Chat, Interpreter and Setup.
-
-Current project_paths are injected, so adding the UI cannot silently activate
-staged official-Ollama migration defaults from the prior foundation patch.
-"""
+"""Composition shared by Studio, Chat, Interpreter and Setup."""
 from pathlib import Path
 import threading
 from core.events import EventBus
@@ -102,8 +98,8 @@ class DesktopServices:
         # runs express themselves, so that root keeps its own user_data.
         self.data = Path(data) if data is not None else self.project_root / 'user_data'
         if backend is None:
-            from integrations.legacy.desktop import LegacyBackend
-            backend = LegacyBackend(self.env, self.model_dir, self.project_root,
+            from integrations.desktop import DesktopBackend
+            backend = DesktopBackend(self.env, self.model_dir, self.project_root,
                                     data=self.data)
         self.backend = backend
         self.events = EventBus()

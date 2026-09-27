@@ -9,7 +9,7 @@ class InferenceService:
         if runtime is None:
             import importlib
             from project_paths import ENV_DIR, MODEL_STORAGE_DIR
-            from integrations.legacy.desktop import ManagedInference
+            from integrations.desktop import ManagedInference
             runtime = ManagedInference(ENV_DIR, MODEL_STORAGE_DIR, importlib.import_module)
         self.runtime = runtime
         self.client, self.model_dir = runtime.client, runtime.model_dir
@@ -66,6 +66,6 @@ class InferenceService:
         """Forward the progress callback only to a runtime that accepts one.
 
         A thirty-second Ollama boot with no output is indistinguishable from a
-        hang, and the retained runtimes did not all take a callback.
+        hang, and not every runtime entrypoint accepts a callback.
         """
         return invoke(self.runtime.ensure_running, log=log)

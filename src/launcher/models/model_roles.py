@@ -264,11 +264,6 @@ TIERS = {
     ],
 }
 
-# 예전 역할 이름 -> 지금 이름. shared registry.json 에 옛 키가 있어도 받아 준다.
-# 사용자가 조용히 무시당하지 않도록 받아 준다.
-ROLE_ALIASES = {"context": "office"}
-
-
 def _canonical(installed):
     """설치 목록을 카탈로그 표기로 맞춘다 (대소문자 차이 흡수)."""
     try:
@@ -342,9 +337,9 @@ def _flatten_tiers(_tiers):
 def _registry_path():
     """Machine-wide model role registry beside the shared model store.
 
-    Personal legacy registries are intentionally not imported automatically:
-    choosing one Windows account's old values as the machine truth would make
-    that account silently win over every other account.
+    Per-account registries are intentionally not imported automatically:
+    choosing one Windows account's values as the machine truth would make that
+    account silently win over every other account.
     """
     import project_paths
     return str(project_paths.model_registry_path())
@@ -389,7 +384,9 @@ def load_registry(path=None):
             sec = {}
         clean = {}
         for role, tiers in sec.items():
-            role = ROLE_ALIASES.get(role, role)
+            if role not in TIERS:
+                errs.append("%s.%s 는 알 수 없는 역할입니다" % (key, role))
+                continue
             if not isinstance(tiers, list):
                 errs.append("%s.%s 가 배열이 아닙니다" % (key, role))
                 continue
@@ -641,7 +638,7 @@ def auto_match_installed(desired_tag, role_name=None, free_gb=None, host="127.0.
         any_m = sorted(inst)[0]
         return any_m, "역할 매칭 없음 → 설치된 " + any_m + " 사용"
 
-    return None, "설치된 모델이 없습니다 — SETUP.bat --manage 에서 받으세요"
+    return None, "설치된 모델이 없습니다 — RUN.bat --manage 에서 받으세요"
 # <<< MODEL_INSTALLED_MATCH_v1
 # <<< MODEL_ROLLBACK_v1
 

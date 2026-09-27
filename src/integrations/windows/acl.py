@@ -1,6 +1,6 @@
 """Run ``icacls`` and read back what it did, in a language-neutral way.
 
-Two callers need exactly this: the model store has to be *readable* by every
+Two callers need exactly this: the model store has to be readable/manageable by every
 account on the machine, and each account's records folder has to be readable
 by *no one else*. Both questions are answered by the same descriptor, and both
 are asked by running the same tool, so the plumbing lives here once.

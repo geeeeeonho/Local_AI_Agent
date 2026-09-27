@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """model_files — 디스크의 blob 파일과 모델 이름을 잇는 표.
 
-MODEL_FILES_v1 compatibility. MODEL_INDEX.json is now authoritative; CSV is a derived view.
+MODEL_INDEX.json is authoritative; MODEL_FILES.csv is its human-readable derived view.
 
 Ollama 는 받은 모델을 내용 해시로만 저장한다.
 
@@ -28,8 +28,7 @@ stdlib 전용. Ollama 가 떠 있지 않아도 동작한다(파일만 읽는다)
 """
 from __future__ import annotations
 
-import tempfile
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -37,9 +36,6 @@ from . import model_index as _index
 
 CSV_NAME = _index.CSV_NAME
 INDEX_NAME = _index.INDEX_NAME
-MARKER = "MODEL_FILES_v1"
-
-FIELDS = _index.CSV_FIELDS
 
 
 @dataclass(frozen=True)
@@ -53,16 +49,6 @@ class FileRow:
     shared_with: int    # 이 파일을 함께 쓰는 모델 수 (1 이면 전용)
     status: str         # ok | missing | size_mismatch | partial | orphan | unknown | unavailable
     rel_path: str       # 저장소 루트 기준 상대 경로
-
-
-def _blob_file_name(digest: str) -> str:
-    """manifest 의 'sha256:abcd' -> 디스크의 'sha256-abcd'."""
-    return str(digest).replace(":", "-", 1)
-
-
-def read_manifests(model_dir) -> Dict[str, dict]:
-    """Compatibility view of validated manifests; build_index includes errors."""
-    return _index.read_manifests(model_dir)
 
 
 def build_index(model_dir) -> dict:
@@ -84,27 +70,6 @@ def _catalog_roles() -> Dict[str, str]:
         return {}
 
 
-def scan(model_dir) -> List[FileRow]:
-    """Compatibility rows derived from the same scanner as MODEL_INDEX.json."""
-    return [FileRow(**row) for row in build_index(model_dir)["files"]]
-
-
-def _writable(path: Path) -> bool:
-    """이미 있는 디렉터리에 쓸 수 있는지만 본다.
-
-    없는 경로를 만들어 보지는 않는다 — 존재 확인용 프로브가 공용 모델 저장소를
-    새로 만들어 버리면, 저장소가 아직 없다는 사실 자체가 사라진다.
-    """
-    if not path.is_dir():
-        return False
-    try:
-        with tempfile.TemporaryFile(dir=path, prefix=".model_files_probe."):
-            pass
-        return True
-    except OSError:
-        return False
-
-
 def default_csv_path(model_dir) -> Path:
     """The one machine-wide CSV beside the shared model store.
 
@@ -114,25 +79,6 @@ def default_csv_path(model_dir) -> Path:
     """
     import project_paths
     return project_paths.model_files_path(model_dir)
-
-
-def write_csv(model_dir, path=None, rows: Optional[Iterable[FileRow]] = None
-              ) -> Optional[Path]:
-    """표를 CSV 로 저장하고 경로를 돌려준다. 실패하면 None.
-
-    Excel 이 한글을 깨뜨리지 않도록 UTF-8 BOM 으로 쓴다. 줄바꿈은 newline=""
-    + \\r\\n 으로 Windows Excel 기본과 맞춘다.
-    """
-    root = Path(model_dir)
-    if path is None and not root.is_dir():
-        return None  # 저장소가 없으면 적을 대응도 없다
-    rows = list(rows) if rows is not None else scan(root)
-    out = Path(path) if path is not None else default_csv_path(root)
-    try:
-        _index.atomic_write(out, _index.csv_bytes(asdict(row) for row in rows))
-        return out
-    except OSError:
-        return None
 
 
 def summary_lines(rows: Iterable[FileRow]) -> List[str]:
@@ -199,6 +145,5 @@ def refresh(model_dir, log=None) -> Optional[Path]:
     return out
 
 
-__all__ = ["FileRow", "FIELDS", "CSV_NAME", "MARKER",
-           "read_manifests", "scan", "write_csv", "default_csv_path",
-           "summary_lines", "refresh", "INDEX_NAME", "build_index"]
+__all__ = ["FileRow", "CSV_NAME", "INDEX_NAME", "build_index",
+           "default_csv_path", "summary_lines", "refresh"]

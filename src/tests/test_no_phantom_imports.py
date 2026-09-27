@@ -199,10 +199,10 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class DynamicLegacyReferenceTests(unittest.TestCase):
-    """Names the transition adapter loads by string must exist for real.
+class DynamicIntegrationReferenceTests(unittest.TestCase):
+    """Names the desktop integration loads by string must exist for real.
 
-    The adapter reaches the retained launcher through ``importlib`` and plain
+    The desktop integration reaches the launcher through ``importlib`` and plain
     attribute access, so neither compileall nor the AST check above can see the
     reference. Unit tests stub those modules, which is exactly how a renamed or
     missing constant survived to the desktop: ``launcher.config.MODEL_CONTEXT``
@@ -211,12 +211,12 @@ class DynamicLegacyReferenceTests(unittest.TestCase):
 
     def test_maintenance_keys_resolve_to_real_action_modules(self):
         import importlib
-        from integrations.legacy.desktop import LegacyBackend
+        from integrations.desktop import DesktopBackend
         from services.system.desktop import MAINTENANCE_OPERATIONS
 
         self.assertEqual(sorted(MAINTENANCE_OPERATIONS),
-                         sorted(LegacyBackend.MAINTENANCE_MODULES))
-        for key, name in LegacyBackend.MAINTENANCE_MODULES.items():
+                         sorted(DesktopBackend.MAINTENANCE_MODULES))
+        for key, name in DesktopBackend.MAINTENANCE_MODULES.items():
             module = importlib.import_module(name)
             self.assertTrue(callable(getattr(module, "run", None)),
                             "%s -> launcher.actions.%s has no run()" % (key, name))
