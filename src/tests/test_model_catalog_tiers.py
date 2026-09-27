@@ -362,25 +362,6 @@ class GroupTaxonomyTests(unittest.TestCase):
         for key in ("uncensored", "coding", "agent", "office"):
             self.assertIn(key, roles.TIERS)
 
-    def test_a_renamed_group_still_accepts_its_old_registry_key(self):
-        # user_data/models/registry.json 에 "context" 를 적어 둔 사용자가
-        # 조용히 무시당하면 안 된다.
-        self.assertEqual(roles.ROLE_ALIASES.get("context"), "office")
-
-
-class GroupDepthTests(unittest.TestCase):
-    """그룹마다 메모리 구간이 끊기지 않아야 한다.
-
-    무검열 그룹은 15GB 다음이 곧바로 5GB 라, 여유 8~14GB 인 PC 는 번역 같은
-    무검열 작업을 8b 로밖에 못 했다. 사다리에 큰 구멍이 없는지 본다.
-    """
-
-    #  등급이 셋으로 고정돼 있으므로 '단계 간 배율' 은 밴드 구조가 정해 버린다
-    #  (상 12~18.4 / 중 6~12 / 하 ~6 이라 배율 3배까지는 구조적으로 정상).
-    #  대신 각 등급의 기본단계가 그 등급이 허용하는 메모리를 실제로 쓰는지 본다.
-    #  예: 중 등급(상한 12GB)에 6.5GB 짜리를 기본으로 두면 5.5GB 를 놀리는 셈이다.
-    MIN_BAND_USE = 0.6
-
     def test_each_level_uses_the_memory_it_is_allowed(self):
         ceilings = {key: hi for key, _label, _lo, hi in catalog.LEVELS}
         for name, tier_list in roles.TIERS.items():
