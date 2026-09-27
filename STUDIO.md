@@ -10,7 +10,7 @@ The project root exposes one launcher:
 - `RUN.bat --app setup`: LocalAI Setup.
 - `RUN.bat --install`: explicit installer flow.
 - `RUN.bat --manage`: current LocalAI Setup management app (same management UI as `--app setup`).
-- `RUN.bat --tui`: retained legacy terminal launcher.
+- `RUN.bat --tui`: terminal launcher.
 
 With `PYTHONPATH=src`, the equivalent modules are `apps.studio`, `apps.chat`,
 `apps.interpreter` and `apps.setup`. They use one parser, shared views and one
@@ -36,7 +36,7 @@ Other active windows refresh the preference on focus and during normal polling.
 An invalid/unreadable preference uses the dark fallback at startup with a warning,
 without overwriting the original file. Failed saves retain the previous theme.
 
-The shell, its raw Tk text areas and recognized retained Agent/Presenter colors
+The shell, its raw Tk text areas and recognized Agent/Presenter colors
 are themed, including warning/error tags. AnythingLLM in the browser and native
 OS dialogs keep their own appearance settings; the shell does not modify them.
 
@@ -70,19 +70,17 @@ AnythingLLM Chat UI. Chat's "Create/manage projects" action opens that UI, prepa
 Chat first if needed. No LocalAI connection record is required for normal Chat.
 There is no separate Projects navigation item or global project toolbar.
 
-The previous LocalAI Project registry is preserved as optional "Agent connection"
-linkage inside Chat's second tab. It connects an existing AnythingLLM workspace
-slug to an Agent working folder, without creating/cloning/deleting the real
-workspace. Standalone Interpreter exposes the same optional records in its
-nested Chat connection tab. The old `navigate('projects')` request routes to this
-nested editor. Existing saved IDs/fields/files and policy precedence are retained.
-A Project's workspace slug remains linkage information only; Chat's initial model can
-come from the Project. The Agent model field is a reference value; the existing
-Agent wizard still confirms its model, execution mode and folder permissions.
+Optional LocalAI Project records provide "Agent connection" linkage inside
+Chat's second tab. They connect an existing AnythingLLM workspace slug to an
+Agent working folder without creating, cloning or deleting the real workspace.
+Standalone Interpreter exposes the same records in its nested Chat connection
+tab. A Project's workspace slug remains linkage information only; Chat's initial
+model can come from the Project. The Agent model field is a reference value;
+the Agent wizard still confirms its model, execution mode and folder permissions.
 
 Agent uses the existing RuntimeCoordinator, native Open Interpreter thread IDs,
 approval descriptions and ChatSessionController. Its conversation, command
-output, file sidebar, model controls, stop/restart and approvals use the retained
+output, file sidebar, model controls, stop/restart and approvals use the
 Agent panel. A Project folder is only a dialog default: it never grants Host or
 Sandbox access automatically. Host Block remains rejected.
 
@@ -91,7 +89,7 @@ between "installed model info" and "model management" and the first desktop's
 free-text tag field.
 
 *Current stack* names the model each role would load right now, its memory
-requirement and whether it is on disk. The choice comes from the retained ladder
+requirement and whether it is on disk. The choice comes from the canonical ladder
 resolver; this view reports it rather than adding a second selection policy.
 Selecting a role shows that role's whole ladder with per-rung disk state, so a
 role falling back to a lighter model is visible instead of surprising.
@@ -119,29 +117,26 @@ ceilings: Ollama shares blob layers between models, so the real cost is usually
 lower. Files are never deleted directly - unchecking a model hands it to Ollama,
 which knows which layers another model still needs.
 
-*Disk usage* also says whether this store really is shared with every account on
-the machine, and offers to put it right. That is a fact about the machine, not
-about the path: publishing the machine-scope OLLAMA_MODELS needs administrator
-rights and can simply have failed during setup, so the screen reads the stored
-value and the store's ACL rather than inferring from the directory name. It
-distinguishes four answers - shared, not shared with the reason, an override
-this account set for itself, and could-not-tell - and offers the repair only
-where there is something the shell may fix. A user-scope OLLAMA_MODELS is that
-account's own setting, so it is explained rather than deleted, and other
-accounts are granted read and execute, never write: the store decides what the
-models on this machine are.
+*Disk usage* also says whether the shared store is actually manageable by every
+Windows account and offers an idempotent repair. LocalAI's sharing decision is
+path + ACL: the managed store must be the machine-wide model directory and
+BUILTIN\Users must be able to read and modify its children. Modify is required
+because every account may install or remove shared models and update the shared
+registry/index under `models\.localai`. `OLLAMA_MODELS` is only a best-effort
+compatibility setting for standalone Ollama CLI/Tray and does not decide
+LocalAI sharing.
 
 Every reader of "which models are here" goes through one pipeline, with Ollama
 as the router: what it serves is what the machine can use, and the store answers
 when it is stopped. Both the screen's install state and its stack view
 deliberately ask the store alone, so they stay truthful while Ollama is stopped
 and so a screen that offers to delete files answers from the directory those
-files are in. "Ollama start / check" runs the retained service action and shows
+files are in. "Ollama start / check" runs the service action and shows
 its log in place. Model downloads use the
 local Ollama server's own network; WARP/Tor routing is not promised for these
 management downloads. Saved Setup Block intent or a currently pinned Block mode
 rejects the model download action. Setup keeps installation, repair and the
-retained maintenance actions.
+maintenance actions.
 
 ## Ownership, policy and shutdown
 
@@ -150,13 +145,12 @@ the launcher's current mode when no new global setting exists. A
 selected Project is read again before session startup. Changing preferences
 does not reconfigure an existing session's network mid-operation.
 
-One window per checkout owns managed runtime mutations via a permanent OS-backed
-lock under `user_data/cache`. That window can run Chat and Agent together with
-the same network mode; other windows may inspect state. Stop its sessions before
-another window starts or repairs managed runtimes. This is a deliberately coarse
-first desktop coordination policy, not a machine-wide multi-user service or a
-cross-checkout lock. External clients can still use Ollama's API. Old launchers
-invoked directly outside the new entrypoints do not participate in this lock.
+One LocalAI window at a time owns managed runtime mutations through the
+machine-wide OS lock at `C:\LocalAI\environment\desktop-runtime.lock`. The lock
+is shared across checkouts and Windows accounts that use the same runtime root.
+The owning window can run Chat and Agent together; another LocalAI window must
+wait before starting, stopping or repairing managed runtimes. The lock does not
+reserve Ollama's API port, so external clients may still use Ollama.
 
 Ollama does not remember the store on its own. `ollama serve` re-reads
 `OLLAMA_MODELS` at every start and keeps nothing; the Ollama desktop app does
