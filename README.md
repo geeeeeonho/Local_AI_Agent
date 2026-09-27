@@ -686,8 +686,8 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 | `llama3-groq-tool-use:8b` | BFCL 89.06 으로 자체 호스팅 최고점이지만 컨텍스트가 8K. 도구 결과로 컨텍스트를 쓰는 이 에이전트엔 부족 |
 | `gemma4:31b` · `qwen3-vl:32b` | 적재 상한 18.4GB 초과 — 이 예산에선 절대 안 뜬다 |
 
-역할 이름을 바꾸면 `model_roles.ROLE_ALIASES` 에 옛 이름을 등록하세요.
-공용 `models\.localai\registry.json` 에 옛 키가 있어도 alias를 통해 계속 읽습니다.
+공용 `models\.localai\registry.json` 은 현재 역할 키(`coding`, `agent`, `uncensored`, `office`, `balanced`)만 허용합니다.
+알 수 없는 역할 키는 조용히 적용하지 않고 오류로 표시합니다.
 
 ### 기본 권장 모델 세트
 
