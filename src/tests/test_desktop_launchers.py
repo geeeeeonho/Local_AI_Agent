@@ -1,4 +1,4 @@
-"""New batch entrypoints and compatibility locks do not mutate runtime paths."""
+"""Batch entrypoints and runtime locks keep canonical paths stable."""
 from pathlib import Path
 import sys
 from types import SimpleNamespace as NS
@@ -40,9 +40,9 @@ def test_paths_keep_shared_assets_under_the_runtime_root(monkeypatch):
 # Redirect the canonical module's attributes instead of replacing the module:
 # every deferred `from project_paths import ...` in the tree reads these, and a
 # partial stand-in would hide names that other importers legitimately need.
-def test_default_inference_does_not_activate_official_migration(monkeypatch,tmp_path):
+def test_default_inference_uses_canonical_shared_paths(monkeypatch,tmp_path):
     from services.inference.service import InferenceService
-    from integrations.legacy import desktop
+    from integrations import desktop
     import project_paths
     monkeypatch.setattr(project_paths,'ENV_DIR',tmp_path/'env')
     monkeypatch.setattr(project_paths,'MODEL_STORAGE_DIR',tmp_path/'models')
