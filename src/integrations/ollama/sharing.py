@@ -25,7 +25,7 @@ BUILTIN_USERS_SID = policy.USERS_SID
 _run = acl.run
 
 
-def _users_access(model_dir: Path) -> tuple[Optional[bool], Optional[bool]]:
+def _users_access(model_dir: Path) -> tuple[bool | None, bool | None]:
     """Return (readable, manageable) for BUILTIN\\Users from one ACL read."""
     if not model_dir.exists():
         return None, None
@@ -92,6 +92,7 @@ def ensure_manageable(model_dir: Path, *, windows=None) -> bool:
     result = _run(['icacls', str(model_dir), '/grant',
                    '*%s:(OI)(CI)(M)' % BUILTIN_USERS_SID, '/T', '/Q'])
     return result is not None and result.returncode == 0
+
 
 def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
     """Best-effort compatibility for Ollama launched outside LocalAI.
