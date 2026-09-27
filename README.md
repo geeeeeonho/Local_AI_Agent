@@ -74,11 +74,11 @@ RUN.bat --app studio       :: Studio
 RUN.bat --app chat         :: 대화 · 문서 · Workspace
 RUN.bat --app interpreter  :: Agent · 명령 · 승인
 RUN.bat --app setup        :: Setup 화면
-RUN.bat --tui              :: 이전 터미널 런처
+RUN.bat --tui              :: 터미널 런처
 ```
 
 Studio 는 Tk 가 있는 Python 3.11+ 를 씁니다. GUI를 사용할 수 없는 환경에서는
-`RUN.bat --tui` 로 이전 터미널 런처를 쓸 수 있습니다.
+`RUN.bat --tui` 로 터미널 런처를 쓸 수 있습니다.
 
 설치와 관리는 같은 `RUN.bat`에서 선택하지만, 설치/재설치와 관리 UI는 서로 다른 책임으로 유지합니다. 기존 개별 실행기와 `RUN_TUI.bat`은 제거되었습니다.
 
