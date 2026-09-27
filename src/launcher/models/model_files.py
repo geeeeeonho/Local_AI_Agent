@@ -28,7 +28,7 @@ stdlib 전용. Ollama 가 떠 있지 않아도 동작한다(파일만 읽는다)
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
