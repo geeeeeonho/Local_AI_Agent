@@ -197,7 +197,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     try:
         model_control.mkdir(parents=True, exist_ok=True)
         if not registry.exists():
-            # Do not silently choose one account's legacy registry.
+            # Do not silently choose one account's per-account registry.
             registry.write_text("{}\n", encoding="utf-8")
         if not mutation_lock.exists():
             mutation_lock.write_bytes(b"\0")
