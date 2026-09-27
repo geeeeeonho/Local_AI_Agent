@@ -102,7 +102,7 @@ def test_per_account_registry_is_not_auto_imported(monkeypatch, tmp_path):
     personal.parent.mkdir(parents=True)
     personal.write_text(json.dumps({
         "replace": {
-            "coding": [{"need": 9.0, "primary": "legacy-A", "alts": []}]
+            "coding": [{"need": 9.0, "primary": "personal-A", "alts": []}]
         }
     }), encoding="utf-8")
 
