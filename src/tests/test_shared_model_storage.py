@@ -89,7 +89,7 @@ def test_role_registry_written_by_alice_is_read_by_bob(monkeypatch, tmp_path):
     assert bob_replace == alice_replace
 
 
-def test_legacy_personal_registry_is_not_auto_imported(monkeypatch, tmp_path):
+def test_per_account_registry_is_not_auto_imported(monkeypatch, tmp_path):
     import project_paths
     from launcher.models import model_roles
 
@@ -98,9 +98,9 @@ def test_legacy_personal_registry_is_not_auto_imported(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCAL_AI_ACCOUNT", "Alice")
     monkeypatch.delenv("LLM_MODEL_DIR", raising=False)
 
-    legacy = project_paths.user_data_dir() / "models" / "registry.json"
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text(json.dumps({
+    personal = project_paths.user_data_dir() / "models" / "registry.json"
+    personal.parent.mkdir(parents=True)
+    personal.write_text(json.dumps({
         "replace": {
             "coding": [{"need": 9.0, "primary": "legacy-A", "alts": []}]
         }
@@ -111,7 +111,7 @@ def test_legacy_personal_registry_is_not_auto_imported(monkeypatch, tmp_path):
     assert replace == {}
     assert add == {}
     assert errors == []
-    assert legacy.exists(), "legacy data is preserved, not migrated or deleted"
+    assert personal.exists(), "per-account data is preserved, not imported or deleted"
 
 
 def test_user_ollama_models_is_diagnostic_not_the_managed_store():
