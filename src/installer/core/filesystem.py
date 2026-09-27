@@ -140,7 +140,13 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
             "관리자 또는 기존 설치 계정에서 Setup을 실행해 "
             "C:\\LocalAI\\users 권한을 먼저 갱신하세요." % account
         ) from exc
-    ensure_private_account(account)
+    private_state = ensure_private_account(account)
+    if private_state is not True:
+        raise RuntimeError(
+            "이 Windows 계정의 LocalAI 개인 폴더를 안전하게 잠그지 못했습니다: %s. "
+            "설치를 중단합니다. 관리자 또는 기존 설치 계정에서 RUN.bat --install로 "
+            "C:\\LocalAI\\users 권한을 복구한 뒤 다시 시도하세요." % account
+        )
 
     paths = {
         "env":                   env,
@@ -246,10 +252,9 @@ def name_the_account(account: Path) -> None:
 def ensure_private_account(account: Path) -> Optional[bool]:
     """이 계정 폴더를 다른 Windows 계정이 못 읽게 잠근다.
 
-    바로 옆 모델 저장소는 일부러 ``BUILTIN\\Users`` 읽기를 허용한다 — 그래야
-    두 번째 계정이 수십 GB 를 다시 받지 않는다. 그 밑에 만들어진 폴더는 그
-    허용을 상속하므로, 자리만 옮겨서는 개인 기록이 개인 것이 되지 않는다.
-    상속을 끊고 확인까지 한다.
+    바로 옆 모델 저장소는 일부러 ``BUILTIN\\Users`` Modify를 허용한다 — 그래야
+    두 번째 계정도 같은 모델을 쓰고 설치·삭제할 수 있다. 그 권한을 개인 기록이
+    상속하면 안 되므로 계정 폴더에서 상속을 끊고 확인까지 한다.
     """
     from integrations.windows import privacy
     state = privacy.ensure_private(account)
