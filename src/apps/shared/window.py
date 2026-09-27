@@ -600,7 +600,7 @@ class DesktopWindow:
         set_text(self.stack_detail,'\n'.join(lines))
 
     def ensure_ollama(self):
-        """Explicit managed-Ollama start/verify, with the retained diagnostics."""
+        """Explicit managed-Ollama start/verify with current diagnostics."""
         try:presenter=self.presenter('models')
         except Exception as exc:self.log(str(exc),level='error');return
         self.run_task('models.ollama',lambda:self.services.setup.maintenance('ollama_action',presenter))
