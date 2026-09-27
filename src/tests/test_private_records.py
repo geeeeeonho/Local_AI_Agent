@@ -239,6 +239,24 @@ def test_setup_locks_the_account_folder_it_creates(monkeypatch, tmp_path):
     assert locked == [account]
 
 
+def test_setup_refuses_to_create_personal_state_when_privacy_cannot_be_enforced(monkeypatch, tmp_path):
+    from installer.core import filesystem
+
+    monkeypatch.setattr(privacy, 'ensure_private', lambda path, **kw: False)
+    account = tmp_path / 'users' / 'Tester'
+
+    with pytest.raises(RuntimeError, match='개인 폴더를 안전하게 잠그지 못했습니다'):
+        filesystem.create_environment(
+            tmp_path / 'env',
+            model_dir=tmp_path / 'models',
+            account_root=account,
+        )
+
+    assert not (account / 'user_data').exists()
+    assert not (account / 'logs').exists()
+
+
+
 def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path):
     """Both halves in one pass: the grants must not undo each other.
 
