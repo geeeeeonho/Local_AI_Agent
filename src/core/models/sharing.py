@@ -9,9 +9,8 @@ For LocalAI accounts, sharing requires two facts:
 * the library is the machine-wide LocalAI store, not a profile-local path;
 * ``BUILTIN\\Users`` can read and modify the model store.
 
-Registry values remain on ``Sharing`` as external-Ollama diagnostics only.
-They help explain what a separately launched Ollama CLI/Tray might do, but are
-not blockers for the LocalAI-managed broker.
+Standalone Ollama compatibility is handled separately when LocalAI publishes
+``OLLAMA_MODELS``; it is not part of the LocalAI sharing state.
 """
 from __future__ import annotations
 
@@ -23,39 +22,11 @@ from core import sddl
 # The variable Ollama itself reads to find its store.
 VARIABLE = 'OLLAMA_MODELS'
 
-# Why the machine's other accounts would not see this store. Stable keys: the
-# UI turns them into sentences, and tests name them.
-NOT_SHARED_PATH = 'not_shared_path'      # the store is not the machine-wide one
-PER_USER_PATH = 'per_user_path'          # it sits inside one profile
-# Retained as stable diagnostic keys for external-Ollama compatibility.
-VARIABLE_MISSING = 'variable_missing'
-VARIABLE_ELSEWHERE = 'variable_elsewhere'
-USER_OVERRIDE = 'user_override'
-NOT_READABLE = 'not_readable'            # BUILTIN\Users cannot read the files
-NOT_MANAGEABLE = 'not_manageable'        # BUILTIN\Users cannot install/remove
-
-
-def _same(left, right, windows: bool = True) -> bool:
-    """Compare two stored paths the way the platform they belong to would.
-
-    These come out of the Windows registry, so they are compared by Windows
-    rules - case-folded, separators unified - whatever platform this code is
-    running on. Doing it through ``os.path`` meant the rule could only be
-    checked on Windows, which is where it is hardest to check.
-
-    Values arrive quoted and with trailing separators, because that is what a
-    Windows dialog and a batch file hand back; Ollama strips them too.
-    """
-    if not left or not right:
-        return False
-    import ntpath
-    import posixpath
-    module = ntpath if windows else posixpath
-
-    def shape(value):
-        text = str(value).strip().strip('"\'')
-        return module.normcase(module.normpath(text))
-    return shape(left) == shape(right)
+# Why the machine's other accounts would not share this store.
+NOT_SHARED_PATH = 'not_shared_path'
+PER_USER_PATH = 'per_user_path'
+NOT_READABLE = 'not_readable'
+NOT_MANAGEABLE = 'not_manageable'
 
 
 # ── reading an ACL without depending on the display language ─────────────
@@ -84,16 +55,12 @@ def manageable_from_sddl(descriptor: str) -> Optional[bool]:
 class Sharing:
     """What is true about the store, and what that means for other accounts.
 
-    ``machine_value`` and ``user_value`` are the two scopes of ``OLLAMA_MODELS``:
-    ``''`` means the scope was read and holds nothing, ``None`` means it could
-    not be read at all. ACL-derived read/manage values are ``None`` when the
-    descriptor cannot be read, and on platforms where the question does not arise.
+    ACL-derived read/manage values are ``None`` when the descriptor cannot
+    be read, and on platforms where the question does not arise.
     """
 
     path: str
     intended_shared: bool
-    machine_value: Optional[str] = None
-    user_value: Optional[str] = None
     readable_by_users: Optional[bool] = None
     per_user_path: bool = False
     windows: bool = True
@@ -134,9 +101,7 @@ class Sharing:
         """Can the program fix this itself, given the rights to do it?
 
         Offered when something is wrong that we may fix, and also when we
-        could not read the ACL: the model-access repair is idempotent. Registry
-        OLLAMA_MODELS values are not part of LocalAI's sharing decision because
-        the managed broker receives its model path explicitly.
+        could not read the ACL: the model-access repair is idempotent.
         """
         fixable = {NOT_READABLE, NOT_MANAGEABLE}
         blockers = set(self.blockers)
