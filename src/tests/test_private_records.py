@@ -287,13 +287,13 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
 
 
 def test_the_window_is_told_when_the_records_are_readable_by_others(tmp_path, monkeypatch):
-    from integrations.legacy import desktop
+    from integrations import desktop
     import project_paths
     account = tmp_path / 'users' / 'Tester'
     account.mkdir(parents=True)
     monkeypatch.setattr(project_paths, 'ACCOUNT_ROOT', account)
     monkeypatch.setattr(privacy, 'is_private', lambda path, **kw: False)
-    backend = desktop.LegacyBackend(tmp_path / 'env', tmp_path / 'models', tmp_path)
+    backend = desktop.DesktopBackend(tmp_path / 'env', tmp_path / 'models', tmp_path)
     message = backend.describe_records_privacy()
     assert message and str(account) in message and '설치 / 복구' in message
 
