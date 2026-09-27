@@ -60,7 +60,6 @@ Search(SearXNG+Tor) 선택을 하고, Ollama·AnythingLLM·Open Interpreter·WAR
 - `python -m installer` → GUI가 필요 없는 진단/자동화용 콘솔 진입점입니다.
 - 새 설치는 예전 경로를 자동 검색·이동·병합하지 않습니다.
 
-기존 `INSTALL.bat`, `MANAGE.bat`, `SETUP.bat`은 더 이상 루트 실행기로 사용하지 않습니다.
 
 ### 2. 실행
 
@@ -939,13 +938,3 @@ C:\LocalAI\users\<계정>\
 체크아웃을 복사하거나 다시 받아도 공용 환경과 모델은 중복 생성하지 않습니다.
 각 Windows 계정의 `RUN.bat`은 같은 공용 런타임을 바라보되, 설정·Agent trace·
 인터프리터 세션·AnythingLLM 데이터 등은 자기 계정 폴더만 사용합니다.
-
-## 이전 상세 README
-
-구조 개편 전의 긴 README는 내용 유실 없이 다음 위치에 보존했습니다.
-
-```text
-src/docs/legacy/README_before_src_refactor.md
-```
-
-과거 패치 이력이나 예전 구조를 확인할 때만 참고하세요. 현재 실행 방법은 이 루트 README를 기준으로 합니다.
