@@ -95,6 +95,7 @@ def test_keep_chat_running_uses_the_current_environment_name(monkeypatch):
     monkeypatch.setenv("LOCAL_AI_KEEP_CHAT", "1")
     assert chat._keep_chat_running() is True
 
+
 def test_chat_action_uses_presenter_ok_not_nonexistent_success_method():
     root = Path(__file__).resolve().parents[1]
     source = (root / "launcher" / "actions" / "chat.py").read_text(encoding="utf-8")
