@@ -756,8 +756,9 @@ C:\LocalAI\models\
 ```
 
 `src/launcher/models/model_files.py` 가 manifest 를 읽어 대응을 복원하고
-**`C:\LocalAI\models\MODEL_FILES.csv`** 로 저장합니다(저장소에 쓸 수 없으면
-`user_data/models/` 로). 모델 설치·삭제 후 자동으로 갱신되고, **모델 → 디스크 사용량**
+**`C:\LocalAI\models\MODEL_FILES.csv`** 로 저장합니다. 저장소에 쓸 수 없으면 계정마다
+두 번째 표를 만들지 않고 실패를 기록에 남깁니다 — 그것은 저장소 권한 문제이므로
+Setup 의 권한 복구 대상입니다. 모델 설치·삭제 후 자동으로 갱신되고, **모델 → 디스크 사용량**
 화면의 [인덱스 갱신] 으로도 다시 씁니다.
 
 | 열 | 뜻 |

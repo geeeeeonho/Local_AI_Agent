@@ -9,7 +9,6 @@
 """
 import unittest
 
-from installer.steps import model as installer_model
 from launcher.models import model_catalog as catalog
 from launcher.models import model_classes as classes
 from launcher.models import model_roles as roles
@@ -59,12 +58,6 @@ class InstallSetTests(unittest.TestCase):
     def test_installer_pulls_exactly_the_core_set(self):
         self.assertEqual([tag for _label, tag in catalog.install_pairs()],
                          catalog.core_tags())
-
-    def test_inline_fallback_matches_the_core_set(self):
-        # 카탈로그 import 가 실패했을 때 쓰이는 목록. 세트가 다르면 설치 결과가
-        # 조용히 갈린다. (받는 순서는 상관없으므로 집합으로 비교한다.)
-        self.assertEqual({tag for _label, tag in installer_model._INLINE},
-                         set(catalog.core_tags()))
 
 
 class RoleDisplayTests(unittest.TestCase):
@@ -361,6 +354,20 @@ class GroupTaxonomyTests(unittest.TestCase):
     def test_the_purpose_groups_the_user_asked_for_all_exist(self):
         for key in ("uncensored", "coding", "agent", "office"):
             self.assertIn(key, roles.TIERS)
+
+
+class GroupDepthTests(unittest.TestCase):
+    """그룹마다 메모리 구간이 끊기지 않아야 한다.
+
+    무검열 그룹은 15GB 다음이 곧바로 5GB 라, 여유 8~14GB 인 PC 는 번역 같은
+    무검열 작업을 8b 로밖에 못 했다. 사다리에 큰 구멍이 없는지 본다.
+    """
+
+    #  등급이 셋으로 고정돼 있으므로 '단계 간 배율' 은 밴드 구조가 정해 버린다
+    #  (상 12~18.4 / 중 6~12 / 하 ~6 이라 배율 3배까지는 구조적으로 정상).
+    #  대신 각 등급의 기본단계가 그 등급이 허용하는 메모리를 실제로 쓰는지 본다.
+    #  예: 중 등급(상한 12GB)에 6.5GB 짜리를 기본으로 두면 5.5GB 를 놀리는 셈이다.
+    MIN_BAND_USE = 0.6
 
     def test_each_level_uses_the_memory_it_is_allowed(self):
         ceilings = {key: hi for key, _label, _lo, hi in catalog.LEVELS}

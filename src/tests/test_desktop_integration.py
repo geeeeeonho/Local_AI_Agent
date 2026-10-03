@@ -93,6 +93,8 @@ def test_setup_runner_is_hidden_and_streamed_not_a_new_console(tmp_path):
 
 def test_checkbox_panels_never_install_global_mousewheel_handlers():
     import inspect
+    import pytest
+    pytest.importorskip('tkinter')
     from launcher.presenter.gui.panels import CheckboxPanel
 
     source=inspect.getsource(CheckboxPanel)

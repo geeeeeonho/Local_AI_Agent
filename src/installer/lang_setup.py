@@ -20,13 +20,18 @@ def _settings_store():
     return settings_store
 
 
+#: ``here`` is the checkout every caller passes. The language is an account
+#: setting, so it lives in the same canonical users/<account>/user_data file the
+#: Settings screen reads and writes. Handing ``here`` to the store put it in
+#: <checkout>/user_data instead - a second settings file the Settings screen
+#: never saw, inside a folder this product treats as read-only.
 def _config_path(here: Path) -> Path:
-    return _settings_store().path(here)
+    return _settings_store().path()
 
 
 def _load_saved_language(here: Path) -> Optional[str]:
     try:
-        lang = _settings_store().load(here).language
+        lang = _settings_store().load().language
         if lang in SUPPORTED_LANGUAGES:
             return lang
     except Exception:
@@ -38,9 +43,9 @@ def _save_language(here: Path, lang: str):
     """통합 설정 파일의 language 필드만 갱신하고 다른 설정은 보존."""
     try:
         store = _settings_store()
-        cfg = store.load(here)
+        cfg = store.load()
         store.update_language(cfg, lang)
-        store.save(cfg, here)
+        store.save(cfg)
     except Exception:
         pass
 
@@ -116,8 +121,6 @@ def initialize_language(here: Path, override: Optional[str] = None) -> str:
 
     Returns: 결정된 언어 코드
     """
-    # load/save 단계에서 기존 설정이 있으면 user_data 정본으로 자동 마이그레이션된다.
-
     # 1) CLI 인자
     if override and override in SUPPORTED_LANGUAGES:
         set_language(override)

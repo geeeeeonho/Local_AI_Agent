@@ -8,7 +8,9 @@ SRC = Path(__file__).resolve().parents[1]
 
 
 def test_layout_splits_shared_machine_assets_from_private_account_data():
-    env = {"USERNAME": "Tester", "LOCAL_AI_ROOT": r"C:\LocalAI"}
+    # The Windows default itself, so the expectation holds on any host: an
+    # explicit LOCAL_AI_ROOT is resolved against the local filesystem.
+    env = {"USERNAME": "Tester"}
     layout = runtime_root.layout(env, windows=True)
 
     assert layout["env"] == Path(r"C:\LocalAI") / "environment"
@@ -65,7 +67,7 @@ def test_modules_that_write_use_canonical_path_helpers():
         "launcher/settings_store.py",
         "launcher/agent/interpreter_backend.py",
         "services/desktop.py",
-        "integrations/legacy/desktop.py",
+        "integrations/desktop.py",
     }
     offenders = []
     for path in sorted(SRC.rglob("*.py")):

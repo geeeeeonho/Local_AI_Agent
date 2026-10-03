@@ -89,7 +89,7 @@ def test_the_shell_reaches_its_window_on_a_first_run_with_no_console(monkeypatch
     monkeypatch.setattr(bootstrap, 'run_exit_cleanups', lambda: True)
     monkeypatch.setattr('services.desktop.create_services',
                         lambda: types.SimpleNamespace(project_root=tmp_path,
-                                                      close=lambda: True))
+                                                      finalize=lambda: True))
     from installer import lang_setup
     monkeypatch.setattr(lang_setup, '_load_saved_language', lambda here: None)
     monkeypatch.setattr(lang_setup, '_save_language', lambda here, value: None)
@@ -160,3 +160,33 @@ def test_the_terminal_launcher_gives_up_instead_of_raising(monkeypatch, failure)
     monkeypatch.setattr('builtins.input', refuse)
     assert tui.prompt('> ') == 'q'
     tui.pause('x')
+
+
+def test_the_chosen_language_lands_where_the_settings_screen_reads_it(monkeypatch, tmp_path):
+    """Every caller hands the checkout in as ``here``.
+
+    The choice used to be saved as <checkout>/user_data/settings/... while the
+    Settings screen and every other reader use this account's canonical
+    settings file, so a language picked there was never read back at start-up
+    and the first-run choice sat in a folder the product treats as read-only.
+    """
+    from installer import lang_setup
+    from launcher import settings_store
+    monkeypatch.setenv('LLM_PROJECT_ROOT', str(tmp_path / 'runtime'))
+    # initialize_language exports its choice; let monkeypatch restore it.
+    monkeypatch.setenv(lang_setup.ENV_VAR, 'unused')
+    monkeypatch.delenv(lang_setup.ENV_VAR)
+    monkeypatch.setattr(lang_setup, 'set_language', lambda value: None)
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+
+    assert lang_setup.initialize_language(checkout, override='ko') == 'ko'
+    assert settings_store.load().language == 'ko'
+    assert not (checkout / 'user_data').exists()
+
+    # And a value set from the Settings screen is what the next start reads.
+    cfg = settings_store.load()
+    settings_store.update_language(cfg, 'en')
+    settings_store.save(cfg)
+    monkeypatch.delenv(lang_setup.ENV_VAR)
+    assert lang_setup.initialize_language(checkout) == 'en'

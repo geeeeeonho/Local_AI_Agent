@@ -769,16 +769,34 @@ class DesktopWindow:
         if not plan['install'] and not plan['remove']:
             self.log('변경할 내용이 없습니다.');return
 
+        # Every change is confirmed on this screen before it starts, not only a
+        # removal: the pre-checked plan alone is a ~100 GB download, and a store
+        # that cannot hold it should be said before the download, not after it
+        # fails partway. The confirmation stays inline - same button, twice.
         signature=(tuple(plan['install']),tuple(plan['remove']))
-        if plan['remove'] and self._model_confirm_signature!=signature:
+        if self._model_confirm_signature!=signature:
             self._model_confirm_signature=signature
-            self.apply_button.configure(text='삭제 포함 적용 확인')
-            self.choice_plan.set(
-                f"삭제 {len(plan['remove'])}개가 포함됩니다 · 같은 버튼을 한 번 더 누르면 "
-                "설치/삭제를 시작합니다.")
+            parts=[]
+            if plan['install']:
+                parts.append(f"설치 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)")
+            if plan['remove']:
+                parts.append(f"삭제 {len(plan['remove'])}개")
+            short=bool(plan['install']) and plan['fits'] is False
+            if short:
+                parts.append(f"공간 {plan['download_gb']-plan['free_gb']:.1f} GB 부족")
+            self.apply_button.configure(
+                text='삭제 포함 적용 확인' if plan['remove'] else '설치 시작 확인')
+            self.choice_plan.set(' · '.join(parts)+' · 같은 버튼을 한 번 더 누르면 시작합니다.')
             if hasattr(self,'model_progress_text'):
-                self.model_progress_text.set('삭제 포함 — 적용 버튼을 한 번 더 눌러 확인')
-            self.log('모델 삭제가 포함되어 있습니다. 같은 화면의 적용 버튼을 한 번 더 누르면 진행합니다.')
+                self.model_progress_text.set(
+                    ('삭제 포함' if plan['remove'] else '설치')+' — 적용 버튼을 한 번 더 눌러 확인')
+            for tag in plan['install']:self.log('  + '+tag)
+            for tag in plan['remove']:self.log('  - '+tag)
+            self.log(self.storage_line(plan))
+            if short:
+                self.log('공간이 모자라면 받다가 중간에 실패합니다. 먼저 정리하거나 덜 고르세요.',
+                         level='error')
+            self.log('모델 '+' · '.join(parts)+'. 같은 화면의 적용 버튼을 한 번 더 누르면 진행합니다.')
             return
 
         self._model_confirm_signature=None

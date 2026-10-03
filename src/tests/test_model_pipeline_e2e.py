@@ -1,37 +1,35 @@
-"""설치기가 고른 모델이 실제로 그 경로에 받아지고, 런처가 그걸 골라 쓰는가.
+"""Models 화면이 고른 모델이 실제로 그 경로에 받아지고, 런처가 그걸 골라 쓰는가.
 
 단위 테스트는 각 조각이 맞다고만 말한다. 조각이 서로 다른 경로를 보고 있으면
 전부 통과하면서도 프로그램은 "모델이 없다" 고 한다. 그래서 여기서는 가짜
-ollama 실행 파일로 진짜 저장소를 만들어 놓고, 사슬 전체를 한 번에 지난다.
+Ollama API 로 진짜 저장소를 만들어 놓고, 사슬 전체를 한 번에 지난다.
 
   카탈로그 3단계 계획
-    -> installer.steps.model.download()  (OLLAMA_MODELS 로 pull)
-    -> C:\\LLM_Models 자리의 blobs/ + manifests/
-    -> model_files 가 그 blob 이 어느 모델인지 CSV 로 기록
+    -> ModelService.plan_changes() / install_model()  (Models 화면이 쓰는 경로)
+    -> Ollama /api/pull 이 공용 저장소에 blobs/ + manifests/ 생성
+    -> model_files 가 그 blob 이 어느 모델인지 MODEL_FILES.csv 로 기록
     -> model_roles 가 '설치된 것' 을 읽어 역할별 모델 결정
     -> 그 태그가 AgentConfig.model 로, 다시 Open Interpreter 스레드 파라미터로
 
-가짜 ollama 는 실제 Ollama 와 같은 레이아웃(내용 해시 blob + OCI manifest)을
+가짜 Ollama 는 실제 Ollama 와 같은 레이아웃(내용 해시 blob + OCI manifest)을
 만든다. 레이아웃이 틀리면 model_files 가 못 읽으므로 그것까지 함께 검증된다.
+(예전 콘솔 다운로더와 선택 창은 Models 화면으로 합쳐지며 제거되었다.)
 """
+import csv
 import hashlib
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from launcher.models import model_catalog as catalog
 from launcher.models import model_files
+from launcher.models import model_index
 from launcher.models import model_roles as roles
 
-class _FakeOllama:
-    """`ollama list` / `ollama pull` 을 진짜와 같은 디스크 레이아웃으로 흉내낸다.
 
-    실행 파일을 만들어 두고 셔뱅으로 돌리면 Windows CI 에서는 못 돌아
-    검증이 통째로 건너뛰어진다. 그래서 subprocess.run 자리에 끼워 넣어
-    두 플랫폼에서 똑같이 돈다.
-    """
+class _FakeOllama:
+    """Ollama 의 pull / delete / tags 를 진짜와 같은 디스크 레이아웃으로 흉내낸다."""
 
     SHARED = hashlib.sha256(b"shared-template").hexdigest()
 
@@ -53,7 +51,11 @@ class _FakeOllama:
                            else "%s/%s:%s" % (namespace, name, tag))
         return out
 
-    def _pull(self, tag: str) -> None:
+    # OllamaClient 와 같은 이름의 표면
+    def list_models(self):
+        return [{"name": name} for name in self.installed()]
+
+    def pull(self, tag, progress=None):
         name, _, version = tag.partition(":")
         namespace, _, short = name.rpartition("/")
         namespace = namespace or "library"
@@ -74,9 +76,11 @@ class _FakeOllama:
                  "digest": "sha256:" + self.SHARED, "size": 64},
             ],
         }), encoding="utf-8")
+        if progress is not None:
+            progress({"status": "success"})
         self.pulled.append(tag)
 
-    def _remove(self, tag: str) -> None:
+    def remove(self, tag):
         """`ollama rm` 은 manifest 를 지운다. (진짜는 참조 없는 blob 도 함께
         정리하지만, 여기서는 manifest 제거만으로 '설치됨' 판정이 바뀐다.)"""
         name, _, version = tag.partition(":")
@@ -84,21 +88,15 @@ class _FakeOllama:
         (self.manifests / (namespace or "library") / short / version).unlink(missing_ok=True)
         self.removed.append(tag)
 
-    def run(self, argv, **kwargs):
-        """subprocess.run 대역. 설치기가 부르는 형태만 처리한다."""
-        args = [str(a) for a in argv]
-        verb = args[1] if len(args) > 1 else ""
-        stdout = ""
-        if verb == "list":
-            stdout = "NAME\tID\tSIZE\tMODIFIED\n" + "".join(
-                name + "\tabc123\t1 GB\t1 day ago\n" for name in self.installed())
-        elif verb == "pull":
-            self._pull(args[2])
-        elif verb == "rm":
-            self._remove(args[2])
-        else:
-            return subprocess.CompletedProcess(args, 1, "", "unknown command")
-        return subprocess.CompletedProcess(args, 0, stdout, "")
+
+class _Inference:
+    """InferenceService 자리. 저장소 경로와 클라이언트만 넘긴다."""
+
+    def __init__(self, store, client):
+        self.model_dir, self.client = store, client
+
+    def ensure_ready(self, log=None):
+        return "http://127.0.0.1:11434"
 
 
 class ModelPipelineTests(unittest.TestCase):
@@ -106,146 +104,134 @@ class ModelPipelineTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
-        self.store = root / "LLM_Models"          # C:\\LLM_Models 자리
-        self.env = root / "llm_environment"
-        self.ollama_dir = self.env / "ollama_runtime"
-        self.ollama_dir.mkdir(parents=True)
+        self.store = root / "models"              # C:\\LocalAI\\models 자리
+        self.env = root / "environment"
         self.store.mkdir(parents=True)
-        # 설치기는 실행 파일의 존재만 확인하고, 호출은 아래에서 가로챈다.
-        (self.ollama_dir / "ollama.exe").write_bytes(b"")
-        self.paths = {"env": self.env, "ollama": self.ollama_dir, "models": self.store}
+        self.env.mkdir(parents=True)
+        self.paths = {"env": self.env, "models": self.store}
 
-        from installer.steps import model as installer_model
+        from services.models.service import ModelService
         self.ollama = _FakeOllama(self.store)
-        real_run = installer_model.subprocess.run
-        self.addCleanup(setattr, installer_model.subprocess, "run", real_run)
-        installer_model.subprocess.run = self.ollama.run
-
-        # 선택 GUI 는 진짜 Tk 창을 띄우고 mainloop 로 사용자를 기다린다.
-        # 테스트는 창을 띄우지 않고 어느 분기를 지나는지 매번 명시한다.
-        # (기본값은 "Tk 사용 불가 -> 권장 세트 자동 설치" 계약.)
-        from installer.steps import model_select_gui
-        real_select = model_select_gui.select_models
-        self.addCleanup(setattr, model_select_gui, "select_models", real_select)
-        self.selection_calls = []
-
-        def unavailable(entries, installed, **kwargs):
-            self.selection_calls.append((entries, set(installed), kwargs))
-            raise ModuleNotFoundError("No module named 'tkinter'")
-
-        self.select = unavailable
-        model_select_gui.select_models = (
-            lambda *a, **kw: self.select(*a, **kw))
+        self.models = ModelService(_Inference(self.store, self.ollama),
+                                   lock_path=root / "model-mutation.lock")
 
     # ── 설치 ────────────────────────────────────────────────────
-    def _install(self):
-        from installer.steps import model as installer_model
-        return installer_model.download(self.paths)
+    def _apply(self, wanted):
+        """Models 화면의 [선택대로 적용] 과 같은 순서: 계획, 삭제, 설치."""
+        plan = self.models.plan_changes(wanted)
+        for tag in plan["remove"]:
+            self.models.remove_model(tag)
+        for tag in plan["install"]:
+            self.models.install_model(tag)
+        return plan
 
-    def test_the_installer_pulls_the_three_level_plan_into_the_model_store(self):
+    def _install(self):
+        planned = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
+        self._apply(planned)
+        return sorted(planned)
+
+    def test_the_models_screen_pulls_the_three_level_plan_into_the_model_store(self):
         pulled = self._install()
         planned = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
-        self.assertEqual(set(pulled), planned,
-                         "설치기가 받은 것과 3단계 계획이 다르다")
+        self.assertEqual(set(self.ollama.pulled), planned,
+                         "받은 것과 3단계 계획이 다르다")
+        self.assertEqual(set(pulled), planned)
         # 진짜 저장소 자리에 파일이 생겼는가
         self.assertTrue((self.store / "blobs").is_dir())
         self.assertTrue((self.store / "manifests").is_dir())
 
-    def test_pulling_is_idempotent(self):
+    def test_applying_the_same_selection_again_downloads_nothing(self):
         self._install()
         before = sorted(p.name for p in (self.store / "blobs").iterdir())
-        self._install()          # 두 번째 실행은 전부 건너뛰어야 한다
+        self.ollama.pulled.clear()
+        plan = self._apply(catalog.recommended_for(catalog.MEMORY_BUDGET_GB))
+        self.assertEqual((plan["install"], plan["remove"]), ([], []))
+        self.assertEqual(self.ollama.pulled, [])
         after = sorted(p.name for p in (self.store / "blobs").iterdir())
         self.assertEqual(before, after)
 
-    def test_the_selection_window_receives_the_catalog_and_the_memory_budget(self):
-        self._install()
-        entries, installed, kwargs = self.selection_calls[0]
-        assert {e.tag for e in entries} == set(catalog.catalog_tags())
-        assert installed == set()
-        assert kwargs["budget_gb"] == catalog.MEMORY_BUDGET_GB
+    def test_the_selection_screen_receives_the_catalog_and_the_memory_budget(self):
+        view = self.models.catalog()
+        self.assertEqual({m["tag"] for m in view["models"]}, set(catalog.catalog_tags()))
+        self.assertEqual(view["budget_gb"], catalog.MEMORY_BUDGET_GB)
+        self.assertEqual(set(view["recommended"]),
+                         catalog.recommended_for(catalog.MEMORY_BUDGET_GB))
+        self.assertFalse(any(m["installed"] for m in view["models"]))
 
     def test_an_explicit_selection_installs_and_removes_exactly_what_was_checked(self):
         self._install()                       # 권장 세트를 먼저 받아 둔다
         keep, drop = sorted(self.ollama.pulled)[0], sorted(self.ollama.pulled)[-1]
-        extra = next(t for t in catalog.catalog_tags() if t not in self.ollama.pulled)
-        self.select = lambda *a, **kw: {keep, extra}
+        extra = next(t for t in sorted(catalog.catalog_tags())
+                     if t not in self.ollama.pulled)
         self.ollama.pulled.clear()
 
-        self._install()
+        self._apply({keep, extra})
         self.assertEqual(self.ollama.pulled, [extra],
                          "체크한 미설치 모델만 받아야 한다")
         self.assertNotIn(drop, self.ollama.installed(),
                          "체크 해제한 설치 모델이 지워지지 않았다")
         self.assertIn(keep, self.ollama.installed())
 
-    def test_a_broken_selection_window_is_reported_loudly_not_swallowed(self):
-        """Tk 부재는 예상된 폴백이지만, 코드 결함은 크게 알려야 한다.
-
-        실제로 NameError 하나가 이 except 절에 삼켜져, 선택 창이 한 번도 뜨지
-        않은 채 매 설치가 권장 세트를 통째로 받았다.
-        """
-        from installer import utils
-        said = []
-        self.addCleanup(setattr, utils, "err", utils.err)
-        utils.err = lambda message: said.append(str(message))
-
-        def broken(*a, **kw):
-            raise NameError("name 'free_gb' is not defined")
-
-        self.select = broken
-        planned = self._install()
-        self.assertTrue(planned, "권장 세트로는 계속 진행해야 한다")
-        self.assertTrue(any("free_gb" in line for line in said), said)
-
-    def test_cancelling_the_selection_window_downloads_nothing(self):
-        self.select = lambda *a, **kw: None
-        self.assertEqual(self._install(), [])
-        self.assertEqual(self.ollama.pulled, [])
-
     # ── 파일 대응표 ─────────────────────────────────────────────
+    def _rows(self):
+        return model_files.build_index(self.store)["files"]
+
     def test_the_csv_lands_next_to_the_models_and_names_every_weight_file(self):
         planned = self._install()
         csv_path = self.store / model_files.CSV_NAME
         self.assertTrue(csv_path.is_file(), "대응표가 저장소 옆에 없다")
-
-        rows = model_files.scan(self.store)
-        named = {r.model for r in rows if r.layer == "weights" and r.status == "ok"}
+        with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+            written = list(csv.DictReader(stream))
+        named = {r["model"] for r in written if r["layer"] == "weights" and r["status"] == "ok"}
         self.assertEqual(named, set(planned),
                          "받은 모델인데 blob 이 어느 모델인지 복원되지 않는다")
-        for row in rows:
-            if row.status == "ok":
-                self.assertTrue((self.store / row.rel_path).is_file(),
-                                "표의 경로가 실제 파일을 가리키지 않는다: " + row.rel_path)
+        for row in written:
+            if row["status"] == "ok":
+                self.assertTrue((self.store / row["rel_path"]).is_file(),
+                                "표의 경로가 실제 파일을 가리키지 않는다: " + row["rel_path"])
 
     def test_a_shared_blob_is_reported_as_shared_not_exclusive(self):
         planned = self._install()
-        rows = model_files.scan(self.store)
-        shared = [r for r in rows if r.layer == "template"]
+        shared = [r for r in self._rows() if r["layer"] == "template"]
         self.assertTrue(shared)
-        self.assertEqual(shared[0].shared_with, len(planned),
+        self.assertEqual(shared[0]["shared_with"], len(planned),
                          "여러 모델이 함께 쓰는 파일인데 전용처럼 보인다")
 
     def test_nothing_is_left_unaccounted_for(self):
         self._install()
-        orphans = [r for r in model_files.scan(self.store) if r.status == "orphan"]
+        orphans = [r for r in self._rows() if r["status"] == "orphan"]
         self.assertEqual(orphans, [], "설치 직후인데 정체불명 파일이 있다")
+
+    def test_the_csv_belongs_to_the_shared_store_and_never_to_one_account(self):
+        """쓸 수 없으면 오류로 알리고, 계정마다 두 번째 정본을 만들지 않는다."""
+        self.assertEqual(model_files.default_csv_path(self.store),
+                         self.store / model_files.CSV_NAME)
+
+    def test_a_failed_index_write_never_breaks_the_install(self):
+        real = model_index.publish
+        self.addCleanup(setattr, model_index, "publish", real)
+
+        def boom(*a, **kw):
+            raise OSError("read-only file system")
+
+        model_index.publish = boom
+        tag = sorted(catalog.recommended_for(catalog.MEMORY_BUDGET_GB))[0]
+        result = self.models.install_model(tag)   # 예외가 새어 나오면 여기서 실패한다
+        self.assertEqual(result["model"], tag)
+        self.assertFalse(result["index_refreshed"])
+        self.assertIn(tag, self.ollama.installed())
 
     # ── 런처가 그걸 실제로 고르는가 ─────────────────────────────
     def _installed_from_store(self):
-        names = set(model_files.read_manifests(self.store))
+        names = set(model_index.read_manifests(self.store))
         return catalog.canonicalize_installed(names)
 
     def test_the_launcher_resolves_every_role_to_something_actually_on_disk(self):
         self._install()
         on_disk = self._installed_from_store()
-        real = roles.installed_models
-        self.addCleanup(setattr, roles, "installed_models", real)
-        roles.installed_models = lambda *a, **kw: on_disk
-
         for free in (20.0, 16.0, 12.0, 8.0):
             for role in roles.LADDERS:
-                chosen = roles.resolve_ladder(role, free)
+                chosen = roles.resolve_ladder(role, free, installed=on_disk)
                 self.assertIn(chosen, on_disk,
                               "여유 %.0fGB / %s -> %s 는 저장소에 없다"
                               % (free, role, chosen))
@@ -258,7 +244,7 @@ class ModelPipelineTests(unittest.TestCase):
         self.addCleanup(setattr, roles, "installed_models", real)
         roles.installed_models = lambda *a, **kw: on_disk
         # 카탈로그에 있지만 받지 않은 태그를 요청 -> 받은 것 중에서 골라야 한다
-        missing = next(t for t in catalog.catalog_tags() if t not in on_disk)
+        missing = next(t for t in sorted(catalog.catalog_tags()) if t not in on_disk)
         picked, note = roles.auto_match_installed(missing, "agent", 20.0)
         self.assertIn(picked, on_disk)
         self.assertTrue(note)
@@ -266,11 +252,7 @@ class ModelPipelineTests(unittest.TestCase):
     # ── 그 태그가 실제 실행 파라미터까지 가는가 ─────────────────
     def test_the_resolved_tag_reaches_the_open_interpreter_thread(self):
         self._install()
-        on_disk = self._installed_from_store()
-        real = roles.installed_models
-        self.addCleanup(setattr, roles, "installed_models", real)
-        roles.installed_models = lambda *a, **kw: on_disk
-        chosen = roles.resolve_ladder("agent", 20.0)
+        chosen = roles.resolve_ladder("agent", 20.0, installed=self._installed_from_store())
 
         from launcher.agent.backend import AgentConfig
         from launcher.agent.interpreter_backend import OpenInterpreterBackend
@@ -295,40 +277,6 @@ class ModelPipelineTests(unittest.TestCase):
         launcher_env = OllamaService(self.env, model_dir=self.store).env_vars({})
         self.assertEqual(installer_env["OLLAMA_MODELS"], str(self.store))
         self.assertEqual(launcher_env["OLLAMA_MODELS"], str(self.store))
-        self.assertEqual(installer_env["OLLAMA_MODELS"], launcher_env["OLLAMA_MODELS"],
-                         "설치기와 런처가 다른 모델 폴더를 본다")
-
-
-    # ── 저장소가 읽기 전용일 때 ─────────────────────────────────
-    def test_the_csv_falls_back_when_the_shared_store_cannot_be_written(self):
-        """공용 저장소는 여러 사용자가 읽도록 쓰기를 막아 두기도 한다
-        (README '경로 정책'). 그때 대응표를 못 쓴다고 설치가 깨지면 안 되고,
-        표 자체는 user_data 쪽에 남아야 한다.
-
-        chmod 은 root 로 돌리면 무력해지므로 쓰기 판정 자체를 막아 확인한다.
-        """
-        self._install()
-        real = model_files._writable
-        self.addCleanup(setattr, model_files, "_writable", real)
-        model_files._writable = lambda path: False
-
-        out = model_files.default_csv_path(self.store)
-        self.assertNotEqual(out.parent, self.store,
-                            "쓸 수 없는 곳에 표를 쓰려 한다")
-        self.assertEqual(out.name, model_files.CSV_NAME)
-        # 스캔 자체는 읽기만 하므로 계속 동작해야 한다
-        self.assertTrue(model_files.scan(self.store))
-
-    def test_a_failed_write_never_breaks_the_install(self):
-        real = model_files.write_csv
-        self.addCleanup(setattr, model_files, "write_csv", real)
-
-        def boom(*a, **kw):
-            raise OSError("read-only file system")
-
-        model_files.write_csv = boom
-        pulled = self._install()          # 예외가 새어 나오면 여기서 실패한다
-        self.assertTrue(pulled)
 
 
 class ListCommandTests(unittest.TestCase):

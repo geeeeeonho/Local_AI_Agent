@@ -44,7 +44,8 @@ class _Panel(tk.Frame):
 def ui(tmp_path):
     from apps.shared.window import DesktopWindow
     svc, backend = make(tmp_path)
-    backend.run_setup = lambda: backend.calls.append(('setup',)) or 0
+    backend.run_setup = lambda options=None, log=None, cancel=None: (
+        backend.calls.append(('setup',)) or 0)
     backend.create_agent_panel = lambda parent, metadata, callbacks: _Panel(parent, callbacks)
     try:
         root = tk.Tk()
@@ -168,20 +169,21 @@ def test_model_install_and_removal_go_through_setup(ui, monkeypatch):
     svc.settings.set_network_mode('direct')
 
     _choose(w, ['demo:latest'])
-    w.apply_selection()
+    w.apply_selection()          # states the plan
+    w.apply_selection()          # the same plan again starts it
     settle(w, lambda: ('pull', 'demo:latest') in backend.calls)
 
     # Unticking an installed model is the removal path.
     _choose(w, [], installed=['demo:latest'])
     w.apply_selection()
+    w.apply_selection()
     settle(w, lambda: ('remove', 'demo:latest') in backend.calls)
 
 
-def test_a_declined_confirmation_never_touches_models(ui, monkeypatch):
+def test_an_unconfirmed_selection_never_touches_models(ui, monkeypatch):
     w, _svc, backend = ui
-    confirmed(monkeypatch, answer=False)
     _choose(w, ['demo:latest'])
-    w.apply_selection()
+    w.apply_selection()          # one click is only the confirmation prompt
     settle(w)
     assert not any(call[0] == 'pull' for call in backend.calls)
 

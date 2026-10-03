@@ -169,7 +169,8 @@ def test_trace_omits_payload_rows_when_logging_disabled(tmp_path, monkeypatch):
     from launcher import settings_store
 
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
-    assert settings_store.set_logging_enabled(False, tmp_path)
+    # Where the settings screen writes it: this account's canonical settings.
+    assert settings_store.set_logging_enabled(False)
 
     exe = tmp_path / "environment" / "open_interpreter" / "bin" / "interpreter.exe"
     exe.parent.mkdir(parents=True)

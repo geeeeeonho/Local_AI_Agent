@@ -175,7 +175,8 @@ def test_searxng_published_port_binds_only_to_loopback(monkeypatch, tmp_path: Pa
     (cfg / "settings.yml").write_text("search:\n", encoding="utf-8")
 
     calls = []
-    monkeypatch.setenv("NET_MODE", "block")
+    # Direct starts no proxy runtime first; Block is refused before Docker.
+    monkeypatch.setenv("NET_MODE", "direct")
     monkeypatch.setattr(searxng_runtime, "is_running", lambda: False)
     monkeypatch.setattr(searxng_runtime, "_ensure_net", lambda: None)
     monkeypatch.setattr(searxng_runtime, "image_exists", lambda: True)

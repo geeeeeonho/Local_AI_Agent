@@ -158,7 +158,7 @@ def test_the_desktop_shell_installs_the_hooks_that_stop_containers(monkeypatch, 
     monkeypatch.setattr(bootstrap, 'run_exit_cleanups', lambda: order.append(('cleanup',)))
     monkeypatch.setattr(bootstrap, 'initialize_language', lambda root, lang: None)
     services = types.SimpleNamespace(project_root=tmp_path,
-                                     close=lambda: order.append(('close',)))
+                                     finalize=lambda: order.append(('finalize',)))
     monkeypatch.setattr('services.desktop.create_services',
                         lambda: order.append(('services',)) or services)
     pytest.importorskip('tkinter')
@@ -168,12 +168,19 @@ def test_the_desktop_shell_installs_the_hooks_that_stop_containers(monkeypatch, 
     steps = [step[0] for step in order]
     assert steps.index('install') < steps.index('services'), \
         'hooks must exist before anything can start a container'
-    assert steps[-2:] == ['close', 'cleanup'], \
+    # finalize() stops the sessions and runs the registered container teardown
+    # while this process still holds the machine-wide runtime lease.
+    assert steps[-1] == 'finalize', \
         'teardown the services do not own still has to run'
 
 
-def test_containers_are_stopped_even_when_startup_fails(monkeypatch, tmp_path):
-    """A crash after WARP is up must not be the one path that leaks it."""
+def test_a_startup_that_fails_before_services_exist_reports_and_starts_nothing(
+        monkeypatch, tmp_path):
+    """Without services nothing could have started a container.
+
+    The hooks were installed first, so whatever the process registered is
+    still torn down by them at exit; the entry point only has to say it failed.
+    """
     from apps.shared import entry
     from services.system import bootstrap
     order = []
@@ -190,7 +197,7 @@ def test_containers_are_stopped_even_when_startup_fails(monkeypatch, tmp_path):
     import tkinter.messagebox
     monkeypatch.setattr(tkinter.messagebox, 'showerror', lambda *a, **k: None)
     assert entry.main('studio', []) == 3
-    assert order == ['install', 'cleanup']
+    assert order == ['install']
 
 
 def test_hook_installation_never_takes_the_program_down_with_it(monkeypatch, tmp_path):

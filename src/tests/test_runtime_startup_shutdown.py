@@ -214,7 +214,7 @@ def test_auto_starting_docker_desktop_registers_a_last_stage_teardown(docker, mo
     assert docker._started_by_us is True
     # Containers are stopped by earlier callbacks; pulling the daemon out from
     # under them would make every one of those fail.
-    assert registered == [{'last': True}]
+    assert registered == [{'stage': 'daemon'}]
 
 
 def test_a_docker_we_did_not_start_is_left_alone(docker, monkeypatch):
@@ -551,9 +551,55 @@ def test_searxng_reports_why_it_did_not_start(tmp_path, monkeypatch):
     monkeypatch.setattr(searxng_runtime, 'is_running', lambda: False)
     monkeypatch.setattr(searxng_runtime, '_ensure_net', lambda: None)
     monkeypatch.setattr(searxng_runtime, 'image_exists', lambda: False)
-    monkeypatch.setenv('NET_MODE', 'block')
+    # Direct: no WARP or Tor to bring up first, so the image check is reached.
+    monkeypatch.setenv('NET_MODE', 'direct')
     assert searxng_runtime.start(tmp_path, log=said.append) is False
     assert any('이미지 없음' in message for message in said), said
+
+
+def test_searxng_is_never_started_for_block(monkeypatch, tmp_path):
+    """Block has no public egress, search included - also from the menu."""
+    from launcher import searxng_runtime
+    said = []
+    monkeypatch.setattr(searxng_runtime, '_register_exit_cleanup', lambda: None)
+    monkeypatch.setattr(searxng_runtime, '_run',
+                        lambda *a, **k: pytest.fail('Block must not touch Docker'))
+    monkeypatch.setenv('NET_MODE', 'block')
+    assert searxng_runtime.start(tmp_path, log=said.append) is False
+    assert any('Block' in message for message in said), said
+
+
+def test_direct_search_neither_starts_warp_nor_routes_through_a_proxy(monkeypatch, tmp_path):
+    """Direct used to start WARP and rewrite the route to llm_warp anyway."""
+    from installer.steps import searxng as installer_searxng
+    from launcher import searxng_runtime, warp_runtime
+    source = tmp_path / 'env' / 'searxng' / 'config'
+    source.mkdir(parents=True)
+    (source / 'settings.yml').write_text(installer_searxng._settings_yml('x'),
+                                         encoding='utf-8')
+    derived = tmp_path / 'derived'
+    derived.mkdir()
+    monkeypatch.setattr(searxng_runtime, '_register_exit_cleanup', lambda: None)
+    monkeypatch.setattr(searxng_runtime, 'is_running', lambda: False)
+    monkeypatch.setattr(searxng_runtime, '_ensure_net', lambda: None)
+    monkeypatch.setattr(searxng_runtime, 'image_exists', lambda: True)
+    monkeypatch.setattr(searxng_runtime, 'container_exists', lambda: False)
+    monkeypatch.setattr(searxng_runtime, '_wait_ready', lambda **kw: True)
+    def derive(env):
+        (derived / 'settings.yml').write_bytes((source / 'settings.yml').read_bytes())
+        return derived
+    monkeypatch.setattr(searxng_runtime, '_cfg_dir', derive)
+    ran = []
+    monkeypatch.setattr(searxng_runtime, '_run', lambda args, **k: ran.append(args)
+                        or NS(returncode=0, stdout='', stderr=''))
+    monkeypatch.setattr(warp_runtime, 'start',
+                        lambda *a, **k: pytest.fail('Direct must not start WARP'))
+    monkeypatch.setenv('NET_MODE', 'direct')
+    assert searxng_runtime.start(tmp_path / 'env') is True
+    settings = (derived / 'settings.yml').read_text(encoding='utf-8')
+    assert '\n  proxies: {}\n' in settings
+    assert 'llm_warp' not in settings and 'llm_tor' not in settings
+    assert any('localai.search.mode=direct' in args for args in ran)
 
 
 def test_searxng_registers_the_teardown_every_other_runtime_had(monkeypatch, tmp_path):
@@ -562,7 +608,8 @@ def test_searxng_registers_the_teardown_every_other_runtime_had(monkeypatch, tmp
     from launcher.core import lifelog
     monkeypatch.setattr(searxng_runtime, '_CLEANUP_REGISTERED', False)
     monkeypatch.setattr(searxng_runtime, 'is_running', lambda: True)
-    monkeypatch.setattr(searxng_runtime, 'running_mode', lambda: 'block')
+    monkeypatch.setattr(searxng_runtime, 'running_mode', lambda: 'warp')
+    monkeypatch.setenv('NET_MODE', 'warp')
     registered = []
     monkeypatch.setattr(lifelog, 'register_cleanup', lambda fn, **kw: registered.append(fn))
     assert searxng_runtime.start(tmp_path) is True

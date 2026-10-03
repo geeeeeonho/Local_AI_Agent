@@ -73,6 +73,12 @@ class _Bootstrap:
     def initialize_language(self, root, language=None):
         self.calls.append(('language', str(root), language))
 
+    def install_exit_hooks(self, root):
+        # The real hooks write this account's launcher log and run a Docker
+        # sweep when the test process exits. A test must do neither.
+        self.calls.append(('hooks',))
+        return True
+
 
 @pytest.fixture
 def bootstrap(monkeypatch):
@@ -80,13 +86,42 @@ def bootstrap(monkeypatch):
     fake = _Bootstrap()
     monkeypatch.setattr(real, 'run_module_entry', fake.run_module_entry)
     monkeypatch.setattr(real, 'initialize_language', fake.initialize_language)
+    monkeypatch.setattr(real, 'install_exit_hooks', fake.install_exit_hooks)
     return fake
 
 
-def test_install_flags_reach_the_installer_with_dashed_names(bootstrap):
-    assert main('setup', ['--install', '--skip-model', '--lang', 'en']) == 0
-    assert bootstrap.calls == [
-        ('installer', ['--install', '--skip-model', '--lang', 'en'])]
+def test_install_flags_open_setup_and_start_repair_in_the_same_window(
+        monkeypatch, bootstrap, tmp_path):
+    """--install opens the one Setup UI and starts there; no second console."""
+    state = _services(monkeypatch, tmp_path)
+    seen = {}
+
+    class Root:
+        def after(self, delay, callback):
+            seen['scheduled'] = callback
+
+    class Window:
+        def __init__(self, app, services):
+            seen['app'] = app
+            self.root = Root()
+
+        def apply_setup_cli_options(self, **options):
+            seen['options'] = options
+
+        def repair(self):
+            pass
+
+        def run(self):
+            pass
+
+    _window_module(monkeypatch, Window)
+    assert main('setup', ['--install', '--skip-search', '--lang', 'en']) == 0
+    assert seen['app'] == 'setup'
+    assert seen['options'] == {'skip_sandbox': False, 'skip_build': False,
+                               'skip_search': True}
+    assert getattr(seen['scheduled'], '__name__', '') == 'repair'
+    assert not any(call and call[0] == 'installer' for call in bootstrap.calls)
+    assert state['closed'] == 1
 
 
 def test_tui_reaches_the_terminal_launcher_from_any_app(bootstrap):
@@ -113,7 +148,9 @@ def _services(monkeypatch, tmp_path):
     class Services:
         project_root = tmp_path
 
-        def close(self):
+        # The entry point ends with finalize(): the shared runtime's teardown
+        # runs while this process still holds the machine-wide lease.
+        def finalize(self):
             state['closed'] += 1
 
     monkeypatch.setattr(desktop_services, 'create_services', Services)

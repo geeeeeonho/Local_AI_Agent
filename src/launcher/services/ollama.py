@@ -239,7 +239,10 @@ class OllamaService:
 
     def describe_store(self, timeout: float = 5) -> str:
         """One line about which store the running server is serving from."""
-        situation, detail = self.inspect_store(timeout=timeout)
+        return self._store_line(*self.inspect_store(timeout=timeout))
+
+    def _store_line(self, situation, detail) -> str:
+        """The words for an inspection already made, without asking again."""
         if situation == self.READY:
             return "모델 저장소 일치: %s (로컬 모델 %d개)" % (
                 self.model_dir, len(detail.get('served') or ()))
@@ -660,7 +663,8 @@ class OllamaService:
         """
         situation, detail = self.inspect_store()
         if situation not in (self.STORE_NOT_READ, self.OTHER_STORE):
-            self._info("지금은 다시 시작할 이유가 없습니다: " + self.describe_store())
+            self._info("지금은 다시 시작할 이유가 없습니다: "
+                       + self._store_line(situation, detail))
             return situation in (self.READY, self.NOTHING_INSTALLED)
 
         pid = self._listener_pid()
@@ -704,7 +708,9 @@ class OllamaService:
             self._ok("다시 시작 완료 · 공용 모델 저장소가 비어 있습니다.")
             return True
         self._err("다시 시작했지만 공용 모델 저장소를 정상적으로 읽지 못합니다.")
-        self._info(self.describe_store())
+        # The answer that decided this failure, not a third probe that may
+        # disagree with it.
+        self._info(self._store_line(situation, detail))
         return False
 
     def register_exit_cleanup(self) -> bool:

@@ -141,6 +141,18 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
             "C:\\LocalAI\\users 권한을 먼저 갱신하세요." % account
         ) from exc
     private_state = ensure_private_account(account)
+    from integrations.windows import acl
+    if private_state is not True and not acl.on_windows():
+        # There is no Windows ACL to enforce off Windows (a development
+        # checkout is its own runtime root there), so is_private() can only
+        # ever answer "unknown". Failing closed on that made every non-Windows
+        # setup - and every model install, which creates the layout too -
+        # abort unconditionally. Owner-only permissions are the equivalent.
+        try:
+            account.chmod(0o700)
+        except OSError:
+            pass
+        private_state = True
     if private_state is not True:
         raise RuntimeError(
             "이 Windows 계정의 LocalAI 개인 폴더를 안전하게 잠그지 못했습니다: %s. "

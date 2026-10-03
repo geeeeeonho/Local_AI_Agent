@@ -130,10 +130,12 @@ def test_trace_detail_flag_follows_the_user_setting(tmp_path, monkeypatch):
     from launcher.agent.agent_trace import detailed_logging_enabled
 
     monkeypatch.setenv("LLM_PROJECT_ROOT", str(tmp_path))
-    assert detailed_logging_enabled(tmp_path) is True
+    # The settings screen writes the account's canonical settings file; the
+    # trace has to read that same file, not a root-relative copy of it.
+    assert detailed_logging_enabled() is True
 
-    assert settings_store.set_logging_enabled(False, tmp_path)
-    assert detailed_logging_enabled(tmp_path) is False
+    assert settings_store.set_logging_enabled(False)
+    assert detailed_logging_enabled() is False
 
     trace = AgentTrace(
         mode="host",

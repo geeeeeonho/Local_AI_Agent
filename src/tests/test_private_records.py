@@ -32,15 +32,24 @@ EVERYONE = 'D:PAI(A;OICI;FA;;;SY)(A;OICI;0x1200a9;;;WD)'
 DENIED = 'D:PAI(D;OICI;FA;;;BU)(A;OICI;0x1200a9;;;BU)(A;OICI;FA;;;SY)'
 
 
-def fake_icacls(monkeypatch, descriptor=LOCKED, returncode=0):
-    """A machine where icacls answers with ``descriptor``. Records every call."""
+def fake_icacls(monkeypatch, descriptor=LOCKED, returncode=0, after_lock=None):
+    """A machine where icacls answers with ``descriptor``. Records every call.
+
+    ``after_lock`` is what a folder reads back once ``/inheritance:r`` has run
+    on it, so a test can follow a real lock from inherited to private.
+    """
     ran = []
+    locked = set()
 
     def run(command, **kwargs):
         ran.append(list(command))
+        if returncode == 0 and '/inheritance:r' in command:
+            locked.add(str(command[1]))
         if returncode == 0 and '/save' in command and descriptor is not None:
             target = Path(command[command.index('/save') + 1])
-            target.write_text('folder\n' + descriptor + '\n', encoding='utf-16')
+            current = (after_lock if after_lock is not None and str(command[1]) in locked
+                       else descriptor)
+            target.write_text('folder\n' + current + '\n', encoding='utf-16')
         return types.SimpleNamespace(returncode=returncode, stdout='', stderr='')
 
     monkeypatch.setattr(acl.subprocess, 'run', run)
@@ -243,6 +252,8 @@ def test_setup_refuses_to_create_personal_state_when_privacy_cannot_be_enforced(
     from installer.core import filesystem
 
     monkeypatch.setattr(privacy, 'ensure_private', lambda path, **kw: False)
+    monkeypatch.setattr('integrations.windows.acl.on_windows', lambda windows=None: True)
+    fake_icacls(monkeypatch)
     account = tmp_path / 'users' / 'Tester'
 
     with pytest.raises(RuntimeError, match='개인 폴더를 안전하게 잠그지 못했습니다'):
@@ -257,6 +268,23 @@ def test_setup_refuses_to_create_personal_state_when_privacy_cannot_be_enforced(
 
 
 
+def test_off_windows_the_account_folder_is_owner_only_instead_of_refused(monkeypatch, tmp_path):
+    """No Windows ACL exists to read back off Windows, so the answer is always
+    "unknown". Failing closed on that aborted every setup and model install on
+    a development machine; owner-only permissions are the equivalent there."""
+    import os
+    import stat
+    from installer.core import filesystem
+    monkeypatch.setattr('integrations.windows.acl.on_windows', lambda windows=None: False)
+    account = tmp_path / 'users' / 'Tester'
+    paths = filesystem.create_environment(tmp_path / 'env',
+                                          model_dir=tmp_path / 'models',
+                                          account_root=account)
+    assert paths['user_data'].is_dir()
+    if os.name != 'nt':
+        assert stat.S_IMODE(account.stat().st_mode) == 0o700
+
+
 def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path):
     """Both halves in one pass: the grants must not undo each other.
 
@@ -269,7 +297,7 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
     account = tmp_path / 'users' / 'Tester'
     # Starts in the state a new folder is really in: inheriting the store's
     # grant, so the lock has to actually run.
-    ran = fake_icacls(monkeypatch, INHERITED)
+    ran = fake_icacls(monkeypatch, INHERITED, after_lock=LOCKED)
     monkeypatch.setattr(filesystem, 'publish_shared_model_dir', lambda *a, **k: True)
     monkeypatch.setattr('core.accounts.current_slug', lambda environ=None: 'Tester')
     monkeypatch.setattr('project_paths.ACCOUNT_ROOT', account)

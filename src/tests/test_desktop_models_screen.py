@@ -114,8 +114,9 @@ def test_apply_pulls_and_removes_through_the_guarded_setup_service(ui, monkeypat
     w.set_selection('none')
     wanted = sorted(w.choice_vars)[0]
     w.choice_vars[wanted].set(True)
-    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: True)
-    w.apply_selection()
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', _no_window)
+    w.apply_selection()          # 첫 클릭은 무엇을 하는지 보여 준다
+    w.apply_selection()          # 같은 계획으로 한 번 더 눌러야 시작한다
     pump(w, lambda: ('pull', wanted) in backend.calls and ('remove', tag) in backend.calls)
     # Removal runs first so a disk-full store is not asked to hold both copies.
     assert backend.calls.index(('remove', tag)) < backend.calls.index(('pull', wanted))
@@ -125,11 +126,12 @@ def test_apply_stops_once_when_ollama_preflight_fails(ui, monkeypatch):
     w, svc, backend = ui
     open_models(w)
     w.set_selection('recommended')
-    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: True)
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', _no_window)
     monkeypatch.setattr(
         svc.setup, 'ensure_model_runtime',
         lambda **_kw: (_ for _ in ()).throw(RuntimeError('Ollama bootstrap failed')),
     )
+    w.apply_selection()
     w.apply_selection()
     pump(w, lambda: not w.runner.busy())
     assert not any(call[0] in ('pull', 'remove') for call in backend.calls)
@@ -137,14 +139,25 @@ def test_apply_stops_once_when_ollama_preflight_fails(ui, monkeypatch):
 
 
 def test_apply_asks_before_touching_anything_and_honours_a_refusal(ui, monkeypatch):
+    """One click only states the plan; nothing is touched until the second."""
     w, svc, backend = ui
     store_model(svc)
     open_models(w)
     w.set_selection('none')
-    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', lambda *a, **k: False)
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', _no_window)
     w.apply_selection()
     pump(w, lambda: not w.runner.busy(), timeout=1)
     assert not any(call[0] in ('pull', 'remove') for call in backend.calls)
+    assert '한 번 더' in w.choice_plan.get()
+    # Changing the selection withdraws the pending confirmation.
+    w.set_selection('recommended')
+    w.apply_selection()
+    pump(w, lambda: not w.runner.busy(), timeout=1)
+    assert not any(call[0] in ('pull', 'remove') for call in backend.calls)
+
+
+def _no_window(*a, **k):
+    pytest.fail('model management must not open a confirmation window')
 
 
 def test_no_change_needs_no_confirmation_and_no_work(ui, monkeypatch):
@@ -301,15 +314,12 @@ def test_the_confirmation_repeats_where_it_goes_and_whether_it_fits(ui, monkeypa
     monkeypatch.setattr(svc.models, 'storage',
                         lambda: dict(real(), free_bytes=1024 ** 3, total_bytes=2 * 1024 ** 3))
     w.set_selection('recommended')
-    asked = {}
-    def capture(title, message, **kw):
-        asked['message'] = message
-        return False
-    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', capture)
+    monkeypatch.setattr('apps.shared.window.messagebox.askyesno', _no_window)
     w.apply_selection()
-    assert str(svc.model_dir) in asked['message']
-    assert '부족' in asked['message']
-    assert '중간에 실패' in asked['message']
+    said = w.choice_plan.get() + '\n' + w.activity.get('1.0', 'end')
+    assert str(svc.model_dir) in said
+    assert '부족' in w.choice_plan.get()
+    assert '중간에 실패' in said
 
 
 def test_the_disk_tab_reports_used_and_free_at_the_store(ui):

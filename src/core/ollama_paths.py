@@ -138,26 +138,6 @@ def store_candidates(environ=None):
     return tuple(out)
 
 
-def install_candidates(environ=None):
-    """Places an official Ollama may already be installed, most likely first."""
-    environ = os.environ if environ is None else environ
-    local = environ.get('LOCALAPPDATA')
-    seen, out = set(), []
-    for candidate in (
-        PROJECT_INSTALL_DIR,
-        _expanded(local) / 'Programs' / 'Ollama' if local else None,
-        Path(r'C:\Program Files\Ollama'),
-        home(environ) / '.ollama' / 'bin',
-    ):
-        if candidate is None:
-            continue
-        key = os.path.normcase(str(candidate))
-        if key not in seen:
-            seen.add(key)
-            out.append(candidate)
-    return tuple(out)
-
-
 # The portable copy is extracted from ollama-windows-amd64.zip, so it is named
 # ollama.exe whatever platform a test happens to run on.
 PORTABLE_EXECUTABLE = 'ollama.exe'
@@ -196,23 +176,3 @@ def setup_command(installer: Path, target: Path) -> list:
     """
     return [str(installer), '/DIR=' + str(target), '/VERYSILENT', '/NORESTART']
 
-
-def find_executable(environ=None, extra=(), fallback=()) -> Path | None:
-    """An Ollama already on this machine, or None.
-
-    Diagnostic/helper search with the LocalAI-managed directory first.
-    Production installation and service startup still pin their executable
-    directly to ``PROJECT_INSTALL_DIR`` and never substitute an external copy.
-    """
-    import shutil
-    environ = os.environ if environ is None else environ
-    for folder in tuple(extra) + install_candidates(environ) + tuple(fallback):
-        for name in executable_names():
-            candidate = Path(folder) / name
-            try:
-                if candidate.is_file():
-                    return candidate
-            except OSError:
-                continue
-    found = shutil.which('ollama', path=environ.get('PATH'))
-    return Path(found) if found else None

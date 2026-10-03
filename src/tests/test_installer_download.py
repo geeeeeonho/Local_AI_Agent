@@ -47,11 +47,11 @@ def test_install_uses_portable_when_official_ollama_is_unavailable(monkeypatch, 
 
     portable = tmp_path / "runtime"
     portable.mkdir()
-    paths = {"ollama": portable}
+    paths = {"ollama": portable, "models": tmp_path / "models"}
     calls = []
 
     monkeypatch.setattr(ollama, "find_existing", lambda _paths: None)
-    monkeypatch.setattr(ollama, "install_official", lambda: None)
+    monkeypatch.setattr(ollama, "install_official", lambda target, models: None)
 
     def install_portable(_paths):
         calls.append("portable")

@@ -92,16 +92,6 @@ def workspace_dir() -> Path:
     return account_dir() / runtime_root.WORKSPACE
 
 
-def _on_windows() -> bool:
-    """One seam for the platform test.
-
-    Patching ``os.name`` itself is not a substitute: ``pathlib`` reads it on
-    every ``Path()``, so a test that flips it globally breaks every other path
-    in the process instead of exercising this one branch.
-    """
-    return os.name == "nt"
-
-
 def model_dir() -> Path:
     """Shared LocalAI model store.
 

@@ -16,6 +16,7 @@ stdlib 만 사용. Windows/Docker Desktop 가정.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -171,8 +172,19 @@ def _cfg_dir(env) -> Path:
     return target
 
 
-def _harden_settings(cfg, log_path=None):
+def _current_mode() -> str:
+    """The network mode this search container is for, in canonical spelling."""
+    mode = __import__("os").environ.get("NET_MODE", "warp").strip().lower()
+    return "block" if mode == "blocked" else mode
+
+
+_PROXY_ROUTE = re.compile(r'^(?P<indent>[ \t]*)proxies:[ \t]*\r?\n[ \t]+"all://":[ \t]*\S+[ \t]*$',
+                          re.M)
+
+
+def _harden_settings(cfg, log_path=None, mode=None):
     """SEARXNG_HARDEN_v2: 프라이버시 하드닝 (모든 start 마다 멱등 적용)."""
+    mode = _current_mode() if mode is None else mode
     try:
         _lt = Path(cfg) / "limiter.toml"
         if _lt.exists():
@@ -189,17 +201,23 @@ def _harden_settings(cfg, log_path=None):
     txt = txt.replace("socks5://host.docker.internal:9050",
                       "socks5h://host.docker.internal:9050")
     txt = txt.replace("socks5h://host.docker.internal:9050", "socks5h://llm_tor:9050")
+    # The route follows the mode this container is started for and nothing
+    # else; reading config.NET_MODE here as well let the two disagree.
     try:
-        _ap = _c("active_socks_proxy", None)
-        _proxy = _ap() if callable(_ap) else None
+        _factory = _c("tor_socks_proxy" if mode == "tor" else "warp_socks_proxy", None)
+        _proxy = _factory() if callable(_factory) else None
     except Exception:
         _proxy = None
-    if _proxy:
-        for _old in ("socks5h://llm_tor:9050", "socks5h://llm_warp:1080"):
-            if _old != _proxy:
-                txt = txt.replace(_old, _proxy)
-    if __import__("os").environ.get("NET_MODE", "warp").strip().lower() != "tor":
-        txt = txt.replace("socks5h://llm_tor:9050", "socks5h://llm_warp:1080")
+    _proxy = _proxy or ("socks5h://llm_tor:9050" if mode == "tor"
+                        else "socks5h://llm_warp:1080")
+    for _old in ("socks5h://llm_tor:9050", "socks5h://llm_warp:1080"):
+        if _old != _proxy:
+            txt = txt.replace(_old, _proxy)
+    if mode == "direct":
+        # Direct means no proxy. Routing it through WARP anyway sent Direct
+        # searches through a container nobody asked for, and failed every
+        # search on a machine without the WARP image.
+        txt = _PROXY_ROUTE.sub(lambda match: match.group("indent") + "proxies: {}", txt)
     if "method:" not in txt and "\nsearch:\n" in txt:
         txt = txt.replace("\nsearch:\n", "\nsearch:\n  method: \"POST\"\n", 1)
     if "enable_metrics:" not in txt and "\ngeneral:\n" in txt:
@@ -263,7 +281,13 @@ def _wait_ready(timeout=BOOT_TIMEOUT, log_path=None, log=None, cancel_check=None
 def start(env, log_path=None, with_tor=True, log=None, cancel_check=None) -> bool:
     """SearXNG 기동. 현재 네트워크 모드와 맞는 컨테이너만 재사용한다."""
     _register_exit_cleanup()
-    _net_mode = __import__("os").environ.get("NET_MODE", "warp").strip().lower()
+    _net_mode = _current_mode()
+    if _net_mode == "block":
+        # Block has no public egress, search included. The desktop search
+        # runtime refuses it too; this module used to start WARP and an
+        # internet-facing SearXNG for it.
+        _log(log_path, "WARN", "Block 모드에서는 웹 검색을 시작하지 않습니다.", log)
+        return False
     if is_running():
         active = running_mode()
         if active == _net_mode:
@@ -273,7 +297,7 @@ def start(env, log_path=None, with_tor=True, log=None, cancel_check=None) -> boo
              % (active or "unknown", _net_mode), log)
         remove()
     _ensure_net()
-    if _net_mode != "tor":
+    if _net_mode == "warp":
         try:
             from . import warp_runtime  # type: ignore
         except Exception:
@@ -312,7 +336,7 @@ def start(env, log_path=None, with_tor=True, log=None, cancel_check=None) -> boo
         _log(log_path, "WARN", "settings.yml 없음: %s (Setup / Repair 필요)" % str(cfg / "settings.yml"), log)
         return False
 
-    _harden_settings(cfg, log_path)
+    _harden_settings(cfg, log_path, mode=_net_mode)
 
     if container_exists():
         remove()

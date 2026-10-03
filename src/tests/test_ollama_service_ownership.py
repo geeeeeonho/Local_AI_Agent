@@ -94,8 +94,6 @@ def test_prepare_install_rejects_unrelated_listener(monkeypatch, tmp_path):
 
 
 def test_unknown_ollama_location_is_rejected(monkeypatch, tmp_path):
-    from core import ollama_paths
-    monkeypatch.setattr(ollama_paths, "install_candidates", lambda environ=None: ())
     svc = _service(tmp_path)
     stranger = tmp_path / "somewhere" / "ollama.exe"
     stranger.parent.mkdir(parents=True)
