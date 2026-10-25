@@ -7,7 +7,7 @@ from services.models.service import ModelService
 from tools.verify_model_catalog import check
 
 TREVOR = "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0"
-TREVOR_Q4 = "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M"
+RETIRED_Q4 = "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M"
 HIGH = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"
 PREVIOUS = "huihui_ai/qwen3-abliterated:14b"
 
@@ -19,7 +19,7 @@ class ModelTierVisibilityTests(unittest.TestCase):
         self.assertEqual(tiers[0]["primary"], HIGH)
         self.assertEqual(tiers[1]["primary"], TREVOR)
         self.assertIn(PREVIOUS, tiers[1]["alts"])
-        self.assertIn(TREVOR_Q4, tiers[1]["alts"])
+        self.assertNotIn(RETIRED_Q4, tiers[1]["alts"])
         self.assertEqual(tiers[2]["primary"], "huihui_ai/qwen3-abliterated:8b")
 
     def test_middle_primary_is_installable_and_recommended(self):
@@ -27,25 +27,26 @@ class ModelTierVisibilityTests(unittest.TestCase):
         self.assertEqual(catalog.level_of(TREVOR), "mid")
         self.assertEqual(entry.memory_gb, 12.7)
         self.assertEqual(entry.size_gb, 12.7)
-        self.assertEqual(catalog.level_of(TREVOR_Q4), "mid")
-        self.assertEqual(catalog.by_tag()[TREVOR_Q4].memory_gb, 7.4)
+        self.assertIsNone(catalog.level_of(RETIRED_Q4))
+        self.assertNotIn(RETIRED_Q4, catalog.by_tag())
         self.assertTrue(entry.uncensored)
         self.assertIn(TREVOR, catalog.recommended_for(20.0))
         self.assertNotIn(PREVIOUS, catalog.recommended_for(20.0))
-        self.assertNotIn(TREVOR_Q4, catalog.recommended_for(20.0))
+        self.assertNotIn(RETIRED_Q4, catalog.recommended_for(20.0))
         self.assertIn(TREVOR, catalog.plan_by_level(20.0)["mid"])
         self.assertIn(PREVIOUS, catalog.catalog_tags())
-        self.assertIn(TREVOR_Q4, catalog.catalog_tags())
+        self.assertNotIn(RETIRED_Q4, catalog.catalog_tags())
 
     def test_runtime_chooses_trevor_before_previous_mid(self):
         actual = roles.resolve_ladder(
             "uncensored", free_gb=15.0, installed={TREVOR, PREVIOUS})
         self.assertEqual(actual, TREVOR)
 
-    def test_chooses_existing_q4_when_q8_does_not_fit(self):
+    def test_uses_previous_mid_option_not_retired_q4_when_q8_cannot_fit(self):
         selected = roles.resolve_ladder(
-            "uncensored", free_gb=11.0, installed={TREVOR, TREVOR_Q4})
-        self.assertEqual(selected, TREVOR_Q4)
+            "uncensored", free_gb=11.0,
+            installed={TREVOR, RETIRED_Q4, PREVIOUS})
+        self.assertEqual(selected, PREVIOUS)
 
     def test_catalog_reports_roles_and_their_three_tiers(self):
         service = object.__new__(ModelService)
@@ -60,7 +61,7 @@ class ModelTierVisibilityTests(unittest.TestCase):
         self.assertEqual(groups["uncensored"]["tiers"][0]["primary"], HIGH)
         self.assertEqual(groups["uncensored"]["tiers"][1]["primary"], TREVOR)
         self.assertIn(PREVIOUS, groups["uncensored"]["tiers"][1]["alts"])
-        self.assertIn(TREVOR_Q4, groups["uncensored"]["tiers"][1]["alts"])
+        self.assertNotIn(RETIRED_Q4, groups["uncensored"]["tiers"][1]["alts"])
 
     def test_current_stack_marks_recommended_and_optional(self):
         service = object.__new__(ModelService)
@@ -74,6 +75,14 @@ class ModelTierVisibilityTests(unittest.TestCase):
         self.assertEqual(trevor["level_label"], "중")
         self.assertTrue(trevor["is_primary"])
         self.assertFalse(previous["is_primary"])
+
+    def test_old_q4_if_installed_remains_manageable_but_not_recommended(self):
+        service = object.__new__(ModelService)
+        view = service.catalog(installed={RETIRED_Q4}, budget_gb=20.0)
+        self.assertIn(RETIRED_Q4, view["extra_installed"])
+        self.assertNotIn(RETIRED_Q4, view["recommended"])
+        self.assertNotIn(RETIRED_Q4, [item["tag"] for item in view["models"]])
+        self.assertIn(TREVOR, view["recommended"])
 
 
 class _FakeResponse:

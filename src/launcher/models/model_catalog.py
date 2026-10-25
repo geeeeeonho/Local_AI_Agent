@@ -163,7 +163,8 @@ _ALL: List[CatalogEntry] = [
                  group="advanced", recommended=False,
                  uncensored=True, note="번역·다국어"),
     # Ollama supports explicit Hugging Face GGUF tags in hf.co/owner/repo:quant form.
-    # TrevorJS Q8_0 is ~12.7 GB; Q4_K_M (~7.4 GB) remains an optional fallback.
+    # TrevorJS Q8_0 (~12.7 GB) is the single recommended uncensored
+    # middle-tier Gemma 4 quantization; no TrevorJS Q4 alternate is offered.
     CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
                  "무검열 중간 추천 (TrevorJS Gemma 4 12B Q8_0)", 12.7,
                  "TrevorJS Gemma 4 12B Uncensored — Q8_0 GGUF (8비트). "
@@ -171,12 +172,6 @@ _ALL: List[CatalogEntry] = [
                  "달라집니다. 12GB GPU에는 일부 CPU 오프로딩이 필요할 수 있습니다.",
                  run_gb=12.7, ctx_k=256, tools=False,
                  uncensored=True, note="중간 추천 · Q8_0"),
-    CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
-                 "무검열 중간 추가 옵션 (TrevorJS Gemma 4 12B Q4_K_M)", 7.4,
-                 "동일 TrevorJS 모델의 Q4_K_M 경량 버전. VRAM 부족 시 선택.",
-                 run_gb=7.4, ctx_k=256, tools=False,
-                 group="advanced", recommended=False,
-                 uncensored=True, note="추가 옵션 · Q4_K_M"),
     CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
                  "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
                  "여유 10~15GB 구간의 번역·범용 주력.",
