@@ -15,6 +15,48 @@ from tkinter import ttk
 from .widgets import PanelHost, ScrollArea, note, set_text, text_box, wrap_to_parent
 
 
+class ModelAccordion:
+    """Independently foldable, keyboard-operable section for the model picker.
+
+    Bodies are hidden with pack_forget, never destroyed, so checkboxes keep
+    their Tk variables and selections while their section is collapsed.
+    """
+
+    def __init__(self, parent, title, *, expanded=False, compact=False,
+                 on_change=None):
+        self.title = title
+        self._expanded = False
+        self._on_change = on_change
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill='x', pady=(5, 1))
+        style = ('Manage.AccordionSmall.TButton' if compact
+                 else 'Manage.Accordion.TButton')
+        self.button = ttk.Button(self.frame, style=style, command=self.toggle)
+        self.button.pack(fill='x')
+        self.body = ttk.Frame(self.frame, padding=(14, 3, 0, 5))
+        self.set_expanded(expanded, notify=False)
+
+    @property
+    def expanded(self):
+        return self._expanded
+
+    def set_expanded(self, expanded, *, notify=True):
+        expanded = bool(expanded)
+        changed = expanded != self._expanded
+        if changed:
+            if expanded:
+                self.body.pack(fill='x', pady=(2, 4))
+            else:
+                self.body.pack_forget()
+        self._expanded = expanded
+        self.button.configure(text=('▼  ' if expanded else '▶  ') + self.title)
+        if changed and notify and self._on_change:
+            self._on_change(expanded)
+
+    def toggle(self):
+        self.set_expanded(not self._expanded)
+
+
 class Stack:
     """Rows stacked top to bottom, where exactly one of them takes the slack.
 
@@ -236,8 +278,8 @@ def _choose(parent, w):
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
-        '5개 역할의 상·중·하 3단계를 먼저 확인하고 아래에서 모델을 고르세요. '
-        '기본 추천은 자동 선택되며 같은 모델을 여러 역할이 공유할 수 있습니다.'),
+        '역할을 펼쳐 상·중·하 권장 모델을 확인하세요. 각 단계와 추가 옵션도 접거나 펼칠 수 있습니다. '
+        '같은 모델을 여러 역할에서 선택해도 설치는 한 번만 진행됩니다.'),
         pad=(0, 6))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,
