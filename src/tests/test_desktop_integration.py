@@ -256,3 +256,15 @@ def test_missing_broker_install_preflight_failure_does_not_touch_account(tmp_pat
     with pytest.raises(RuntimeError, match='포트를 다른 프로그램'):
         b.prepare_model_runtime()
     assert not (tmp_path/'users').exists()
+
+
+def test_known_broker_store_mismatch_can_use_guarded_repair_without_full_setup(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: False, is_installed=lambda: True,
+              is_running=lambda: True,
+              restart_for_store=lambda: calls.append(('store-repair',)) or True,
+              last_error='모델 저장소가 다릅니다')
+    modules['launcher.services.ollama'].OllamaService=lambda *args,**kw: broker
+    assert b.prepare_model_runtime() == 'http://127.0.0.1:11434'
+    assert calls == [('store-repair',)]
+    assert not (tmp_path/'users').exists()
