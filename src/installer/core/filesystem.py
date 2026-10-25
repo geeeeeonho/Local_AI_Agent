@@ -288,6 +288,8 @@ def repair_stale_children(account: Path) -> list:
     blocked = stale()
     if blocked and privacy.repair_as_admin(account, log=info) is True:
         blocked = stale()
+    if not blocked:
+        ok("  권한 복구 완료 · 이 계정이 모든 기록 파일에 다시 쓸 수 있습니다")
     for path in blocked[:5]:
         warn("  여전히 쓸 수 없음: %s" % path)
     if blocked:

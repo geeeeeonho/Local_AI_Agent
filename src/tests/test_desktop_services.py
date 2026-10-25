@@ -49,6 +49,16 @@ class Backend:
     def agent_stop(self): self.calls.append(('agent_stop',)); return True
     def chat_stop(self): self.calls.append(('chat_stop',)); return True
     def maintenance(self, key, presenter): self.calls.append(('maintenance', key))
+    store_situation = 'ready'
+    def check_ollama(self, log=None):
+        self.calls.append(('check_ollama',))
+        if log: log('관리형 Ollama 준비 완료')
+        return {'ready': True, 'situation': self.store_situation, 'message': 'ok',
+                'store': str(self.inference.model_dir), 'on_disk': 3,
+                'restart_needed': self.store_situation == 'unread'}
+    def restart_ollama_for_store(self, log=None):
+        self.calls.append(('restart_ollama',))
+        return {'ok': True, 'message': '이제 모델이 보입니다'}
     def create_presenter(self, window): return SimpleNamespace(_window=window)
     def setup_command(self, options=None):
         return ['python', '-m', 'installer', '--install', '--embedded']

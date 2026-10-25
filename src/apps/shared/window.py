@@ -202,8 +202,14 @@ class DesktopWindow:
         # sat on "[1/5] Network preparation" for the entire ninety seconds that
         # Docker Desktop was booting, with the explanation in the activity log.
         service=data.get('service')
-        if event.topic=='runtime.progress' and service=='models':
+        if event.topic=='runtime.progress' and service=='models' and data.get('status'):
             self.update_model_transfer(data)
+            # Ollama streams pull progress several times a second. Every chunk
+            # went into the activity log, burying everything else; only a new
+            # step or another tenth of a layer is worth a line there.
+            line=self.model_transfer_line(data)
+            if line:self.log('models: '+line)
+            return
         if text and event.topic=='runtime.progress' and service=='setup' and hasattr(self,'setup_status'):
             self.setup_status.set('진행 중 · '+str(text)[:170])
         if text and event.topic=='runtime.progress' and (
@@ -219,6 +225,27 @@ class DesktopWindow:
                 )
         if text:self.log(event.topic+': '+str(text),
                          level='error' if event.topic=='runtime.error' else 'info')
+
+    def model_transfer_line(self,data):
+        """One activity line per pull step / 10% of a layer, else None."""
+        model=str(data.get('model') or '')
+        status=str(data.get('status') or '')
+        total=data.get('total');completed=data.get('completed')
+        tenth=None
+        if isinstance(total,(int,float)) and total>0 and isinstance(completed,(int,float)):
+            tenth=int(max(0.0,min(1.0,float(completed)/float(total)))*10)
+        key=(model,status)
+        last=getattr(self,'_model_transfer_last',None)
+        if last is not None and last[0]==key and last[1]==tenth:
+            return None
+        if last is not None and last[0]==key and tenth is not None and last[1] is not None and tenth<last[1]:
+            return None
+        self._model_transfer_last=(key,tenth)
+        parts=[model,status]
+        if tenth is not None:
+            parts.append('%d%%' % (tenth*10))
+            parts.append(f"{float(completed)/(1024**3):.1f}/{float(total)/(1024**3):.1f} GB")
+        return ' · '.join(p for p in parts if p)
 
     def update_model_transfer(self,data):
         """Render Ollama pull progress inside the existing Models page."""
@@ -255,6 +282,13 @@ class DesktopWindow:
             if error is not None and not self.closing:error(exc)
         ok=self.runner.submit(key,fn,finish,failed,mutate=mutate)
         if ok and announce:self.log(key+' ...')
+        if ok and mutate:
+            # Changes run one at a time. Queued behind another one - possibly
+            # waiting on a click somewhere - this looked exactly like a hang.
+            ahead=self.runner.mutations_ahead(key)
+            if ahead:
+                self.log(key+' 대기 중 · 앞선 작업('+', '.join(ahead)+')이 끝나면 시작합니다. '
+                         '그 작업이 화면에서 [확인]을 기다리고 있을 수 있습니다.')
         return ok
 
     def current_project(self):
@@ -611,10 +645,35 @@ class DesktopWindow:
         set_text(self.stack_detail,'\n'.join(lines))
 
     def ensure_ollama(self):
-        """Explicit managed-Ollama start/verify with current diagnostics."""
-        try:presenter=self.presenter('models')
-        except Exception as exc:self.log(str(exc),level='error');return
-        self.run_task('models.ollama',lambda:self.services.setup.maintenance('ollama_action',presenter))
+        """Explicit managed-Ollama start/verify, reported in the activity log.
+
+        This used to run the terminal launcher's action, which ends in
+        ``pause()`` and waits for a [확인] click inside the Models page. On the
+        one worker that runs every change, that wait held "models.apply"
+        behind it with nothing on screen. Nothing here waits on a click: the
+        result is logged, and the one question - restart Ollama on the right
+        store - is asked on the UI thread afterwards.
+        """
+        def done(result):
+            result=result or {}
+            if not result.get('ready'):
+                self.log('Ollama 시작/검증 실패: '+str(result.get('message') or ''),level='error')
+                return
+            if result.get('restart_needed') and self.confirm_store_restart(result):
+                self.run_task('models.ollama.restart',self.services.setup.restart_ollama_for_store,
+                              lambda value:self.log(str((value or {}).get('message') or ''),
+                                                   level='info' if (value or {}).get('ok') else 'error'))
+        self.run_task('models.ollama',self.services.setup.check_ollama,done)
+
+    def confirm_store_restart(self,result):
+        return messagebox.askyesno(
+            'Ollama 다시 시작',
+            '설치된 모델 %d개가 %s 에 있는데 실행 중인 Ollama 가 그 경로를 읽지 않습니다.\n\n'
+            'Ollama 는 시작할 때만 OLLAMA_MODELS 를 읽으므로, 다시 시작해야 이 모델들이 보입니다.\n\n'
+            '지금 실행 중인 Ollama 를 끄고 이 경로로 다시 시작할까요?\n'
+            '(진행 중인 다른 작업이 있다면 함께 끊깁니다.)'
+            % (int(result.get('on_disk') or 0),result.get('store') or ''),
+            parent=self.root)
 
     # ── model screen: catalog selection ──────────────────────────────────
     def load_models_screen(self):
@@ -884,19 +943,26 @@ class DesktopWindow:
 
         def work():
             done={'install':[],'remove':[],'failed':[]}
+            say=lambda text:self.services.events.emit('runtime.progress',{'message':'models.apply: '+text})
+            say('시작 · Ollama 준비 확인 중 (설치 %d개 · 삭제 %d개)' % (len(plan['install']),len(plan['remove'])))
             try:
                 self.services.setup.ensure_model_runtime(download=bool(plan['install']))
             except Exception as exc:
                 done['failed'].append(('prepare','Ollama',str(exc)))
                 return done
-            for tag in plan['remove']:
+            for index,tag in enumerate(plan['remove'],1):
                 self.services.events.emit('runtime.progress', {
                     'service':'models','model':tag,'status':'삭제 중'})
-                try:self.services.setup.remove_model(tag);done['remove'].append(tag)
+                try:
+                    self.services.setup.remove_model(tag);done['remove'].append(tag)
+                    say('삭제 완료 %d/%d · %s' % (index,len(plan['remove']),tag))
                 except Exception as exc:done['failed'].append(('remove',tag,str(exc)))
-            for tag in plan['install']:
+            for index,tag in enumerate(plan['install'],1):
                 if self.runner.cancel.is_set():break
-                try:self.services.setup.install_model(tag);done['install'].append(tag)
+                say('설치 시작 %d/%d · %s' % (index,len(plan['install']),tag))
+                try:
+                    self.services.setup.install_model(tag);done['install'].append(tag)
+                    say('설치 완료 %d/%d · %s' % (index,len(plan['install']),tag))
                 except Exception as exc:done['failed'].append(('install',tag,str(exc)))
             return done
 
@@ -925,7 +991,10 @@ class DesktopWindow:
             if hasattr(self,'model_progress_text'):
                 self.model_progress_text.set('실패 · '+str(exc))
 
-        self.run_task('models.apply',work,finished,error=failed)
+        if self.run_task('models.apply',work,finished,error=failed):
+            ahead=self.runner.mutations_ahead('models.apply')
+            if ahead and hasattr(self,'model_progress_text'):
+                self.model_progress_text.set('대기 중 · '+', '.join(ahead)+' 작업이 끝나면 시작합니다')
 
     def refresh_health(self,*,fresh=False):
         if fresh:

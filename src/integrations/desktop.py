@@ -518,6 +518,41 @@ class DesktopBackend:
         ollama.start_service(shared_paths)
         return self.inference.endpoint
 
+    def _ollama_service(self, log=None):
+        cls = self.load('launcher.services.ollama').OllamaService
+        return cls(self.env, logger=LogAdapter(log) if log else None,
+                   model_dir=self.model_dir)
+
+    def check_ollama(self, log=None):
+        """Start/verify the managed broker and report its store, without pausing.
+
+        The terminal action this replaces ends in ``presenter.pause()``. In the
+        desktop it ran on the single change worker, so every later model change
+        queued silently behind a [확인] button nobody had noticed.
+        """
+        say = log or (lambda message: None)
+        service = self._ollama_service(log)
+        say('관리형 Ollama 상태 확인 중…')
+        if not service.ensure_running():
+            return {'ready': False, 'situation': 'failed',
+                    'message': getattr(service, 'last_error', '') or '시작/검증 실패'}
+        say('관리형 Ollama 준비 완료')
+        situation, detail = service.inspect_store()
+        message = service.describe_store()
+        say(message)
+        return {'ready': True, 'situation': situation, 'message': message,
+                'store': str(self.model_dir),
+                'on_disk': len(detail.get('on_disk') or ()),
+                'restart_needed': situation == service.STORE_NOT_READ}
+
+    def restart_ollama_for_store(self, log=None):
+        service = self._ollama_service(log)
+        restarted = bool(service.restart_for_store())
+        message = service.describe_store()
+        return {'ok': restarted,
+                'message': ('이제 모델이 보입니다: ' + message) if restarted
+                           else ('다시 시작하지 못했습니다: ' + message)}
+
     MAINTENANCE_MODULES = {
         'docker_image': 'launcher.actions.docker_image',
         'docker_clean': 'launcher.actions.docker_clean',

@@ -51,6 +51,22 @@ class SetupService:
         self.network.owner.acquire()
         return self.backend.prepare_model_runtime()
 
+    def _models_log(self, message):
+        if self.events is not None:
+            self.events.emit('runtime.progress', {'message': str(message)})
+
+    def check_ollama(self):
+        """Start/verify the managed Ollama for the Models page. Never waits on a click."""
+        self.require_idle()
+        self.network.owner.acquire()
+        return self.backend.check_ollama(log=self._models_log)
+
+    def restart_ollama_for_store(self):
+        """Restart Ollama on the resolved store, after the user said yes."""
+        self.require_idle()
+        self.network.owner.acquire()
+        return self.backend.restart_ollama_for_store(log=self._models_log)
+
     def install_model(self, name):
         self.ensure_model_runtime(download=True)
         return self.models.install_model(name)
