@@ -57,8 +57,8 @@ MAX_MODEL_GB = MEMORY_BUDGET_GB * _SAFETY
 #    하 — 메모리가 빠듯할 때의 최후 단계.
 #  (min_gb, max_gb] 로 모델을 등급에 배정한다.
 LEVELS: Tuple[Tuple[str, str, float, float], ...] = (
-    ("high", "상", 12.0, MAX_MODEL_GB),
-    ("mid", "중", 6.0, 12.0),
+    ("high", "상", 13.0, MAX_MODEL_GB),
+    ("mid", "중", 6.0, 13.0),
     ("low", "하", 0.0, 6.0),
 )
 LEVEL_KEYS = tuple(key for key, _label, _lo, _hi in LEVELS)
@@ -163,14 +163,20 @@ _ALL: List[CatalogEntry] = [
                  group="advanced", recommended=False,
                  uncensored=True, note="번역·다국어"),
     # Ollama supports explicit Hugging Face GGUF tags in hf.co/owner/repo:quant form.
-    # TrevorJS publishes a Q4_K_M GGUF (~7.4 GB) for the Gemma 4 12B uncensored model.
+    # TrevorJS Q8_0 is ~12.7 GB; Q4_K_M (~7.4 GB) remains an optional fallback.
+    CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
+                 "무검열 중간 추천 (TrevorJS Gemma 4 12B Q8_0)", 12.7,
+                 "TrevorJS Gemma 4 12B Uncensored — Q8_0 GGUF (8비트). "
+                 "다운로드 약 12.7GB, 상주 메모리는 실행 환경·컨텍스트에 따라 "
+                 "달라집니다. 12GB GPU에는 일부 CPU 오프로딩이 필요할 수 있습니다.",
+                 run_gb=12.7, ctx_k=256, tools=False,
+                 uncensored=True, note="중간 추천 · Q8_0"),
     CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
-                 "무검열 중간 추천 (TrevorJS Gemma 4 12B)", 7.4,
-                 "TrevorJS Gemma 4 12B Uncensored — Q4_K_M GGUF. Hugging Face에서 "
-                 "Ollama로 직접 받는 중간 단계의 무검열 번역·창작·범용 모델. "
-                 "실제 사용 메모리는 컨텍스트와 실행 환경에 따라 더 들 수 있습니다.",
+                 "무검열 중간 추가 옵션 (TrevorJS Gemma 4 12B Q4_K_M)", 7.4,
+                 "동일 TrevorJS 모델의 Q4_K_M 경량 버전. VRAM 부족 시 선택.",
                  run_gb=7.4, ctx_k=256, tools=False,
-                 uncensored=True, note="중간 추천 · TrevorJS"),
+                 group="advanced", recommended=False,
+                 uncensored=True, note="추가 옵션 · Q4_K_M"),
     CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
                  "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
                  "여유 10~15GB 구간의 번역·범용 주력.",
@@ -271,9 +277,9 @@ _CORE_TAGS = frozenset({
     "devstral-small-2:24b",
     "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
     "gpt-oss:20b",
-    # 중 — 브라우저·Docker 를 같이 쓰는 평소 상태 (9GB 급)
+    # 중 — 6~13GB 적재 메모리 범위 (Q8_0 포함)
     "qwen2.5-coder:14b",
-    "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
+    "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
     "gemma4:12b",
     # 하 — 메모리가 빠듯할 때 (5GB 급)
     "gemma4:e4b-it-qat",

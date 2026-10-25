@@ -441,7 +441,8 @@ def test_each_role_and_its_subsections_expand_independently(ui):
 def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     w, _, _ = ui
     open_models(w)
-    trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
+    trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0'
+    trevor_q4='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
     previous='huihui_ai/qwen3-abliterated:14b'
     high='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
 
@@ -453,6 +454,7 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     highest=w.catalog_groups['role:uncensored:tier:1'].body
     assert any(inside(box,mid) for box in w.choice_checkbuttons[trevor])
     assert any(inside(box,options) for box in w.choice_checkbuttons[previous])
+    assert any(inside(box,options) for box in w.choice_checkbuttons[trevor_q4])
     assert any(inside(box,highest) for box in w.choice_checkbuttons[high])
 
 

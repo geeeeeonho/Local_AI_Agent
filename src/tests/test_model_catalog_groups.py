@@ -43,7 +43,9 @@ class RoleCatalogGroupingTests(unittest.TestCase):
             'prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S')
         self.assertEqual(
             role['tiers'][1]['recommended']['tag'],
-            'hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M')
+            'hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0')
+        self.assertIn('hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M',
+                      [x['tag'] for x in role['tiers'][1]['options']])
         self.assertIn('huihui_ai/qwen3-abliterated:14b',
                       [x['tag'] for x in role['tiers'][1]['options']])
         self.assertEqual(
