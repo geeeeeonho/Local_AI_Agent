@@ -340,3 +340,93 @@ def test_the_screen_says_whether_other_accounts_share_the_store(ui, monkeypatch)
     monkeypatch.setattr(svc.models, 'storage', lambda: dict(real(), shared=False, per_user=True))
     w.set_selection('recommended')
     assert '이 계정 전용' in w.choice_storage.get()
+
+
+# ── role-based accordion catalogue ─────────────────────────────────────
+def test_role_groups_contain_three_recommendations_and_optional_choices(ui):
+    w, _, _ = ui
+    open_models(w)
+    expected={'coding','agent','uncensored','office','balanced'}
+    assert {key.removeprefix('role:') for key in w.catalog_groups
+            if key.startswith('role:') and ':' not in key[5:]} == expected
+
+    for name in expected:
+        for number in (1,2,3):
+            assert f'role:{name}:tier:{number}' in w.catalog_groups
+            assert '(권장)' in w.catalog_groups[
+                f'role:{name}:tier:{number}'].button.cget('text')
+        assert f'role:{name}:options' in w.catalog_groups
+        assert not w.catalog_groups[f'role:{name}:options'].expanded
+
+    # Every catalogue entry is still selectable, including RAG embedders.
+    tags={model['tag'] for model in w._catalog['models']}
+    assert set(w.choice_vars) == tags | set(w._catalog['extra_installed'])
+
+
+def test_each_role_and_its_subsections_expand_independently(ui):
+    w, _, _ = ui
+    open_models(w)
+    coding=w.catalog_groups['role:coding']
+    uncensored=w.catalog_groups['role:uncensored']
+    options=w.catalog_groups['role:uncensored:options']
+    middle=w.catalog_groups['role:uncensored:tier:2']
+
+    assert coding.expanded
+    assert not uncensored.expanded
+    uncensored.button.invoke()
+    assert uncensored.expanded and coding.expanded
+    assert not options.expanded and middle.expanded
+    options.button.invoke()
+    middle.button.invoke()
+    assert options.expanded and not middle.expanded
+
+    before=w.selected_tags()
+    uncensored.button.invoke()
+    assert not uncensored.expanded
+    assert before == w.selected_tags()
+    uncensored.button.invoke()
+    assert options.expanded and not middle.expanded
+
+    # Refresh retains user-controlled fold state (but still loads the catalog).
+    w.build_catalog_rows(w._catalog)
+    assert w.catalog_groups['role:uncensored'].expanded
+    assert w.catalog_groups['role:uncensored:options'].expanded
+    assert not w.catalog_groups['role:uncensored:tier:2'].expanded
+
+
+def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
+    w, _, _ = ui
+    open_models(w)
+    trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
+    previous='huihui_ai/qwen3-abliterated:14b'
+    high='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
+
+    def inside(widget, container):
+        return str(widget).startswith(str(container)+'.')
+
+    mid=w.catalog_groups['role:uncensored:tier:2'].body
+    options=w.catalog_groups['role:uncensored:options'].body
+    highest=w.catalog_groups['role:uncensored:tier:1'].body
+    assert any(inside(box,mid) for box in w.choice_checkbuttons[trevor])
+    assert any(inside(box,options) for box in w.choice_checkbuttons[previous])
+    assert any(inside(box,highest) for box in w.choice_checkbuttons[high])
+
+
+def test_shared_models_use_one_checkbox_variable_and_one_install_item(ui):
+    w, _, _ = ui
+    open_models(w)
+    shared='gemma4:12b'
+    assert len(w.choice_checkbuttons[shared]) > 1
+    first,second=w.choice_checkbuttons[shared][:2]
+    assert w.choice_vars[shared].get()
+    first.invoke()
+    w.root.update_idletasks()
+    assert not w.choice_vars[shared].get()
+    assert not second.instate(['selected'])
+    assert shared not in w.selected_tags()
+    second.invoke()
+    assert first.instate(['selected'])
+    assert shared in w.selected_tags()
+    plan=w.services.models.plan_changes(
+        w.selected_tags(),installed=w.catalog_installed())
+    assert plan['install'].count(shared) <= 1
