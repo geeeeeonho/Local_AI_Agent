@@ -213,12 +213,56 @@ def test_the_disk_tab_keeps_the_canonical_index_view(ui):
     assert (svc.model_dir / 'MODEL_INDEX.json').exists()
 
 
-def test_ollama_check_runs_the_retained_action_in_the_model_screen(ui):
+def test_ollama_check_never_waits_on_a_click_inside_the_model_screen(ui):
+    """It ran the terminal action, whose pause() held every later change."""
     w, _, backend = ui
     open_models(w)
     w.ensure_ollama()
-    pump(w, lambda: ('maintenance', 'ollama_action') in backend.calls)
-    assert w.presenters['models']._window.host is w.hosts['models']
+    pump(w, lambda: ('check_ollama',) in backend.calls and not w.runner.busy('models.ollama'))
+    assert ('maintenance', 'ollama_action') not in backend.calls
+    assert 'models' not in w.presenters, 'no presenter, so no [확인] to wait for'
+
+
+def test_a_store_restart_is_asked_on_the_ui_thread_and_only_then_run(ui, monkeypatch):
+    w, _, backend = ui
+    open_models(w)
+    backend.store_situation = 'unread'
+    asked = []
+    monkeypatch.setattr(w, 'confirm_store_restart', lambda result: asked.append(result) or True)
+    w.ensure_ollama()
+    pump(w, lambda: ('restart_ollama',) in backend.calls)
+    assert asked and asked[0]['on_disk'] == 3
+
+    backend.calls.clear()
+    monkeypatch.setattr(w, 'confirm_store_restart', lambda result: False)
+    w.ensure_ollama()
+    pump(w, lambda: ('check_ollama',) in backend.calls and not w.runner.busy('models.ollama'))
+    assert ('restart_ollama',) not in backend.calls
+
+
+def test_a_change_queued_behind_another_says_what_it_waits_for(ui):
+    import threading
+    w, _, _ = ui
+    gate = threading.Event()
+    w.run_task('models.slow', lambda: gate.wait(5))
+    w.run_task('models.next', lambda: None)
+    text = w.activity.get('1.0', 'end')
+    gate.set()
+    pump(w, lambda: not w.runner.busy())
+    assert 'models.next 대기 중' in text and 'models.slow' in text
+
+
+def test_pull_progress_is_one_activity_line_per_step_not_per_chunk(ui):
+    w, _, _ = ui
+    lines = []
+    for completed in range(0, 101):
+        line = w.model_transfer_line({'model': 'gemma4:12b', 'status': 'pulling abc',
+                                      'completed': completed, 'total': 100})
+        if line:
+            lines.append(line)
+    assert len(lines) == 11, lines
+    assert lines[-1].startswith('gemma4:12b · pulling abc · 100%')
+    assert w.model_transfer_line({'model': 'gemma4:12b', 'status': 'success'})
 
 
 def test_setup_no_longer_asks_the_user_to_type_a_model_tag(ui):

@@ -273,3 +273,38 @@ def test_known_broker_store_mismatch_can_use_guarded_repair_without_full_setup(t
     assert b.prepare_model_runtime() == 'http://127.0.0.1:11434'
     assert calls == [('store-repair',)]
     assert not (tmp_path/'users').exists()
+
+
+# ── the Models page's Ollama check reports instead of pausing ──
+
+def test_ollama_check_reports_the_store_without_waiting_for_a_click(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: True, STORE_NOT_READ='unread',
+              inspect_store=lambda: ('ready', {'served': ['a'], 'on_disk': ['a']}),
+              describe_store=lambda: '모델 저장소 일치')
+    modules['launcher.services.ollama']=NS(OllamaService=lambda *a,**kw: broker)
+    said=[]
+    result=b.check_ollama(log=said.append)
+    assert result['ready'] and not result['restart_needed']
+    assert said[-1] == '모델 저장소 일치'
+
+
+def test_ollama_check_asks_for_a_restart_only_when_models_are_unread(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: True, STORE_NOT_READ='unread',
+              inspect_store=lambda: ('unread', {'served': [], 'on_disk': ['a', 'b']}),
+              describe_store=lambda: '읽고 있지 않습니다',
+              restart_for_store=lambda: calls.append('restart') or True)
+    modules['launcher.services.ollama']=NS(OllamaService=lambda *a,**kw: broker)
+    result=b.check_ollama()
+    assert result['restart_needed'] and result['on_disk'] == 2
+    assert calls == [], 'nothing is restarted without the user saying yes'
+    assert b.restart_ollama_for_store()['ok'] and calls == ['restart']
+
+
+def test_a_failed_ollama_start_is_a_result_not_a_hang(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: False, last_error='포트 사용 중')
+    modules['launcher.services.ollama']=NS(OllamaService=lambda *a,**kw: broker)
+    result=b.check_ollama()
+    assert result == {'ready': False, 'situation': 'failed', 'message': '포트 사용 중'}
