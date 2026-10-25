@@ -214,6 +214,7 @@ def test_model_prepare_reuses_running_broker_without_reinstalling_account(tmp_pa
 def test_existing_broker_start_failure_is_reported_not_hidden_by_full_setup(tmp_path):
     b,modules,calls=fixture(tmp_path)
     broker=NS(ensure_running=lambda: False, is_installed=lambda: True,
+              is_running=lambda: False,
               last_error='Ollama 시작 실패: 로그 폴더에 쓸 수 없습니다')
     modules['launcher.services.ollama'].OllamaService=lambda *a,**kw: broker
     with pytest.raises(RuntimeError,match='로그 폴더에 쓸 수 없습니다'):
