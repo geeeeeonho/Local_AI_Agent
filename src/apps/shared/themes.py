@@ -197,6 +197,17 @@ class ThemeController:
                         borderwidth=0, focuscolor=p.chat)
         style.map('TButton', background=[('disabled', p.surface), ('active', p.hover), ('focus', p.hover)],
                   foreground=[('disabled', p.muted)])
+        style.configure('Manage.Accordion.TButton', anchor='w',
+                        background=p.manage_soft, foreground=p.fg,
+                        font=('Segoe UI', 10, 'bold'),
+                        padding=(12, 9), borderwidth=0, focuscolor=p.manage)
+        style.map('Manage.Accordion.TButton',
+                  background=[('active', p.hover), ('focus', p.hover)])
+        style.configure('Manage.AccordionSmall.TButton', anchor='w',
+                        background=p.surface, foreground=p.fg,
+                        padding=(10, 6), borderwidth=0, focuscolor=p.manage)
+        style.map('Manage.AccordionSmall.TButton',
+                  background=[('active', p.hover), ('focus', p.hover)])
         style.configure('Nav.TButton', anchor='w', background=p.sidebar, padding=(16, 10),
                         focuscolor=p.chat)
         style.map('Nav.TButton', background=[('focus', p.hover), ('active', p.hover)])
