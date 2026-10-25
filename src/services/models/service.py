@@ -103,6 +103,7 @@ class ModelService:
     def catalog(self, *, installed=None, budget_gb=None):
         """Catalog rows for the selection view, each with its install state."""
         from launcher.models import model_catalog as catalog
+        from launcher.models import model_roles as roles, model_classes as classes
         budget = catalog.MEMORY_BUDGET_GB if budget_gb is None else float(budget_gb)
         present = catalog.canonicalize_installed(
             self.installed_tags() if installed is None else installed)
@@ -119,8 +120,24 @@ class ModelService:
                 'installed': entry.tag in present,
                 'recommended': entry.tag in recommended,
             })
+        # Role/tier data is read from TIERS, not inferred from catalog.group.
+        # Shared models can serve several roles without becoming duplicate
+        # installation choices on the desktop.
+        role_tiers = []
+        for key, title, description in classes.CLASSES:
+            tier_rows = []
+            for number, tier in enumerate(roles.TIERS.get(key, ()), start=1):
+                level = catalog.level_of(tier['primary'])
+                tier_rows.append({
+                    'number': number, 'level': level or '',
+                    'level_label': catalog.level_label(level) if level else str(number),
+                    'primary': tier['primary'], 'alts': list(tier.get('alts', ())),
+                })
+            role_tiers.append({
+                'key': key, 'title': title, 'desc': description, 'tiers': tier_rows,
+            })
         return {
-            'budget_gb': budget, 'models': models,
+            'budget_gb': budget, 'models': models, 'role_tiers': role_tiers,
             'recommended': sorted(recommended),
             # Models the user pulled themselves. Listed so unchecking one is a
             # deliberate removal rather than an invisible leftover.
@@ -152,9 +169,19 @@ class ModelService:
                 chosen = roles.resolve_ladder(role.name, free, installed=present)
             except Exception:
                 chosen = None
-            ladder = [{'tag': tag, 'need_gb': float(need),
-                       'on_disk': catalog.is_installed(tag, present)}
-                      for tag, need in (roles.LADDERS.get(role.name) or ())]
+            ladder = []
+            for number, tier in enumerate(roles.TIERS.get(role.name, ()), start=1):
+                level = catalog.level_of(tier['primary'])
+                for position, tag in enumerate([tier['primary'], *tier.get('alts', ())]):
+                    memory = catalog.memory_gb(tag)
+                    ladder.append({
+                        'tag': tag,
+                        'need_gb': float(memory if memory is not None else tier['need']),
+                        'on_disk': catalog.is_installed(tag, present),
+                        'tier': number,
+                        'level_label': catalog.level_label(level) if level else str(number),
+                        'is_primary': position == 0,
+                    })
             # The requirement that matters is the rung that will actually load,
             # not the role's top tier; showing the latter put "18.0 GB" beside a
             # 7.6 GB model.

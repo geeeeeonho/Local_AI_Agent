@@ -162,6 +162,15 @@ _ALL: List[CatalogEntry] = [
                  run_gb=17.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  uncensored=True, note="번역·다국어"),
+    # Ollama supports explicit Hugging Face GGUF tags in hf.co/owner/repo:quant form.
+    # TrevorJS publishes a Q4_K_M GGUF (~7.4 GB) for the Gemma 4 12B uncensored model.
+    CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
+                 "무검열 중간 추천 (TrevorJS Gemma 4 12B)", 7.4,
+                 "TrevorJS Gemma 4 12B Uncensored — Q4_K_M GGUF. Hugging Face에서 "
+                 "Ollama로 직접 받는 중간 단계의 무검열 번역·창작·범용 모델. "
+                 "실제 사용 메모리는 컨텍스트와 실행 환경에 따라 더 들 수 있습니다.",
+                 run_gb=7.4, ctx_k=256, tools=False,
+                 uncensored=True, note="중간 추천 · TrevorJS"),
     CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
                  "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
                  "여유 10~15GB 구간의 번역·범용 주력.",
@@ -264,7 +273,7 @@ _CORE_TAGS = frozenset({
     "gpt-oss:20b",
     # 중 — 브라우저·Docker 를 같이 쓰는 평소 상태 (9GB 급)
     "qwen2.5-coder:14b",
-    "huihui_ai/qwen3-abliterated:14b",
+    "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
     "gemma4:12b",
     # 하 — 메모리가 빠듯할 때 (5GB 급)
     "gemma4:e4b-it-qat",

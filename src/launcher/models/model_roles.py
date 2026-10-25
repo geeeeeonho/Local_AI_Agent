@@ -226,8 +226,9 @@ TIERS = {
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
          "alts": ["huihui_ai/gemma-4-abliterated:26b-qat",
                   "huihui_ai/Qwen3.6-abliterated:27b"]},   # 번역·다국어 축
-        {"need": 9.0, "primary": "huihui_ai/qwen3-abliterated:14b",
-         "alts": ["huihui_ai/gemma-4-abliterated:12b",
+        {"need": 7.4, "primary": "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M",
+         "alts": ["huihui_ai/qwen3-abliterated:14b",  # 이전 중간 추천은 선택 후보로 보존
+                  "huihui_ai/gemma-4-abliterated:12b",
                   "huihui_ai/qwen3-vl-abliterated:8b"]},   # 이미지 속 글자 번역
         {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b",
          "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M",        # 다른 계열
