@@ -479,6 +479,11 @@ class DesktopBackend:
         # is not an "uninstalled" broker. Do not conceal its original error by
         # attempting full Setup, changing private ACLs, or overwriting binaries.
         if service.is_installed():
+            # Match explicit Setup's safe store-repair path, without invoking
+            # the full installer. restart_for_store() refuses unknown processes
+            # and a broker that is actively serving models.
+            if service.is_running() and service.restart_for_store():
+                return self.inference.endpoint
             detail = (getattr(service, 'last_error', '') or
                       '설치된 Ollama를 시작하거나 공용 모델 저장소에 연결하지 못했습니다.')
             raise RuntimeError(
