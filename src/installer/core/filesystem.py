@@ -12,7 +12,7 @@ from project_paths import (ACCOUNT_ROOT, ENV_DIRNAME, LOGS_DIRNAME,
                            USER_DATA_DIRNAME, model_control_dir,
                            model_registry_path, model_mutation_lock_path)
 
-from .console import section, ok, warn
+from .console import section, info, ok, warn
 
 
 INSTALL_MANIFEST = "LOCAL_AI_AGENT_INSTALL.json"
@@ -143,28 +143,16 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     private_state = ensure_private_account(account)
     if private_state is not True:
         from integrations.windows import privacy
-        # Report what actually failed. A standard account that originally
-        # installed LocalAI may own its folder but be unable to change an ACL
-        # left by a different/elevated process. "Run Setup again" without this
-        # distinction only repeats the same failure.
-        verified = privacy.is_private(account)
-        writable = privacy.current_user_can_write(account)
-        if verified is False:
-            issue = "다른 계정의 읽기 권한이 남아 있습니다"
-        elif verified is None:
-            issue = "Windows ACL을 읽거나 확인할 수 없습니다"
-        else:
-            issue = "폴더 보안은 확인됐지만 복구 작업이 실패했습니다"
-        if not writable:
-            issue += "; 현재 계정에서 이 폴더에 쓸 수 없습니다"
-        raise RuntimeError(
-            "이 Windows 계정의 LocalAI 개인 폴더를 안전하게 잠그지 못했습니다: %s. "
-            "원인: %s. 개인 기록 보호를 위해 설치를 중단합니다. "
-            "현재 계정과 폴더 소유자/ACL을 확인하세요 "
-            "(whoami /user, icacls \"%s\"). 권한이 없다면 "
-            "폴더의 소유자 또는 관리자에게 이 계정의 권한 복구를 요청하세요."
-            % (account, issue, account)
-        )
+        # The signed-in token could not lock its own folder - typically one an
+        # elevated run created, owned by Administrators. One UAC prompt hands
+        # it back to this account's SID; the check then runs again as the user.
+        if privacy.repair_as_admin(account, log=info) is True:
+            name_the_account(account)
+            ok("  %-20s → %s (관리자 복구 후 이 계정 전용)" % ("account", account))
+            private_state = True
+    if private_state is not True:
+        raise RuntimeError(_private_account_failure(account))
+    repair_stale_children(account)
 
     paths = {
         "env":                   env,
@@ -241,6 +229,71 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     if model_dir is None:
         publish_shared_model_dir(models)
     return paths
+
+
+def _private_account_failure(account: Path) -> str:
+    """Say what actually blocked the lock, and the commands that fix it.
+
+    "Run Setup again" without this distinction only repeats the same failure:
+    an unreadable ACL, a folder owned by Administrators and a folder still
+    readable by others are three different repairs.
+    """
+    from integrations.windows import privacy
+    report = privacy.diagnose(account)
+    verified = report.get("private")
+    if verified is False:
+        issue = "다른 계정의 읽기 권한이 남아 있습니다"
+    elif verified is None:
+        issue = "Windows ACL을 읽거나 확인할 수 없습니다"
+    else:
+        issue = "폴더 보안은 확인됐지만 복구 작업이 실패했습니다"
+    if not report.get("writable"):
+        issue += "; 현재 계정에서 이 폴더에 쓸 수 없습니다"
+    return (
+        "이 Windows 계정의 LocalAI 개인 폴더를 안전하게 잠그지 못했습니다: %s. "
+        "원인: %s. 개인 기록 보호를 위해 설치를 중단합니다.\n"
+        "진단: %s\n"
+        "관리자 명령 프롬프트에서 아래 세 줄을 실행한 뒤 Setup을 다시 실행하세요:\n%s"
+        % (account, issue, privacy.describe_diagnosis(report),
+           privacy.manual_repair_text(account, report.get("user_sid")))
+    )
+
+
+def repair_stale_children(account: Path) -> list:
+    """Unblock files below a private account folder that its owner cannot write.
+
+    The folder's own ACL can be right while one file inside is not - a log an
+    elevated run created, a lock left by an interrupted install. Ollama then
+    failed to start on ``logs\\ollama_run.log`` although Setup reported the
+    account as private. Only LocalAI's own state trees are checked and reset;
+    the user's workspace files are theirs. The elevated fallback is the full
+    account repair, because one UAC prompt has to cover whatever is left.
+    """
+    from integrations.windows import acl, privacy
+    if not acl.on_windows():
+        return []
+    folders = (account / LOGS_DIRNAME, account / USER_DATA_DIRNAME)
+
+    def stale():
+        return [path for folder in folders for path in privacy.unwritable_files(folder)]
+
+    blocked = stale()
+    if not blocked:
+        return []
+    warn("이 계정이 쓸 수 없는 파일 %d개를 발견해 권한을 다시 맞춥니다 (예: %s)"
+         % (len(blocked), blocked[0]))
+    for folder in folders:
+        if any(folder in path.parents for path in blocked):
+            privacy.reset_tree(folder)
+    blocked = stale()
+    if blocked and privacy.repair_as_admin(account, log=info) is True:
+        blocked = stale()
+    for path in blocked[:5]:
+        warn("  여전히 쓸 수 없음: %s" % path)
+    if blocked:
+        warn("관리자 명령 프롬프트에서 다음을 실행하면 복구됩니다:\n"
+             + privacy.manual_repair_text(account))
+    return blocked
 
 
 ACCOUNT_MARKER = "ACCOUNT.txt"

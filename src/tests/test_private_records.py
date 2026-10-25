@@ -129,20 +129,66 @@ def test_locking_a_folder_breaks_inheritance_in_the_same_call(monkeypatch, tmp_p
     """
     folder = tmp_path / 'users' / 'Tester'
     folder.mkdir(parents=True)
+    (folder / 'logs').mkdir()
+    (folder / 'logs' / 'ollama_run.log').write_text('stale', encoding='utf-8')
     ran = fake_icacls(monkeypatch)
 
     assert privacy.make_private(folder, windows=True,
                                 environ={'USERNAME': 'Tester', 'USERDOMAIN': 'PC'})
 
-    command = ran[-1]
-    assert command[:2] == ['icacls', str(folder)]
-    assert '/inheritance:r' in command
-    assert 'PC\\Tester:(OI)(CI)F' in command
-    assert '*%s:(OI)(CI)F' % privacy.SYSTEM_SID in command
-    assert '*%s:(OI)(CI)F' % privacy.ADMINISTRATORS_SID in command
-    assert '/T' in command, 'files already inside have to be covered too'
-    assert command.count('/grant:r') == 3
-    assert not any('BU' in part or sddl.USERS_SID in part for part in command)
+    lock, reset = ran[-2], ran[-1]
+    assert lock[:2] == ['icacls', str(folder)]
+    assert '/inheritance:r' in lock
+    assert 'PC\\Tester:(OI)(CI)F' in lock
+    assert '*%s:(OI)(CI)F' % privacy.SYSTEM_SID in lock
+    assert '*%s:(OI)(CI)F' % privacy.ADMINISTRATORS_SID in lock
+    assert lock.count('/grant:r') == 3
+    assert '/T' not in lock, 'one stale file below must not fail the folder lock'
+    # Files already inside are covered by a separate reset to inherit from it.
+    assert reset[:3] == ['icacls', str(folder / '*'), '/reset']
+    assert '/T' in reset and '/C' in reset
+    assert not any('BU' in part or sddl.USERS_SID in part
+                   for command in (lock, reset) for part in command)
+
+
+def test_a_stale_child_does_not_fail_a_folder_lock_that_worked(monkeypatch, tmp_path):
+    """The exact failure behind "ACL을 읽거나 확인할 수 없습니다" loops."""
+    folder = tmp_path / 'account'
+    folder.mkdir()
+    (folder / 'held.log').write_text('x', encoding='utf-8')
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(list(command))
+        code = 1 if '/reset' in command else 0
+        return types.SimpleNamespace(returncode=code, stdout='', stderr='')
+
+    monkeypatch.setattr(acl.subprocess, 'run', run)
+    assert privacy.make_private(folder, windows=True, environ={'USERNAME': 'T'}) is True
+    assert any('/reset' in command for command in ran)
+
+
+def test_an_empty_folder_is_not_given_a_wildcard_that_matches_nothing(monkeypatch, tmp_path):
+    folder = tmp_path / 'account'
+    folder.mkdir()
+    ran = fake_icacls(monkeypatch)
+    assert privacy.make_private(folder, windows=True, environ={'USERNAME': 'T'})
+    assert not any('/reset' in command for command in ran)
+
+
+def test_this_process_is_granted_by_sid_so_no_name_lookup_can_fail(monkeypatch):
+    """``AzureAD\\name`` or a renamed account made the whole icacls call fail."""
+    monkeypatch.setattr(acl, 'current_user_sid', lambda: 'S-1-5-21-1-2-3-1001')
+    assert privacy.owner_token() == '*S-1-5-21-1-2-3-1001'
+    assert privacy.grants()[0] == '*S-1-5-21-1-2-3-1001:(OI)(CI)F'
+    # An explicit environment names an account, not this process.
+    assert privacy.owner_token({'USERNAME': 'T', 'USERDOMAIN': 'PC'}) == 'PC\\T'
+    # With no SID available it falls back to the name Windows uses.
+    monkeypatch.setattr(acl, 'current_user_sid', lambda: None)
+    monkeypatch.delenv(accounts.ACCOUNT_VARIABLE, raising=False)
+    monkeypatch.setenv('USERNAME', 'Tester')
+    monkeypatch.setenv('USERDOMAIN', 'PC')
+    assert privacy.owner_token() == 'PC\\Tester'
 
 
 def test_administrators_keep_access_so_a_broken_acl_can_be_repaired(monkeypatch):
@@ -268,8 +314,21 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
     models = tmp_path / 'models'
     account = tmp_path / 'users' / 'Tester'
     # Starts in the state a new folder is really in: inheriting the store's
-    # grant, so the lock has to actually run.
-    ran = fake_icacls(monkeypatch, INHERITED)
+    # grant, so the lock has to actually run - and reads as locked once it has.
+    ran = []
+    state = {'account': INHERITED}
+
+    def run(command, **kwargs):
+        ran.append(list(command))
+        if '/inheritance:r' in command and str(account) in command:
+            state['account'] = LOCKED
+        if '/save' in command:
+            target = Path(command[command.index('/save') + 1])
+            descriptor = state['account'] if str(account) in command else INHERITED
+            target.write_text('folder\n' + descriptor + '\n', encoding='utf-16')
+        return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr(acl.subprocess, 'run', run)
     monkeypatch.setattr(filesystem, 'publish_shared_model_dir', lambda *a, **k: True)
     monkeypatch.setattr('core.accounts.current_slug', lambda environ=None: 'Tester')
     monkeypatch.setattr('project_paths.ACCOUNT_ROOT', account)

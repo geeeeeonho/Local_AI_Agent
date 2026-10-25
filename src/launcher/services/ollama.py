@@ -453,6 +453,19 @@ class OllamaService:
             return False
 
     def _write_runtime_state(self, pid: int) -> None:
+        """Record the pid this account started. Losing the record is not fatal.
+
+        The server is already answering when this runs. A state file a stale
+        ACL refuses only means a later start treats the server as shared
+        rather than ours; raising here turned a running Ollama into a failed
+        model install.
+        """
+        try:
+            self._store_runtime_state(pid)
+        except OSError as exc:
+            self._warn("Ollama 실행 기록을 저장하지 못했습니다 (서버는 실행 중): %s" % exc)
+
+    def _store_runtime_state(self, pid: int) -> None:
         self.runtime_state_file.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "pid": int(pid),
@@ -718,14 +731,59 @@ class OllamaService:
         return True
 
     # ── 시작 ──
-    def _launch(self) -> int:
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        self.model_dir.mkdir(parents=True, exist_ok=True)
-        f = open(self.log_file, "ab")
+    def _open_log(self):
+        """Open the server log for append without letting it stop the start.
+
+        ``ollama_run.log`` can be refused while its folder is fine: an elevated
+        run created it, or an older server still holds it. The start used to
+        die there with ``[Errno 13] Permission denied``, so a model install
+        failed over a log file. In order: move the refused file aside (deleting
+        or renaming a child needs only the folder's permission, not the
+        file's), write a fresh file beside it, use this account's TEMP, and as
+        a last resort start without a log. ``self.log_file`` always names the
+        file actually in use, so error messages point at the right one.
+        """
         try:
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
+            return open(self.log_file, "ab")
+        except OSError as exc:
+            refused = exc
+        original = self.log_file
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        aside = original.with_name("%s.blocked-%s%s" % (original.stem, stamp, original.suffix))
+        try:
+            os.replace(original, aside)
+            stream = open(original, "ab")
+            self._warn("쓸 수 없던 Ollama 로그를 옆으로 옮기고 새로 만들었습니다: %s" % aside)
+            return stream
+        except OSError:
+            pass
+        import tempfile
+        for candidate in (
+            original.with_name("%s-%d%s" % (original.stem, os.getpid(), original.suffix)),
+            Path(tempfile.gettempdir()) / ("LocalAI-" + original.name),
+        ):
+            try:
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                stream = open(candidate, "ab")
+            except OSError:
+                continue
+            self.log_file = candidate
+            self._warn("Ollama 로그 %s 에 쓸 수 없어 %s 에 기록합니다 (%s). "
+                       "[설치 / 복구]를 실행하면 로그 폴더 권한을 바로잡습니다."
+                       % (original, candidate, refused))
+            return stream
+        self._warn("Ollama 로그 파일을 열 수 없어 로그 없이 시작합니다: %s" % refused)
+        return None
+
+    def _launch(self) -> int:
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        f = self._open_log()
+        try:
+            output = f if f is not None else subprocess.DEVNULL
             kwargs = {
-                "stdout": f,
-                "stderr": f,
+                "stdout": output,
+                "stderr": output,
                 "env": self.env_vars(),
             }
             if os.name == "nt":
@@ -733,7 +791,8 @@ class OllamaService:
             process = subprocess.Popen([str(self.exe), "serve"], **kwargs)
             return int(process.pid)
         finally:
-            f.close()
+            if f is not None:
+                f.close()
 
     def ensure_running(self, boot_timeout: Optional[int] = None) -> bool:
         """공용 모델 경로를 쓰는 관리형 Ollama만 재사용/기동한다."""
