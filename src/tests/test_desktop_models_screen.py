@@ -371,8 +371,8 @@ def test_each_role_and_its_subsections_expand_independently(ui):
     options=w.catalog_groups['role:uncensored:options']
     middle=w.catalog_groups['role:uncensored:tier:2']
 
-    assert coding.expanded
-    assert not uncensored.expanded
+    assert not coding.expanded and not uncensored.expanded
+    coding.button.invoke()
     uncensored.button.invoke()
     assert uncensored.expanded and coding.expanded
     assert not options.expanded and middle.expanded
