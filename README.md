@@ -230,6 +230,18 @@ WORKSPACE_DIR       -> <ACCOUNT_ROOT>\workspace
 직접 쓰며, 이전 실행이 남긴 `user_data\cache\*.lock`은 런타임 정본으로 다시 사용하지
 않습니다.
 
+계정 폴더 권한은 이름(`%USERDOMAIN%\%USERNAME%`)이 아니라 현재 프로세스의 **SID**로
+부여하고, ACL은 Win32 API(`GetNamedSecurityInfoW`)로 직접 읽습니다(실패 시 `icacls /save`,
+`Get-Acl` 순서로 대체). 폴더 자체를 먼저 잠근 뒤 안쪽 파일은 별도로 상속 재설정하므로,
+"관리자 권한으로 실행"한 이전 설치가 남긴 로그 파일 하나 때문에 잠금 전체가 실패하지
+않습니다. 현재 계정 권한으로 고칠 수 없으면(예: 폴더 소유자가 Administrators) Setup이
+UAC 확인 창을 한 번 띄워 폴더 소유권을 이 계정 SID로 되돌린 뒤 다시 확인합니다.
+자동화 환경에서 UAC 창을 띄우지 않으려면 `LOCAL_AI_NO_ELEVATION=1`을 설정하세요. 그래도
+실패하면 Setup 오류에 원인(SID·소유자·Windows 오류 코드)과 관리자 명령 프롬프트에서
+실행할 `icacls` 명령 세 줄이 함께 표시됩니다. Ollama 로그(`logs\ollama_run.log`)에 쓸 수
+없을 때는 Ollama 시작을 실패로 처리하지 않고, 기존 파일을 옆으로 옮기거나 다른 로그
+파일에 기록합니다.
+
 공용 실행환경 권한은 의도적으로 **읽기/실행**이고, 모델 저장소만 **Modify**입니다.
 모델 설치·삭제, manifest/blob 변경, `MODEL_FILES.csv`, 공용 registry와 mutation lock은
 모두 `C:\LocalAI\models` 아래에서 한 벌로 관리합니다. 반면 `environment` 아래 공용
