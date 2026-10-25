@@ -235,6 +235,10 @@ def _choose(parent, w):
         ('전체 선택', lambda: w.set_selection('all'), None, False),
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
+    layout.fixed(lambda box: _note(box,
+        '5개 역할의 상·중·하 3단계를 먼저 확인하고 아래에서 모델을 고르세요. '
+        '기본 추천은 자동 선택되며 같은 모델을 여러 역할이 공유할 수 있습니다.'),
+        pad=(0, 6))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,
     # so the header shares one row and gives the rest back.

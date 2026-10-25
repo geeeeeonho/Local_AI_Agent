@@ -18,7 +18,8 @@ developer command, never called by the desktop or the installer, and it is not
 routed through the managed WARP/Tor/Block policy. Do not run it when the point
 of the exercise is that the machine has no public egress.
 
-Only manifests are read; nothing is downloaded, installed or removed.
+Only metadata is read (Ollama manifests or Hugging Face GGUF file listings);
+nothing is downloaded, installed or removed.
 """
 from __future__ import annotations
 
@@ -109,12 +110,53 @@ def manifest_gb(document: dict) -> float | None:
     return total / _GB
 
 
+def fetch_hf_gguf_size(tag: str, *, opener=None, timeout: float = 15) -> tuple[float | None, str]:
+    """Resolve an hf.co/owner/repo:quant tag through Hub metadata, without weights."""
+    repository, quant = split_tag(tag)
+    parts = repository.split('/')
+    if len(parts) != 3 or parts[0].lower() != 'hf.co':
+        return None, "invalid Hugging Face model tag"
+    url = "https://huggingface.co/api/models/%s/%s/tree/main" % (parts[1], parts[2])
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with (opener or _opener()).open(request, timeout=timeout) as response:
+            raw = response.read(_MAX_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        return None, "HTTP %s" % exc.code
+    except Exception as exc:
+        return None, "%s: %s" % (type(exc).__name__, exc)
+    if len(raw) > _MAX_BYTES:
+        return None, "file listing exceeds size limit"
+    try:
+        listing = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        return None, "unreadable file listing: %s" % exc
+    if not isinstance(listing, list):
+        return None, "file listing is not an array"
+    ending = "-" + quant.lower() + ".gguf"
+    for item in listing:
+        if isinstance(item, dict) and str(item.get("path", "")).lower().endswith(ending):
+            size = item.get("size")
+            if not isinstance(size, int):
+                lfs = item.get("lfs") or {}
+                size = lfs.get("size") if isinstance(lfs, dict) else None
+            return (size / _GB if isinstance(size, int) and size >= 0 else None), "ok"
+    return None, "GGUF quantization not found"
+
+
 def check(tag: str, declared_gb: float, *, opener=None, timeout: float = 15) -> TagReport:
     # A cloud tag has no downloadable manifest, so asking the registry would
     # report it as simply missing. It is a different and worse problem: it runs
     # on Ollama's servers, outside every network mode this project offers.
     if is_cloud_tag(tag):
         return TagReport(tag, False, declared_gb, None, 'cloud tag - runs remotely')
+    if tag.lower().startswith("hf.co/"):
+        actual, detail = fetch_hf_gguf_size(tag, opener=opener, timeout=timeout)
+        if detail != "ok":
+            absent = detail in ("HTTP 404", "GGUF quantization not found")
+            return TagReport(tag, False if absent else None, declared_gb, None, detail)
+        return TagReport(tag, True, declared_gb, actual,
+                         "ok" if actual is not None else "GGUF size unavailable")
     document, detail = fetch_manifest(tag, opener=opener, timeout=timeout)
     if document is None:
         # 404 is a real answer: the tag is gone. Anything else is "unknown", and
@@ -140,7 +182,8 @@ def summarise(reports: list[TagReport], tolerance_gb: float = DEFAULT_TOLERANCE_
     unknown = [r for r in reports if r.exists is None]
     drifted = [r for r in reports
                if r.drift_gb is not None and abs(r.drift_gb) > tolerance_gb]
-    lines = ["%d catalogue tags checked against %s" % (len(reports), REGISTRY), ""]
+    lines = ["%d catalogue tags checked against %s + Hugging Face GGUF listings"
+             % (len(reports), REGISTRY), ""]
     if cloud:
         lines.append("CLOUD - these run on Ollama's servers, not this machine:")
         lines += ["  %s" % r.tag for r in cloud]
