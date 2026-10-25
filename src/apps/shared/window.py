@@ -641,12 +641,12 @@ class DesktopWindow:
         self.catalog_groups={}
         groups=group_catalog(catalog)
 
-        for index,role in enumerate(groups['roles']):
+        for role in groups['roles']:
             key='role:'+role['key']
             section=self.add_catalog_group(
                 self.choice_body,key,
                 f"{role['title']}  ·  상·중·하 권장 / 추가 옵션 {role['optional_count']}개",
-                expanded=(index==0))
+                expanded=False)
             if role['desc']:
                 desc=ttk.Label(section.body,text=role['desc'],
                                style='Muted.TLabel',wraplength=690,justify='left')
