@@ -16,6 +16,8 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
                       wrap_to_parent)
 from .themes import themed
 from . import views
+from .models_view import ModelAccordion
+from .model_groups import group_catalog
 
 
 class DesktopWindow:
@@ -632,60 +634,86 @@ class DesktopWindow:
         self.update_choice_summary()
 
     def build_catalog_rows(self,catalog):
-        for child in self.choice_body.winfo_children():child.destroy()
+        for child in self.choice_body.winfo_children():
+            child.destroy()
         self.choice_vars={}
-        role_tiers=catalog.get('role_tiers') or ()
-        uses={}
-        if role_tiers:
-            self.add_catalog_group('역할별 기본 추천 · 상 / 중 / 하 3단계')
-            for role in role_tiers:
-                steps=[]
+        self.choice_checkbuttons={}
+        self.catalog_groups={}
+        groups=group_catalog(catalog)
+
+        for index,role in enumerate(groups['roles']):
+            key='role:'+role['key']
+            section=self.add_catalog_group(
+                self.choice_body,key,
+                f"{role['title']}  ·  상·중·하 권장 / 추가 옵션 {role['optional_count']}개",
+                expanded=(index==0))
+            if role['desc']:
+                desc=ttk.Label(section.body,text=role['desc'],
+                               style='Muted.TLabel',wraplength=690,justify='left')
+                desc.pack(anchor='w',fill='x',pady=(4,6))
+                wrap_to_parent(desc,inset=70,minimum=220)
+            for tier in role['tiers']:
+                primary=tier['recommended']
+                label=tier['level_label']
+                if primary is None:
+                    ttk.Label(section.body,text=label+' 단계 · 권장 모델 정보 없음',
+                              style='Muted.TLabel').pack(anchor='w')
+                    continue
+                primary_section=self.add_catalog_group(
+                    section.body,key+':tier:'+str(tier['number']),
+                    f"{label} 단계 (권장)  ·  {primary['tag']}",
+                    expanded=True,compact=True)
+                self.add_catalog_row(
+                    primary_section.body,primary,
+                    checked=primary['installed'] or primary['recommended'],
+                    status=f'{label} 단계 권장')
+            if role['optional_count']:
+                options_section=self.add_catalog_group(
+                    section.body,key+':options',
+                    f"추가 옵션 ({role['optional_count']}개)  ·  필요할 때 선택",
+                    expanded=False,compact=True)
                 for tier in role['tiers']:
-                    level=tier['level_label']
-                    steps.append(f"{level}: {tier['primary']}")
-                    uses.setdefault(tier['primary'], []).append(
-                        f"{role['title']} {level} 추천")
-                    for tag in tier.get('alts', ()):
-                        uses.setdefault(tag, []).append(f"{role['title']} {level} 선택")
-                line=role['title']+'  |  '+'  ·  '.join(steps)
-                ttk.Label(self.choice_body,text=line,
-                          style='Manage.CardMuted.TLabel',
-                          wraplength=740,justify='left').pack(
-                              anchor='w',padx=(4,0),pady=(1,6))
+                    if not tier['options']:
+                        continue
+                    ttk.Label(options_section.body,
+                              text=tier['level_label']+' 단계 선택 모델',
+                              style='Section.TLabel').pack(
+                                  anchor='w',pady=(12,2))
+                    for model in tier['options']:
+                        self.add_catalog_row(
+                            options_section.body,model,
+                            checked=model['installed'] or model['recommended'],
+                            status=tier['level_label']+' 단계 선택')
 
-        shown=set()
-        explanations={'high':'고성능 · 여유 메모리가 넉넉할 때',
-                      'mid':'일상 사용 · 브라우저 등과 병행할 때',
-                      'low':'경량 · 메모리가 부족할 때'}
-        for key,label in catalog['levels']:
-            models=[m for m in catalog['models']
-                    if m['kind']=='chat' and m['level']==key]
-            if not models:continue
-            self.add_catalog_group(f"{label} 단계 · {explanations.get(key, '')}")
-            for model in sorted(models,key=lambda m: (
-                    m['group']!='core',m['tag'].lower())):
-                tag=model['tag']
-                primary=any(text.endswith(' 추천') for text in uses.get(tag, ()))
-                status='기본 추천' if primary or (not role_tiers and model['group']=='core') else '선택 후보'
+        extra=groups['extra']
+        other=[model for model in extra if model.get('kind')!='embed']
+        embeddings=[model for model in extra if model.get('kind')=='embed']
+        for key,title,models in (
+                ('extra:other','기타 모델 · 역할 외 선택지',other),
+                ('extra:embed','RAG 임베딩 · 별도 선택',embeddings)):
+            if not models:
+                continue
+            section=self.add_catalog_group(
+                self.choice_body,key,f'{title} ({len(models)}개)',
+                expanded=False)
+            for model in models:
                 self.add_catalog_row(
-                    model,checked=model['installed'] or model['recommended'],
-                    status=status,use_text=' · '.join(uses.get(tag, ())))
-                shown.add(tag)
-
-        remaining=[m for m in catalog['models'] if m['tag'] not in shown]
-        if remaining:
-            self.add_catalog_group('추가 모델 · RAG 임베딩 및 기타 선택지')
-            for model in remaining:
-                self.add_catalog_row(
-                    model,checked=model['installed'] or model['recommended'],
-                    status='선택 후보')
+                    section.body,model,
+                    checked=model['installed'] or model['recommended'],
+                    status='선택 모델',show_role=True)
         if catalog['extra_installed']:
-            self.add_catalog_group('설치됨 (카탈로그 외)')
+            section=self.add_catalog_group(
+                self.choice_body,'extra:installed',
+                f"직접 설치한 모델 ({len(catalog['extra_installed'])}개)",
+                expanded=False)
             for tag in catalog['extra_installed']:
-                self.add_catalog_row({'tag':tag,'role':'직접 받은 모델','level_label':'','note':'',
-                                      'size_gb':0.0,'memory_gb':0.0,'installed':True,
-                                      'desc':'카탈로그에 없는 모델입니다. 체크를 풀면 삭제합니다.'},
-                                     checked=True,status='직접 설치')
+                self.add_catalog_row(
+                    section.body,
+                    {'tag':tag,'role':'직접 받은 모델','level_label':'','note':'',
+                     'size_gb':0.0,'memory_gb':0.0,'installed':True,
+                     'desc':'카탈로그에 없는 모델입니다. 체크를 풀면 삭제합니다.'},
+                    checked=True,status='직접 설치')
+
         plan=catalog['plan']
         parts=[f"[{label}] "+(', '.join(plan.get(key) or ()) or '없음')
                for key,label in catalog['levels']]
@@ -700,34 +728,47 @@ class DesktopWindow:
             self.log('  '+part)
         self.choice_scroller.bind_content()
 
-    def add_catalog_group(self,title):
-        ttk.Label(self.choice_body,text=title,style='Section.TLabel').pack(anchor='w',pady=(16,2))
-        ttk.Separator(self.choice_body).pack(fill='x',pady=(0,8))
+    def add_catalog_group(self,parent,key,title,*,expanded=False,compact=False):
+        states=getattr(self,'_catalog_group_state',None)
+        if states is None:
+            states={}
+            self._catalog_group_state=states
+        section=ModelAccordion(
+            parent,title,expanded=states.get(key,expanded),compact=compact,
+            on_change=lambda opened,k=key: states.__setitem__(k,opened))
+        self.catalog_groups[key]=section
+        return section
 
-    def add_catalog_row(self,model,*,checked,status='',use_text=''):
+    def add_catalog_row(self,parent,model,*,checked,status='',show_role=False):
         tag=model['tag']
         var=self.choice_vars.get(tag)
         if var is None:
             var=tk.BooleanVar(master=self.root,value=checked)
             self.choice_vars[tag]=var
-        card=ttk.Frame(self.choice_body,style='Manage.Card.TFrame',padding=12)
-        card.pack(fill='x',pady=4)
-        facts=[tag,model['role']]
-        if status:facts.append('['+status+']')
-        if model.get('level_label'):
-            facts.append('['+model['level_label']+' 단계]'+(
-                (' '+model['note']) if model.get('note') else ''))
-        if model['size_gb']:facts.append(f"~{model['size_gb']:.1f}GB")
-        if model['installed']:facts.append('설치됨')
-        ttk.Checkbutton(card,text='   ·   '.join(facts),variable=var,
-                        command=self.update_choice_summary,
-                        style='Card.TCheckbutton').pack(anchor='w',fill='x')
-        info=[]
-        if use_text:info.append('역할/단계: '+use_text)
-        if model.get('desc'):info.append(model['desc'])
-        if info:
-            ttk.Label(card,text='  /  '.join(info),style='Manage.CardMuted.TLabel',
-                      wraplength=660,justify='left').pack(anchor='w',padx=(26,0),pady=(4,0))
+        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=10)
+        card.pack(fill='x',pady=3)
+        facts=[tag]
+        if show_role:
+            facts.append(model['role'])
+        if status:
+            facts.append('['+status+']')
+        if model.get('note'):
+            facts.append(model['note'])
+        if model['size_gb']:
+            facts.append(f"받기 ~{model['size_gb']:.1f}GB")
+        if model['installed']:
+            facts.append('설치됨')
+        box=ttk.Checkbutton(card,text='   ·   '.join(facts),variable=var,
+                            command=self.update_choice_summary,
+                            style='Card.TCheckbutton')
+        box.pack(anchor='w',fill='x')
+        self.choice_checkbuttons.setdefault(tag,[]).append(box)
+        if model.get('desc'):
+            desc=ttk.Label(card,text=model['desc'],
+                           style='Manage.CardMuted.TLabel',
+                           wraplength=600,justify='left')
+            desc.pack(anchor='w',fill='x',padx=(26,0),pady=(4,0))
+            wrap_to_parent(desc,inset=70,minimum=220)
 
     def selected_tags(self):
         return {tag for tag,var in self.choice_vars.items() if var.get()}
