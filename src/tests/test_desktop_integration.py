@@ -197,3 +197,61 @@ def test_bad_local_chat_url_is_not_opened(tmp_path):
                 'http://127.0.0.1:3001/\r\nevil']:
         with pytest.raises(ValueError): local_url(url)
     assert local_url('http://127.0.0.1:3001') == 'http://127.0.0.1:3001'
+
+
+# ── Model-only preparation must never run the account-private installer ──
+
+def test_model_prepare_reuses_running_broker_without_reinstalling_account(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: True, is_installed=lambda: True)
+    modules['launcher.services.ollama'].OllamaService=lambda *a,**kw: broker
+    # fixture's importer deliberately has no installer modules. Loading one
+    # would fail, which proves the running-server path stays model-only.
+    assert b.prepare_model_runtime() == 'http://127.0.0.1:11434'
+    assert not (tmp_path/'users').exists()
+
+
+def test_existing_broker_start_failure_is_reported_not_hidden_by_full_setup(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: False, is_installed=lambda: True,
+              last_error='Ollama 시작 실패: 로그 폴더에 쓸 수 없습니다')
+    modules['launcher.services.ollama'].OllamaService=lambda *a,**kw: broker
+    with pytest.raises(RuntimeError,match='로그 폴더에 쓸 수 없습니다'):
+        b.prepare_model_runtime()
+    assert not (tmp_path/'users').exists()
+    assert not (tmp_path/'ollama').exists()
+
+
+def test_missing_broker_installs_only_shared_resources_not_account_tree(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: False, is_installed=lambda: False,
+              last_error='Ollama 미설치')
+    modules['launcher.services.ollama'].OllamaService=lambda *a,**kw: broker
+    expected=tmp_path/'ollama'
+    modules['project_paths']=NS(OLLAMA_INSTALL_DIR=expected,
+                                MODEL_STORAGE_DIR=tmp_path/'models')
+    def guard(paths):
+        assert paths == {'env': tmp_path/'env',
+                         'ollama': expected, 'models': tmp_path/'models'}
+        assert expected.is_dir() and (tmp_path/'models').is_dir()
+        assert not (tmp_path/'users').exists()
+    modules['installer.steps.ollama']=NS(
+        prepare_install=lambda env,models: calls.append(('preflight',env,models)),
+        install=lambda paths: (guard(paths), calls.append(('install',paths))),
+        start_service=lambda paths: (guard(paths), calls.append(('start',paths))),
+    )
+    assert b.prepare_model_runtime() == 'http://127.0.0.1:11434'
+    assert [item[0] for item in calls] == ['preflight','install','start']
+    assert not (tmp_path/'users').exists()
+
+
+def test_missing_broker_install_preflight_failure_does_not_touch_account(tmp_path):
+    b,modules,calls=fixture(tmp_path)
+    broker=NS(ensure_running=lambda: False, is_installed=lambda: False)
+    modules['launcher.services.ollama'].OllamaService=lambda *a,**kw: broker
+    modules['installer.steps.ollama']=NS(
+        prepare_install=lambda *a: (_ for _ in ()).throw(
+            RuntimeError('포트를 다른 프로그램이 사용 중')))
+    with pytest.raises(RuntimeError, match='포트를 다른 프로그램'):
+        b.prepare_model_runtime()
+    assert not (tmp_path/'users').exists()
