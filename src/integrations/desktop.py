@@ -462,27 +462,60 @@ class DesktopBackend:
     # module path built from the key alone raised ModuleNotFoundError the first
     # time a user pressed those buttons. Name the real modules here instead.
     def prepare_model_runtime(self):
-        """Make Ollama usable for explicit model management.
+        """Start the shared Ollama broker without re-installing private account data.
 
-        Model selection is an explicit install action. It ensures the shared
-        LocalAI broker/runtime exists and starts it against the resolved store.
+        The Models page changes C:/LocalAI/models, not users/<account>. A
+        failed Ollama start previously invoked create_environment(), which
+        unconditionally tried to rewrite the private account ACL and could
+        abort a model-only action for an unrelated account-permission issue.
+        Privacy enforcement stays mandatory for full Setup and personal data.
         """
         service_cls = self.load('launcher.services.ollama').OllamaService
         service = service_cls(self.env, model_dir=self.model_dir)
         if service.ensure_running():
             return self.inference.endpoint
 
-        ollama = self.load('installer.steps.ollama')
-        utils = self.load('installer.utils')
-        project_paths = self.load('project_paths')
+        # A present broker that failed to start (or is serving another store)
+        # is not an "uninstalled" broker. Do not conceal its original error by
+        # attempting full Setup, changing private ACLs, or overwriting binaries.
+        if service.is_installed():
+            # Match explicit Setup's safe store-repair path, without invoking
+            # the full installer. restart_for_store() refuses unknown processes
+            # and a broker that is actively serving models.
+            if service.is_running() and service.restart_for_store():
+                return self.inference.endpoint
+            detail = (getattr(service, 'last_error', '') or
+                      '설치된 Ollama를 시작하거나 공용 모델 저장소에 연결하지 못했습니다.')
+            raise RuntimeError(
+                detail + '\n모델 변경 중 전체 설치/개인 폴더 권한 복구는 실행하지 않았습니다. '
+                '모델 화면의 [Ollama 시작 / 확인]에서 상태를 확인하세요.'
+            )
 
-        ollama.prepare_install(self.env, self.model_dir)
-        if Path(self.model_dir) == Path(project_paths.MODEL_STORAGE_DIR):
-            paths = utils.create_environment(self.env)
-        else:
-            paths = utils.create_environment(self.env, model_dir=self.model_dir)
-        ollama.install(paths)
-        ollama.start_service(paths)
+        # The broker is genuinely missing. Only prepare its shared locations:
+        # installing a model must never create or relax users/<account> ACLs.
+        ollama = self.load('installer.steps.ollama')
+        project_paths = self.load('project_paths')
+        model_store = Path(self.model_dir)
+        broker = Path(project_paths.OLLAMA_INSTALL_DIR)
+        ollama.prepare_install(self.env, model_store)
+        try:
+            broker.mkdir(parents=True, exist_ok=True)
+            model_store.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                '공용 Ollama/모델 폴더에 쓸 수 없습니다: %s 또는 %s. '
+                '기존 설치 계정에서 공용 설치 경로의 권한을 확인하세요. (%s)'
+                % (broker, model_store, exc)
+            ) from exc
+        # Preserve the full installer's sharing contract for a fresh broker,
+        # while deliberately excluding the unrelated private users tree.
+        if model_store == Path(project_paths.MODEL_STORAGE_DIR):
+            filesystem = self.load('installer.core.filesystem')
+            filesystem.ensure_shared_model_access(model_store)
+            filesystem.ensure_shared_runtime_access((self.env, broker))
+        shared_paths = {'env': Path(self.env), 'ollama': broker, 'models': model_store}
+        ollama.install(shared_paths)
+        ollama.start_service(shared_paths)
         return self.inference.endpoint
 
     MAINTENANCE_MODULES = {

@@ -319,3 +319,32 @@ def test_the_window_is_told_when_the_records_are_readable_by_others(tmp_path, mo
     assert backend.describe_records_privacy() is None
     monkeypatch.setattr(privacy, 'is_private', lambda path, **kw: None)
     assert backend.describe_records_privacy() is None, 'unknown is not an alarm'
+
+
+def test_failed_private_account_setup_reports_actual_acl_reason(monkeypatch, tmp_path):
+    """A standard installer account needs actionable diagnostics, not a loop."""
+    from installer.core import filesystem
+
+    monkeypatch.setattr(privacy, 'ensure_private', lambda path, **kw: False)
+    monkeypatch.setattr(privacy, 'is_private', lambda path, **kw: False)
+    monkeypatch.setattr(privacy, 'current_user_can_write', lambda path: True)
+    account=tmp_path / 'users' / 'Tester'
+    with pytest.raises(RuntimeError, match='다른 계정의 읽기 권한이 남아 있습니다'):
+        filesystem.create_environment(
+            tmp_path / 'env', model_dir=tmp_path / 'models',
+            account_root=account)
+    assert not (account / 'user_data').exists()
+
+
+def test_private_but_unwritable_account_reports_write_failure(monkeypatch, tmp_path):
+    from installer.core import filesystem
+
+    monkeypatch.setattr(privacy, 'ensure_private', lambda path, **kw: False)
+    monkeypatch.setattr(privacy, 'is_private', lambda path, **kw: True)
+    monkeypatch.setattr(privacy, 'current_user_can_write', lambda path: False)
+    account=tmp_path / 'users' / 'Tester'
+    with pytest.raises(RuntimeError, match='현재 계정에서 이 폴더에 쓸 수 없습니다'):
+        filesystem.create_environment(
+            tmp_path / 'env', model_dir=tmp_path / 'models',
+            account_root=account)
+    assert not (account / 'user_data').exists()
