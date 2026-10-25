@@ -507,6 +507,12 @@ class DesktopBackend:
                 '기존 설치 계정에서 공용 설치 경로의 권한을 확인하세요. (%s)'
                 % (broker, model_store, exc)
             ) from exc
+        # Preserve the full installer's sharing contract for a fresh broker,
+        # while deliberately excluding the unrelated private users tree.
+        if model_store == Path(project_paths.MODEL_STORAGE_DIR):
+            filesystem = self.load('installer.core.filesystem')
+            filesystem.ensure_shared_model_access(model_store)
+            filesystem.ensure_shared_runtime_access((self.env, broker))
         shared_paths = {'env': Path(self.env), 'ollama': broker, 'models': model_store}
         ollama.install(shared_paths)
         ollama.start_service(shared_paths)
