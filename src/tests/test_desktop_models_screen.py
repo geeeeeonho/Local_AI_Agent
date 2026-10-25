@@ -454,7 +454,7 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     highest=w.catalog_groups['role:uncensored:tier:1'].body
     assert any(inside(box,mid) for box in w.choice_checkbuttons[trevor])
     assert any(inside(box,options) for box in w.choice_checkbuttons[previous])
-    assert any(inside(box,options) for box in w.choice_checkbuttons[trevor_q4])
+    assert trevor_q4 not in w.choice_checkbuttons
     assert any(inside(box,highest) for box in w.choice_checkbuttons[high])
 
 
