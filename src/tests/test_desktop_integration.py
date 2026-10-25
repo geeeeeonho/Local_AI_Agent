@@ -231,6 +231,10 @@ def test_missing_broker_installs_only_shared_resources_not_account_tree(tmp_path
     expected=tmp_path/'ollama'
     modules['project_paths']=NS(OLLAMA_INSTALL_DIR=expected,
                                 MODEL_STORAGE_DIR=tmp_path/'models')
+    modules['installer.core.filesystem']=NS(
+        ensure_shared_model_access=lambda path: calls.append(('share-models',path)),
+        ensure_shared_runtime_access=lambda paths: calls.append(('share-runtime',paths)),
+    )
     def guard(paths):
         assert paths == {'env': tmp_path/'env',
                          'ollama': expected, 'models': tmp_path/'models'}
@@ -242,7 +246,8 @@ def test_missing_broker_installs_only_shared_resources_not_account_tree(tmp_path
         start_service=lambda paths: (guard(paths), calls.append(('start',paths))),
     )
     assert b.prepare_model_runtime() == 'http://127.0.0.1:11434'
-    assert [item[0] for item in calls] == ['preflight','install','start']
+    assert [item[0] for item in calls] == [
+        'preflight','share-models','share-runtime','install','start']
     assert not (tmp_path/'users').exists()
 
 
