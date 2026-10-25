@@ -142,10 +142,28 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
         ) from exc
     private_state = ensure_private_account(account)
     if private_state is not True:
+        from integrations.windows import privacy
+        # Report what actually failed. A standard account that originally
+        # installed LocalAI may own its folder but be unable to change an ACL
+        # left by a different/elevated process. "Run Setup again" without this
+        # distinction only repeats the same failure.
+        verified = privacy.is_private(account)
+        writable = privacy.current_user_can_write(account)
+        if verified is False:
+            issue = "다른 계정의 읽기 권한이 남아 있습니다"
+        elif verified is None:
+            issue = "Windows ACL을 읽거나 확인할 수 없습니다"
+        else:
+            issue = "폴더 보안은 확인됐지만 복구 작업이 실패했습니다"
+        if not writable:
+            issue += "; 현재 계정에서 이 폴더에 쓸 수 없습니다"
         raise RuntimeError(
             "이 Windows 계정의 LocalAI 개인 폴더를 안전하게 잠그지 못했습니다: %s. "
-            "설치를 중단합니다. 관리자 또는 기존 설치 계정에서 RUN.bat --install로 "
-            "C:\\LocalAI\\users 권한을 복구한 뒤 다시 시도하세요." % account
+            "원인: %s. 개인 기록 보호를 위해 설치를 중단합니다. "
+            "현재 계정과 폴더 소유자/ACL을 확인하세요 "
+            "(whoami /user, icacls \"%s\"). 권한이 없다면 "
+            "폴더의 소유자 또는 관리자에게 이 계정의 권한 복구를 요청하세요."
+            % (account, issue, account)
         )
 
     paths = {
