@@ -80,7 +80,8 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
                  "이 계정만 LocalAI 관리자로 기록합니다. 나중에 Setup을 다시 실행하면 "
                  "다시 시도합니다.")
             policy.notes["groups_pending"] = True
-            if not acl.succeeded(acl.run(windows.lock_root_command(root, policy), timeout=600)):
+            if windows.lockable_root(root) and not acl.succeeded(
+                    acl.run(windows.lock_root_command(root, policy), timeout=600)):
                 warn("공용 폴더 권한을 잠그지 못했습니다: %s" % root)
         _write_policy(policy_path, policy)
         ok("LocalAI 관리자: 이 계정 (%s)" % sid)
@@ -94,7 +95,8 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
                 policy.users_group_sid = windows.group_sid(machine.USERS_GROUP)
                 policy.notes.pop("groups_pending", None)
                 _write_policy(policy_path, policy)
-        if not acl.succeeded(acl.run(windows.lock_root_command(root, policy), timeout=600)):
+        if windows.lockable_root(root) and not acl.succeeded(
+                acl.run(windows.lock_root_command(root, policy), timeout=600)):
             warn("공용 폴더 권한을 다시 맞추지 못했습니다: %s" % root)
         app_step.deploy(project_root, app_dir)
         return "admin"

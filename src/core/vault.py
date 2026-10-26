@@ -62,8 +62,18 @@ _FINAL = 1
 DISABLE_VARIABLE = 'LOCAL_AI_VAULT'
 
 
-class VaultError(RuntimeError):
-    """A protected record could not be read or written."""
+class VaultError(ValueError):
+    """A protected record could not be read or written.
+
+    A ValueError, like a corrupt JSON document, so every caller that already
+    copes with an unreadable state file copes with this one.
+    """
+
+
+class Undecryptable(VaultError):
+    """The key this account has now does not open it: written by another
+    account, damaged, or protected before an administrator reset this
+    account's password. Keeping it does not make it readable again."""
 
 
 # ── the key ──────────────────────────────────────────────────────────────
@@ -87,7 +97,8 @@ def protector():
         return None
     if _default_factory is None:
         try:
-            import project_paths  # noqa: F401  - registers the default key
+            # Importing it registers the default key (see project_paths).
+            __import__('project_paths')
         except ImportError:
             return None
     factory = _default_factory
@@ -163,8 +174,17 @@ def open_bytes(raw: bytes, *, using_protector=None) -> bytes:
     try:
         return shield.unprotect(raw[len(MAGIC_FILE):])
     except Exception as exc:
-        raise VaultError('this record cannot be decrypted by the signed-in '
-                         'Windows account (%s)' % exc) from exc
+        raise Undecryptable('this record cannot be decrypted by the signed-in '
+                            'Windows account (%s)' % exc) from exc
+
+
+def set_aside(path) -> Path:
+    """Move an undecryptable record out of the way, never deleting it."""
+    path = Path(path)
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    target = path.with_name('%s.undecryptable-%s' % (path.name, stamp))
+    os.replace(path, target)
+    return target
 
 
 def read_bytes(path, limit: Optional[int] = None) -> bytes:
@@ -415,7 +435,7 @@ class _FrameReader(io.RawIOBase):
         try:
             plain = self._shield.unprotect(blob)
         except Exception as exc:
-            raise VaultError('sealed archive cannot be decrypted (%s)' % exc) from exc
+            raise Undecryptable('sealed archive cannot be decrypted (%s)' % exc) from exc
         if len(plain) < _FRAME_HEADER.size:
             raise VaultError('sealed archive frame is malformed')
         archive_id, index, flags = _FRAME_HEADER.unpack(plain[:_FRAME_HEADER.size])
@@ -795,7 +815,7 @@ def wait_for(predicate, timeout: float, interval: float = 0.2) -> bool:
 
 
 __all__ = ['MAGIC_FILE', 'MAGIC_ARCHIVE', 'LINE_PREFIX', 'DISABLE_VARIABLE',
-           'VaultError', 'register_default', 'protector', 'using', 'enabled', 'is_private_path',
+           'VaultError', 'Undecryptable', 'set_aside', 'register_default', 'protector', 'using', 'enabled', 'is_private_path',
            'should_protect', 'is_protected_bytes', 'seal_bytes', 'open_bytes',
            'read_bytes', 'read_text', 'encode_for', 'write_bytes_atomic',
            'write_text_atomic', 'protect_line', 'open_line', 'iter_lines',

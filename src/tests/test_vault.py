@@ -318,3 +318,47 @@ def test_an_empty_store_needs_no_archive(key, account):
     store = vault.Store('chat', root, exclude=('models',))
     assert store.seal_if_idle() is True
     assert not store.sealed()
+
+
+# ── a key this account no longer has ─────────────────────────────────────
+
+def test_a_document_this_key_cannot_open_is_kept_aside_and_the_app_starts(account):
+    """An administrator reset the password: the record is gone, the app is not."""
+    from core.persistence import JsonStore
+    path = account / 'user_data' / 'settings' / 'localai.json'
+    with vault.using(Key(b'before reset')):
+        JsonStore(path).update(lambda data: {'schema_version': 1, 'theme': 'dark'})
+    with vault.using(Key(b'after reset')):
+        assert JsonStore(path).read() == {}
+        kept = list(path.parent.glob('localai.json.undecryptable-*'))
+        assert len(kept) == 1 and not path.exists()
+        JsonStore(path).update(lambda data: {'schema_version': 1, 'theme': 'light'})
+        assert JsonStore(path).read()['theme'] == 'light'
+
+
+def test_a_sealed_store_this_key_cannot_open_is_kept_aside(account):
+    from services.records import SessionStores
+    data = account / 'user_data'
+    make_store(data / 'anythingllm')
+    with vault.using(Key(b'before reset')):
+        SessionStores(data).close('chat')
+    said = []
+    events = type('E', (), {'emit': lambda self, topic, payload: said.append(payload['message'])})()
+    with vault.using(Key(b'after reset')):
+        stores = SessionStores(data, events)
+        stores.open('chat')
+        assert list(data.glob('anythingllm.vault.undecryptable-*'))
+        assert any('풀 수 없는' in line for line in said)
+        stores.close('chat')
+
+
+def test_without_a_protector_a_sealed_store_is_refused_not_set_aside(account):
+    from services.records import SessionStores
+    data = account / 'user_data'
+    make_store(data / 'anythingllm')
+    with vault.using(Key()):
+        SessionStores(data).close('chat')
+    with vault.using(None):
+        with pytest.raises(vault.VaultError):
+            SessionStores(data).open('chat')
+    assert (data / 'anythingllm.vault').is_file(), 'still openable with the real key'

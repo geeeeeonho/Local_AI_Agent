@@ -336,6 +336,7 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
     monkeypatch.setattr(filesystem, 'MODEL_STORAGE_DIR', models)
     monkeypatch.setattr(filesystem, 'ACCOUNT_ROOT', account)
     monkeypatch.setattr('integrations.windows.acl.on_windows', lambda windows=None: True)
+    monkeypatch.setattr(filesystem, 'OLLAMA_INSTALL_DIR', tmp_path / 'ollama')
 
     filesystem.create_environment(tmp_path / 'env')
 
@@ -360,7 +361,10 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
         'BUILTIN Users must never receive a grant on users/<account> itself'
 
     locked = [c for c in ran if '/inheritance:r' in c]
-    assert locked and all(str(account) in command for command in locked)
+    # The account folder, and the broker's shared write-only log - nothing else.
+    shared_log = str(tmp_path / 'ollama' / 'logs')
+    assert any(str(account) in command for command in locked)
+    assert all(str(account) in command or shared_log in command for command in locked)
 
 
 def test_the_window_is_told_when_the_records_are_readable_by_others(tmp_path, monkeypatch):

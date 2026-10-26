@@ -289,3 +289,16 @@ def test_an_ordinary_accounts_setup_leaves_shared_permissions_alone(tmp_path, mo
     filesystem.create_environment(tmp_path / 'env', model_dir=tmp_path / 'models',
                                   account_root=tmp_path / 'users' / 'T', manage_shared=False)
     assert not any('/grant' in command for command in ran), ran
+
+
+def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
+    """LOCAL_AI_ROOT can point anywhere; cutting inheritance there must not."""
+    system = tmp_path / 'Windows'
+    profile = tmp_path / 'Users' / 'ghwork'
+    monkeypatch.setenv('SystemRoot', str(system))
+    monkeypatch.setenv('USERPROFILE', str(profile))
+    assert windows.lockable_root(tmp_path / 'LocalAI')
+    assert not windows.lockable_root(Path('/'))
+    assert not windows.lockable_root(system)
+    assert not windows.lockable_root(tmp_path / 'Users'), 'holds every profile'
+    assert not windows.lockable_root(tmp_path), 'would include the Windows folder'

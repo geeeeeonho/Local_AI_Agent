@@ -173,6 +173,32 @@ def records_folder(users_root: Path, name: str) -> Path:
 
 # ── scripts that need an administrator ───────────────────────────────────
 
+def lockable_root(root) -> bool:
+    """Is ``root`` a folder whose inheritance LocalAI may cut?
+
+    ``LOCAL_AI_ROOT`` can point anywhere. Locking a drive root, the Windows
+    folder or a profile folder would lock the machine's other software out
+    of its own files, so only a dedicated folder at least one level below a
+    drive root, and not one of those, qualifies.
+    """
+    path = Path(root)
+    if path.parent == path or not path.name:
+        return False
+    protected = []
+    for variable in ('SystemRoot', 'WINDIR', 'ProgramFiles', 'ProgramFiles(x86)',
+                     'ProgramData', 'USERPROFILE', 'PUBLIC'):
+        value = os.environ.get(variable)
+        if value:
+            protected.append(Path(value))
+    protected.append(Path(os.environ.get('SystemDrive', 'C:') + '\\') / 'Users')
+    key = os.path.normcase(str(path)).rstrip('\\/')
+    for item in protected:
+        other = os.path.normcase(str(item)).rstrip('\\/')
+        if key == other or other.startswith(key + os.sep):
+            return False
+    return True
+
+
 def _safe(value: str) -> bool:
     return bool(_SAFE_NAME.match(str(value or '')))
 
@@ -229,8 +255,9 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
         ".Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $failed = 1 }"
         % quote(machine.ADMINS_GROUP),
     ]
-    lines += lock_root_lines(root, admin_sids=(user_sid,), group_variable='$admins',
-                             principal=machine.Policy().principal())
+    if lockable_root(root):
+        lines += lock_root_lines(root, admin_sids=(user_sid,), group_variable='$admins',
+                                 principal=machine.Policy().principal())
     if shortcuts:
         lines += _shortcut_lines(app_dir)
     lines.append('exit $failed')
@@ -340,6 +367,6 @@ def delete_records_script(folder: Path, users_root: Path) -> Optional[str]:
 
 __all__ = ['powershell', 'quote', 'encoded', 'run_script', 'run_as_admin',
            'token_group_sids', 'account_name', 'group_sid', 'list_accounts',
-           'records_folder', 'first_install_script', 'lock_root_lines',
+           'records_folder', 'lockable_root', 'first_install_script', 'lock_root_lines',
            'lock_root_command', 'remove_grants_command', 'access_commands',
            'membership_script', 'delete_records_script']

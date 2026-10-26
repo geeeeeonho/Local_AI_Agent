@@ -81,7 +81,17 @@ class JsonStore:
             raise ValueError(f'LocalAI state exceeds size limit: {self.path}')
         # Inside this account's folder the document is DPAPI-protected;
         # plaintext from before that is still read.
-        raw = vault.open_bytes(raw)
+        try:
+            raw = vault.open_bytes(raw)
+        except vault.Undecryptable:
+            # Protected for a key this account no longer has (an administrator
+            # reset its password): the content is gone either way. Keep the
+            # file aside and start empty instead of refusing to start at all.
+            try:
+                vault.set_aside(self.path)
+            except OSError:
+                pass
+            return {}
         data = json.loads(raw.decode('utf-8'))
         if not isinstance(data, dict):
             raise ValueError(f'LocalAI state must be an object: {self.path}')

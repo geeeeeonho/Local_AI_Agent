@@ -86,6 +86,10 @@ def _run_install(args) -> int:
     # UAC prompt); administrators keep C:\LocalAI\app current, everyone
     # else's Setup prepares only their own folder.
     role = machine_step.ensure(ROOT, APP_DIR, HERE)
+    if role == "admin":
+        # Now that the administrators are known, they may read the broker log.
+        from installer.core.filesystem import ensure_shared_log_access
+        ensure_shared_log_access(paths["ollama"] / "logs")
     if role == "user":
         utils.info("공용 구성요소가 이미 설치되어 있으면 그대로 사용합니다.")
     components = []

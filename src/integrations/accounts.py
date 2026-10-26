@@ -116,7 +116,8 @@ class AccountAdmin:
         self._write(policy)
         if not admin:
             acl.run(windows.remove_grants_command(self.root, user['sid']), timeout=600)
-        if not acl.succeeded(acl.run(windows.lock_root_command(self.root, policy), timeout=600)):
+        if windows.lockable_root(self.root) and not acl.succeeded(
+                acl.run(windows.lock_root_command(self.root, policy), timeout=600)):
             raise RuntimeError('공용 폴더 권한을 갱신하지 못했습니다: %s' % self.root)
         return ('%s 계정을 LocalAI 관리자%s. 그룹 변경은 그 계정이 다시 로그인하면 적용됩니다.'
                 % (user['name'], '로 지정했습니다' if admin else '에서 해제했습니다'))
@@ -141,6 +142,8 @@ class AccountAdmin:
         policy = self._require_admin()
         if mode == machine.ACCESS_MEMBERS and not policy.users_group_sid:
             raise RuntimeError('LocalAI-Users 그룹이 아직 없습니다. [설치 / 복구]를 한 번 실행하세요.')
+        if not windows.lockable_root(self.root):
+            raise RuntimeError('이 위치에서는 접근 범위를 바꿀 수 없습니다: %s' % self.root)
         previous = policy.principal()
         policy.access = mode
         self._write(policy)

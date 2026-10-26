@@ -49,7 +49,15 @@ class SessionStores:
             for store in self.stores[kind]:
                 if store.sealed():
                     say('암호화된 %s 저장소를 여는 중…' % store.name)
-                opened.append(store.open(log=say))
+                try:
+                    opened.append(store.open(log=say))
+                except vault.Undecryptable as exc:
+                    # Sealed with a key this account no longer has. Keep the
+                    # archive (never delete what cannot be read) and start empty.
+                    kept = vault.set_aside(store.archive)
+                    say('이 계정의 현재 키로 풀 수 없는 %s 저장소를 %s 로 옮기고 빈 저장소로 '
+                        '시작합니다 (%s).' % (store.name, kept.name, exc))
+                    opened.append(store.open(log=say))
         except Exception:
             for hold in opened:
                 if hold is not None:

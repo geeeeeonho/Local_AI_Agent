@@ -87,6 +87,47 @@ def ensure_accounts_parent_access(users_root: Path, windows: Optional[bool] = No
     return result is not None and result.returncode == 0
 
 
+#: OWNER RIGHTS: replaces a file owner's implicit read-ACL/change-ACL rights.
+OWNER_RIGHTS_SID = "S-1-3-4"
+
+
+def ensure_shared_log_access(log_dir: Path, windows: Optional[bool] = None) -> bool:
+    """Every account may append to the broker's log; none may read it back.
+
+    The broker answers every account, so its output is everyone's activity.
+    ``W`` lets an account create and append; the OWNER RIGHTS entry stops the
+    account that created the file from granting itself read later. LocalAI
+    administrators read it for diagnosis - it never holds prompts, because
+    OLLAMA_DEBUG is not passed to the broker.
+    """
+    from integrations.windows import acl, privacy
+    from integrations.ollama.sharing import principal_sid
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    if not acl.on_windows(windows):
+        return True
+    from core import machine
+    import project_paths
+    policy = machine.load(project_paths.machine_policy_path())
+    command = ["icacls", str(log_dir), "/inheritance:r",
+               "/grant:r", "*%s:(OI)(CI)F" % privacy.SYSTEM_SID,
+               "/grant:r", "*%s:(OI)(CI)F" % privacy.ADMINISTRATORS_SID]
+    for sid in (policy.admin_sids() if policy is not None else ()):
+        command += ["/grant:r", "*%s:(OI)(CI)F" % sid]
+    command += ["/grant:r", "*%s:(OI)(CI)W" % principal_sid(),
+                "/grant:r", "*%s:(OI)(CI)W" % OWNER_RIGHTS_SID, "/Q"]
+    result = acl.run(command)
+    if result is None or result.returncode != 0:
+        warn("공용 Ollama 로그 폴더 권한 설정 실패: %s" % log_dir)
+        return False
+    # The read/execute grant on the whole broker folder is applied with /T and
+    # lands on these files too; they must inherit only the folder's grants.
+    privacy.reset_children(log_dir)
+    return True
+
+
 def ensure_shared_runtime_lock_access(lock_path: Path, windows: Optional[bool] = None) -> bool:
     """Allow every local account to open the one machine-wide runtime lock.
 
@@ -194,6 +235,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     # 설치/삭제할 수 있는 machine-wide mutable state다.
     if manage_shared:
         ensure_shared_runtime_access((env, paths["ollama"]))
+        ensure_shared_log_access(paths["ollama"] / LOGS_DIRNAME)
 
     # Canonical LocalAI store: widen only this subtree before creating the
     # shared control files, so a standard second account can repair/use it.
@@ -327,12 +369,16 @@ def protect_existing_records(account: Path) -> int:
             converted += bool(vault.protect_lines_in_place(path))
         except (OSError, vault.VaultError) as exc:
             warn("  기록 암호화 실패: %s (%s)" % (path.name, exc))
+    from core.persistence import file_lock
     data = account / USER_DATA_DIRNAME
     for folder in ("settings", "projects", "runtime"):
         for path in sorted((data / folder).glob("*.json")):
             try:
-                converted += bool(vault.protect_file_in_place(path))
-            except (OSError, vault.VaultError) as exc:
+                # The same lock JsonStore takes, so a running window's save
+                # cannot land between the read and the rewrite.
+                with file_lock(path.with_name(path.name + ".lock")):
+                    converted += bool(vault.protect_file_in_place(path))
+            except (OSError, TimeoutError, vault.VaultError) as exc:
                 warn("  설정 암호화 실패: %s (%s)" % (path.name, exc))
     if converted:
         ok("  기존 기록 %d개를 이 계정 전용 암호화로 바꿨습니다" % converted)
