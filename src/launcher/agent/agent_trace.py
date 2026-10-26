@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import project_paths
+from core import vault
 
 _SECRET_KEYS = {
     "authorization",
@@ -136,7 +137,9 @@ class AgentTrace:
 
     def _stream(self):
         if self._handle is None and not self._closed:
-            self._handle = self.path.open("a", encoding="utf-8")
+            # Prompts, commands and results: encrypted per row for this
+            # Windows account (core.vault), plaintext only off Windows.
+            self._handle = vault.open_log(self.path, "a")
         return self._handle
 
     def record(

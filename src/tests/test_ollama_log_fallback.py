@@ -120,3 +120,47 @@ def test_a_refused_state_file_does_not_turn_a_running_server_into_a_failure(tmp_
                         lambda pid: (_ for _ in ()).throw(PermissionError(13, 'denied')))
     svc._write_runtime_state(4242)
     assert any('실행 기록을 저장하지 못했습니다' in line for line in svc.said)
+
+
+# ── the broker's log is shared and write-only ────────────────────────────
+
+def test_on_windows_the_broker_logs_to_the_shared_folder(tmp_path, monkeypatch):
+    import project_paths
+    monkeypatch.setattr(module, '_shared_log', lambda: True)
+    svc = OllamaService(tmp_path / 'environment', model_dir=tmp_path / 'models')
+    assert svc.log_file == project_paths.ollama_log_dir() / 'server.log'
+    assert svc.private_log.name == 'ollama_run.log'
+
+
+def test_a_shared_log_this_account_cannot_open_falls_back_to_its_own(tmp_path, monkeypatch):
+    svc = service(tmp_path)
+    shared = tmp_path / 'LocalAI' / 'ollama' / 'logs' / 'server.log'
+    svc.log_file = shared
+    refuse(monkeypatch, shared)
+    stream = svc._open_log()
+    stream.close()
+    assert svc.log_file == svc.private_log
+    assert not list(shared.parent.glob('*.blocked-*')), 'never rename the shared log'
+
+
+def test_prompts_never_reach_the_shared_log(tmp_path):
+    svc = service(tmp_path)
+    env = svc.env_vars({'OLLAMA_DEBUG': '1', 'PATH': 'x'})
+    assert 'OLLAMA_DEBUG' not in env
+
+
+def test_setup_makes_the_log_folder_append_only_for_accounts(tmp_path, monkeypatch):
+    import types
+    from installer.core import filesystem
+    from integrations.windows import acl, privacy
+    ran = []
+    monkeypatch.setattr(acl, 'run', lambda command, **kw: ran.append(command)
+                        or types.SimpleNamespace(returncode=0, stdout='', stderr=''))
+    monkeypatch.setattr(privacy, 'reset_children', lambda path, **kw: ran.append(['reset', str(path)]))
+    assert filesystem.ensure_shared_log_access(tmp_path / 'logs', windows=True)
+    command = ran[0]
+    assert '/inheritance:r' in command
+    assert '*S-1-5-32-545:(OI)(CI)W' in command, 'append, not read'
+    assert '*S-1-3-4:(OI)(CI)W' in command, 'the creator cannot grant itself read'
+    assert not any('RX' in part or ':(OI)(CI)R' in part for part in command if 'S-1-5-32-545' in part)
+    assert ran[1] == ['reset', str(tmp_path / 'logs')]

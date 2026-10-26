@@ -7,6 +7,8 @@ set "PYTHONIOENCODING=utf-8"
 set "PYTHONPATH=%~dp0src;%PYTHONPATH%"
 cd /d "%~dp0"
 
+if /I "%~1"=="--records" goto RUN_RECORDS
+
 set "FORCE_CONSOLE="
 echo %* | findstr /I /C:"--tui" /C:"--help" >nul 2>&1 && set "FORCE_CONSOLE=1"
 
@@ -46,6 +48,16 @@ if not errorlevel 1 (
   goto CHECK
 )
 goto NOPY
+
+:RUN_RECORDS
+rem Encrypted logs/traces of this Windows account, decrypted for reading.
+where python.exe >nul 2>&1
+if not errorlevel 1 (
+  python -m tools.records %*
+  goto CHECK
+)
+py -3 -m tools.records %*
+goto CHECK
 
 :RUN_SYSTEM_GUI
 start "" pythonw.exe -m apps.studio %*

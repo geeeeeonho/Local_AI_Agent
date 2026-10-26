@@ -4,9 +4,11 @@ from .session import AgentSession
 
 
 class AgentLauncher:
-    def __init__(self, backend, network, events):
+    def __init__(self, backend, network, events, stores=None):
         self.backend, self.network, self.events = backend, network, events
         self.session = None
+        # Agent sessions stay sealed for this account between runs.
+        self.stores = stores
 
     @property
     def opened(self):
@@ -19,12 +21,20 @@ class AgentLauncher:
             return None
         network_was_prepared = self.network.mode is not None
         selected = self.network.prepare(mode, cancel=cancel)
+        if self.stores is not None:
+            self.stores.open('agent')
         # Agent preparation starts Docker, Ollama and SearXNG; each of those
         # waits was uninterruptible, so a window close during the wizard had to
         # sit through all three.
-        binding = invoke(self.backend.agent_open, presenter, selected.value, project,
-                         cancel=cancel)
+        try:
+            binding = invoke(self.backend.agent_open, presenter, selected.value, project,
+                             cancel=cancel)
+        except Exception:
+            # No session was started, so nothing can be writing the stores.
+            self._seal()
+            raise
         if binding is None or (cancel is not None and cancel()):
+            self._seal()
             if not network_was_prepared:
                 self.network.reset()
             return None
@@ -33,6 +43,7 @@ class AgentLauncher:
             closed = self.session.close()
             if closed:
                 self.session = None
+                self._seal()
                 if not network_was_prepared:
                     self.network.reset()
             raise RuntimeError('Interpreter startup failed. Check Setup / Repair.')
@@ -45,5 +56,15 @@ class AgentLauncher:
         if not self.session.close():
             return False
         self.session = None
+        self._seal()
         self.events.emit('agent.stopped', {})
         return True
+
+    def _seal(self):
+        """Seal agent stores once no session runs. Never raises."""
+        if self.stores is None:
+            return
+        try:
+            self.stores.close('agent')
+        except Exception:
+            pass

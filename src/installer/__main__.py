@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-from project_paths import (ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT,
+from project_paths import (APP_DIR, ENV_DIR, MODEL_STORAGE_DIR, PROJECT_ROOT,
                            RUNTIME_ROOT)
 from installer import utils, resources, lang_setup
+from installer.steps import machine as machine_step
 from installer.steps import ollama
 from installer.steps import python_tools
 from installer.steps import sandbox
@@ -77,7 +78,20 @@ def _run_install(args) -> int:
 
     ollama.prepare_install(ENV, MODEL_STORAGE_DIR)
 
-    paths = utils.create_environment(ENV)
+    # Only LocalAI administrators change the shared folders' permissions;
+    # anyone else's Setup would just fail those steps and say so loudly.
+    paths = utils.create_environment(
+        ENV, manage_shared=machine_step.current_role(ROOT) != "user")
+    # The first installing account becomes the LocalAI administrator (one
+    # UAC prompt); administrators keep C:\LocalAI\app current, everyone
+    # else's Setup prepares only their own folder.
+    role = machine_step.ensure(ROOT, APP_DIR, HERE)
+    if role == "admin":
+        # Now that the administrators are known, they may read the broker log.
+        from installer.core.filesystem import ensure_shared_log_access
+        ensure_shared_log_access(paths["ollama"] / "logs")
+    if role == "user":
+        utils.info("공용 구성요소가 이미 설치되어 있으면 그대로 사용합니다.")
     components = []
     failed_components = []
     skipped_components = []

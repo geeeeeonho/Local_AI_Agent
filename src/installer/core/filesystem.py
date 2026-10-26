@@ -77,14 +77,55 @@ def ensure_accounts_parent_access(users_root: Path, windows: Optional[bool] = No
     account, SYSTEM and Administrators full control.
     """
     from integrations.windows import acl
-    from integrations.ollama.sharing import BUILTIN_USERS_SID
+    from integrations.ollama.sharing import principal_sid
     if not acl.on_windows(windows):
         return True
     result = acl.run([
         "icacls", str(users_root), "/grant",
-        "*%s:(RD,X,AD,RA,REA)" % BUILTIN_USERS_SID, "/Q",
+        "*%s:(RD,X,AD,RA,REA)" % principal_sid(), "/Q",
     ])
     return result is not None and result.returncode == 0
+
+
+#: OWNER RIGHTS: replaces a file owner's implicit read-ACL/change-ACL rights.
+OWNER_RIGHTS_SID = "S-1-3-4"
+
+
+def ensure_shared_log_access(log_dir: Path, windows: Optional[bool] = None) -> bool:
+    """Every account may append to the broker's log; none may read it back.
+
+    The broker answers every account, so its output is everyone's activity.
+    ``W`` lets an account create and append; the OWNER RIGHTS entry stops the
+    account that created the file from granting itself read later. LocalAI
+    administrators read it for diagnosis - it never holds prompts, because
+    OLLAMA_DEBUG is not passed to the broker.
+    """
+    from integrations.windows import acl, privacy
+    from integrations.ollama.sharing import principal_sid
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    if not acl.on_windows(windows):
+        return True
+    from core import machine
+    import project_paths
+    policy = machine.load(project_paths.machine_policy_path())
+    command = ["icacls", str(log_dir), "/inheritance:r",
+               "/grant:r", "*%s:(OI)(CI)F" % privacy.SYSTEM_SID,
+               "/grant:r", "*%s:(OI)(CI)F" % privacy.ADMINISTRATORS_SID]
+    for sid in (policy.admin_sids() if policy is not None else ()):
+        command += ["/grant:r", "*%s:(OI)(CI)F" % sid]
+    command += ["/grant:r", "*%s:(OI)(CI)W" % principal_sid(),
+                "/grant:r", "*%s:(OI)(CI)W" % OWNER_RIGHTS_SID, "/Q"]
+    result = acl.run(command)
+    if result is None or result.returncode != 0:
+        warn("공용 Ollama 로그 폴더 권한 설정 실패: %s" % log_dir)
+        return False
+    # The read/execute grant on the whole broker folder is applied with /T and
+    # lands on these files too; they must inherit only the folder's grants.
+    privacy.reset_children(log_dir)
+    return True
 
 
 def ensure_shared_runtime_lock_access(lock_path: Path, windows: Optional[bool] = None) -> bool:
@@ -95,17 +136,18 @@ def ensure_shared_runtime_lock_access(lock_path: Path, windows: Optional[bool] =
     shared environment directory or replace binaries.
     """
     from integrations.windows import acl
-    from integrations.ollama.sharing import BUILTIN_USERS_SID
+    from integrations.ollama.sharing import principal_sid
     if not acl.on_windows(windows):
         return True
     result = acl.run([
         "icacls", str(lock_path), "/grant",
-        "*%s:(R,W)" % BUILTIN_USERS_SID, "/Q",
+        "*%s:(R,W)" % principal_sid(), "/Q",
     ])
     return result is not None and result.returncode == 0
 
 def create_environment(env: Path, model_dir: Optional[Path] = None,
-                       account_root: Optional[Path] = None) -> Dict[str, Path]:
+                       account_root: Optional[Path] = None,
+                       manage_shared: bool = True) -> Dict[str, Path]:
     """새 설치용 공용 런타임과 이 계정의 개인 폴더를 생성한다.
 
     새 설치는 이전 경로를 검색하거나 옮기지 않는다. 공용 구성은 runtime root
@@ -126,7 +168,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     # users/<account> folder.
     users_root = account.parent
     users_root.mkdir(parents=True, exist_ok=True)
-    if not ensure_accounts_parent_access(users_root):
+    if manage_shared and not ensure_accounts_parent_access(users_root):
         warn("다른 Windows 계정의 사용자 폴더 생성 권한을 설정하지 못했습니다: %s" % users_root)
 
     # A standard account may have permission to create users/<account> but no
@@ -153,6 +195,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     if private_state is not True:
         raise RuntimeError(_private_account_failure(account))
     repair_stale_children(account)
+    protect_existing_records(account)
 
     paths = {
         "env":                   env,
@@ -190,11 +233,13 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
 
     # 공용 런타임/Ollama는 실행만 공유한다. models만 모든 계정이
     # 설치/삭제할 수 있는 machine-wide mutable state다.
-    ensure_shared_runtime_access((env, paths["ollama"]))
+    if manage_shared:
+        ensure_shared_runtime_access((env, paths["ollama"]))
+        ensure_shared_log_access(paths["ollama"] / LOGS_DIRNAME)
 
     # Canonical LocalAI store: widen only this subtree before creating the
     # shared control files, so a standard second account can repair/use it.
-    if model_dir is None:
+    if model_dir is None and manage_shared:
         ensure_shared_model_access(models)
 
     model_control = model_control_dir(models)
@@ -220,14 +265,17 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     try:
         if not runtime_lock.exists():
             runtime_lock.write_bytes(b"\0")
-        if not ensure_shared_runtime_lock_access(runtime_lock):
+        if manage_shared and not ensure_shared_runtime_lock_access(runtime_lock):
             warn("공용 런타임 잠금 파일 권한 설정 실패: %s" % runtime_lock)
     except OSError as exc:
         warn("공용 런타임 잠금 파일 준비 실패: %s (%s)" % (runtime_lock, exc))
     paths["runtime_lock"] = runtime_lock
 
     if model_dir is None:
-        publish_shared_model_dir(models)
+        if manage_shared:
+            publish_shared_model_dir(models)
+        else:
+            os.environ["OLLAMA_MODELS"] = str(models)
     return paths
 
 
@@ -298,6 +346,45 @@ def repair_stale_children(account: Path) -> list:
     return blocked
 
 
+#: Written by programs LocalAI does not control; left as those programs wrote them.
+_UNMANAGED_LOGS = ("ollama_run", "ollama_server")
+
+
+def protect_existing_records(account: Path) -> int:
+    """Encrypt records written in plaintext before protection existed.
+
+    New logs, traces and documents are written encrypted already; this
+    converts what an earlier version left, once, as the account itself - only
+    its own DPAPI key can do it. Returns how many files were converted.
+    """
+    from core import vault
+    if not vault.enabled():
+        return 0
+    converted = 0
+    logs = account / LOGS_DIRNAME
+    for path in sorted(logs.glob("*.log")) + sorted(logs.glob("*.jsonl")):
+        if path.name.startswith(_UNMANAGED_LOGS):
+            continue
+        try:
+            converted += bool(vault.protect_lines_in_place(path))
+        except (OSError, vault.VaultError) as exc:
+            warn("  기록 암호화 실패: %s (%s)" % (path.name, exc))
+    from core.persistence import file_lock
+    data = account / USER_DATA_DIRNAME
+    for folder in ("settings", "projects", "runtime"):
+        for path in sorted((data / folder).glob("*.json")):
+            try:
+                # The same lock JsonStore takes, so a running window's save
+                # cannot land between the read and the rewrite.
+                with file_lock(path.with_name(path.name + ".lock")):
+                    converted += bool(vault.protect_file_in_place(path))
+            except (OSError, TimeoutError, vault.VaultError) as exc:
+                warn("  설정 암호화 실패: %s (%s)" % (path.name, exc))
+    if converted:
+        ok("  기존 기록 %d개를 이 계정 전용 암호화로 바꿨습니다" % converted)
+    return converted
+
+
 ACCOUNT_MARKER = "ACCOUNT.txt"
 
 
@@ -351,6 +438,8 @@ def write_install_manifest(
 ) -> Path:
     """설치 루트에 사람이 읽을 수 있는 설치 식별 JSON을 기록한다."""
     manifest = paths["env"] / INSTALL_MANIFEST
+    if manifest.exists() and not os.access(manifest, os.W_OK):
+        return manifest
     now = datetime.now(timezone.utc).isoformat()
 
     installed_at = now
@@ -383,8 +472,13 @@ def write_install_manifest(
         "updated_at": now,
         "note": "This directory is managed by Local AI Agent RUN.bat --install.",
     }
-    manifest.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        manifest.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        # The shared environment belongs to the LocalAI administrators; an
+        # ordinary account's Setup records nothing there.
+        pass
     return manifest

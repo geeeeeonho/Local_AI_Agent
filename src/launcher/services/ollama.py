@@ -36,6 +36,11 @@ def _same_path(left: Path, right: Path) -> bool:
     )
 
 
+def _shared_log() -> bool:
+    """The machine-wide broker log exists on Windows installs only."""
+    return os.name == "nt"
+
+
 class OllamaService:
     """프로젝트가 설치한 Ollama 포터블 서비스 제어."""
 
@@ -63,7 +68,13 @@ class OllamaService:
         # recording a pid there let a second signed-in user read the first
         # user's pid as their own and stop a server they had not started.
         state = Path(state_dir) if state_dir is not None else project_paths.LOGS_DIR
-        self.log_file = state / "ollama_run.log"
+        # This account's own fallback for the server log. The broker serves
+        # every account, so on Windows its output goes to the shared,
+        # write-only log instead (project_paths.ollama_log_dir()).
+        self.private_log = state / "ollama_run.log"
+        self.log_file = self.private_log
+        if state_dir is None and _shared_log():
+            self.log_file = project_paths.ollama_log_dir() / "server.log"
         self.runtime_state_file = state / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
@@ -503,6 +514,9 @@ class OllamaService:
         # own boundary only covers requests we originate; this refuses them in
         # the server, with 403, including on the OpenAI-compatible endpoint.
         e["OLLAMA_NO_CLOUD"] = "1"
+        # Debug output includes prompts, and the broker's log is shared by
+        # every account on the machine. Never inherit it into that log.
+        e.pop("OLLAMA_DEBUG", None)
         e.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
         e.setdefault("OLLAMA_KEEP_ALIVE", "5m")
         return e
@@ -749,20 +763,24 @@ class OllamaService:
         except OSError as exc:
             refused = exc
         original = self.log_file
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        aside = original.with_name("%s.blocked-%s%s" % (original.stem, stamp, original.suffix))
-        try:
-            os.replace(original, aside)
-            stream = open(original, "ab")
-            self._warn("쓸 수 없던 Ollama 로그를 옆으로 옮기고 새로 만들었습니다: %s" % aside)
-            return stream
-        except OSError:
-            pass
+        if original == self.private_log:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            aside = original.with_name("%s.blocked-%s%s" % (original.stem, stamp, original.suffix))
+            try:
+                os.replace(original, aside)
+                stream = open(original, "ab")
+                self._warn("쓸 수 없던 Ollama 로그를 옆으로 옮기고 새로 만들었습니다: %s" % aside)
+                return stream
+            except OSError:
+                pass
         import tempfile
-        for candidate in (
-            original.with_name("%s-%d%s" % (original.stem, os.getpid(), original.suffix)),
-            Path(tempfile.gettempdir()) / ("LocalAI-" + original.name),
-        ):
+        candidates = [] if original == self.private_log else [self.private_log]
+        candidates += [
+            self.private_log.with_name("%s-%d%s" % (self.private_log.stem, os.getpid(),
+                                                     self.private_log.suffix)),
+            Path(tempfile.gettempdir()) / ("LocalAI-" + self.private_log.name),
+        ]
+        for candidate in candidates:
             try:
                 candidate.parent.mkdir(parents=True, exist_ok=True)
                 stream = open(candidate, "ab")

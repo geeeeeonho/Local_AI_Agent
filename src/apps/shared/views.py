@@ -251,6 +251,8 @@ def setup(parent,w):
     note(parent,'별도 설치 콘솔이나 선택창을 열지 않습니다. 진행 로그는 이 창 아래 Activity에 '
          '실시간으로 표시됩니다. 모델은 Models 화면에서 같은 방식으로 선택/다운로드합니다.')
 
+    accounts_card(parent,w)
+
     if 'models' in w.spec.pages:
         card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
         card.pack(fill='x',pady=(4,14))
@@ -264,12 +266,59 @@ def setup(parent,w):
     ttk.Label(parent,text='유지보수',style='Section.TLabel').pack(anchor='w',pady=(8,8))
     r=row(parent)
     for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),
-                     ('searxng_action','Search 관리'),('ollama_action','Ollama 확인')]:
+                     ('searxng_action','Search 관리')]:
         button(r,text,lambda k=key:w.maintenance(k))
+    # Not the retained terminal action: it waited on a [확인] click and held
+    # every later change behind it.
+    button(r,'Ollama 확인',w.ensure_ollama)
     button(r,'설정 화면',lambda:w.navigate('settings'))
     note(parent,'유지보수 메뉴와 체크 선택도 이 Setup 페이지 안에 표시됩니다. '
          '실행 결과는 동일한 로그 영역에 기록됩니다.')
     w.hosts['setup']=PanelHost(parent)
+
+
+def accounts_card(parent,w):
+    """This PC's Windows accounts and their LocalAI roles, for administrators."""
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
+    card.pack(fill='x',pady=(4,14))
+    ttk.Label(card,text='LocalAI 계정 관리',style='Manage.Card.TLabel',
+              font=('Segoe UI',12,'bold')).pack(anchor='w')
+    w.accounts_summary=tk.StringVar(master=w.root,value='계정 목록을 아직 읽지 않았습니다.')
+    ttk.Label(card,textvariable=w.accounts_summary,style='Manage.CardMuted.TLabel',
+              wraplength=720,justify='left').pack(anchor='w',pady=(6,10))
+    wrapper=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    wrapper.pack(fill='x')
+    columns=('name','role','access','records')
+    w.accounts_tree=ttk.Treeview(wrapper,columns=columns,show='headings',height=5,selectmode='browse')
+    for key,title,width in zip(columns,('Windows 계정','역할','LocalAI 사용','기록'),(220,140,150,120)):
+        w.accounts_tree.heading(key,text=title)
+        w.accounts_tree.column(key,width=width,minwidth=60)
+    w.accounts_tree.pack(fill='x')
+    w.accounts_tree.bind('<<TreeviewSelect>>',lambda event:w.sync_account_buttons())
+    actions=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    actions.pack(fill='x',pady=(10,0))
+    button(actions,'목록 새로고침',w.load_accounts)
+    w.account_buttons={
+        'allow':button(actions,'사용 허용',lambda:w.account_action('allow',True)),
+        'deny':button(actions,'사용 해제',lambda:w.account_action('allow',False)),
+        'admin':button(actions,'관리자 지정',lambda:w.account_action('admin',True)),
+        'unadmin':button(actions,'관리자 해제',lambda:w.account_action('admin',False)),
+        'delete':button(actions,'기록 삭제',lambda:w.account_action('delete'),kind='Danger'),
+    }
+    access=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    access.pack(fill='x',pady=(10,0))
+    w.accounts_access=tk.StringVar(master=w.root,value='everyone')
+    w.account_access_radios=[]
+    for value,text in (('everyone','이 PC의 모든 계정이 사용'),('members','허용한 계정만 사용')):
+        radio=ttk.Radiobutton(access,text=text,value=value,variable=w.accounts_access,
+                              command=w.set_account_access,style='Card.TRadiobutton')
+        radio.pack(side='left',padx=(0,16))
+        w.account_access_radios.append(radio)
+    ttk.Label(card,text='관리자도 다른 계정의 기록은 읽을 수 없습니다 — 각 계정의 Windows 키로 '
+                        '암호화되어 있습니다. 삭제만 할 수 있습니다. 그룹 변경과 삭제는 Windows '
+                        '관리자 승인(UAC)이 필요하고, 그룹 변경은 그 계정이 다시 로그인하면 적용됩니다.',
+              style='Manage.CardMuted.TLabel',wraplength=720,justify='left').pack(anchor='w',pady=(10,0))
+    w.sync_account_buttons()
 
 
 BUILDERS={'home':home,'chat':chat,'agent':agent,'models':models,

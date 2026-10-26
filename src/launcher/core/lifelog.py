@@ -33,6 +33,8 @@ import traceback
 from pathlib import Path
 from typing import Callable, List, Optional, TextIO
 
+from core import vault
+
 
 __all__ = [
     "install_global_hooks",
@@ -120,7 +122,7 @@ def _write_fatal(stage: str, exc: BaseException) -> None:
     if _log_dir is None:
         return
     try:
-        with open(_log_dir / "lifelog_fatal.log", "a", encoding="utf-8") as f:
+        with vault.open_log(_log_dir / "lifelog_fatal.log", "a") as f:
             f.write("\n" + "=" * 60 + "\n")
             f.write("[" + _ts() + "] FATAL at stage: " + stage + "\n")
             f.write("=" * 60 + "\n")
@@ -151,7 +153,8 @@ def _open_main_log() -> Optional[TextIO]:
         return None
     try:
         path = _log_dir / ("launcher_" + _ts_file() + ".log")
-        _main_log_fh = open(path, "w", encoding="utf-8", buffering=1)
+        # Encrypted line by line inside this account's folder (core.vault).
+        _main_log_fh = vault.open_log(path, "w")
         _main_log_fh.write("=" * 60 + "\n")
         _main_log_fh.write("  Launcher session log\n")
         _main_log_fh.write("  Started: " + datetime.datetime.now().isoformat() + "\n")
@@ -167,7 +170,7 @@ def _open_main_log() -> Optional[TextIO]:
         _main_log_fh.write("=" * 60 + "\n")
         _safe_fsync(_main_log_fh)
         return _main_log_fh
-    except OSError:
+    except (OSError, vault.VaultError):
         _main_log_fh = None
         return None
 
@@ -229,7 +232,7 @@ def open_session_log(name: str) -> Optional[TextIO]:
     safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in name)
     try:
         path = _llm_session_log_dir() / (safe_name + "_" + _ts_file() + ".log")  # SESSION_LOG_PATH_FIX_v2
-        fh = open(str(path), "w", encoding="utf-8", buffering=1)  # PATH_UNIFY_v1: 이중 join 제거
+        fh = vault.open_log(path, "w")
         fh.write("=" * 60 + "\n")
         fh.write("  Session: " + name + "\n")
         fh.write("  Started: " + datetime.datetime.now().isoformat() + "\n")
@@ -237,7 +240,7 @@ def open_session_log(name: str) -> Optional[TextIO]:
         _safe_fsync(fh)
         log("INFO", "세션 로그 오픈: " + path.name)
         return fh
-    except OSError as e:
+    except (OSError, vault.VaultError) as e:
         log("FAIL", "세션 로그 오픈 실패 (" + name + "): " + str(e))
         return None
 

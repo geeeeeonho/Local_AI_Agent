@@ -102,6 +102,16 @@ def _on_windows() -> bool:
     return os.name == "nt"
 
 
+def app_dir() -> Path:
+    """Shared: the one installed copy of the program every account runs."""
+    return runtime_dir() / runtime_root.APP
+
+
+def machine_policy_path() -> Path:
+    """Shared, admin-written: who administers LocalAI and who may use it."""
+    return runtime_dir() / runtime_root.MACHINE_POLICY
+
+
 def model_dir() -> Path:
     """Shared LocalAI model store.
 
@@ -142,6 +152,7 @@ PROJECT_ROOT = project_root()
 RUNTIME_ROOT = runtime_dir()
 
 # Shared by every account on the machine.
+APP_DIR = app_dir()
 ENV_DIR = env_dir()
 RUNTIME_LOCK_PATH = ENV_DIR / "desktop-runtime.lock"
 ACCOUNTS_DIR = accounts_dir()
@@ -172,3 +183,30 @@ ACCOUNTS_DIRNAME = runtime_root.USERS
 
 # Shared LocalAI-managed Ollama broker.
 OLLAMA_INSTALL_DIR = _override("LLM_OLLAMA_DIR", runtime_dir() / runtime_root.OLLAMA)
+
+
+def ollama_log_dir() -> Path:
+    """Shared and write-only: the broker's output, whichever account started it.
+
+    The broker serves every account, so its log describes everyone's requests;
+    keeping it in the starting account's private folder showed that account
+    other people's activity. Accounts may append here but not read.
+    """
+    return OLLAMA_INSTALL_DIR / runtime_root.LOGS
+
+
+def _register_record_key() -> None:
+    """Records inside users/<account> are encrypted with this account's key.
+
+    core.vault owns the formats and never imports a platform adapter; the
+    Windows DPAPI adapter is attached here, where every entry point passes.
+    """
+    try:
+        from core import vault
+        from integrations.windows import dpapi
+    except ImportError:
+        return
+    vault.register_default(lambda: dpapi.Protector() if dpapi.available() else None)
+
+
+_register_record_key()

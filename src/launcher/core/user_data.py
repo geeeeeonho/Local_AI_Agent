@@ -8,11 +8,11 @@ product-owned per-session store.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import project_paths
+from core import vault
 
 __all__ = [
     "project_root", "root",
@@ -108,26 +108,15 @@ def save_json(path: Any, obj: Any) -> bool:
     """Atomically store JSON using a temporary file and os.replace."""
     p = Path(path)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(
-            json.dumps(obj, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        os.replace(tmp, p)
+        vault.write_text_atomic(p, json.dumps(obj, ensure_ascii=False, indent=2))
         return True
     except Exception:
-        try:
-            if tmp.exists():  # type: ignore[name-defined]
-                tmp.unlink()
-        except Exception:
-            pass
         return False
 
 
 def load_json(path: Any, default: Any = None) -> Any:
     """Load JSON and return default on failure."""
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        return json.loads(vault.read_text(path))
     except Exception:
         return default

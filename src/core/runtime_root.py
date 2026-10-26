@@ -3,6 +3,8 @@
 A Windows machine has one shared runtime root::
 
     C:\\LocalAI\\
+        app\\                  shared program everyone runs (admins update it)
+        machine.json         who administers LocalAI, who may use it
         environment\\          shared managed runtimes/tools
         ollama\\               shared LocalAI-managed Ollama broker
         models\\               shared local model library
@@ -44,6 +46,8 @@ PORTABLE_VARIABLE = 'LLM_PROJECT_ROOT'
 
 #: Folder names under the root. One spelling, used by every component.
 MODELS = 'models'
+APP = 'app'
+MACHINE_POLICY = 'machine.json'
 OLLAMA = 'ollama'
 ENVIRONMENT = 'environment'
 USERS = 'users'

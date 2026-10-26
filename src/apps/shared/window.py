@@ -47,6 +47,7 @@ class DesktopWindow:
         self._model_records = {};self._projects = {};self.project_boxes = []
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
         self._model_confirm_signature = None
+        self._accounts = {}
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
         self._chat_progress = [];self._chat_starting = False
@@ -68,6 +69,8 @@ class DesktopWindow:
         self.root.bind('<FocusIn>', self._appearance_focus, add='+')
         self.root.protocol('WM_DELETE_WINDOW', self.request_close)
         self._timer = self.root.after(50, self._tick)
+        if start_polling:
+            self.recover_records()
 
     def _build(self):
         outer=ttk.Frame(self.root);outer.pack(fill='both',expand=True)
@@ -162,6 +165,7 @@ class DesktopWindow:
             button.configure(style=nav_style(name,name==key))
         if key in ('chat','agent'):self.load_projects()
         if key=='settings':self.load_settings();self.sync_theme()
+        if key=='setup' and hasattr(self,'accounts_tree'):self.load_accounts()
         if key=='models' and self._catalog is None:
             self.load_models_screen()
 
@@ -643,6 +647,97 @@ class DesktopWindow:
             lines.append(f"    [{mark}] [{status}] {rung['tag']}  (적재 {rung['need_gb']:.1f} GB){here}")
         lines+=['','[O] 설치됨 · [X] 미설치. 없는 후보는 실행 시 건너뜁니다.']
         set_text(self.stack_detail,'\n'.join(lines))
+
+    # ── accounts (Setup page) ────────────────────────────────────────────
+    def load_accounts(self):
+        def show(overview):
+            self._accounts=overview or {}
+            tree=getattr(self,'accounts_tree',None)
+            if tree is None:return
+            tree.delete(*tree.get_children())
+            if not self._accounts.get('available'):
+                self.accounts_summary.set(str(self._accounts.get('reason') or '계정 정보를 읽지 못했습니다.'))
+                self.sync_account_buttons();return
+            for row in self._accounts.get('rows',()):
+                name=row['name']+('  (나)' if row.get('me') else '')
+                role='LocalAI 관리자' if row.get('admin') else '사용자'
+                use='비활성 계정' if row.get('disabled') else ('허용' if row.get('allowed') else '허용 안 됨')
+                tree.insert('', 'end', iid=row['sid'], values=(name,role,use,'있음' if row.get('records') else '없음'))
+            access=self._accounts.get('access','everyone')
+            self.accounts_access.set(access)
+            mine='이 계정은 LocalAI 관리자입니다' if self._accounts.get('is_admin') else \
+                 '이 계정은 관리자가 아니어서 보기만 할 수 있습니다'
+            scope='모든 계정 사용' if access=='everyone' else '허용한 계정만 사용'
+            self.accounts_summary.set('%s · 접근: %s · 계정 %d개' % (mine,scope,len(self._accounts.get('rows',()))))
+            self.sync_account_buttons()
+        self.run_task('accounts.load',self.services.setup.accounts_overview,show,mutate=False)
+
+    def selected_account(self):
+        tree=getattr(self,'accounts_tree',None)
+        if tree is None:return None
+        chosen=tree.selection()
+        if not chosen:return None
+        for row in (getattr(self,'_accounts',{}) or {}).get('rows',()):
+            if row['sid']==chosen[0]:return row
+        return None
+
+    def sync_account_buttons(self):
+        buttons=getattr(self,'account_buttons',None)
+        if not buttons:return
+        overview=getattr(self,'_accounts',{}) or {}
+        admin=bool(overview.get('available') and overview.get('is_admin'))
+        row=self.selected_account()
+        wanted={
+            'allow':admin and row is not None and not row.get('member') and not row.get('admin'),
+            'deny':admin and row is not None and row.get('member'),
+            'admin':admin and row is not None and not row.get('admin'),
+            'unadmin':admin and row is not None and row.get('admin'),
+            'delete':admin and row is not None and row.get('records') and not row.get('me'),
+        }
+        for key,b in buttons.items():
+            b.state(['!disabled'] if wanted.get(key) else ['disabled'])
+        for radio in getattr(self,'account_access_radios',()):
+            radio.state(['!disabled'] if admin and overview.get('groups_ready') else ['disabled'])
+
+    def confirm_account_delete(self,row):
+        return messagebox.askyesno(
+            '기록 삭제',
+            '%s 계정의 LocalAI 기록(설정 · 대화 · 에이전트 기록 · 로그 · 작업 폴더)을 삭제합니다.\n\n'
+            '내용은 그 계정의 Windows 키로 암호화되어 있어 관리자도 열어 볼 수 없고, '
+            '삭제하면 되돌릴 수 없습니다. 계속할까요?' % row['name'],
+            icon='warning',parent=self.root)
+
+    def account_action(self,kind,value=None):
+        row=self.selected_account()
+        if row is None:
+            self.log('계정을 먼저 선택하세요.');return
+        if kind=='delete' and not self.confirm_account_delete(row):return
+        def done(message):
+            if message:self.log(str(message))
+            self.load_accounts()
+        self.run_task('accounts.'+kind,
+                      lambda:self.services.setup.account_action(kind,sid=row['sid'],value=value),done)
+
+    def set_account_access(self):
+        mode=self.accounts_access.get()
+        overview=getattr(self,'_accounts',{}) or {}
+        if mode==overview.get('access'):return
+        if mode=='members' and not messagebox.askyesno(
+                '접근 제한',
+                '허용한 계정과 LocalAI 관리자만 LocalAI를 쓸 수 있게 합니다. '
+                '허용하지 않은 계정은 다음 실행부터 공용 프로그램과 모델에 접근할 수 없습니다. 계속할까요?',
+                parent=self.root):
+            self.accounts_access.set(overview.get('access','everyone'));return
+        self.run_task('accounts.access',lambda:self.services.setup.account_action('access',value=mode),
+                      lambda message:(self.log(str(message)),self.load_accounts()))
+
+    def recover_records(self):
+        """Seal Chat/Agent stores a crashed earlier session left readable."""
+        recover=getattr(self.services,'recover_records',None)
+        if not callable(recover):return
+        def done(sealed):
+            if sealed:self.log('이전 세션이 남긴 저장소를 이 계정 전용으로 잠갔습니다: '+', '.join(sealed))
+        self.run_task('records.recover',recover,done,announce=False)
 
     def ensure_ollama(self):
         """Explicit managed-Ollama start/verify, reported in the activity log.

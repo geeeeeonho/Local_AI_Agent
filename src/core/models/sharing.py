@@ -37,14 +37,24 @@ USERS_SDDL = sddl.USERS_SDDL
 USERS_SID = sddl.USERS_SID
 
 
-def readable_from_sddl(descriptor: str) -> Optional[bool]:
-    """Can BUILTIN\\Users read, per this security descriptor? None if unparsable."""
-    return sddl.read_access(descriptor, (USERS_SDDL, USERS_SID))
+def _principals(principal: Optional[str]):
+    if principal is None or principal.upper() == USERS_SID:
+        return (USERS_SDDL, USERS_SID)
+    return (principal,)
 
 
-def manageable_from_sddl(descriptor: str) -> Optional[bool]:
-    """Can BUILTIN\\Users manage model-store children? None if unparsable."""
-    return sddl.modify_access(descriptor, (USERS_SDDL, USERS_SID))
+def readable_from_sddl(descriptor: str, principal: Optional[str] = None) -> Optional[bool]:
+    """Can the accounts allowed to use LocalAI read? None if unparsable.
+
+    ``principal`` is BUILTIN\\Users by default, or the LocalAI-Users group
+    when an administrator limited access to members.
+    """
+    return sddl.read_access(descriptor, _principals(principal))
+
+
+def manageable_from_sddl(descriptor: str, principal: Optional[str] = None) -> Optional[bool]:
+    """Can the allowed accounts manage model-store children? None if unparsable."""
+    return sddl.modify_access(descriptor, _principals(principal))
 
 
 @dataclass(frozen=True)

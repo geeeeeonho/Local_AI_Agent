@@ -15,6 +15,8 @@ import threading
 import time
 from typing import Callable
 
+from core import vault
+
 _MAX_BYTES = 4 * 1024 * 1024
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -77,6 +79,19 @@ class JsonStore:
             return {}
         if len(raw) > _MAX_BYTES:
             raise ValueError(f'LocalAI state exceeds size limit: {self.path}')
+        # Inside this account's folder the document is DPAPI-protected;
+        # plaintext from before that is still read.
+        try:
+            raw = vault.open_bytes(raw)
+        except vault.Undecryptable:
+            # Protected for a key this account no longer has (an administrator
+            # reset its password): the content is gone either way. Keep the
+            # file aside and start empty instead of refusing to start at all.
+            try:
+                vault.set_aside(self.path)
+            except OSError:
+                pass
+            return {}
         data = json.loads(raw.decode('utf-8'))
         if not isinstance(data, dict):
             raise ValueError(f'LocalAI state must be an object: {self.path}')
@@ -90,6 +105,7 @@ class JsonStore:
             payload = (json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + '\n').encode('utf-8')
             if len(payload) > _MAX_BYTES:
                 raise ValueError('LocalAI state exceeds size limit')
+            payload = vault.encode_for(self.path, payload)
             fd, name = tempfile.mkstemp(prefix='.' + self.path.name + '.', suffix='.tmp', dir=self.path.parent)
             try:
                 with os.fdopen(fd, 'wb') as output:

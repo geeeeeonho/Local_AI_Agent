@@ -3,9 +3,12 @@ from core.network.policy import NetworkMode
 
 
 class ChatService:
-    def __init__(self, backend, inference, network, search, events):
+    def __init__(self, backend, inference, network, search, events, stores=None):
         self.backend, self.inference = backend, inference
         self.network, self.search, self.events = network, search, events
+        # Chat history and documents stay sealed for this account between
+        # sessions (services.records); None where nothing is protected.
+        self.stores = stores
         self.started = False
         self.attempted = False
         self.url = None
@@ -65,6 +68,8 @@ class ChatService:
                 log('[4/5] Search skipped for Block/local-only mode')
 
             log('[5/5] Starting AnythingLLM and verifying container -> Ollama -> selected model')
+            if self.stores is not None:
+                self.stores.open('chat')
             self.attempted = True
             self.url = self.backend.chat_start(model, log, cancel)
             if not self.url:
@@ -88,6 +93,7 @@ class ChatService:
                     except Exception:
                         cleanup_ok = False
                     if cleanup_ok:
+                        self._seal()
                         self.started = False
                         self.attempted = False
                         self.url = None
@@ -101,6 +107,15 @@ class ChatService:
                     self.network.reset()
             log('Chat preparation failed: ' + str(exc))
             raise
+
+    def _seal(self):
+        """Seal the store once the container is verifiably gone. Never raises."""
+        if self.stores is None:
+            return
+        try:
+            self.stores.close('chat')
+        except Exception:
+            pass
 
     NO_LOCAL_MODEL = ('Chat에 사용할 로컬 Ollama 모델이 없습니다. '
                       '모델 화면에서 모델을 먼저 받으세요. '
@@ -139,6 +154,7 @@ class ChatService:
             return True
         if not self.backend.chat_stop():
             return False
+        self._seal()
         self.started = False
         self.attempted = False
         self.url = None

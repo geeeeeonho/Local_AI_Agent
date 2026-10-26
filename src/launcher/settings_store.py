@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from core import vault
+
 from .core import user_data
 
 
@@ -54,7 +56,7 @@ def path(project_root: Path | None = None) -> Path:
 
 def _read_dict(p: Path) -> dict[str, Any]:
     try:
-        value = json.loads(p.read_text(encoding="utf-8"))
+        value = json.loads(vault.read_text(p))
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
