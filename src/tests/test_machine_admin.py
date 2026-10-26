@@ -12,6 +12,8 @@ from pathlib import Path, PureWindowsPath
 import pytest
 
 from core import machine
+# Imported before any test patches acl.run: sharing binds acl.run at import.
+import integrations.ollama.sharing  # noqa: F401
 from integrations.windows import acl
 from integrations.windows import machine as windows
 

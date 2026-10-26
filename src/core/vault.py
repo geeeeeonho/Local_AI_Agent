@@ -805,15 +805,6 @@ class Store:
             return seal_tree(self.root, self.archive, exclude=self.exclude, log=log)
 
 
-def wait_for(predicate, timeout: float, interval: float = 0.2) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return bool(predicate())
-
-
 __all__ = ['MAGIC_FILE', 'MAGIC_ARCHIVE', 'LINE_PREFIX', 'DISABLE_VARIABLE',
            'VaultError', 'Undecryptable', 'set_aside', 'register_default', 'protector', 'using', 'enabled', 'is_private_path',
            'should_protect', 'is_protected_bytes', 'seal_bytes', 'open_bytes',
