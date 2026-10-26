@@ -253,6 +253,9 @@ class ThemeController:
         style.map('TCombobox', fieldbackground=[('readonly', p.input)], foreground=[('readonly', p.fg)])
         style.configure('TRadiobutton', background=p.bg, foreground=p.fg, padding=8)
         style.map('TRadiobutton', background=[('active', p.hover)], foreground=[('disabled', p.muted)])
+        style.configure('Card.TRadiobutton', background=p.manage_soft, foreground=p.fg, padding=4)
+        style.map('Card.TRadiobutton', background=[('active', p.manage_soft)],
+                  foreground=[('disabled', p.muted)])
         # Selection lists use checkbuttons; without these they kept clam's pale
         # beige indicator and an unreadable label on the dark surface.
         for name, ground in (('TCheckbutton', p.bg), ('Card.TCheckbutton', p.manage_soft)):

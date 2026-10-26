@@ -263,6 +263,49 @@ def lock_root_command(root: Path, policy: machine.Policy) -> List[str]:
     return command
 
 
+def remove_grants_command(path: Path, sid: str, *, tree=False) -> List[str]:
+    """Drop every explicit grant to ``sid`` on ``path`` (and below, for ``tree``).
+
+    ``/grant:r`` replaces a listed SID's entries but leaves unlisted ones, so a
+    removed administrator or a retired principal has to be removed by name.
+    """
+    command = ['icacls', str(path), '/remove:g', '*' + sid]
+    return command + (['/T', '/C', '/Q'] if tree else ['/Q'])
+
+
+def access_commands(root: Path, policy: machine.Policy, previous: str) -> List[List[str]]:
+    """Point every shared grant at ``policy.principal()`` instead of ``previous``.
+
+    The same five places Setup grants "every account": the root (read and
+    run the program), the model store (manage models), the runtimes (read
+    and run), the users parent (create one's own folder) and the shared
+    runtime lock (take it). Run by a LocalAI administrator, who holds full
+    control of all of them, so no UAC prompt is needed.
+    """
+    root = Path(root)
+    new = policy.principal()
+    changed = previous.upper() != new.upper()
+    commands = []
+    if changed:
+        commands.append(remove_grants_command(root, previous))
+    commands.append(lock_root_command(root, policy))
+    for name, rights in (('models', '(OI)(CI)(M)'), ('environment', '(OI)(CI)(RX)'),
+                         ('ollama', '(OI)(CI)(RX)')):
+        path = root / name
+        if changed:
+            commands.append(remove_grants_command(path, previous, tree=True))
+        commands.append(['icacls', str(path), '/grant', '*%s:%s' % (new, rights), '/T', '/C', '/Q'])
+    users = root / 'users'
+    if changed:
+        commands.append(remove_grants_command(users, previous))
+    commands.append(['icacls', str(users), '/grant', '*%s:(RD,X,AD,RA,REA)' % new, '/Q'])
+    lock = root / 'environment' / 'desktop-runtime.lock'
+    if changed:
+        commands.append(remove_grants_command(lock, previous))
+    commands.append(['icacls', str(lock), '/grant', '*%s:(R,W)' % new, '/Q'])
+    return commands
+
+
 def membership_script(group: str, sid: str, present: bool) -> Optional[str]:
     if not machine.is_sid(sid) or group not in (machine.ADMINS_GROUP, machine.USERS_GROUP):
         return None
@@ -298,4 +341,5 @@ def delete_records_script(folder: Path, users_root: Path) -> Optional[str]:
 __all__ = ['powershell', 'quote', 'encoded', 'run_script', 'run_as_admin',
            'token_group_sids', 'account_name', 'group_sid', 'list_accounts',
            'records_folder', 'first_install_script', 'lock_root_lines',
-           'lock_root_command', 'membership_script', 'delete_records_script']
+           'lock_root_command', 'remove_grants_command', 'access_commands',
+           'membership_script', 'delete_records_script']

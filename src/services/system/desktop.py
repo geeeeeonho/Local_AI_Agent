@@ -55,6 +55,16 @@ class SetupService:
         if self.events is not None:
             self.events.emit('runtime.progress', {'message': str(message)})
 
+    def accounts_overview(self):
+        """Windows accounts on this PC and their LocalAI roles. Reads only."""
+        reader = getattr(self.backend, 'accounts_overview', None)
+        return reader() if callable(reader) else {'available': False,
+                                                   'reason': '이 실행 환경에서는 계정 관리를 쓸 수 없습니다.'}
+
+    def account_action(self, kind, sid=None, value=None):
+        """Allow/remove, make/unmake administrator, delete records, set access."""
+        return self.backend.account_action(kind, sid=sid, value=value, log=self._models_log)
+
     def check_ollama(self):
         """Start/verify the managed Ollama for the Models page. Never waits on a click."""
         self.require_idle()

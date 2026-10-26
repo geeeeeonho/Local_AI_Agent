@@ -546,6 +546,26 @@ class DesktopBackend:
         ollama.start_service(shared_paths)
         return self.inference.endpoint
 
+    def _account_admin(self):
+        from integrations.accounts import AccountAdmin
+        return AccountAdmin(self.load('project_paths').runtime_dir())
+
+    def accounts_overview(self):
+        return self._account_admin().overview()
+
+    def account_action(self, kind, sid=None, value=None, log=None):
+        """One administrator change. Raises RuntimeError with the reason."""
+        admin = self._account_admin()
+        if kind == 'allow':
+            return admin.set_allowed(sid, bool(value), log=log)
+        if kind == 'admin':
+            return admin.set_admin(sid, bool(value), log=log)
+        if kind == 'delete':
+            return admin.delete_records(sid, log=log)
+        if kind == 'access':
+            return admin.set_access(str(value), log=log)
+        raise ValueError('unknown account action: %s' % kind)
+
     def _ollama_service(self, log=None):
         cls = self.load('launcher.services.ollama').OllamaService
         return cls(self.env, logger=LogAdapter(log) if log else None,

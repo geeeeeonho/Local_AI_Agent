@@ -49,6 +49,15 @@ class Backend:
     def agent_stop(self): self.calls.append(('agent_stop',)); return True
     def chat_stop(self): self.calls.append(('chat_stop',)); return True
     def maintenance(self, key, presenter): self.calls.append(('maintenance', key))
+    accounts = {'available': True, 'is_admin': True, 'access': 'everyone', 'groups_ready': True,
+                'rows': [{'name': 'ghwork', 'sid': 'S-1-5-21-1-2-3-1001', 'disabled': False,
+                          'admin': True, 'member': False, 'allowed': True, 'records': True, 'me': True},
+                         {'name': 'guest2', 'sid': 'S-1-5-21-1-2-3-1002', 'disabled': False,
+                          'admin': False, 'member': False, 'allowed': True, 'records': True, 'me': False}]}
+    def accounts_overview(self): return self.accounts
+    def account_action(self, kind, sid=None, value=None, log=None):
+        self.calls.append(('account', kind, sid, value))
+        return 'done ' + kind
     store_situation = 'ready'
     def check_ollama(self, log=None):
         self.calls.append(('check_ollama',))

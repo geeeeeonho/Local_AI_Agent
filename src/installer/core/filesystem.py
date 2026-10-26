@@ -77,12 +77,12 @@ def ensure_accounts_parent_access(users_root: Path, windows: Optional[bool] = No
     account, SYSTEM and Administrators full control.
     """
     from integrations.windows import acl
-    from integrations.ollama.sharing import BUILTIN_USERS_SID
+    from integrations.ollama.sharing import principal_sid
     if not acl.on_windows(windows):
         return True
     result = acl.run([
         "icacls", str(users_root), "/grant",
-        "*%s:(RD,X,AD,RA,REA)" % BUILTIN_USERS_SID, "/Q",
+        "*%s:(RD,X,AD,RA,REA)" % principal_sid(), "/Q",
     ])
     return result is not None and result.returncode == 0
 
@@ -95,12 +95,12 @@ def ensure_shared_runtime_lock_access(lock_path: Path, windows: Optional[bool] =
     shared environment directory or replace binaries.
     """
     from integrations.windows import acl
-    from integrations.ollama.sharing import BUILTIN_USERS_SID
+    from integrations.ollama.sharing import principal_sid
     if not acl.on_windows(windows):
         return True
     result = acl.run([
         "icacls", str(lock_path), "/grant",
-        "*%s:(R,W)" % BUILTIN_USERS_SID, "/Q",
+        "*%s:(R,W)" % principal_sid(), "/Q",
     ])
     return result is not None and result.returncode == 0
 

@@ -13,7 +13,7 @@ from core.models import sharing as policy
 from core.models.sharing import Sharing, VARIABLE
 from integrations.windows import acl
 
-__all__ = ['read', 'repair', 'Sharing', 'VARIABLE',
+__all__ = ['read', 'repair', 'Sharing', 'VARIABLE', 'principal_sid',
            'ensure_readable', 'ensure_manageable',
            'publish_machine_variable', 'publish_user_variable',
            'publish_variable', 'describe']
@@ -25,6 +25,18 @@ BUILTIN_USERS_SID = policy.USERS_SID
 _run = acl.run
 
 
+def principal_sid() -> str:
+    """Who "every account" is: BUILTIN\\Users, or LocalAI-Users when an
+    administrator limited access to members (``core.machine``)."""
+    try:
+        import project_paths
+        from core import machine
+        policy = machine.load(project_paths.machine_policy_path())
+    except Exception:
+        policy = None
+    return policy.principal() if policy is not None else BUILTIN_USERS_SID
+
+
 def _users_access(model_dir: Path) -> tuple[bool | None, bool | None]:
     """Return (readable, manageable) for BUILTIN\\Users from one ACL read."""
     if not model_dir.exists():
@@ -32,10 +44,11 @@ def _users_access(model_dir: Path) -> tuple[bool | None, bool | None]:
     text = acl.saved_sddl(model_dir)
     if text is None:
         return None, None
+    principal = principal_sid()
     for line in text.splitlines():
         descriptor = line.strip()
-        readable = policy.readable_from_sddl(descriptor)
-        manageable = policy.manageable_from_sddl(descriptor)
+        readable = policy.readable_from_sddl(descriptor, principal)
+        manageable = policy.manageable_from_sddl(descriptor, principal)
         if readable is not None or manageable is not None:
             return readable, manageable
     return None, None
@@ -74,7 +87,7 @@ def ensure_readable(model_dir: Path, *, windows=None) -> bool:
     if not acl.on_windows(windows):
         return True
     result = _run(['icacls', str(model_dir), '/grant',
-                   '*%s:(OI)(CI)(RX)' % BUILTIN_USERS_SID, '/T', '/Q'])
+                   '*%s:(OI)(CI)(RX)' % principal_sid(), '/T', '/Q'])
     return result is not None and result.returncode == 0
 
 
@@ -89,7 +102,7 @@ def ensure_manageable(model_dir: Path, *, windows=None) -> bool:
     if not acl.on_windows(windows):
         return True
     result = _run(['icacls', str(model_dir), '/grant',
-                   '*%s:(OI)(CI)(M)' % BUILTIN_USERS_SID, '/T', '/Q'])
+                   '*%s:(OI)(CI)(M)' % principal_sid(), '/T', '/Q'])
     return result is not None and result.returncode == 0
 
 
