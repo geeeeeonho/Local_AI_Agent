@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List
 
 import project_paths
+from core import vault
 
 _FILENAME = "folder_policy.json"
 
@@ -31,7 +32,7 @@ def load() -> dict:
     p = _store_path()
     try:
         if p.exists():
-            d = json.loads(p.read_text(encoding="utf-8"))
+            d = json.loads(vault.read_text(p))
             if isinstance(d, dict):
                 d.setdefault("allowed", [])
                 d.setdefault("denied", [])
@@ -44,10 +45,7 @@ def load() -> dict:
 def save(data: dict) -> bool:
     p = _store_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, p)
+        vault.write_text_atomic(p, json.dumps(data, ensure_ascii=False, indent=2))
         return True
     except Exception:
         return False

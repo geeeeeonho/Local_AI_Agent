@@ -68,6 +68,8 @@ class DesktopWindow:
         self.root.bind('<FocusIn>', self._appearance_focus, add='+')
         self.root.protocol('WM_DELETE_WINDOW', self.request_close)
         self._timer = self.root.after(50, self._tick)
+        if start_polling:
+            self.recover_records()
 
     def _build(self):
         outer=ttk.Frame(self.root);outer.pack(fill='both',expand=True)
@@ -643,6 +645,14 @@ class DesktopWindow:
             lines.append(f"    [{mark}] [{status}] {rung['tag']}  (적재 {rung['need_gb']:.1f} GB){here}")
         lines+=['','[O] 설치됨 · [X] 미설치. 없는 후보는 실행 시 건너뜁니다.']
         set_text(self.stack_detail,'\n'.join(lines))
+
+    def recover_records(self):
+        """Seal Chat/Agent stores a crashed earlier session left readable."""
+        recover=getattr(self.services,'recover_records',None)
+        if not callable(recover):return
+        def done(sealed):
+            if sealed:self.log('이전 세션이 남긴 저장소를 이 계정 전용으로 잠갔습니다: '+', '.join(sealed))
+        self.run_task('records.recover',recover,done,announce=False)
 
     def ensure_ollama(self):
         """Explicit managed-Ollama start/verify, reported in the activity log.

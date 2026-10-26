@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from core import vault
+
 from . import folder_policy
 
 HOST_PERMISSION_PROFILE = "local-ai-host"
@@ -56,7 +58,7 @@ def _validate_persisted_policy_store() -> None:
     if not exists:
         return
     try:
-        data = json.loads(policy_path.read_text(encoding="utf-8"))
+        data = json.loads(vault.read_text(policy_path))
     except Exception as exc:
         raise HostPermissionPolicyError("folder policy store could not be read") from exc
     if not isinstance(data, dict):

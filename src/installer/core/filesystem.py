@@ -153,6 +153,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     if private_state is not True:
         raise RuntimeError(_private_account_failure(account))
     repair_stale_children(account)
+    protect_existing_records(account)
 
     paths = {
         "env":                   env,
@@ -296,6 +297,41 @@ def repair_stale_children(account: Path) -> list:
         warn("관리자 명령 프롬프트에서 다음을 실행하면 복구됩니다:\n"
              + privacy.manual_repair_text(account))
     return blocked
+
+
+#: Written by programs LocalAI does not control; left as those programs wrote them.
+_UNMANAGED_LOGS = ("ollama_run", "ollama_server")
+
+
+def protect_existing_records(account: Path) -> int:
+    """Encrypt records written in plaintext before protection existed.
+
+    New logs, traces and documents are written encrypted already; this
+    converts what an earlier version left, once, as the account itself - only
+    its own DPAPI key can do it. Returns how many files were converted.
+    """
+    from core import vault
+    if not vault.enabled():
+        return 0
+    converted = 0
+    logs = account / LOGS_DIRNAME
+    for path in sorted(logs.glob("*.log")) + sorted(logs.glob("*.jsonl")):
+        if path.name.startswith(_UNMANAGED_LOGS):
+            continue
+        try:
+            converted += bool(vault.protect_lines_in_place(path))
+        except (OSError, vault.VaultError) as exc:
+            warn("  기록 암호화 실패: %s (%s)" % (path.name, exc))
+    data = account / USER_DATA_DIRNAME
+    for folder in ("settings", "projects", "runtime"):
+        for path in sorted((data / folder).glob("*.json")):
+            try:
+                converted += bool(vault.protect_file_in_place(path))
+            except (OSError, vault.VaultError) as exc:
+                warn("  설정 암호화 실패: %s (%s)" % (path.name, exc))
+    if converted:
+        ok("  기존 기록 %d개를 이 계정 전용 암호화로 바꿨습니다" % converted)
+    return converted
 
 
 ACCOUNT_MARKER = "ACCOUNT.txt"

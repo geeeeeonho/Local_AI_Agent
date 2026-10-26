@@ -98,7 +98,8 @@ def _write_fatal(exc: BaseException, ctx: str = ""):
         f"{tb}\n"
     )
     try:
-        with open(_fatal_log_path(), "a", encoding="utf-8") as f:
+        from core import vault
+        with vault.open_log(_fatal_log_path(), "a") as f:
             f.write(msg)
     except Exception:
         pass

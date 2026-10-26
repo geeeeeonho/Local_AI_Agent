@@ -13,6 +13,7 @@ from services.search.service import SearchService
 from services.chat.service import ChatService
 from services.agent.launcher import AgentLauncher
 from services.system.desktop import SetupService, SystemService
+from services.records import SessionStores
 
 
 class DesktopServices:
@@ -118,8 +119,10 @@ class DesktopServices:
             events=self.events,
         )
         self.search = SearchService(backend, self.network, self.events)
-        self.chat = ChatService(backend, self.inference, self.network, self.search, self.events)
-        self.agent = AgentLauncher(backend, self.network, self.events)
+        self.records = SessionStores(self.data, self.events)
+        self.chat = ChatService(backend, self.inference, self.network, self.search,
+                                self.events, stores=self.records)
+        self.agent = AgentLauncher(backend, self.network, self.events, stores=self.records)
         self.system = SystemService(backend)
         self.setup = SetupService(
             backend, self.models, self.network, self.settings,
@@ -163,6 +166,17 @@ class DesktopServices:
             return False
         self.network.mode = None
         return True
+
+    def recover_records(self):
+        """Seal Chat/Agent stores a crashed session left in plaintext.
+
+        Only where the backend can prove the runtime that used them is not
+        running; otherwise they wait for the next verified session stop.
+        """
+        idle = getattr(self.backend, 'session_runtime_idle', None)
+        if not callable(idle):
+            return []
+        return self.records.recover(idle)
 
     def close(self):
         """Stop this account's sessions and release the machine runtime lease.

@@ -376,6 +376,34 @@ class DesktopBackend:
         self._chat_owned_id = None
         return True
 
+    def session_runtime_idle(self, kind):
+        """True only when ``kind``'s runtime provably is not running.
+
+        Used before sealing a store a crashed session left in plaintext:
+        sealing under a live container would delete files it is writing.
+        Docker down proves it; otherwise its containers are asked for.
+        Anything unanswerable is "not idle".
+        """
+        docker = self.load('launcher.services.docker').DockerService
+        try:
+            if not docker.daemon_alive():
+                return True
+        except Exception:
+            return False
+        if kind == 'chat':
+            try:
+                return self._chat_id() is None
+            except Exception:
+                return False
+        if kind == 'agent':
+            prefix = str(self.load('launcher.config').SANDBOX_CONTAINER_PREFIX)
+            result = docker.run(['ps', '--filter', 'name=^/' + prefix,
+                                 '--format', '{{.ID}}'], timeout=10)
+            if result is None or result.returncode != 0:
+                return False
+            return not (result.stdout or '').split()
+        return False
+
     def _daemon_alive(self):
         """``False`` only when Docker provably is not there. Errors are unknown."""
         try:
