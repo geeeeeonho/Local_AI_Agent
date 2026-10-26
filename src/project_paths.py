@@ -172,3 +172,20 @@ ACCOUNTS_DIRNAME = runtime_root.USERS
 
 # Shared LocalAI-managed Ollama broker.
 OLLAMA_INSTALL_DIR = _override("LLM_OLLAMA_DIR", runtime_dir() / runtime_root.OLLAMA)
+
+
+def _register_record_key() -> None:
+    """Records inside users/<account> are encrypted with this account's key.
+
+    core.vault owns the formats and never imports a platform adapter; the
+    Windows DPAPI adapter is attached here, where every entry point passes.
+    """
+    try:
+        from core import vault
+        from integrations.windows import dpapi
+    except ImportError:
+        return
+    vault.register_default(lambda: dpapi.Protector() if dpapi.available() else None)
+
+
+_register_record_key()

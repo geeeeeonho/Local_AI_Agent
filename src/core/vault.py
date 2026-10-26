@@ -28,7 +28,9 @@ Plaintext written before this existed is still read, so turning protection on
 loses nothing. Formats never depend on Windows; the key does. Off Windows - a
 development checkout - there is no protector and files stay plaintext.
 
-``core`` decides formats; ``integrations.windows.dpapi`` touches the machine.
+``core`` decides formats; ``integrations.windows.dpapi`` touches the machine
+and is registered as the default key by ``project_paths`` - core never imports
+an adapter itself.
 """
 from __future__ import annotations
 
@@ -68,6 +70,13 @@ class VaultError(RuntimeError):
 
 _override = None
 _overridden = False
+_default_factory = None
+
+
+def register_default(factory) -> None:
+    """Install the machine's key: a callable returning a protector or None."""
+    global _default_factory
+    _default_factory = factory
 
 
 def protector():
@@ -76,13 +85,13 @@ def protector():
         return _override
     if os.environ.get(DISABLE_VARIABLE, '').strip().lower() in ('0', 'off', 'false', 'no'):
         return None
-    if os.name != 'nt':
-        return None
-    try:
-        from integrations.windows import dpapi
-    except ImportError:
-        return None
-    return dpapi.Protector() if dpapi.available() else None
+    if _default_factory is None:
+        try:
+            import project_paths  # noqa: F401  - registers the default key
+        except ImportError:
+            return None
+    factory = _default_factory
+    return factory() if factory is not None else None
 
 
 @contextlib.contextmanager
@@ -786,7 +795,7 @@ def wait_for(predicate, timeout: float, interval: float = 0.2) -> bool:
 
 
 __all__ = ['MAGIC_FILE', 'MAGIC_ARCHIVE', 'LINE_PREFIX', 'DISABLE_VARIABLE',
-           'VaultError', 'protector', 'using', 'enabled', 'is_private_path',
+           'VaultError', 'register_default', 'protector', 'using', 'enabled', 'is_private_path',
            'should_protect', 'is_protected_bytes', 'seal_bytes', 'open_bytes',
            'read_bytes', 'read_text', 'encode_for', 'write_bytes_atomic',
            'write_text_atomic', 'protect_line', 'open_line', 'iter_lines',
