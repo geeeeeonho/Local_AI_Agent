@@ -102,6 +102,16 @@ def _on_windows() -> bool:
     return os.name == "nt"
 
 
+def app_dir() -> Path:
+    """Shared: the one installed copy of the program every account runs."""
+    return runtime_dir() / runtime_root.APP
+
+
+def machine_policy_path() -> Path:
+    """Shared, admin-written: who administers LocalAI and who may use it."""
+    return runtime_dir() / runtime_root.MACHINE_POLICY
+
+
 def model_dir() -> Path:
     """Shared LocalAI model store.
 
@@ -142,6 +152,7 @@ PROJECT_ROOT = project_root()
 RUNTIME_ROOT = runtime_dir()
 
 # Shared by every account on the machine.
+APP_DIR = app_dir()
 ENV_DIR = env_dir()
 RUNTIME_LOCK_PATH = ENV_DIR / "desktop-runtime.lock"
 ACCOUNTS_DIR = accounts_dir()
