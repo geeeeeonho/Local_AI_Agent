@@ -16,7 +16,7 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
                       wrap_to_parent)
 from .themes import themed
 from . import views
-from .models_view import ModelAccordion, CatalogColumns
+from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
 
 
@@ -949,7 +949,8 @@ class DesktopWindow:
                         anchor='w')
         label.pack(anchor='w',fill='x',pady=(0,3))
         self.choice_status_labels.setdefault(tag,[]).append(label)
-        name_label=ttk.Label(card,text=tag,style='Manage.Card.TLabel',
+        visible_name=model_display_name(tag) if model.get('desc') else tag
+        name_label=ttk.Label(card,text=visible_name,style='Manage.Card.TLabel',
                              wraplength=175,justify='left')
         name_label.pack(anchor='w',fill='x')
         wrap_to_parent(name_label,inset=18,minimum=120)
@@ -982,7 +983,7 @@ class DesktopWindow:
             # Full descriptions are valuable, but repeating them for every
             # recommended tier made the four-column comparison impractically
             # tall. Display details only when requested, per shared model tag.
-            desc=ttk.Label(card,text=model['desc'],
+            desc=ttk.Label(card,text='전체 태그: '+tag+'\n'+model['desc'],
                            style='Manage.CardMuted.TLabel',
                            wraplength=150,justify='left')
             wrap_to_parent(desc,inset=38,minimum=110)
