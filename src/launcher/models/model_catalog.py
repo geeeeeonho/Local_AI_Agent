@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """model_catalog — 설치/관리용 모델 카탈로그 (단일 소스).
 
-MODEL_CATALOG_v6 — Gemma 4 / Qwen3.6 세대. 목표 하드웨어: 모델용 메모리 ~20GB.
+MODEL_CATALOG_v7 — 기본 5종(상/중) + 선택형 하 단계·Qwen 3.8 후보. 모델용 메모리 예산 ~20GB.
 
 메모리 예산이 이 파일의 출발점이다. MEMORY_BUDGET_GB 를 넘겨 적재할 수 없는
 모델은 아예 담지 않는다 — 목록에만 있으면 디스크만 먹고 사다리는 매번 그 아래로
@@ -9,9 +9,9 @@ MODEL_CATALOG_v6 — Gemma 4 / Qwen3.6 세대. 목표 하드웨어: 모델용 �
 
 크기를 두 개로 나눈다. 예전에는 하나로 뭉뚱그려서 사다리가 틀린 판단을 했다.
   size_gb : 다운로드(디스크) 크기. 설치 화면의 "몇 GB 받나" 계산용.
-  run_gb  : 실제로 상주하는 메모리. 사다리의 적재 가능 판정용.
-대부분 GGUF 는 둘이 같지만 Gemma 4 E 계열(e2b/e4b)은 다르다 —
-e4b 는 9.6GB 를 받아도 실제 활성 파라미터만 올려서 ~5GB 로 돈다.
+  run_gb  : 적재 메모리의 대략적인 예산(실제 컨텍스트·KV 캐시 따라 변동).
+Gemma 4 E 계열의 effective 파라미터 수는 실제 적재 메모리가 아니다.
+예를 들어 e4b-it-qat 는 Ollama GGUF 약 6.1GB이며, 저사양 5GB 로 취급하지 않는다.
 
 tools 는 함수/도구 호출 지원 여부다. 에이전트·코딩 사다리는 이게 False 인 모델을
 담을 수 없다(tests/test_model_catalog_tiers.py 가 막는다). Open Interpreter 는
@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-MARKER = "MODEL_CATALOG_v6"
+MARKER = "MODEL_CATALOG_v7"
 
 # ── 하드웨어 예산 ──────────────────────────────────────────────────
 #  이 PC 가 모델에 내줄 수 있는 최대 상주 메모리(GB).
@@ -90,11 +90,12 @@ class CatalogEntry:
 #  group·recommended 플래그와 실제 기본 세트가 따로 놀아서, 손으로 맞춰야 했다.
 _ALL: List[CatalogEntry] = [
     CatalogEntry("prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-                 "무검열·범용·에이전트 (Gemma ARA)", 15.0,
-                 "메인 — Gemma 4 26B-A4B ARA abliterated. 공개 abliteration 중 최저 거부율(7.7%)·"
-                 "최고 품질(4.6/5). MoE 활성 ~4B 라 26B 급인데도 빠르다.",
-                 run_gb=15.0, ctx_k=256, vision=True,
-                 uncensored=True, note="거부율 최저"),
+                 "무검열·창작 전용 (Gemma ARA)", 15.0,
+                 "무검열 창작·번역 후보. Ollama 공개 페이지는 이 GGUF의 이미지 입력을 "
+                 "지원한다고 표시하지 않으므로 이미지/OCR 역할에서 제외합니다. "
+                 "거부율·품질 수치는 독립 재평가 전까지 보증하지 않습니다.",
+                 run_gb=15.0, ctx_k=256, vision=False,
+                 uncensored=True, note="무검열 · 텍스트 입력"),
     CatalogEntry("qwen3.6:27b", "코딩 에이전트 (Open Interpreter)", 18.0,
                  "코딩 1순위 — dense 27B, SWE-bench Verified 77.2. 로컬에서 도구 호출이 가장 "
                  "안정적인 Qwen3 계열이고 Ollama OpenAI 호환 엔드포인트에서 검증됐다.",
@@ -117,33 +118,41 @@ _ALL: List[CatalogEntry] = [
     # QAT = 학습 중 4비트를 시뮬레이션한 체크포인트. 사후 반올림(PTQ)보다 양자화
     # 손상이 훨씬 적어 툴콜·코드블록 형식 준수가 안정적이다. Gemma 4 는 τ2-bench
     # (에이전트 도구 사용) 86.4 로 세대가 바뀌며 크게 올랐다(Gemma 3 27B 는 6.6).
-    CatalogEntry("gemma4:26b-a4b-it-qat", "에이전트 1순위 (Gemma QAT)", 18.0,
+    CatalogEntry("gemma4:26b-a4b-it-qat", "도구 호출 상위 (Gemma QAT)", 16.0,
                  "에이전트 최상단 — 26B-A4B QAT. MoE 활성 ~4B 라 도구 왕복이 많은 "
                  "에이전트 루프에서 dense 27B급보다 훨씬 빠르다.",
-                 run_gb=18.0, ctx_k=256, vision=True,
+                 run_gb=16.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
-                 note="형식 안정"),
+                 note="도구 호출 · QAT"),
     CatalogEntry("gemma4:26b", "Gemma 정식 26B (검열)", 18.0,
                  "정식 26B-A4B MoE — 템플릿/툴콜 보장(검열 있음). 범용·맥락 1순위.",
                  run_gb=18.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  note="이미지·툴콜"),
-    CatalogEntry("gemma4:12b-it-qat", "저사양 에이전트/범용 (QAT)", 8.9,
-                 "여유 10GB 안팎 구간. 12B QAT — 저압축에서도 형식 준수 유지.",
-                 run_gb=8.9, ctx_k=256, vision=True,
+    CatalogEntry("gemma4:12b-it-qat", "중간 에이전트/범용 (QAT)", 7.2,
+                 "Gemma 4 12B QAT 공식 GGUF(약 7.2GB). 양자화 친화형 체크포인트. "
+                 "실행 메모리는 KV 캐시·컨텍스트에 따라 더 필요할 수 있습니다.",
+                 run_gb=7.6, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  note="형식 안정"),
-    CatalogEntry("gemma4:e4b-it-qat", "최저사양 폴백 (QAT)", 9.6,
-                 "최저사양 마지막 단계. 다운로드는 9.6GB 지만 활성 파라미터만 올려 "
-                 "상주는 ~5GB 다. 도구 호출·비전 내장.",
-                 run_gb=5.0, ctx_k=128, vision=True,
+    CatalogEntry("gemma4:e4b-it-qat", "Gemma E4B QAT (선택)", 6.1,
+                 "공식 GGUF 약 6.1GB. E4B의 'effective' 파라미터 수가 실제 "
+                 "가중치 적재량을 뜻하지는 않습니다. 여유 메모리 추정값은 "
+                 "KV 캐시를 제외한 보수적 하한이며, 저사양 기본 폴백이 아닙니다.",
+                 run_gb=6.7, ctx_k=128, vision=True,
                  group="advanced", recommended=False,
                  note="이미지·툴콜"),
-    CatalogEntry("gemma4:e4b", "Gemma 초경량 폴백", 9.6,
-                 "e4b 정식 태그(비-QAT). 상주 ~5GB.",
-                 run_gb=5.0, ctx_k=128, vision=True,
+    CatalogEntry("gemma4:e4b", "Gemma E4B 기본 (선택)", 9.5,
+                 "Ollama e4b 기본 태그는 변형에 따라 약 6.6~9.5GB입니다. "
+                 "메모리 계산에는 보수적으로 9.5GB를 사용합니다.",
+                 run_gb=9.5, ctx_k=128, vision=True,
                  group="advanced", recommended=False,
                  note="비-QAT 원본"),
+    CatalogEntry("gemma4:e2b-it-qat", "Gemma 경량 멀티모달 폴백", 4.3,
+                 "Gemma 4 E2B QAT 공식 GGUF. 128K·이미지·도구 호출을 지원하며 "
+                 "저사양 문서·범용의 별도 선택지입니다.",
+                 run_gb=4.7, ctx_k=128, vision=True,
+                 group="advanced", recommended=False, note="저사양 · 비전"),
     # ── 무검열 그룹 (번역·창작·검열 없는 범용) ──
     #  CORE 의 ARA 는 "거부율 최저" 로 뽑힌 특수 abliteration 이고, 아래는 크기별
     #  사다리를 메우는 축이다. 예전에는 15GB 와 5GB 사이가 통째로 비어 있어서,
@@ -221,6 +230,42 @@ _ALL: List[CatalogEntry] = [
                  "코드블록 형식이 깨진다고 실측돼, 코드 실행에는 이 검열본을 쓴다.",
                  run_gb=5.2, ctx_k=40, note="형식 안정",
                  group="advanced", recommended=False),
+    # Qwen 3.8은 Ollama 공식 태그(27B/Q4 약 18GB, 비전·툴콜)지만,
+    # 일부 Ollama 0.32.13 ROCm 환경에서 OpenAI 호환 /v1/chat/completions
+    # 무응답 이슈(#17790)가 있어 자동 설치하지 않습니다. 선택 후 실행 검증 필요.
+    CatalogEntry("qwen3.8:27b", "Qwen 3.8 코딩·에이전트 실험 후보", 18.0,
+                 "Qwen3.8 27B 공식 GGUF. 256K·이미지·툴콜 지원. "
+                 "Ollama 네이티브 /api/chat과 OpenAI 호환 /v1/chat/completions의 "
+                 "실행 호환성을 기기에서 검증한 뒤 기본값으로 전환하세요.",
+                 run_gb=18.0, ctx_k=256, vision=True,
+                 group="advanced", recommended=False,
+                 note="실험 · API 검증"),
+    CatalogEntry("qwen3.5:9b", "Qwen 3.5 범용·도구·문서 중간", 6.6,
+                 "공식 Qwen 3.5 9B. 도구 호출·멀티모달·256K를 제공하며 "
+                 "코딩·한국어·문서 중간급 대체 후보입니다.",
+                 run_gb=7.0, ctx_k=256, vision=True,
+                 group="advanced", recommended=False, note="범용·비전·도구"),
+    CatalogEntry("qwen3.5:4b-q4_K_M", "저사양 공용 폴백 (선택)", 3.3,
+                 "공식 Qwen 3.5 4B Q4_K_M. 작은 모델이므로 실행 품질은 "
+                 "실측이 필요합니다. 저사양 옵션이며 기본 설치에서 제외합니다.",
+                 run_gb=3.8, ctx_k=256, vision=True,
+                 group="advanced", recommended=False, note="하 단계 · 선택"),
+    CatalogEntry("ministral-3:3b", "저사양 비전·툴콜 폴백", 3.0,
+                 "Ministral 3 3B 공식 Ollama 태그. 작은 메모리에서 비전·도구 호출을 "
+                 "수동으로 활성화할 때 선택할 수 있습니다.",
+                 run_gb=3.4, ctx_k=256, vision=True,
+                 group="advanced", recommended=False, note="저사양 · 툴콜"),
+    CatalogEntry("ministral-3:14b", "도구·에이전트 중간 (Mistral)", 9.1,
+                 "Ministral 3 14B. 도구 호출·JSON 출력·이미지 입력 지원. "
+                 "로컬 Open Interpreter 호환성 검증 후 우선순위를 조정합니다.",
+                 run_gb=9.6, ctx_k=256, vision=True,
+                 group="advanced", recommended=False, note="툴콜·JSON"),
+    CatalogEntry("huihui_ai/qwen3.5-abliterated:9b",
+                 "무검열 중간 (Qwen 3.5 튜닝)", 6.6,
+                 "Huihui AI의 공개 Qwen3.5 9B abliterated. 번역·창작 대안이며 "
+                 "실제 거부율/출력 형식과 라이선스는 별도 검증이 필요합니다.",
+                 run_gb=7.0, ctx_k=256, vision=True, uncensored=True,
+                 group="advanced", recommended=False, note="튜닝 · 무검열 대안"),
     CatalogEntry("qwen2.5-coder:14b", "코딩 중간", 9.0,
                  "코딩 중간 롤백 — 10GB 급에서 코드블록·도구 호출이 안정적이라고 실측된 단계.",
                  run_gb=9.0, ctx_k=32,
@@ -264,22 +309,17 @@ _ALL: List[CatalogEntry] = [
                  note="가장 가벼움"),
 ]
 
-# 3단계(상/중/하) × 역할의 '기본단계' 전부. plan_by_level() 결과와 같아야 하고
-# tests/test_model_catalog_tiers.py 가 그것을 확인한다.
+# 기본 설치 5종은 3단계 사다리의 일부(상 2 + 중 3)만 선별한다.
+# 저사양 하 단계는 사용자가 필요할 때만 체크한다. Core = 기본 권장 목록이다.
 _CORE_TAGS = frozenset({
-    # 상 — 다른 걸 거의 안 띄웠을 때 (14~18GB)
-    "gemma4:26b",           # 사무·문서 1순위 (이 예산 안 범용 품질 최고 + 이미지)
+    # 20GB 모델 예산의 간결한 기본 다운로드 세트 (5종).
+    # 상: 코딩/무검열. 중: 코딩·에이전트/문서/범용·무검열.
+    # 하: 목록에는 남지만 사용자가 명시적으로 선택할 때만 설치한다.
     "devstral-small-2:24b",
     "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-    "gpt-oss:20b",
-    # 중 — 6~13GB 적재 메모리 범위 (Q8_0 포함)
     "qwen2.5-coder:14b",
-    "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
     "gemma4:12b",
-    # 하 — 메모리가 빠듯할 때 (5GB 급)
-    "gemma4:e4b-it-qat",
-    "huihui_ai/qwen3-abliterated:8b",
-    "qwen2.5-coder:7b",
+    "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
 })
 
 
@@ -395,74 +435,49 @@ def by_level() -> Dict[str, List[CatalogEntry]]:
 def plan_by_level(budget_gb: Optional[float] = None,
                   tiers: Optional[Dict[str, Sequence[dict]]] = None,
                   ) -> Dict[str, List[str]]:
-    """예산 안에서 역할마다 3단계 기본단계를 뽑아 등급별로 묶는다.
+    """Select the lean, shared high/mid defaults that fit the configured budget.
 
-    ★ 여기 들어가는 값은 '지금 여유' 가 아니라 이 PC 의 메모리 예산이다.
-      브라우저를 켜 둔 채 설치했다고 해서 상 등급을 영영 못 받으면 안 된다.
-      실행 시점의 선택만 실제 여유를 본다(model_roles.resolve_ladder).
-
-    대안(alts)은 넣지 않는다 — 같은 등급의 취향 선택이라 기본 설치를 부풀린다.
+    The full three-tier ladders remain available for manual selection. Low
+    models are NEVER selected by default, even on an 8GB machine: an empty
+    recommended set is preferable to silently downloading a model the user
+    explicitly excluded from default installation.
     """
     budget = MEMORY_BUDGET_GB if budget_gb is None else float(budget_gb)
     ceiling = budget * _SAFETY
     if tiers is None:
-        try:
-            from . import model_roles as _mr
-            tiers = _mr.TIERS
-        except Exception:
-            tiers = None
+        from . import model_roles as _mr
+        tiers = _mr.TIERS
     out: Dict[str, List[str]] = {k: [] for k in LEVEL_KEYS}
-    if not tiers:
-        return out
     table = by_tag()
-    seen: Set[str] = set()
-    for tier_list in tiers.values():
-        for tier in tier_list:
-            tag = tier.get("primary")
-            entry = table.get(tag)
-            if entry is None or tag in seen or entry.memory_gb > ceiling:
-                continue
-            key = level_of(tag)
-            if key:
-                seen.add(tag)
-                out[key].append(tag)
+    primaries = {tier["primary"] for group in tiers.values() for tier in group}
+    for tag in sorted(_CORE_TAGS):
+        entry = table.get(tag)
+        if entry is None or tag not in primaries or entry.memory_gb > ceiling:
+            continue
+        key = level_of(tag)
+        if key in ("high", "mid"):
+            out[key].append(tag)
     for key in out:
-        out[key].sort(key=lambda t: -table[t].memory_gb)
+        out[key].sort(key=lambda tag: -table[tag].memory_gb)
     return out
 
 
 def recommended_for(budget_gb: Optional[float],
                     ladders: Optional[Dict[str, Sequence[Tuple[str, float]]]] = None,
                     ) -> Set[str]:
-    """예산에 맞는 기본 설치 세트 = 3단계 기본단계 전부.
+    """Default installation = curated shared high/mid models only.
 
-    단계를 하나만 받아 두면 여유 메모리가 오르내릴 때 쓸 게 없어지고,
-    대안까지 다 받으면 디스크만 먹는다. 그 사이가 이 세트다.
-    budget_gb 가 None 이면 정적 recommended 플래그로 폴백한다.
+    Explicitly installed low-tier models stay installed; this controls only
+    the new install recommendation. A too-small budget can return an empty set.
     """
-    static = {e.tag for e in all_entries() if e.recommended}
     if budget_gb is None:
-        return static
-    tiers = None
+        return set(_CORE_TAGS)
+    ceiling = float(budget_gb) * _SAFETY
     if ladders is not None:
-        # 사다리만 주어진 경우(테스트) — 평탄 목록에서 등급별 최상단을 고른다.
-        ceiling = float(budget_gb) * _SAFETY
-        table = by_tag()
-        picked: Set[str] = set()
-        for rungs in ladders.values():
-            per_level: Dict[str, str] = {}
-            for tag, _need in rungs:
-                entry = table.get(tag)
-                if entry is None or entry.memory_gb > ceiling:
-                    continue
-                key = level_of(tag)
-                if key and key not in per_level:
-                    per_level[key] = tag
-            picked.update(per_level.values())
-        return picked or static
-    plan = plan_by_level(budget_gb, tiers)
-    picked = {tag for tags in plan.values() for tag in tags}
-    return picked or static
+        reachable = {tag for rungs in ladders.values() for tag, _need in rungs}
+        return {tag for tag in _CORE_TAGS if tag in reachable
+                and (memory_gb(tag) or float("inf")) <= ceiling}
+    return {tag for tags in plan_by_level(budget_gb).values() for tag in tags}
 
 
 # ── 설치 여부 대조 ────────────────────────────────────────────────

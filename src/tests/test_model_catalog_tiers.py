@@ -9,7 +9,6 @@
 """
 import unittest
 
-from installer.steps import model as installer_model
 from launcher.models import model_catalog as catalog
 from launcher.models import model_classes as classes
 from launcher.models import model_roles as roles
@@ -60,11 +59,12 @@ class InstallSetTests(unittest.TestCase):
         self.assertEqual([tag for _label, tag in catalog.install_pairs()],
                          catalog.core_tags())
 
-    def test_inline_fallback_matches_the_core_set(self):
-        # 카탈로그 import 가 실패했을 때 쓰이는 목록. 세트가 다르면 설치 결과가
-        # 조용히 갈린다. (받는 순서는 상관없으므로 집합으로 비교한다.)
-        self.assertEqual({tag for _label, tag in installer_model._INLINE},
-                         set(catalog.core_tags()))
+    def test_core_never_contains_low_level_models(self):
+        self.assertTrue(catalog.core_tags())
+        self.assertTrue(all(catalog.level_of(tag) in ("high", "mid")
+                            for tag in catalog.core_tags()))
+        # The modern installer uses the shared Models screen rather than
+        # importing a non-existent legacy installer.steps.model module.
 
 
 class RoleDisplayTests(unittest.TestCase):
@@ -115,6 +115,17 @@ class LadderResolutionTests(unittest.TestCase):
         self.assertEqual(roles.resolve_ladder("coding", 64.0), lower)
         roles.installed_models = lambda *a, **kw: {top, lower}
         self.assertEqual(roles.resolve_ladder("coding", 64.0), top)
+
+    def test_uninstalled_low_fallback_is_not_reported_as_loaded(self):
+        roles.installed_models = lambda *a, **kw: {"devstral-small-2:24b"}
+        # The only installed model is larger than 8GB free memory.
+        self.assertIsNone(roles.resolve_ladder("coding", 8.0))
+
+    def test_an_empty_store_can_still_show_a_installable_suggestion(self):
+        roles.installed_models = lambda *a, **kw: set()
+        chosen = roles.resolve_ladder("coding", 8.0)
+        self.assertIsNotNone(chosen)
+        self.assertLessEqual(catalog.memory_gb(chosen), 8.0 * catalog._SAFETY)
 
     def test_unknown_role_has_no_ladder(self):
         self.assertIsNone(roles.resolve_ladder("no-such-role", 64.0))
@@ -177,11 +188,13 @@ class MemoryFigureTests(unittest.TestCase):
             self.assertGreater(entry.size_gb, 0.0, entry.tag)
             self.assertGreater(entry.memory_gb, 0.0, entry.tag)
 
-    def test_e4b_is_lighter_to_run_than_to_download(self):
-        # Gemma 4 E 계열은 활성 파라미터만 올린다. 이 구분이 사라지면 저사양
-        # 구간에서 실제로 돌아가는 모델을 "안 맞는다"고 걸러 버린다.
+    def test_e4b_effective_parameters_do_not_underestimate_weight_memory(self):
+        # E4B 'effective 4B' does not mean only ~4GB is resident.
+        # Official Ollama QAT artifact is about 6.1GB before KV cache.
         e4b = catalog.by_tag()["gemma4:e4b-it-qat"]
-        self.assertLess(e4b.memory_gb, e4b.size_gb)
+        self.assertAlmostEqual(e4b.size_gb, 6.1)
+        self.assertGreaterEqual(e4b.memory_gb, e4b.size_gb)
+        self.assertEqual(catalog.level_of(e4b.tag), "mid")
 
 
 class ToolCallingTests(unittest.TestCase):
@@ -264,10 +277,12 @@ class InstallPlanTests(unittest.TestCase):
     안 된다. 예전에는 detect_free_memory_gb() 를 그대로 넣고 있었다.
     """
 
-    def test_the_plan_covers_all_three_levels_within_budget(self):
+    def test_the_plan_contains_only_curated_high_and_mid_models(self):
         plan = catalog.plan_by_level(catalog.MEMORY_BUDGET_GB)
-        for key in catalog.LEVEL_KEYS:
-            self.assertTrue(plan[key], "%s 등급이 계획에 없다" % key)
+        self.assertTrue(plan["high"])
+        self.assertTrue(plan["mid"])
+        self.assertEqual(plan["low"], [])
+        self.assertLessEqual(sum(len(tags) for tags in plan.values()), 5)
 
     def test_core_is_exactly_the_plan(self):
         self.assertEqual(set(catalog.core_tags()),
@@ -283,16 +298,16 @@ class InstallPlanTests(unittest.TestCase):
         primaries = {t["primary"] for tl in roles.TIERS.values() for t in tl}
         self.assertTrue(picked <= primaries)
 
-    def test_a_smaller_budget_drops_the_upper_levels(self):
-        small = catalog.recommended_for(8.0)
-        self.assertTrue(small)
-        for tag in small:
-            self.assertEqual(catalog.level_of(tag), "low", tag)
-        self.assertLess(catalog.download_gb(small),
+    def test_an_8gb_budget_does_not_force_low_models_back_into_defaults(self):
+        self.assertEqual(catalog.recommended_for(8.0), set())
+        mid = catalog.recommended_for(12.0)
+        self.assertTrue(mid)
+        self.assertTrue(all(catalog.level_of(tag) == "mid" for tag in mid))
+        self.assertLess(catalog.download_gb(mid),
                         catalog.download_gb(catalog.recommended_for(20.0)))
 
-    def test_every_role_is_covered_at_each_budget(self):
-        for budget in (8.0, 12.0, 16.0, 20.0):
+    def test_every_role_is_covered_when_the_high_mid_set_fits(self):
+        for budget in (16.0, 20.0):
             picked = catalog.recommended_for(budget)
             for role, ladder in roles.LADDERS.items():
                 self.assertTrue(picked & {tag for tag, _ in ladder},
@@ -316,29 +331,48 @@ class EndToEndCoverageTests(unittest.TestCase):
         self._real = roles.installed_models
         self.addCleanup(setattr, roles, "installed_models", self._real)
 
-    def test_the_budget_install_satisfies_every_role_at_every_free_memory(self):
-        """예산대로 한 번 설치해 두면, 그 뒤 여유가 얼마로 떨어지든 모든 역할이
-        실제로 받아 둔 모델로 해결돼야 한다."""
+    def test_the_lean_install_satisfies_all_roles_when_mid_tiers_fit(self):
         picked = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
         roles.installed_models = lambda *a, **kw: set(picked)
-        for free in (6.0, 8.0, 12.0, 16.0, 20.0):
+        for free in (16.0, 20.0):
             for role in roles.LADDERS:
                 chosen = roles.resolve_ladder(role, free)
                 self.assertIn(chosen, picked,
-                              "여유 %.0fGB / %s -> %s 를 골랐는데 받은 적이 없다"
+                              "여유 %.0fGB / %s -> %s 는 기본 설치에 없음"
                               % (free, role, chosen))
 
-    def test_the_chosen_model_always_fits_in_memory(self):
+    def test_a_low_memory_machine_never_selects_an_oversized_model(self):
         picked = catalog.recommended_for(catalog.MEMORY_BUDGET_GB)
         roles.installed_models = lambda *a, **kw: set(picked)
-        for free in (6.0, 8.0, 12.0, 16.0, 20.0):
+        for free in (2.0, 5.0, 6.0, 8.0, 12.0, 16.0, 20.0):
             for role in roles.LADDERS:
                 chosen = roles.resolve_ladder(role, free)
-                self.assertLessEqual(catalog.memory_gb(chosen), free * catalog._SAFETY,
-                                     "여유 %.0fGB / %s -> %s" % (free, role, chosen))
+                if chosen is not None:
+                    self.assertLessEqual(catalog.memory_gb(chosen),
+                                         free * catalog._SAFETY,
+                                         "여유 %.0fGB / %s -> %s" % (free, role, chosen))
+        self.assertIsNone(roles.resolve_ladder("agent", 2.0))
+        self.assertIsNone(roles.resolve_ladder("office", 2.0))
+
+
+class AgentLowMemoryGuardTests(unittest.TestCase):
+    def test_no_model_can_load_and_the_executor_is_not_probed(self):
+        from launcher.agent.entry_dialog import _resolve
+        old_probe, old_installed = roles._load_probe, roles.installed_models
+        self.addCleanup(setattr, roles, "_load_probe", old_probe)
+        self.addCleanup(setattr, roles, "installed_models", old_installed)
+        roles.installed_models = lambda *a, **kw: set()
+        roles._load_probe = lambda *a, **kw: self.fail("oversized model must not be probed")
+        self.assertIsNone(roles.resolve_ladder("agent", 2.0))
+        self.assertIsNone(roles.resolve_with_rollback("agent", free_gb=2.0))
+        selection = _resolve(roles, "5", 2.0)
+        self.assertIsNone(selection["tag"])
+        self.assertIn("메모리", selection["reason"])
 
 
 class GroupTaxonomyTests(unittest.TestCase):
+    MIN_BAND_USE = 0.50
+
     """용도 그룹은 사다리·역할·화면 세 곳에 같은 이름으로 있어야 한다.
 
     예전에는 "context" 역할이 CLASSES 에 빠져 있어서, 사다리도 있고 모델도
@@ -379,6 +413,29 @@ class GroupTaxonomyTests(unittest.TestCase):
             steps = [catalog.memory_gb(t["primary"]) for t in tier_list]
             self.assertGreaterEqual(max(steps), 14.0, "%s 에 상위 단계가 없다" % name)
             self.assertLessEqual(min(steps), 7.0, "%s 에 저사양 단계가 없다" % name)
+
+
+class ModernModelPolicyTests(unittest.TestCase):
+    def test_agent_primary_is_tool_capable_and_not_abliterated(self):
+        entry = catalog.by_tag()[roles.TIERS["agent"][0]["primary"]]
+        self.assertTrue(entry.tools)
+        self.assertFalse(entry.uncensored)
+        self.assertTrue(entry.vision)
+
+    def test_qwen38_is_an_opt_in_advanced_model(self):
+        tag = "qwen3.8:27b"
+        entry = catalog.by_tag()[tag]
+        self.assertTrue(entry.tools and entry.vision)
+        self.assertEqual(catalog.level_of(tag), "high")
+        self.assertNotIn(tag, catalog.recommended_for(20.0))
+        self.assertIn(tag, [m for m, _ in roles.LADDERS["coding"]])
+
+    def test_tuned_qwen35_9b_is_optional_in_uncensored_middle(self):
+        tag = "huihui_ai/qwen3.5-abliterated:9b"
+        self.assertTrue(catalog.by_tag()[tag].uncensored)
+        self.assertEqual(catalog.level_of(tag), "mid")
+        self.assertIn(tag, roles.TIERS["uncensored"][1]["alts"])
+        self.assertNotIn(tag, catalog.recommended_for(20.0))
 
 
 class UncensoredGroupTests(unittest.TestCase):

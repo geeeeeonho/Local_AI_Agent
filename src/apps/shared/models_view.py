@@ -355,8 +355,10 @@ def _choose(parent, w):
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
-        '역할 그룹은 넓은 화면에서 한 줄에 4개씩 표시됩니다. 상·중·하 단계와 추가 옵션은 각각 접을 수 있습니다. '
-        '상태 표시는 실제 설치 여부이며, 체크는 앞으로 설치·유지할 목록입니다.'),
+        '기본 예산 20GB에서는 상·중 5종을 권장하며 작은 예산에서는 더 적게 선택합니다. '
+        '하 단계는 필요할 때 직접 체크하세요. '
+        '이미 설치된 모델은 기본 세트를 다시 선택해도 유지합니다. '
+        '설치 상태와 앞으로 적용할 체크 상태는 서로 다릅니다.'),
         pad=(0, 6))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,
