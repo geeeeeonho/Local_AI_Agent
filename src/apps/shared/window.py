@@ -953,7 +953,10 @@ class DesktopWindow:
                              wraplength=175,justify='left')
         name_label.pack(anchor='w',fill='x')
         wrap_to_parent(name_label,inset=18,minimum=120)
-        box=ttk.Checkbutton(card,text='설치 / 유지 선택',variable=var,
+        # The checkbox's meaning depends on what is actually on disk.
+        # "selected" is a future intent, never proof that the file exists.
+        choice_label='이 모델 유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
+        box=ttk.Checkbutton(card,text=choice_label,variable=var,
                             command=self.update_choice_summary,
                             style='Card.TCheckbutton')
         box.pack(anchor='w',fill='x')
