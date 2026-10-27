@@ -921,9 +921,11 @@ class DesktopWindow:
         label=ttk.Label(card,textvariable=state_text,style='Model.State.TLabel',
                         anchor='w')
         label.pack(anchor='w',fill='x',pady=(0,3))
-        box=ttk.Checkbutton(card,text=tag,variable=var,
+        ttk.Label(card,text=tag,style='Manage.Card.TLabel',
+                  wraplength=205,justify='left').pack(anchor='w',fill='x')
+        box=ttk.Checkbutton(card,text='설치 / 유지 선택',variable=var,
                             command=self.update_choice_summary,
-                            style='Card.TCheckbutton',wraplength=205)
+                            style='Card.TCheckbutton')
         box.pack(anchor='w',fill='x')
         # A short status/size line is easier to scan in a four-column grid.
         details=[status] if status else []
