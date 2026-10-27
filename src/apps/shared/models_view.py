@@ -355,7 +355,8 @@ def _choose(parent, w):
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
-        '기본 권장은 상·중 5종만 선택합니다. 하 단계는 필요할 때 직접 체크하세요. '
+        '기본 예산 20GB에서는 상·중 5종을 권장하며 작은 예산에서는 더 적게 선택합니다. '
+        '하 단계는 필요할 때 직접 체크하세요. '
         '이미 설치된 모델은 기본 세트를 다시 선택해도 유지합니다. '
         '설치 상태와 앞으로 적용할 체크 상태는 서로 다릅니다.'),
         pad=(0, 6))
