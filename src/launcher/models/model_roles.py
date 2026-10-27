@@ -489,6 +489,10 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
         for m, _need in fits:
             if _installed_match(m, installed):
                 return m
+        # A known non-empty store must not silently select a different,
+        # uninstalled low/mid fallback just because the new defaults omit
+        # low-tier downloads. Tell callers to install a fitting model.
+        return None
     if fits:
         return fits[0][0]
     # The small-model rung is available for manual installation, not part of
