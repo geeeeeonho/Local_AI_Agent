@@ -275,6 +275,13 @@ class ThemeController:
             style.configure('Model.State' + state + '.TLabel',
                             background=p.manage_soft, foreground=ink,
                             font=('Segoe UI', 9, 'bold'))
+        style.configure('Model.SummaryRemove.TLabel', background=p.bg,
+                        foreground=p.danger, font=('Segoe UI', 12, 'bold'))
+        style.configure('Manage.Details.TButton', anchor='w',
+                        background=p.manage_soft, foreground=p.muted,
+                        font=('Segoe UI', 9), padding=(5, 2), borderwidth=0)
+        style.map('Manage.Details.TButton',
+                  background=[('active',p.hover)],foreground=[('active',p.fg)])
         style.configure('Alert.TLabel', foreground=p.danger)
         # A readiness line has three states and they have to be told apart at a
         # glance; "the button is no longer greyed out" is not a signal anyone
