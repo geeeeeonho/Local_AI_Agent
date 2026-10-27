@@ -9,9 +9,9 @@ MODEL_CATALOG_v7 — 기본 5종(상/중) + 선택형 하 단계·Qwen 3.8 후�
 
 크기를 두 개로 나눈다. 예전에는 하나로 뭉뚱그려서 사다리가 틀린 판단을 했다.
   size_gb : 다운로드(디스크) 크기. 설치 화면의 "몇 GB 받나" 계산용.
-  run_gb  : 실제로 상주하는 메모리. 사다리의 적재 가능 판정용.
-대부분 GGUF 는 둘이 같지만 Gemma 4 E 계열(e2b/e4b)은 다르다 —
-e4b 는 9.6GB 를 받아도 실제 활성 파라미터만 올려서 ~5GB 로 돈다.
+  run_gb  : 적재 메모리의 대략적인 예산(실제 컨텍스트·KV 캐시 따라 변동).
+Gemma 4 E 계열의 effective 파라미터 수는 실제 적재 메모리가 아니다.
+예를 들어 e4b-it-qat 는 Ollama GGUF 약 6.1GB이며, 저사양 5GB 로 취급하지 않는다.
 
 tools 는 함수/도구 호출 지원 여부다. 에이전트·코딩 사다리는 이게 False 인 모델을
 담을 수 없다(tests/test_model_catalog_tiers.py 가 막는다). Open Interpreter 는
@@ -309,8 +309,8 @@ _ALL: List[CatalogEntry] = [
                  note="가장 가벼움"),
 ]
 
-# 3단계(상/중/하) × 역할의 '기본단계' 전부. plan_by_level() 결과와 같아야 하고
-# tests/test_model_catalog_tiers.py 가 그것을 확인한다.
+# 기본 설치 5종은 3단계 사다리의 일부(상 2 + 중 3)만 선별한다.
+# 저사양 하 단계는 사용자가 필요할 때만 체크한다. Core = 기본 권장 목록이다.
 _CORE_TAGS = frozenset({
     # 20GB 모델 예산의 간결한 기본 다운로드 세트 (5종).
     # 상: 코딩/무검열. 중: 코딩·에이전트/문서/범용·무검열.
