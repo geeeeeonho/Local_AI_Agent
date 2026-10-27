@@ -489,7 +489,10 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
                 return m
     if fits:
         return fits[0][0]
-    return _lightest(lad, installed)
+    # The small-model rung is available for manual installation, not part of
+    # the new default set. Never claim an installed but oversized model can
+    # run when there is no memory-fit candidate.
+    return None
 
 
 def _load_probe(model, host="127.0.0.1:11434", timeout=180):
@@ -512,7 +515,15 @@ def resolve_with_rollback(role_name, free_gb=None, presenter=None, host="127.0.0
     if not lad:
         return None
     seq = [m for m, _ in lad]
-    model = resolve_ladder(role_name, free_gb) or seq[0]
+    model = resolve_ladder(role_name, free_gb)
+    if model is None:
+        if presenter is not None:
+            try:
+                presenter.warn("모델을 적재할 여유 메모리가 없습니다. "
+                               "필요하면 모델 관리에서 하 단계 모델을 직접 설치하세요.")
+            except Exception:
+                pass
+        return None
     # 이름이 아니라 '위치' 로 내려간다. seq.index() 로 되찾으면 같은 태그가 사다리에
     # 두 번 나올 때(레지스트리 add 로 충분히 생긴다) 첫 번째 위치로 되돌아가 영원히
     # 같은 구간을 맴돈다.
