@@ -149,7 +149,7 @@ def select_agent_model(env: Path, p: Presenter):
     )
     choice = p.show_menu(
         title="에이전트 모델 역할 선택",
-        subtitle=free_text + " · 코딩은 부족하면 7b 자동",
+        subtitle=free_text + " · 하 단계 모델은 기본 설치에서 제외 (필요하면 수동 설치)",
         items=items,
     )
     if choice in ("b", "q", None):
@@ -161,10 +161,13 @@ def select_agent_model(env: Path, p: Presenter):
     ladders = getattr(mr, "LADDERS", {})
     if getattr(role, "name", "") in ladders and hasattr(mr, "resolve_ladder"):
         picked = mr.resolve_ladder(role.name, free)
-        if picked:
-            if picked != tag:
-                reason = "사다리 선택(여유 적응): " + picked
-            tag = picked
+        if picked is None:
+            p.warn("모델을 적재할 메모리가 부족합니다. "
+                   "Models에서 하 단계 모델을 수동으로 설치하거나 메모리를 확보하세요.")
+            return None
+        if picked != tag:
+            reason = "사다리 선택(여유 적응): " + picked
+        tag = picked
     return {"tag": tag, "reason": reason, "label": role.label}
 
 
