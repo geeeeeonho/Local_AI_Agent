@@ -828,9 +828,9 @@ class DesktopWindow:
                 expanded=True)
             if role['desc']:
                 desc=ttk.Label(section.body,text=role['desc'],
-                               style='Muted.TLabel',wraplength=690,justify='left')
-                desc.configure(wraplength=205)
+                               style='Muted.TLabel',wraplength=175,justify='left')
                 desc.pack(anchor='w',fill='x',pady=(4,6))
+                wrap_to_parent(desc,inset=12,minimum=140)
             for tier in role['tiers']:
                 primary=tier['recommended']
                 label=tier['level_label']
@@ -849,7 +849,7 @@ class DesktopWindow:
             if role['optional_count']:
                 options_section=self.add_catalog_group(
                     section.body,key+':options',
-                    f"추가 옵션 ({role['optional_count']}개)  ·  필요할 때 선택",
+                    f"추가 옵션 ({role['optional_count']}개)",
                     expanded=False,compact=True)
                 for tier in role['tiers']:
                     if not tier['options']:
@@ -935,8 +935,10 @@ class DesktopWindow:
                         anchor='w')
         label.pack(anchor='w',fill='x',pady=(0,3))
         self.choice_status_labels.setdefault(tag,[]).append(label)
-        ttk.Label(card,text=tag,style='Manage.Card.TLabel',
-                  wraplength=205,justify='left').pack(anchor='w',fill='x')
+        name_label=ttk.Label(card,text=tag,style='Manage.Card.TLabel',
+                             wraplength=175,justify='left')
+        name_label.pack(anchor='w',fill='x')
+        wrap_to_parent(name_label,inset=18,minimum=120)
         box=ttk.Checkbutton(card,text='설치 / 유지 선택',variable=var,
                             command=self.update_choice_summary,
                             style='Card.TCheckbutton')
@@ -948,18 +950,23 @@ class DesktopWindow:
         if show_role and model.get('role'):
             details.append(model['role'])
         if details:
-            ttk.Label(card,text=' · '.join(details),style='Manage.CardMuted.TLabel',
-                      wraplength=205,justify='left').pack(anchor='w',fill='x',padx=(20,0))
+            details_label=ttk.Label(card,text=' · '.join(details),
+                                    style='Manage.CardMuted.TLabel',
+                                    wraplength=150,justify='left')
+            details_label.pack(anchor='w',fill='x',padx=(20,0))
+            wrap_to_parent(details_label,inset=38,minimum=110)
         self.choice_checkbuttons.setdefault(tag,[]).append(box)
         if model.get('note'):
-            ttk.Label(card,text=model['note'],style='Manage.CardMuted.TLabel',
-                      wraplength=205,justify='left').pack(
-                          anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            note_label=ttk.Label(card,text=model['note'],style='Manage.CardMuted.TLabel',
+                                 wraplength=150,justify='left')
+            note_label.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            wrap_to_parent(note_label,inset=38,minimum=110)
         if model.get('desc'):
             desc=ttk.Label(card,text=model['desc'],
                            style='Manage.CardMuted.TLabel',
-                           wraplength=205,justify='left')
+                           wraplength=150,justify='left')
             desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            wrap_to_parent(desc,inset=38,minimum=110)
 
     def fold_catalog_roles(self, expanded):
         """Fold role groups without touching tier states or selected models."""
