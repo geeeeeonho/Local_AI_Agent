@@ -556,8 +556,9 @@ def test_catalog_preserves_model_notes_when_rendering_compact_cards(ui):
     open_models(w)
     note_model = next(m for m in w._catalog['models'] if m.get('note'))
     card = w.choice_checkbuttons[note_model['tag']][0].master
+    from tkinter import ttk
     notes = [child.cget('text') for child in card.winfo_children()
-             if isinstance(child, __import__('tkinter').ttk.Label)]
+             if isinstance(child, ttk.Label)]
     assert note_model['note'] in notes
 
 
