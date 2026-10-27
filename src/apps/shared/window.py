@@ -907,18 +907,6 @@ class DesktopWindow:
                      'desc':'카탈로그에 없는 모델입니다. 체크를 풀면 삭제합니다.'},
                     checked=True,status='직접 설치')
 
-        plan=catalog['plan']
-        parts=[f"[{label}] "+(', '.join(plan.get(key) or ()) or '없음')
-               for key,label in catalog['levels']]
-        counts=' · '.join(f"{label} {len(plan.get(key) or ())}개"
-                          for key,label in catalog['levels'])
-        self._choice_plan_default=(
-            f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 "
-            f"3단계를 미리 체크했습니다 · {counts} · 자세한 목록은 기록에")
-        self.choice_plan.set(self._choice_plan_default)
-        self.log('선택 계획 · 여유 메모리는 오르내리므로 세 단계를 모두 둡니다:')
-        for part in parts:
-            self.log('  '+part)
         self.choice_scroller.bind_content()
 
     def add_catalog_group(self,parent,key,title,*,expanded=False,compact=False):
