@@ -943,6 +943,12 @@ class DesktopWindow:
                            wraplength=205,justify='left')
             desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
 
+    def fold_catalog_roles(self, expanded):
+        """Fold role groups without touching tier states or selected models."""
+        for key, section in getattr(self, 'catalog_groups', {}).items():
+            if key.startswith('role:') and key.count(':') == 1:
+                section.set_expanded(expanded)
+
     def selected_tags(self):
         return {tag for tag,var in self.choice_vars.items() if var.get()}
 
