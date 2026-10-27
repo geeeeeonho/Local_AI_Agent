@@ -259,8 +259,10 @@ def _summary_row(parent, w):
     every pixel it can get.
     """
     frame = ttk.Frame(parent)
-    ttk.Label(frame, textvariable=w.choice_summary,
-              style='Section.TLabel').pack(side='left', anchor='w')
+    summary=ttk.Label(frame,textvariable=w.choice_summary,
+                      style='Section.TLabel')
+    summary.pack(side='left',anchor='w')
+    w.choice_summary_label=summary
     storage = ttk.Label(frame, textvariable=w.choice_storage, style='Muted.TLabel',
                         wraplength=520, justify='right')
     storage.pack(side='right', anchor='e', padx=(12, 0))
