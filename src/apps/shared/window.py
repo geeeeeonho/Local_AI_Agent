@@ -923,7 +923,7 @@ class DesktopWindow:
         label.pack(anchor='w',fill='x',pady=(0,3))
         box=ttk.Checkbutton(card,text=tag,variable=var,
                             command=self.update_choice_summary,
-                            style='Card.TCheckbutton')
+                            style='Card.TCheckbutton',wraplength=205)
         box.pack(anchor='w',fill='x')
         # A short status/size line is easier to scan in a four-column grid.
         details=[status] if status else []
