@@ -415,9 +415,10 @@ def test_each_role_and_its_subsections_expand_independently(ui):
     options=w.catalog_groups['role:uncensored:options']
     middle=w.catalog_groups['role:uncensored:tier:2']
 
-    assert not coding.expanded and not uncensored.expanded
+    assert coding.expanded and uncensored.expanded
     coding.button.invoke()
-    uncensored.button.invoke()
+    assert not coding.expanded
+    coding.button.invoke()
     assert uncensored.expanded and coding.expanded
     assert not options.expanded and middle.expanded
     options.button.invoke()
@@ -476,3 +477,34 @@ def test_shared_models_use_one_checkbox_variable_and_one_install_item(ui):
     plan=w.services.models.plan_changes(
         w.selected_tags(),installed=w.catalog_installed())
     assert plan['install'].count(shared) <= 1
+
+
+def test_catalog_has_responsive_four_column_roles(ui):
+    w, _, _ = ui
+    open_models(w)
+    from apps.shared.models_view import CatalogColumns
+    assert CatalogColumns.columns_for_width(1100) == 4
+    assert CatalogColumns.columns_for_width(650) == 2
+    assert CatalogColumns.columns_for_width(200) == 1
+    assert len(w.catalog_columns.slots) >= 5
+    w.catalog_columns.reflow(1100)
+    assert w.catalog_columns.columns == 4
+    roles = [w.catalog_groups['role:' + key].frame.master
+             for key in ('coding', 'agent', 'uncensored', 'office', 'balanced')]
+    assert [int(frame.grid_info()['column']) for frame in roles] == [0, 1, 2, 3, 0]
+    w.catalog_columns.reflow(650)
+    assert [int(frame.grid_info()['column']) for frame in roles] == [0, 1, 0, 1, 0]
+
+
+def test_catalog_state_label_distinguishes_disk_from_choice(ui):
+    w, svc, _ = ui
+    installed = store_model(svc)
+    open_models(w)
+    missing = next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
+    assert '설치됨' in w.choice_statuses[installed][0].get()
+    assert '미설치' in w.choice_statuses[missing][0].get()
+    w.choice_vars[installed].set(False)
+    w.choice_vars[missing].set(True)
+    w.update_choice_summary()
+    assert '삭제 예정' in w.choice_statuses[installed][0].get()
+    assert '설치 예정' in w.choice_statuses[missing][0].get()
