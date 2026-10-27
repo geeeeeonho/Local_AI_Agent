@@ -573,3 +573,16 @@ def test_collapse_all_does_not_collapse_tiers_or_change_selections(ui):
     assert w.catalog_groups['role:coding'].expanded
     assert w.catalog_groups['role:coding:tier:2'].expanded
     assert w.selected_tags() == before
+
+
+def test_fold_controls_remain_visible_at_minimum_window_size(ui):
+    w, _, _ = ui
+    open_models(w)
+    w.root.wm_geometry('880x560')
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+    from tkinter import ttk
+    tools = w.choice_body.winfo_children()[0]
+    buttons = [node for node in tools.winfo_children() if isinstance(node, ttk.Button)]
+    assert {btn.cget('text') for btn in buttons} == {'모두 펼치기', '모두 접기'}
+    assert all(btn.winfo_ismapped() and btn.winfo_width() >= 60 for btn in buttons)
