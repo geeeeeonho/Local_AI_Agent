@@ -68,11 +68,15 @@ class CatalogColumns:
     """
 
     MAX_COLUMNS = 4
-    MIN_COLUMN_WIDTH = 225
+    MIN_COLUMN_WIDTH = 240
 
     @classmethod
     def columns_for_width(cls, width):
-        return max(1, min(cls.MAX_COLUMNS, int(width) // cls.MIN_COLUMN_WIDTH))
+        # Never squeeze three cards into a width that fits only two legibly.
+        width = int(width)
+        if width >= 4 * cls.MIN_COLUMN_WIDTH:
+            return 4
+        return 2 if width >= 2 * cls.MIN_COLUMN_WIDTH else 1
 
     def __init__(self, parent):
         self.parent = parent
@@ -81,7 +85,10 @@ class CatalogColumns:
         self.slots = []
         self.columns = 0
         self._placed = 0
-        parent.bind('<Configure>', self._resize, add='+')
+        # Bind to our own frame, not the persistent ScrollArea.body. The
+        # catalogue destroys/recreates this grid on refresh; a parent-bound
+        # callback would keep referring to the destroyed grid on every resize.
+        self.frame.bind('<Configure>', self._resize, add='+')
 
     def add(self):
         slot = ttk.Frame(self.frame, padding=(3, 3))
@@ -94,7 +101,7 @@ class CatalogColumns:
 
     def reflow(self, width=None):
         if width is None:
-            width = self.parent.winfo_width()
+            width = self.frame.winfo_width()
         columns = self.columns_for_width(width)
         if columns == self.columns and self._placed == len(self.slots):
             return
@@ -328,9 +335,7 @@ def _choose(parent, w):
         ('권장 세트', lambda: w.set_selection('recommended'), 'Manage', False),
         ('전체 선택', lambda: w.set_selection('all'), None, False),
         ('전체 해제', lambda: w.set_selection('none'), None, False),
-        ('목록 새로고침', w.load_catalog, None, False),
-        ('그룹 모두 펼치기', lambda: w.fold_catalog_roles(True), None, False),
-        ('그룹 모두 접기', lambda: w.fold_catalog_roles(False), None, False))))
+        ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
         '역할 그룹은 넓은 화면에서 한 줄에 4개씩 표시됩니다. 상·중·하 단계와 추가 옵션은 각각 접을 수 있습니다. '
         '상태 표시는 실제 설치 여부이며, 체크는 앞으로 설치·유지할 목록입니다.'),
