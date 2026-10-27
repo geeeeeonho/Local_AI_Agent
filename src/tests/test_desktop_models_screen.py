@@ -673,3 +673,24 @@ def test_checkboxes_explain_their_effect_on_installed_vs_missing(ui):
     missing=next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
     assert '해제=삭제' in w.choice_checkbuttons[installed][0].cget('text')
     assert '이 모델 설치' in w.choice_checkbuttons[missing][0].cget('text')
+
+
+def test_compact_name_keeps_quantization_suffix_and_expanded_view_has_full_tag(ui):
+    from apps.shared.models_view import model_display_name
+    tag='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
+    visible=model_display_name(tag)
+    assert 'gemma-4-26B' in visible and visible.endswith('Q4_K_S')
+    assert len(visible) <= 35
+
+    w, _, _ = ui
+    open_models(w)
+    card=w.choice_checkbuttons[tag][0].master
+    from tkinter import ttk
+    names=[node.cget('text') for node in card.winfo_children()
+           if isinstance(node, ttk.Label)]
+    assert visible in names
+    desc, button=w.catalog_detail_widgets[tag][0]
+    assert not desc.winfo_manager()
+    assert tag in desc.cget('text')
+    button.invoke()
+    assert desc.winfo_manager() == 'pack'
