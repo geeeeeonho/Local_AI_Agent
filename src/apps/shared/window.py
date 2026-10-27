@@ -16,7 +16,7 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
                       wrap_to_parent)
 from .themes import themed
 from . import views
-from .models_view import ModelAccordion
+from .models_view import ModelAccordion, CatalogColumns
 from .model_groups import group_catalog
 
 
@@ -792,20 +792,26 @@ class DesktopWindow:
             child.destroy()
         self.choice_vars={}
         self.choice_checkbuttons={}
+        self.choice_statuses={}
         self.catalog_groups={}
         groups=group_catalog(catalog)
+        columns=CatalogColumns(self.choice_body)
+        self.catalog_columns=columns
 
         for role in groups['roles']:
             key='role:'+role['key']
+            installed_count=len({entry['tag'] for tier in role['tiers']
+                                 for entry in ([tier['recommended']] + tier['options'])
+                                 if entry is not None and entry['installed']})
             section=self.add_catalog_group(
-                self.choice_body,key,
-                f"{role['title']}  ·  상·중·하 권장 / 추가 옵션 {role['optional_count']}개",
-                expanded=False)
+                columns.add(),key,
+                f"{role['title']}  ·  설치 {installed_count}개",
+                expanded=True)
             if role['desc']:
                 desc=ttk.Label(section.body,text=role['desc'],
                                style='Muted.TLabel',wraplength=690,justify='left')
+                desc.configure(wraplength=205)
                 desc.pack(anchor='w',fill='x',pady=(4,6))
-                wrap_to_parent(desc,inset=70,minimum=220)
             for tier in role['tiers']:
                 primary=tier['recommended']
                 label=tier['level_label']
@@ -815,7 +821,7 @@ class DesktopWindow:
                     continue
                 primary_section=self.add_catalog_group(
                     section.body,key+':tier:'+str(tier['number']),
-                    f"{label} 단계 (권장)  ·  {primary['tag']}",
+                    f"{label} 단계 (권장)",
                     expanded=True,compact=True)
                 self.add_catalog_row(
                     primary_section.body,primary,
@@ -848,7 +854,7 @@ class DesktopWindow:
             if not models:
                 continue
             section=self.add_catalog_group(
-                self.choice_body,key,f'{title} ({len(models)}개)',
+                columns.add(),key,f'{title} ({len(models)}개)',
                 expanded=False)
             for model in models:
                 self.add_catalog_row(
@@ -857,7 +863,7 @@ class DesktopWindow:
                     status='선택 모델',show_role=True)
         if catalog['extra_installed']:
             section=self.add_catalog_group(
-                self.choice_body,'extra:installed',
+                columns.add(),'extra:installed',
                 f"직접 설치한 모델 ({len(catalog['extra_installed'])}개)",
                 expanded=False)
             for tag in catalog['extra_installed']:
@@ -899,7 +905,7 @@ class DesktopWindow:
         if var is None:
             var=tk.BooleanVar(master=self.root,value=checked)
             self.choice_vars[tag]=var
-        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=10)
+        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=7)
         card.pack(fill='x',pady=3)
         facts=[tag]
         if show_role:
@@ -910,19 +916,30 @@ class DesktopWindow:
             facts.append(model['note'])
         if model['size_gb']:
             facts.append(f"받기 ~{model['size_gb']:.1f}GB")
-        if model['installed']:
-            facts.append('설치됨')
-        box=ttk.Checkbutton(card,text='   ·   '.join(facts),variable=var,
+        state_text=tk.StringVar(master=self.root)
+        self.choice_statuses.setdefault(tag,[]).append(state_text)
+        label=ttk.Label(card,textvariable=state_text,style='Model.State.TLabel',
+                        anchor='w')
+        label.pack(anchor='w',fill='x',pady=(0,3))
+        box=ttk.Checkbutton(card,text=tag,variable=var,
                             command=self.update_choice_summary,
                             style='Card.TCheckbutton')
         box.pack(anchor='w',fill='x')
+        # A short status/size line is easier to scan in a four-column grid.
+        details=[status] if status else []
+        if model.get('size_gb'):
+            details.append(f"~{model['size_gb']:.1f} GB")
+        if show_role and model.get('role'):
+            details.append(model['role'])
+        if details:
+            ttk.Label(card,text=' · '.join(details),style='Manage.CardMuted.TLabel',
+                      wraplength=205,justify='left').pack(anchor='w',fill='x',padx=(20,0))
         self.choice_checkbuttons.setdefault(tag,[]).append(box)
         if model.get('desc'):
             desc=ttk.Label(card,text=model['desc'],
                            style='Manage.CardMuted.TLabel',
-                           wraplength=600,justify='left')
-            desc.pack(anchor='w',fill='x',padx=(26,0),pady=(4,0))
-            wrap_to_parent(desc,inset=70,minimum=220)
+                           wraplength=205,justify='left')
+            desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
 
     def selected_tags(self):
         return {tag for tag,var in self.choice_vars.items() if var.get()}
@@ -952,6 +969,15 @@ class DesktopWindow:
         self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
                                 f"   ·   삭제 예정 {len(plan['remove'])}개")
         self.choice_storage.set(self.storage_line(plan))
+        installed=self.catalog_installed()
+        for tag, labels in getattr(self,'choice_statuses',{}).items():
+            selected=bool(self.choice_vars[tag].get())
+            if tag in installed:
+                state='● 설치됨 · 유지' if selected else '● 설치됨 · 삭제 예정'
+            else:
+                state='○ 미설치 · 설치 예정' if selected else '○ 미설치'
+            for label in labels:
+                label.set(state)
         # A selection that cannot fit is shown as a problem, not as a number the
         # user is expected to compare themselves mid-download.
         short=plan['fits'] is False and plan['install']
