@@ -15,6 +15,19 @@ from tkinter import ttk
 from .widgets import PanelHost, ScrollArea, note, set_text, text_box, wrap_to_parent
 
 
+def model_display_name(tag, limit=35):
+    """Short readable model name for four-column cards.
+
+    Keep both the model family and the quantization/version suffix in view.
+    The exact Ollama tag remains available in the model's expanded details.
+    """
+    name=str(tag).rsplit('/',1)[-1]
+    if len(name) <= limit:
+        return name
+    suffix=12
+    return name[:limit-suffix-1] + '…' + name[-suffix:]
+
+
 class ModelAccordion:
     """Independently foldable, keyboard-operable section for the model picker.
 
