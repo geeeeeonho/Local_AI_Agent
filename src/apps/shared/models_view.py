@@ -328,7 +328,9 @@ def _choose(parent, w):
         ('권장 세트', lambda: w.set_selection('recommended'), 'Manage', False),
         ('전체 선택', lambda: w.set_selection('all'), None, False),
         ('전체 해제', lambda: w.set_selection('none'), None, False),
-        ('목록 새로고침', w.load_catalog, None, False))))
+        ('목록 새로고침', w.load_catalog, None, False),
+        ('그룹 모두 펼치기', lambda: w.fold_catalog_roles(True), None, False),
+        ('그룹 모두 접기', lambda: w.fold_catalog_roles(False), None, False))))
     layout.fixed(lambda box: _note(box,
         '역할 그룹은 넓은 화면에서 한 줄에 4개씩 표시됩니다. 상·중·하 단계와 추가 옵션은 각각 접을 수 있습니다. '
         '상태 표시는 실제 설치 여부이며, 체크는 앞으로 설치·유지할 목록입니다.'),
