@@ -415,9 +415,10 @@ def test_each_role_and_its_subsections_expand_independently(ui):
     options=w.catalog_groups['role:uncensored:options']
     middle=w.catalog_groups['role:uncensored:tier:2']
 
-    assert not coding.expanded and not uncensored.expanded
+    assert coding.expanded and uncensored.expanded
     coding.button.invoke()
-    uncensored.button.invoke()
+    assert not coding.expanded
+    coding.button.invoke()
     assert uncensored.expanded and coding.expanded
     assert not options.expanded and middle.expanded
     options.button.invoke()
@@ -476,3 +477,220 @@ def test_shared_models_use_one_checkbox_variable_and_one_install_item(ui):
     plan=w.services.models.plan_changes(
         w.selected_tags(),installed=w.catalog_installed())
     assert plan['install'].count(shared) <= 1
+
+
+def test_catalog_has_responsive_four_column_roles(ui):
+    w, _, _ = ui
+    open_models(w)
+    from apps.shared.models_view import CatalogColumns
+    assert CatalogColumns.columns_for_width(1100) == 4
+    assert CatalogColumns.columns_for_width(650) == 2
+    assert CatalogColumns.columns_for_width(820) == 2
+    assert CatalogColumns.columns_for_width(200) == 1
+    assert len(w.catalog_columns.slots) >= 5
+    w.catalog_columns.reflow(1100)
+    assert w.catalog_columns.columns == 4
+    roles = [w.catalog_groups['role:' + key].frame.master
+             for key in ('coding', 'agent', 'uncensored', 'office', 'balanced')]
+    assert [int(frame.grid_info()['column']) for frame in roles] == [0, 1, 2, 3, 0]
+    w.catalog_columns.reflow(650)
+    assert [int(frame.grid_info()['column']) for frame in roles] == [0, 1, 0, 1, 0]
+
+
+def test_catalog_state_label_distinguishes_disk_from_choice(ui):
+    w, svc, _ = ui
+    installed = store_model(svc)
+    open_models(w)
+    missing = next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
+    assert '설치됨' in w.choice_statuses[installed][0].get()
+    assert '미설치' in w.choice_statuses[missing][0].get()
+    w.choice_vars[installed].set(False)
+    w.choice_vars[missing].set(True)
+    w.update_choice_summary()
+    assert '삭제 예정' in w.choice_statuses[installed][0].get()
+    assert '설치 예정' in w.choice_statuses[missing][0].get()
+
+
+def test_catalog_refresh_does_not_leak_resize_handlers_or_discard_unsaved_choices(ui):
+    w, _, _ = ui
+    open_models(w)
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+    original_binding = w.choice_body.bind('<Configure>')
+    tag = next(iter(w.choice_vars))
+    w.choice_vars[tag].set(not w.choice_vars[tag].get())
+    chosen = w.choice_vars[tag].get()
+
+    for _ in range(3):
+        old_frame = w.catalog_columns.frame
+        w.build_catalog_rows(w._catalog)
+        assert not old_frame.winfo_exists()
+        assert w.choice_body.bind('<Configure>') == original_binding
+        assert w.choice_vars[tag].get() == chosen
+
+    w.root.wm_geometry('1180x740')
+    pump(w)
+    assert w.catalog_columns.frame.winfo_exists()
+
+
+def test_status_styles_distinguish_missing_pending_and_removal(ui):
+    w, svc, _ = ui
+    installed = store_model(svc)
+    open_models(w)
+    missing = next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
+
+    assert w.choice_status_labels[installed][0].cget('style') == 'Model.StateInstalled.TLabel'
+    w.choice_vars[installed].set(False)
+    w.choice_vars[missing].set(False)
+    w.update_choice_summary()
+    assert w.choice_status_labels[installed][0].cget('style') == 'Model.StateRemove.TLabel'
+    assert w.choice_status_labels[missing][0].cget('style') == 'Model.StateMissing.TLabel'
+
+    w.choice_vars[missing].set(True)
+    w.update_choice_summary()
+    assert w.choice_status_labels[missing][0].cget('style') == 'Model.StateInstall.TLabel'
+
+
+def test_catalog_preserves_model_notes_when_rendering_compact_cards(ui):
+    w, _, _ = ui
+    open_models(w)
+    note_model = next(m for m in w._catalog['models'] if m.get('note'))
+    card = w.choice_checkbuttons[note_model['tag']][0].master
+    from tkinter import ttk
+    notes = [child.cget('text') for child in card.winfo_children()
+             if isinstance(child, ttk.Label)]
+    assert note_model['note'] in notes
+
+
+def test_collapse_all_does_not_collapse_tiers_or_change_selections(ui):
+    w, _, _ = ui
+    open_models(w)
+    before = w.selected_tags()
+    extras = [section for key, section in w.catalog_groups.items()
+              if key.startswith('extra:') and key.count(':') == 1]
+    assert extras
+    w.fold_catalog_roles(False)
+    assert not w.catalog_groups['role:coding'].expanded
+    assert all(not section.expanded for section in extras)
+    assert w.catalog_groups['role:coding:tier:2'].expanded
+    w.fold_catalog_roles(True)
+    assert w.catalog_groups['role:coding'].expanded
+    assert all(section.expanded for section in extras)
+    assert w.catalog_groups['role:coding:tier:2'].expanded
+    assert w.selected_tags() == before
+
+
+def test_fold_controls_remain_visible_at_minimum_window_size(ui):
+    w, _, _ = ui
+    open_models(w)
+    w.root.wm_geometry('880x560')
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+    from tkinter import ttk
+    tools = w.choice_body.winfo_children()[0]
+    buttons = [node for node in tools.winfo_children() if isinstance(node, ttk.Button)]
+    assert {btn.cget('text') for btn in buttons} == {'모두 펼치기', '모두 접기'}
+    assert all(btn.winfo_ismapped() and btn.winfo_width() >= 60 for btn in buttons)
+
+
+def test_installed_badge_survives_a_storage_plan_failure(ui, monkeypatch):
+    w, svc, _ = ui
+    installed = store_model(svc)
+    open_models(w)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError('storage plan unavailable')
+    monkeypatch.setattr(svc.models, 'plan_changes', fail)
+    w.update_choice_summary()
+    assert '설치됨' in w.choice_statuses[installed][0].get()
+    assert '선택 계산 실패' in w.choice_summary.get()
+    assert 'disabled' in w.apply_button.state()
+
+
+def test_model_manager_opens_on_the_choice_tab(ui):
+    w, _, _ = ui
+    open_models(w)
+    assert w.model_tabs.select() == str(w.model_pages['choose'])
+
+
+def test_compact_descriptions_can_expand_per_model_and_survive_refresh(ui):
+    w, _, _ = ui
+    open_models(w)
+    tag=next(m['tag'] for m in w._catalog['models'] if m.get('desc'))
+    before=w.selected_tags()
+    items=w.catalog_detail_widgets[tag]
+    assert items and all(not desc.winfo_manager() for desc, _ in items)
+    items[0][1].invoke()
+    assert all(desc.winfo_manager() == 'pack' for desc, _ in items)
+    assert all('설명 접기' in button.cget('text') for _, button in items)
+    assert w.selected_tags() == before
+    w.build_catalog_rows(w._catalog)
+    assert all(desc.winfo_manager() == 'pack'
+               for desc, _ in w.catalog_detail_widgets[tag])
+    w.catalog_detail_widgets[tag][0][1].invoke()
+    assert all(not desc.winfo_manager()
+               for desc, _ in w.catalog_detail_widgets[tag])
+
+
+def test_refresh_adopts_externally_installed_model_unless_user_overrode_it(ui):
+    import copy
+    w, _, _ = ui
+    open_models(w)
+    candidate=next(m['tag'] for m in w._catalog['models']
+                   if not m['installed'] and not m['recommended'])
+    assert not w.choice_vars[candidate].get()
+    fresh=copy.deepcopy(w._catalog)
+    next(m for m in fresh['models'] if m['tag'] == candidate)['installed']=True
+    w.show_catalog(fresh)
+    assert w.choice_vars[candidate].get()
+    assert '설치됨 · 유지' in w.choice_statuses[candidate][0].get()
+
+    # A real manual uncheck is still an intentional removal after refresh.
+    w.choice_vars[candidate].set(False)
+    w.build_catalog_rows(fresh)
+    w.update_choice_summary()
+    assert not w.choice_vars[candidate].get()
+    assert '삭제 예정' in w.choice_statuses[candidate][0].get()
+
+
+def test_model_installation_count_is_separate_from_pending_selection(ui):
+    w, svc, _ = ui
+    store_model(svc)
+    open_models(w)
+    assert '현재 설치 1/' in w.catalog_install_count.get()
+    w.set_selection('none')
+    assert '현재 설치 1/' in w.catalog_install_count.get()
+    assert '삭제 예정' in w.choice_plan.get()
+    assert w.choice_summary_label.cget('style') == 'Model.SummaryRemove.TLabel'
+    w.set_selection('recommended')
+    assert w.choice_summary_label.cget('style') == 'Section.TLabel'
+
+
+def test_checkboxes_explain_their_effect_on_installed_vs_missing(ui):
+    w, svc, _ = ui
+    installed=store_model(svc)
+    open_models(w)
+    missing=next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
+    assert '해제=삭제' in w.choice_checkbuttons[installed][0].cget('text')
+    assert '이 모델 설치' in w.choice_checkbuttons[missing][0].cget('text')
+
+
+def test_compact_name_keeps_quantization_suffix_and_expanded_view_has_full_tag(ui):
+    from apps.shared.models_view import model_display_name
+    tag='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
+    visible=model_display_name(tag)
+    assert 'gemma-4-26B' in visible and visible.endswith('Q4_K_S')
+    assert len(visible) <= 35
+
+    w, _, _ = ui
+    open_models(w)
+    card=w.choice_checkbuttons[tag][0].master
+    from tkinter import ttk
+    names=[node.cget('text') for node in card.winfo_children()
+           if isinstance(node, ttk.Label)]
+    assert visible in names
+    desc, button=w.catalog_detail_widgets[tag][0]
+    assert not desc.winfo_manager()
+    assert tag in desc.cget('text')
+    button.invoke()
+    assert desc.winfo_manager() == 'pack'

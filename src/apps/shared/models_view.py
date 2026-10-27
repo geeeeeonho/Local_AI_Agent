@@ -15,6 +15,19 @@ from tkinter import ttk
 from .widgets import PanelHost, ScrollArea, note, set_text, text_box, wrap_to_parent
 
 
+def model_display_name(tag, limit=35):
+    """Short readable model name for four-column cards.
+
+    Keep both the model family and the quantization/version suffix in view.
+    The exact Ollama tag remains available in the model's expanded details.
+    """
+    name=str(tag).rsplit('/',1)[-1]
+    if len(name) <= limit:
+        return name
+    suffix=12
+    return name[:limit-suffix-1] + '…' + name[-suffix:]
+
+
 class ModelAccordion:
     """Independently foldable, keyboard-operable section for the model picker.
 
@@ -33,7 +46,7 @@ class ModelAccordion:
                  else 'Manage.Accordion.TButton')
         self.button = ttk.Button(self.frame, style=style, command=self.toggle)
         self.button.pack(fill='x')
-        self.body = ttk.Frame(self.frame, padding=(14, 3, 0, 5))
+        self.body = ttk.Frame(self.frame, padding=(2, 2, 2, 4) if compact else (5, 4, 5, 7))
         self.set_expanded(expanded, notify=False)
 
     @property
@@ -55,6 +68,65 @@ class ModelAccordion:
 
     def toggle(self):
         self.set_expanded(not self._expanded)
+
+
+
+class CatalogColumns:
+    """Responsive role-card grid: four peers across when space permits.
+
+    A model tag may be very long, so cards use wrapped labels instead of
+    forcing the grid columns wider than the viewport. On narrower windows the
+    same widgets move to two or one column. No widgets or checkbox variables
+    are recreated during a resize.
+    """
+
+    MAX_COLUMNS = 4
+    MIN_COLUMN_WIDTH = 240
+
+    @classmethod
+    def columns_for_width(cls, width):
+        # Never squeeze three cards into a width that fits only two legibly.
+        width = int(width)
+        if width >= 4 * cls.MIN_COLUMN_WIDTH:
+            return 4
+        return 2 if width >= 2 * cls.MIN_COLUMN_WIDTH else 1
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill='x')
+        self.slots = []
+        self.columns = 0
+        self._placed = 0
+        # Bind to our own frame, not the persistent ScrollArea.body. The
+        # catalogue destroys/recreates this grid on refresh; a parent-bound
+        # callback would keep referring to the destroyed grid on every resize.
+        self.frame.bind('<Configure>', self._resize, add='+')
+
+    def add(self):
+        slot = ttk.Frame(self.frame, padding=(3, 3))
+        self.slots.append(slot)
+        self.reflow()
+        return slot
+
+    def _resize(self, event):
+        self.reflow(event.width)
+
+    def reflow(self, width=None):
+        if width is None:
+            width = self.frame.winfo_width()
+        columns = self.columns_for_width(width)
+        if columns == self.columns and self._placed == len(self.slots):
+            return
+        self.columns, self._placed = columns, len(self.slots)
+        for slot in self.slots:
+            slot.grid_forget()
+        for column in range(self.MAX_COLUMNS):
+            self.frame.columnconfigure(column, weight=int(column < columns),
+                                       minsize=0)
+        for index, slot in enumerate(self.slots):
+            slot.grid(row=index // columns, column=index % columns,
+                      sticky='nsew', padx=2, pady=2)
 
 
 class Stack:
@@ -200,8 +272,10 @@ def _summary_row(parent, w):
     every pixel it can get.
     """
     frame = ttk.Frame(parent)
-    ttk.Label(frame, textvariable=w.choice_summary,
-              style='Section.TLabel').pack(side='left', anchor='w')
+    summary=ttk.Label(frame,textvariable=w.choice_summary,
+                      style='Section.TLabel')
+    summary.pack(side='left',anchor='w')
+    w.choice_summary_label=summary
     storage = ttk.Label(frame, textvariable=w.choice_storage, style='Muted.TLabel',
                         wraplength=520, justify='right')
     storage.pack(side='right', anchor='e', padx=(12, 0))
@@ -239,7 +313,7 @@ def build(parent, w):
     w.model_tabs = ttk.Notebook(parent)
     w.model_tabs.pack(fill='both', expand=True)
     pages = (('stack', '현재 스택', _stack),
-             ('choose', '모델 고르기', _choose),
+             ('choose', '설치 · 모델 관리', _choose),
              ('disk', '디스크 사용량', _disk))
     w.model_pages = {}
     for key, title, builder in pages:
@@ -247,6 +321,9 @@ def build(parent, w):
         w.model_tabs.add(page, text=title)
         w.model_pages[key] = page
         builder(page, w)
+    # Most users open Models to browse or manage installations. The runtime
+    # stack remains one click away, and the Ollama repair action selects it.
+    w.model_tabs.select(w.model_pages['choose'])
 
 
 def _stack(parent, w):
@@ -278,8 +355,8 @@ def _choose(parent, w):
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
-        '역할을 펼쳐 상·중·하 권장 모델을 확인하세요. 각 단계와 추가 옵션도 접거나 펼칠 수 있습니다. '
-        '같은 모델을 여러 역할에서 선택해도 설치는 한 번만 진행됩니다.'),
+        '역할 그룹은 넓은 화면에서 한 줄에 4개씩 표시됩니다. 상·중·하 단계와 추가 옵션은 각각 접을 수 있습니다. '
+        '상태 표시는 실제 설치 여부이며, 체크는 앞으로 설치·유지할 목록입니다.'),
         pad=(0, 6))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,

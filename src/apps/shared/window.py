@@ -16,7 +16,7 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
                       wrap_to_parent)
 from .themes import themed
 from . import views
-from .models_view import ModelAccordion
+from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
 
 
@@ -788,24 +788,62 @@ class DesktopWindow:
         self.update_choice_summary()
 
     def build_catalog_rows(self,catalog):
+        # Refresh should not turn an in-progress manual choice back into the
+        # budget recommendation before the user presses Apply.
+        previous_choices={tag: var.get() for tag,var in self.choice_vars.items()}
+        previous_defaults=getattr(self,'_catalog_choice_defaults',{})
+        # Preserve only intentional changes, not untouched old defaults.
+        # Otherwise an externally installed model may appear unchecked after
+        # refresh and be incorrectly marked for removal.
+        self._previous_catalog_choices={
+            tag: checked for tag, checked in previous_choices.items()
+            if checked != previous_defaults.get(tag,checked)
+        }
         for child in self.choice_body.winfo_children():
             child.destroy()
+        self._catalog_choice_defaults={}
         self.choice_vars={}
         self.choice_checkbuttons={}
+        self.choice_statuses={}
+        self.choice_status_labels={}
+        self.catalog_detail_widgets={}
         self.catalog_groups={}
         groups=group_catalog(catalog)
+        # Keep these actions in the scrolling list, not the fixed top toolbar:
+        # six full-size buttons overflow the model page at its minimum width.
+        tools=ttk.Frame(self.choice_body)
+        tools.pack(fill='x',pady=(0,5))
+        ttk.Label(tools,text='역할별 모델',style='Section.TLabel').pack(
+            side='left',anchor='w')
+        if not hasattr(self,'catalog_install_count'):
+            self.catalog_install_count=tk.StringVar(master=self.root,value='')
+        ttk.Label(tools,textvariable=self.catalog_install_count,
+                  style='Muted.TLabel').pack(side='left',padx=(12,0))
+        ttk.Button(tools,text='모두 접기',
+                   command=lambda:self.fold_catalog_roles(False)).pack(
+                       side='right',padx=(6,0))
+        ttk.Button(tools,text='모두 펼치기',
+                   command=lambda:self.fold_catalog_roles(True)).pack(side='right')
+        columns=CatalogColumns(self.choice_body)
+        self.catalog_columns=columns
 
         for role in groups['roles']:
             key='role:'+role['key']
+            installed_count=len({entry['tag'] for tier in role['tiers']
+                                 for entry in ([tier['recommended']] + tier['options'])
+                                 if entry is not None and entry['installed']})
+            # Full names remain in the explanatory body; short card headings
+            # are essential so four columns fit even on a laptop.
+            short_title=role['title'].split(' (',1)[0]
             section=self.add_catalog_group(
-                self.choice_body,key,
-                f"{role['title']}  ·  상·중·하 권장 / 추가 옵션 {role['optional_count']}개",
-                expanded=False)
+                columns.add(),key,
+                f"{short_title} · 설치 {installed_count}개",
+                expanded=True)
             if role['desc']:
                 desc=ttk.Label(section.body,text=role['desc'],
-                               style='Muted.TLabel',wraplength=690,justify='left')
+                               style='Muted.TLabel',wraplength=175,justify='left')
                 desc.pack(anchor='w',fill='x',pady=(4,6))
-                wrap_to_parent(desc,inset=70,minimum=220)
+                wrap_to_parent(desc,inset=12,minimum=140)
             for tier in role['tiers']:
                 primary=tier['recommended']
                 label=tier['level_label']
@@ -815,7 +853,7 @@ class DesktopWindow:
                     continue
                 primary_section=self.add_catalog_group(
                     section.body,key+':tier:'+str(tier['number']),
-                    f"{label} 단계 (권장)  ·  {primary['tag']}",
+                    f"{label} 단계 (권장) · {'설치됨' if primary['installed'] else '미설치'}",
                     expanded=True,compact=True)
                 self.add_catalog_row(
                     primary_section.body,primary,
@@ -824,7 +862,7 @@ class DesktopWindow:
             if role['optional_count']:
                 options_section=self.add_catalog_group(
                     section.body,key+':options',
-                    f"추가 옵션 ({role['optional_count']}개)  ·  필요할 때 선택",
+                    f"추가 옵션 ({role['optional_count']}개)",
                     expanded=False,compact=True)
                 for tier in role['tiers']:
                     if not tier['options']:
@@ -848,7 +886,8 @@ class DesktopWindow:
             if not models:
                 continue
             section=self.add_catalog_group(
-                self.choice_body,key,f'{title} ({len(models)}개)',
+                columns.add(),key,
+                f"{'RAG 임베딩' if key == 'extra:embed' else '기타 모델'} · {len(models)}개",
                 expanded=False)
             for model in models:
                 self.add_catalog_row(
@@ -857,8 +896,8 @@ class DesktopWindow:
                     status='선택 모델',show_role=True)
         if catalog['extra_installed']:
             section=self.add_catalog_group(
-                self.choice_body,'extra:installed',
-                f"직접 설치한 모델 ({len(catalog['extra_installed'])}개)",
+                columns.add(),'extra:installed',
+                f"직접 설치 · {len(catalog['extra_installed'])}개",
                 expanded=False)
             for tag in catalog['extra_installed']:
                 self.add_catalog_row(
@@ -868,18 +907,6 @@ class DesktopWindow:
                      'desc':'카탈로그에 없는 모델입니다. 체크를 풀면 삭제합니다.'},
                     checked=True,status='직접 설치')
 
-        plan=catalog['plan']
-        parts=[f"[{label}] "+(', '.join(plan.get(key) or ()) or '없음')
-               for key,label in catalog['levels']]
-        counts=' · '.join(f"{label} {len(plan.get(key) or ())}개"
-                          for key,label in catalog['levels'])
-        self._choice_plan_default=(
-            f"메모리 예산 {catalog['budget_gb']:.0f}GB 기준 "
-            f"3단계를 미리 체크했습니다 · {counts} · 자세한 목록은 기록에")
-        self.choice_plan.set(self._choice_plan_default)
-        self.log('선택 계획 · 여유 메모리는 오르내리므로 세 단계를 모두 둡니다:')
-        for part in parts:
-            self.log('  '+part)
         self.choice_scroller.bind_content()
 
     def add_catalog_group(self,parent,key,title,*,expanded=False,compact=False):
@@ -897,32 +924,84 @@ class DesktopWindow:
         tag=model['tag']
         var=self.choice_vars.get(tag)
         if var is None:
-            var=tk.BooleanVar(master=self.root,value=checked)
+            var=tk.BooleanVar(
+                master=self.root,
+                value=getattr(self,'_previous_catalog_choices',{}).get(tag,checked))
             self.choice_vars[tag]=var
-        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=10)
+            self._catalog_choice_defaults[tag]=checked
+        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=7)
         card.pack(fill='x',pady=3)
-        facts=[tag]
-        if show_role:
-            facts.append(model['role'])
-        if status:
-            facts.append('['+status+']')
-        if model.get('note'):
-            facts.append(model['note'])
-        if model['size_gb']:
-            facts.append(f"받기 ~{model['size_gb']:.1f}GB")
-        if model['installed']:
-            facts.append('설치됨')
-        box=ttk.Checkbutton(card,text='   ·   '.join(facts),variable=var,
+        state_text=tk.StringVar(master=self.root)
+        self.choice_statuses.setdefault(tag,[]).append(state_text)
+        label=ttk.Label(card,textvariable=state_text,style='Model.StateMissing.TLabel',
+                        anchor='w')
+        label.pack(anchor='w',fill='x',pady=(0,3))
+        self.choice_status_labels.setdefault(tag,[]).append(label)
+        visible_name=model_display_name(tag) if model.get('desc') else tag
+        name_label=ttk.Label(card,text=visible_name,style='Manage.Card.TLabel',
+                             wraplength=175,justify='left')
+        name_label.pack(anchor='w',fill='x')
+        wrap_to_parent(name_label,inset=18,minimum=120)
+        # The checkbox's meaning depends on what is actually on disk.
+        # "selected" is a future intent, never proof that the file exists.
+        choice_label='이 모델 유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
+        box=ttk.Checkbutton(card,text=choice_label,variable=var,
                             command=self.update_choice_summary,
                             style='Card.TCheckbutton')
         box.pack(anchor='w',fill='x')
+        # A short status/size line is easier to scan in a four-column grid.
+        details=[status] if status else []
+        if model.get('size_gb'):
+            details.append(f"~{model['size_gb']:.1f} GB")
+        if show_role and model.get('role'):
+            details.append(model['role'])
+        if details:
+            details_label=ttk.Label(card,text=' · '.join(details),
+                                    style='Manage.CardMuted.TLabel',
+                                    wraplength=150,justify='left')
+            details_label.pack(anchor='w',fill='x',padx=(20,0))
+            wrap_to_parent(details_label,inset=38,minimum=110)
         self.choice_checkbuttons.setdefault(tag,[]).append(box)
+        if model.get('note'):
+            note_label=ttk.Label(card,text=model['note'],style='Manage.CardMuted.TLabel',
+                                 wraplength=150,justify='left')
+            note_label.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            wrap_to_parent(note_label,inset=38,minimum=110)
         if model.get('desc'):
-            desc=ttk.Label(card,text=model['desc'],
+            # Full descriptions are valuable, but repeating them for every
+            # recommended tier made the four-column comparison impractically
+            # tall. Display details only when requested, per shared model tag.
+            desc=ttk.Label(card,text='전체 태그: '+tag+'\n'+model['desc'],
                            style='Manage.CardMuted.TLabel',
-                           wraplength=600,justify='left')
-            desc.pack(anchor='w',fill='x',padx=(26,0),pady=(4,0))
-            wrap_to_parent(desc,inset=70,minimum=220)
+                           wraplength=150,justify='left')
+            wrap_to_parent(desc,inset=38,minimum=110)
+            opened=getattr(self,'_catalog_detail_state',{}).get(tag,False)
+            detail_button=ttk.Button(
+                card,text='설명 접기 ▲' if opened else '설명 보기 ▼',
+                style='Manage.Details.TButton',
+                command=lambda model_tag=tag:self.toggle_catalog_detail(model_tag))
+            detail_button.pack(anchor='w',padx=(16,0),pady=(2,0))
+            if opened:
+                desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            self.catalog_detail_widgets.setdefault(tag,[]).append((desc,detail_button))
+
+    def toggle_catalog_detail(self,tag):
+        if not hasattr(self,'_catalog_detail_state'):
+            self._catalog_detail_state={}
+        opened=not self._catalog_detail_state.get(tag,False)
+        self._catalog_detail_state[tag]=opened
+        for desc,button in self.catalog_detail_widgets.get(tag,()):
+            if opened:
+                desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            else:
+                desc.pack_forget()
+            button.configure(text='설명 접기 ▲' if opened else '설명 보기 ▼')
+
+    def fold_catalog_roles(self, expanded):
+        """Fold top-level role and extra groups, preserving nested tier states."""
+        for key, section in getattr(self, 'catalog_groups', {}).items():
+            if key.count(':') == 1 and key.startswith(('role:', 'extra:')):
+                section.set_expanded(expanded)
 
     def selected_tags(self):
         return {tag for tag,var in self.choice_vars.items() if var.get()}
@@ -941,16 +1020,52 @@ class DesktopWindow:
     def update_choice_summary(self):
         catalog=getattr(self,'_catalog',None)
         if catalog is None:return
-        try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
-        except Exception as exc:self.choice_summary.set('선택 계산 실패: '+str(exc));return
+        # The visible install state must not depend on disk free-space
+        # estimation succeeding. It is known from the catalogue scan.
+        installed=self.catalog_installed()
+        if hasattr(self,'catalog_install_count'):
+            total=len(catalog['models'])+len(catalog['extra_installed'])
+            self.catalog_install_count.set(f'현재 설치 {len(installed)}/{total}개')
+        for tag, labels in getattr(self,'choice_statuses',{}).items():
+            selected=bool(self.choice_vars[tag].get())
+            if tag in installed:
+                state='● 설치됨 · 유지' if selected else '● 설치됨 · 삭제 예정'
+                style='Model.StateInstalled.TLabel' if selected else 'Model.StateRemove.TLabel'
+            else:
+                state='○ 미설치 · 설치 예정' if selected else '○ 미설치'
+                style='Model.StateInstall.TLabel' if selected else 'Model.StateMissing.TLabel'
+            for variable in labels:
+                variable.set(state)
+            for label in self.choice_status_labels.get(tag,()):
+                label.configure(style=style)
+
+        try:plan=self.services.models.plan_changes(self.selected_tags(),installed=installed)
+        except Exception as exc:
+            self.choice_summary.set('선택 계산 실패: '+str(exc))
+            if hasattr(self,'choice_summary_label'):
+                self.choice_summary_label.configure(style='Model.SummaryRemove.TLabel')
+            self.choice_storage.set('설치 계획을 확인할 수 없습니다.')
+            self.choice_storage_label.configure(style='Alert.TLabel')
+            self.apply_button.state(['disabled'])
+            return
         self._plan=plan
         self._model_confirm_signature=None
         if hasattr(self,'apply_button'):
             self.apply_button.configure(text='선택대로 적용')
-        if hasattr(self,'_choice_plan_default'):
-            self.choice_plan.set(self._choice_plan_default)
+        if plan['remove']:
+            self.choice_plan.set(
+                f"주의 · {len(plan['remove'])}개가 삭제 대상입니다. "
+                "적용을 누르면 이 화면에서 한 번 더 확인합니다.")
+        elif plan['install']:
+            self.choice_plan.set(
+                f"{len(plan['install'])}개 다운로드 예정 · 여러 역할에 같은 모델이 있어도 한 번만 받습니다.")
+        else:
+            self.choice_plan.set("변경 사항 없음 · 체크된 모델은 그대로 유지합니다.")
         self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
                                 f"   ·   삭제 예정 {len(plan['remove'])}개")
+        if hasattr(self,'choice_summary_label'):
+            self.choice_summary_label.configure(
+                style='Model.SummaryRemove.TLabel' if plan['remove'] else 'Section.TLabel')
         self.choice_storage.set(self.storage_line(plan))
         # A selection that cannot fit is shown as a problem, not as a number the
         # user is expected to compare themselves mid-download.
