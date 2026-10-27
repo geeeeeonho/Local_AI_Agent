@@ -639,14 +639,16 @@ MAX_MODEL_GB     = 18.4      # 예산 × 0.92 (나머지는 KV 캐시·버퍼 �
 | **중** | 6~12GB | 브라우저·Docker 를 같이 쓰는 평소 상태 |
 | **하** | ~6GB | 메모리가 빠듯할 때의 최후 단계 |
 
-한 단계만 받아 두면 여유 메모리가 오르내릴 때 쓸 게 없어지고, 단계가 너무 많으면
-어느 것이 실제로 도는지 알 수 없고 디스크만 먹습니다. 그래서 **세 단계 전부**가
-기본 설치 세트입니다. 같은 등급의 다른 선택지는 `alts`(대안)로 두며 기본 설치에는
-들어가지 않습니다 — 받아 둔 사람에게만 걸립니다.
+3단계는 **실행 시 후보 사다리**입니다. **기본 다운로드는 상·중 5종만** 미리 체크하고,
+하 단계 모델은 사용자가 Models 화면에서 직접 선택했을 때만 설치합니다.
+기본 5종은 역할별 공통 모델을 재사용하며 중복 다운로드를 줄입니다.
+메모리가 너무 적어 기본 세트 중 하나도 적재할 수 없다면 불가능한 모델을
+억지로 선택하지 않고, 하 단계 모델을 수동 설치하도록 안내합니다.
 
-20GB 예산에서 18GB 급(`qwen3.6:27b`, `gemma4:26b-a4b-it-qat`)은 여유 19.6GB 를
-요구해 사실상 유휴 상태에서만 뜹니다. 그래서 기본단계가 아니라 상 등급의
-**대안**입니다.
+Qwen 3.8 27B(공식 Ollama `qwen3.8:27b`, 약 18GB)는 코딩·에이전트·문서·범용
+상위 단계의 **실험용 대안**으로 등록했습니다. 일부 Ollama 환경에서
+OpenAI 호환 `/v1/chat/completions` 경로의 응답 정지 보고가 있어 기본
+설치에는 넣지 않았습니다. 실제 로컬 연결 테스트 후 권장 모델 승격을 검토하세요.
 
 ### 설치는 예산으로, 실행은 지금 여유로
 
@@ -668,9 +670,11 @@ size_gb  받는 크기(디스크)   — Models 화면의 "몇 GB 받나"
 run_gb   상주 크기(메모리)   — 등급 배정과 적재 가능 판정
 ```
 
-대부분 GGUF 는 둘이 같지만 Gemma 4 E 계열은 다릅니다. `gemma4:e4b` 는 9.6GB를
-받아도 활성 파라미터만 올려 **약 5GB로 돕니다**. 하나로 뭉뚱그리면 저사양 PC 에서
-실제로 잘 돌아가는 모델을 "안 맞는다"고 걸러 버립니다.
+Gemma 4 E 계열의 'E4B'는 **effective parameter** 수를 의미합니다. 전체
+가중치가 4~5GB만 적재된다는 뜻이 아닙니다. 공식 `gemma4:e4b-it-qat`는
+다운로드가 약 6.1GB이므로, 카탈로그에서는 중 단계의 선택 모델로
+처리하고 저사양 기본 폴백에서 제외했습니다. 실행 시 KV 캐시·컨텍스트 크기에
+따라 더 많은 메모리가 필요할 수 있습니다.
 
 ### 도구 호출
 
@@ -683,30 +687,28 @@ Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사�
 `TIERS` 의 키 = `model_classes.CLASSES` 의 키 = `ROLES` 의 이름. 셋이 같은 집합이어야
 하고 테스트가 이를 강제합니다.
 
-| 그룹 | 목적 | 상 (15GB급) | 중 (9GB급) | 하 (5GB급) |
+| 그룹 | 목적 | 상 (기본 사다리) | 중 (기본 사다리) | 하 (수동 선택) |
 | --- | --- | --- | --- | --- |
 | `coding` | 코드 작성·실행 | `devstral-small-2:24b` | `qwen2.5-coder:14b` | `qwen2.5-coder:7b` |
-| `agent` | 검색·도구·자율 실행 | `prutser/…ara-abliterated:Q4_K_S` | `qwen2.5-coder:14b` | `gemma4:e4b-it-qat` |
-| `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `huihui_ai/qwen3-abliterated:14b` | `huihui_ai/qwen3-abliterated:8b` |
-| `office` | 요약·보고서·스캔본 OCR | `gemma4:26b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
-| `balanced` | 일상 대화 | `gpt-oss:20b` | `gemma4:12b` | `gemma4:e4b-it-qat` |
+| `agent` | 검색·도구·자율 실행 | `gemma4:26b-a4b-it-qat` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
+| `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `hf.co/TrevorJS/…:Q8_0` | `huihui_ai/qwen3-abliterated:8b` |
+| `office` | 요약·보고서·스캔본 | `gemma4:26b` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
+| `balanced` | 일상 대화 | `gpt-oss:20b` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
+
+이 표의 **사다리 기본 모델(primary)**은 기본 설치 모델과 다릅니다. 예를 들어
+에이전트 상단 QAT 모델은 고급 선택에서만 받으며 기본 설치 시에는
+이미 받은 중 단계 `gemma4:12b`를 다른 역할과 공유합니다.
 
 ### Gemma 4 를 어디에 두었나
 
-Gemma 4 는 이 예산 안에서 **범용 품질이 가장 높습니다.** 26B-A4B 가 Arena
-오픈 6위(1441 Elo) · MMLU-Pro 82.6 · GPQA Diamond 84.3 으로, GPQA 에서는
-gpt-oss-120B(76.2)마저 앞섭니다. MoE 활성 ~4B 라 26B 급인데도 빠르고,
-전 사이즈가 이미지를 봅니다. 그래서 15개 기본단계 중 **11개가 Gemma 4 계열**입니다.
+Gemma 4는 사무·범용·에이전트에 공통 활용합니다. QAT 모델은 정식
+도구 호출/멀티모달을 지원하지만 실제 Open Interpreter 통합 검증이
+필요합니다. Abliterated ARA 모델은 Ollama 배포 페이지상 **텍스트 입력
+전용**이므로 기본 에이전트나 문서 OCR 사다리에는 넣지 않았습니다.
+코딩은 Devstral과 Qwen 계열을 중심으로 배치합니다.
 
-한 곳만 예외입니다. **코딩은 Gemma 4 를 쓰지 않습니다.** SWE-bench Verified
-(실제 GitHub 이슈 해결)가 Gemma 4 의 약점으로 같은 체급 Qwen 에 크게 뒤지고,
-Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상이 이 프로그램의 코딩
-역할과 정확히 겹칩니다 — 여러 파일에 걸친 장기 과제 분해, 30턴 이상 일관된 도구
-호출, 중간 실패에서의 복구. 반면 도구 사용 자체(τ2-bench 86.4, Gemma 3 27B 는
-6.6)는 강해서 에이전트 역할에는 그대로 씁니다.
-
-`gemma4:31b`(dense, Arena 오픈 3위·1452 Elo)은 **이 예산에 들어오지 않습니다.**
-적재 ~20GB 로 상한 18.4GB 를 넘어, 받아도 뜨지 않습니다.
+`gemma4:31b`는 기본 20GB 모델 예산에서 실행 여유가 부족할 수 있어
+기본 후보에서 제외합니다.
 
 사무 그룹은 상·중 등급 후보를 **전부 이미지가 되는 모델로만** 채웁니다.
 사다리는 '맞는 것 중 첫 번째' 를 자동으로 고르기 때문에, 이미지를 못 보는 후보를
@@ -731,13 +733,14 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 "한국어" …) — 후보가 여럿이면 왜 이걸 고르는지가 보여야 고를 수 있습니다.
 
 ```text
-무검열 · 중 (적재 6.1~9.0GB · 후보 3개)
-  ★ huihui_ai/qwen3-abliterated:14b      9.0GB  [설치됨]  다국어
-  · huihui_ai/gemma-4-abliterated:12b    7.6GB  [미설치]  이미지
-  · huihui_ai/qwen3-vl-abliterated:8b    6.1GB  [미설치]  이미지
-
-★ 지금 실제 사용 · ☆ 이 여유에서의 추천(미설치) · · 같은 등급 대안
+무검열 · 중 (수동 선택 후보 포함)
+  ★ TrevorJS Gemma 4 12B Q8_0    12.7GB · 기본 권장
+  · Huihui Qwen3.5 Abliterated 9B   7.0GB · 튜닝 후보
+  · Huihui Qwen3 Abliterated 14B    9.0GB · 이전 추천 유지
 ```
+
+이름·크기는 카탈로그 기준이며, 실제 선택은 현재 여유 메모리와 설치
+여부에 따라 달라집니다.
 
 **후보에서 뺀 것**과 이유:
 
@@ -753,20 +756,28 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 
 ### 기본 권장 모델 세트
 
-`model_catalog.plan_by_level()` 이 역할 × 3단계의 기본단계를 모읍니다(중복 제거).
-20GB 예산에서:
+`model_catalog.plan_by_level()`는 기본 예산 20GB에서 **상 2종 + 중 3종 = 총 5종**만
+권장합니다. 하 단계는 모델 관리 화면에서 선택할 수 있지만 자동으로
+설치하거나 기존 파일을 지우지 않습니다.
 
-| 등급 | 받기 | 모델 |
-| --- | --- | --- |
-| 상 | 62.0GB | `gemma4:26b`, `devstral-small-2:24b`, `prutser/…ara-abliterated:Q4_K_S`, `gpt-oss:20b` |
-| 중 | 25.6GB | `qwen2.5-coder:14b`, `huihui_ai/qwen3-abliterated:14b`, `gemma4:12b` |
-| 하 | 19.3GB | `gemma4:e4b-it-qat`, `huihui_ai/qwen3-abliterated:8b`, `qwen2.5-coder:7b` |
-|  | **106.9GB** |  |
+| 등급 | 모델 | 카탈로그 다운로드 크기 합계 |
+| --- | --- | ---: |
+| 상 | `devstral-small-2:24b`, `prutser/…ara-abliterated:Q4_K_S` | 약 30.0GB |
+| 중 | `qwen2.5-coder:14b`, `gemma4:12b`, `hf.co/TrevorJS/…:Q8_0` | 약 29.3GB |
+| 하 | 기본 설치 없음 (수동 선택 가능) | 0GB |
+| **합계** | **5종 (기존 기본 10종에서 축소)** | **약 59.3GB** |
 
-`RUN.bat --manage`의 **Models → 모델 고르기** 화면은 이 구성을 권장 체크 상태로 보여 주고
-각 항목에 `[상]` `[중]` `[하]` 를 붙입니다. 모델 설치·삭제·다운로드 진행률도 이 화면
-안에서 처리하며 별도 모델 선택 창을 만들지 않습니다. 용량이 부담되면 한 등급을 통째로
-빼도 됩니다 — 사다리가 남은 등급으로 안전하게 내려갑니다.
+다운로드 양은 모델 카탈로그의 추정치이며, Ollama blob 공유와 실제
+업스트림 태그 변경에 따라 달라질 수 있습니다.
+
+`RUN.bat --manage`의 **Models → 설치 · 모델 관리** 화면에서 최종 선택을
+확인하고 적용합니다. 저장된 모델이 기본 5종에서 빠지더라도
+`권장 세트` 버튼은 기존 설치를 자동 삭제하지 않습니다.
+
+**Qwen 3.8 관련:** `qwen3.8:27b`는 공식 27B/18GB 모델입니다.
+공식 9B Qwen 3.8 모델은 확인되지 않아, 중간급 Qwen 계열은
+`qwen3.5:9b`, 무검열 튜닝 모델은
+`huihui_ai/qwen3.5-abliterated:9b`를 선택 후보로 두었습니다.
 
 ### 목록을 직접 찍어 보기
 
@@ -775,7 +786,7 @@ Google 도 공식 벤치마크에서 이 항목을 뺐습니다. 실패 양상�
 ```powershell
 $env:PYTHONPATH = "$PWD\src"
 python -m launcher.models            # 지금 여유 메모리 기준 전체 후보군
-python -m launcher.models --plan     # 기본 설치 세트(3단계)만
+python -m launcher.models --plan     # 상·중 기본 5종만
 python -m launcher.models --free 12  # 여유 12GB 를 가정
 ```
 
@@ -785,7 +796,7 @@ python -m launcher.models --free 12  # 여유 12GB 를 가정
 레이아웃(내용 해시 blob + OCI manifest)을 만들어 놓고 사슬 전체를 한 번에 지납니다.
 
 ```text
-3단계 계획 -> installer.steps.model.download() -> OLLAMA_MODELS 경로에 pull
+상·중 기본 계획 -> Models 화면의 선택 적용 -> OLLAMA_MODELS 경로에 pull
            -> blobs/ + manifests/ 생성 -> MODEL_FILES.csv 로 파일↔모델 복원
            -> model_roles 가 '설치된 것' 을 읽어 역할별 결정
            -> AgentConfig.model -> Open Interpreter 스레드 파라미터
