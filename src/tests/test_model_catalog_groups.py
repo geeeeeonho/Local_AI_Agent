@@ -52,6 +52,37 @@ class RoleCatalogGroupingTests(unittest.TestCase):
             role['tiers'][2]['recommended']['tag'],
             'huihui_ai/qwen3-abliterated:8b')
 
+    def test_qwen3_vl_instruct_q4_is_visible_as_office_mid_ocr_spotlight(self):
+        tag = 'qwen3-vl:8b-instruct-q4_K_M'
+        office = next(r for r in self.groups['roles'] if r['key'] == 'office')
+        middle = office['tiers'][1]
+        self.assertEqual(middle['level_label'], '중')
+        self.assertEqual(middle['recommended']['tag'], 'gemma4:12b')
+        self.assertEqual([row['tag'] for row in middle['featured']], [tag])
+        self.assertIn(tag, [row['tag'] for row in middle['options']])
+        self.assertIn('qwen3-vl:8b', [row['tag'] for row in middle['options']])
+        self.assertNotIn(tag, self.catalog['recommended'])
+        self.assertFalse(next(row for row in self.catalog['models']
+                              if row['tag'] == tag)['installed'])
+        self.assertEqual(office['optional_count'],
+                         sum(len(t['options']) - len(t['featured'])
+                             for t in office['tiers']))
+
+    def test_ocr_spotlight_stays_separate_from_lean_default_installs(self):
+        tag = 'qwen3-vl:8b-instruct-q4_K_M'
+        entry = catalog.by_tag()[tag]
+        self.assertEqual(entry.spotlight_for, 'office')
+        self.assertTrue(entry.vision)
+        self.assertEqual(entry.ctx_k, 256)
+        self.assertAlmostEqual(entry.size_gb, 6.2)
+        self.assertGreaterEqual(entry.memory_gb, entry.size_gb)
+        self.assertEqual(catalog.level_of(tag), 'mid')
+        self.assertIn('Q4_K_M', tag)
+        self.assertNotIn(tag, catalog.core_tags())
+        self.assertEqual(len(catalog.core_tags()), 5)
+        self.assertNotIn(tag, catalog.recommended_for(20.0))
+        self.assertNotIn(tag, catalog.plan_by_level(20.0)['mid'])
+
     def test_unassigned_models_are_still_in_optional_group(self):
         self.assertEqual(
             {x['tag'] for x in self.groups['extra'] if x['kind'] == 'embed'},
