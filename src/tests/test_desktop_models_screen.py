@@ -485,6 +485,7 @@ def test_catalog_has_responsive_four_column_roles(ui):
     from apps.shared.models_view import CatalogColumns
     assert CatalogColumns.columns_for_width(1100) == 4
     assert CatalogColumns.columns_for_width(650) == 2
+    assert CatalogColumns.columns_for_width(820) == 2
     assert CatalogColumns.columns_for_width(200) == 1
     assert len(w.catalog_columns.slots) >= 5
     w.catalog_columns.reflow(1100)
@@ -508,3 +509,66 @@ def test_catalog_state_label_distinguishes_disk_from_choice(ui):
     w.update_choice_summary()
     assert '삭제 예정' in w.choice_statuses[installed][0].get()
     assert '설치 예정' in w.choice_statuses[missing][0].get()
+
+
+def test_catalog_refresh_does_not_leak_resize_handlers_or_discard_unsaved_choices(ui):
+    w, _, _ = ui
+    open_models(w)
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+    original_binding = w.choice_body.bind('<Configure>')
+    tag = next(iter(w.choice_vars))
+    w.choice_vars[tag].set(not w.choice_vars[tag].get())
+    chosen = w.choice_vars[tag].get()
+
+    for _ in range(3):
+        old_frame = w.catalog_columns.frame
+        w.build_catalog_rows(w._catalog)
+        assert not old_frame.winfo_exists()
+        assert w.choice_body.bind('<Configure>') == original_binding
+        assert w.choice_vars[tag].get() == chosen
+
+    w.root.wm_geometry('1180x740')
+    pump(w)
+    assert w.catalog_columns.frame.winfo_exists()
+
+
+def test_status_styles_distinguish_missing_pending_and_removal(ui):
+    w, svc, _ = ui
+    installed = store_model(svc)
+    open_models(w)
+    missing = next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
+
+    assert w.choice_status_labels[installed][0].cget('style') == 'Model.StateInstalled.TLabel'
+    w.choice_vars[installed].set(False)
+    w.choice_vars[missing].set(False)
+    w.update_choice_summary()
+    assert w.choice_status_labels[installed][0].cget('style') == 'Model.StateRemove.TLabel'
+    assert w.choice_status_labels[missing][0].cget('style') == 'Model.StateMissing.TLabel'
+
+    w.choice_vars[missing].set(True)
+    w.update_choice_summary()
+    assert w.choice_status_labels[missing][0].cget('style') == 'Model.StateInstall.TLabel'
+
+
+def test_catalog_preserves_model_notes_when_rendering_compact_cards(ui):
+    w, _, _ = ui
+    open_models(w)
+    note_model = next(m for m in w._catalog['models'] if m.get('note'))
+    card = w.choice_checkbuttons[note_model['tag']][0].master
+    notes = [child.cget('text') for child in card.winfo_children()
+             if isinstance(child, __import__('tkinter').ttk.Label)]
+    assert note_model['note'] in notes
+
+
+def test_collapse_all_does_not_collapse_tiers_or_change_selections(ui):
+    w, _, _ = ui
+    open_models(w)
+    before = w.selected_tags()
+    w.fold_catalog_roles(False)
+    assert not w.catalog_groups['role:coding'].expanded
+    assert w.catalog_groups['role:coding:tier:2'].expanded
+    w.fold_catalog_roles(True)
+    assert w.catalog_groups['role:coding'].expanded
+    assert w.catalog_groups['role:coding:tier:2'].expanded
+    assert w.selected_tags() == before
