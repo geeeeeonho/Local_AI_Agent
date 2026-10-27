@@ -991,17 +991,8 @@ class DesktopWindow:
     def update_choice_summary(self):
         catalog=getattr(self,'_catalog',None)
         if catalog is None:return
-        try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
-        except Exception as exc:self.choice_summary.set('선택 계산 실패: '+str(exc));return
-        self._plan=plan
-        self._model_confirm_signature=None
-        if hasattr(self,'apply_button'):
-            self.apply_button.configure(text='선택대로 적용')
-        if hasattr(self,'_choice_plan_default'):
-            self.choice_plan.set(self._choice_plan_default)
-        self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
-                                f"   ·   삭제 예정 {len(plan['remove'])}개")
-        self.choice_storage.set(self.storage_line(plan))
+        # The visible install state must not depend on disk free-space
+        # estimation succeeding. It is known from the catalogue scan.
         installed=self.catalog_installed()
         for tag, labels in getattr(self,'choice_statuses',{}).items():
             selected=bool(self.choice_vars[tag].get())
@@ -1015,6 +1006,23 @@ class DesktopWindow:
                 variable.set(state)
             for label in self.choice_status_labels.get(tag,()):
                 label.configure(style=style)
+
+        try:plan=self.services.models.plan_changes(self.selected_tags(),installed=installed)
+        except Exception as exc:
+            self.choice_summary.set('선택 계산 실패: '+str(exc))
+            self.choice_storage.set('설치 계획을 확인할 수 없습니다.')
+            self.choice_storage_label.configure(style='Alert.TLabel')
+            self.apply_button.state(['disabled'])
+            return
+        self._plan=plan
+        self._model_confirm_signature=None
+        if hasattr(self,'apply_button'):
+            self.apply_button.configure(text='선택대로 적용')
+        if hasattr(self,'_choice_plan_default'):
+            self.choice_plan.set(self._choice_plan_default)
+        self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
+                                f"   ·   삭제 예정 {len(plan['remove'])}개")
+        self.choice_storage.set(self.storage_line(plan))
         # A selection that cannot fit is shown as a problem, not as a number the
         # user is expected to compare themselves mid-download.
         short=plan['fits'] is False and plan['install']
