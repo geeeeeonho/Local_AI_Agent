@@ -859,19 +859,41 @@ class DesktopWindow:
                     primary_section.body,primary,
                     checked=primary['installed'] or primary['recommended'],
                     status=f'{label} 단계 권장')
+                featured=tier.get('featured',())
+                if featured:
+                    ttk.Separator(primary_section.body,orient='horizontal').pack(
+                        fill='x',pady=(8,5))
+                    hint=ttk.Label(
+                        primary_section.body,
+                        text='이미지/OCR 특화 추천 · 기본 자동 설치에는 포함되지 않습니다',
+                        style='Manage.CardMuted.TLabel',
+                        wraplength=175,justify='left')
+                    hint.pack(anchor='w',fill='x',pady=(0,3))
+                    wrap_to_parent(hint,inset=12,minimum=120)
+                    for model in featured:
+                        self.add_catalog_row(
+                            primary_section.body,model,
+                            checked=model['installed'] or model['recommended'],
+                            status=f"{label} 단계 · {model['note']}")
             if role['optional_count']:
                 options_section=self.add_catalog_group(
                     section.body,key+':options',
                     f"추가 옵션 ({role['optional_count']}개)",
                     expanded=False,compact=True)
                 for tier in role['tiers']:
-                    if not tier['options']:
+                    # Featured choices have their own visible card beside the
+                    # tier primary. Do not render a duplicate checkbox in the
+                    # collapsed extra-options list.
+                    featured_tags={model['tag'] for model in tier.get('featured',())}
+                    extra_models=[model for model in tier['options']
+                                  if model['tag'] not in featured_tags]
+                    if not extra_models:
                         continue
                     ttk.Label(options_section.body,
                               text=tier['level_label']+' 단계 선택 모델',
                               style='Section.TLabel').pack(
                                   anchor='w',pady=(12,2))
-                    for model in tier['options']:
+                    for model in extra_models:
                         self.add_catalog_row(
                             options_section.body,model,
                             checked=model['installed'] or model['recommended'],
