@@ -116,6 +116,17 @@ class LadderResolutionTests(unittest.TestCase):
         roles.installed_models = lambda *a, **kw: {top, lower}
         self.assertEqual(roles.resolve_ladder("coding", 64.0), top)
 
+    def test_uninstalled_low_fallback_is_not_reported_as_loaded(self):
+        roles.installed_models = lambda *a, **kw: {"devstral-small-2:24b"}
+        # The only installed model is larger than 8GB free memory.
+        self.assertIsNone(roles.resolve_ladder("coding", 8.0))
+
+    def test_an_empty_store_can_still_show_a_installable_suggestion(self):
+        roles.installed_models = lambda *a, **kw: set()
+        chosen = roles.resolve_ladder("coding", 8.0)
+        self.assertIsNotNone(chosen)
+        self.assertLessEqual(catalog.memory_gb(chosen), 8.0 * catalog._SAFETY)
+
     def test_unknown_role_has_no_ladder(self):
         self.assertIsNone(roles.resolve_ladder("no-such-role", 64.0))
 
@@ -342,6 +353,21 @@ class EndToEndCoverageTests(unittest.TestCase):
                                          "여유 %.0fGB / %s -> %s" % (free, role, chosen))
         self.assertIsNone(roles.resolve_ladder("agent", 2.0))
         self.assertIsNone(roles.resolve_ladder("office", 2.0))
+
+
+class AgentLowMemoryGuardTests(unittest.TestCase):
+    def test_no_model_can_load_and_the_executor_is_not_probed(self):
+        from launcher.agent.entry_dialog import _resolve
+        old_probe, old_installed = roles._load_probe, roles.installed_models
+        self.addCleanup(setattr, roles, "_load_probe", old_probe)
+        self.addCleanup(setattr, roles, "installed_models", old_installed)
+        roles.installed_models = lambda *a, **kw: set()
+        roles._load_probe = lambda *a, **kw: self.fail("oversized model must not be probed")
+        self.assertIsNone(roles.resolve_ladder("agent", 2.0))
+        self.assertIsNone(roles.resolve_with_rollback("agent", free_gb=2.0))
+        selection = _resolve(roles, "5", 2.0)
+        self.assertIsNone(selection["tag"])
+        self.assertIn("메모리", selection["reason"])
 
 
 class GroupTaxonomyTests(unittest.TestCase):
