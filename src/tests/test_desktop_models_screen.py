@@ -591,3 +591,17 @@ def test_fold_controls_remain_visible_at_minimum_window_size(ui):
     buttons = [node for node in tools.winfo_children() if isinstance(node, ttk.Button)]
     assert {btn.cget('text') for btn in buttons} == {'모두 펼치기', '모두 접기'}
     assert all(btn.winfo_ismapped() and btn.winfo_width() >= 60 for btn in buttons)
+
+
+def test_installed_badge_survives_a_storage_plan_failure(ui, monkeypatch):
+    w, svc, _ = ui
+    installed = store_model(svc)
+    open_models(w)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError('storage plan unavailable')
+    monkeypatch.setattr(svc.models, 'plan_changes', fail)
+    w.update_choice_summary()
+    assert '설치됨' in w.choice_statuses[installed][0].get()
+    assert '선택 계산 실패' in w.choice_summary.get()
+    assert 'disabled' in w.apply_button.state()
