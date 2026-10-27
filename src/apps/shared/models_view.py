@@ -300,7 +300,7 @@ def build(parent, w):
     w.model_tabs = ttk.Notebook(parent)
     w.model_tabs.pack(fill='both', expand=True)
     pages = (('stack', '현재 스택', _stack),
-             ('choose', '모델 고르기', _choose),
+             ('choose', '설치 · 모델 관리', _choose),
              ('disk', '디스크 사용량', _disk))
     w.model_pages = {}
     for key, title, builder in pages:
@@ -308,6 +308,9 @@ def build(parent, w):
         w.model_tabs.add(page, text=title)
         w.model_pages[key] = page
         builder(page, w)
+    # Most users open Models to browse or manage installations. The runtime
+    # stack remains one click away, and the Ollama repair action selects it.
+    w.model_tabs.select(w.model_pages['choose'])
 
 
 def _stack(parent, w):
