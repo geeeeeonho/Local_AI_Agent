@@ -202,7 +202,8 @@ TIERS = {
                   "gemma4:12b-it-qat", "qwen3.5:9b",
                   "gemma4:e4b-it-qat", "gemma4:e4b", "qwen3:14b"]},
         {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat", "qwen2.5-coder:7b", "qwen3:8b"]},
+         "alts": ["gemma4:e2b-it-qat", "ministral-3:3b",
+                  "qwen2.5-coder:7b", "qwen3:8b"]},
     ],
     "uncensored": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
@@ -226,7 +227,7 @@ TIERS = {
                   "qwen3-vl:8b", "ministral-3:14b",
                   "gemma4:e4b-it-qat", "gemma4:e4b"]},
         {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat"]},
+         "alts": ["gemma4:e2b-it-qat", "ministral-3:3b"]},
     ],
     "balanced": [
         {"need": 14.0, "primary": "gpt-oss:20b",
@@ -237,7 +238,8 @@ TIERS = {
                   "gemma4:12b-it-qat", "qwen3:14b",
                   "gemma4:e4b-it-qat", "gemma4:e4b"]},
         {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat", "exaone3.5:7.8b", "qwen3:8b"]},
+         "alts": ["gemma4:e2b-it-qat", "ministral-3:3b",
+                  "exaone3.5:7.8b", "qwen3:8b"]},
     ],
 }
 
