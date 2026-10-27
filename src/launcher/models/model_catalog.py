@@ -79,6 +79,7 @@ class CatalogEntry:
     kind: str = "chat"        # "chat" | "embed"
     group: str = "core"       # "core"(기본) | "advanced"(선택)
     recommended: bool = True  # 정적 기본 체크(메모리 감지 실패 시 폴백)
+    spotlight_for: str = ""    # 특정 역할의 특화 추천 UI 표시; 기본 설치 체크와 별개
 
     @property
     def memory_gb(self) -> float:
@@ -274,12 +275,26 @@ _ALL: List[CatalogEntry] = [
     # ── 사무·문서 (스캔 문서·스크린샷 읽기) ──
     #  한국어 스캔본·표·스크린샷을 읽어야 하는 사무 작업용. Gemma 4 도 이미지를
     #  보지만, CJK 문자 OCR 은 Qwen3-VL 이 확실히 낫다.
-    CatalogEntry("qwen3-vl:8b", "문서 OCR·이미지 (한국어)", 6.1,
-                 "Qwen3-VL 8B — 한·중·일 문자 OCR 과 손글씨까지. 스캔 PDF·"
-                 "스크린샷에서 표와 텍스트를 뽑을 때. 256K.",
-                 run_gb=6.1, ctx_k=256, vision=True,
+    # Instruct Q4_K_M is an explicit, verified Ollama tag (not an alias
+    # for the default '8b' Thinking tag). Spotlight means discoverability,
+    # not automatic download; the five-model CORE set must stay unchanged.
+    CatalogEntry("qwen3-vl:8b-instruct-q4_K_M",
+                 "사무·문서 이미지/OCR 특화 추천 (Instruct Q4)", 6.2,
+                 "Qwen3-VL 8B Instruct Q4_K_M — 스캔 문서·스크린샷의 한글 OCR, "
+                 "표/이미지 구조 파악 및 UI 인식에 적합한 멀티모달 후보. "
+                 "256K는 최대 지원 컨텍스트이지 8GB VRAM 적재 보장이 아닙니다. "
+                 "이미지 수·컨텍스트에 따라 실행 메모리가 증가하며 "
+                 "Ollama 0.12.7 이상이 필요합니다.",
+                 run_gb=7.2, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
-                 note="이미지 OCR"),
+                 note="OCR 우선 추천", spotlight_for="office"),
+    # Preserve the existing tag for users who already installed it.
+    CatalogEntry("qwen3-vl:8b", "문서 OCR·이미지 (기존 8B 태그)", 6.2,
+                 "기존 Qwen3-VL 8B 태그. 이미 설치한 사용자를 위해 선택지로 유지합니다. "
+                 "빠른 OCR 추출에는 별도 Instruct Q4_K_M 특화 추천을 우선 고려하세요.",
+                 run_gb=7.2, ctx_k=256, vision=True,
+                 group="advanced", recommended=False,
+                 note="기존 8B 선택지"),
     # ── 범용/추론 ──
     CatalogEntry("gpt-oss:20b", "에이전트·추론 (MoE)", 14.0,
                  "OpenAI 오픈(Apache) 21B-A3.6B MoE — 에이전트 작업 겨냥 설계라 도구 호출이 "

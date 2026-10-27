@@ -115,6 +115,8 @@ class ModelService:
                 'tag': entry.tag, 'role': entry.role, 'desc': entry.desc,
                 'cloud': is_cloud_tag(entry.tag),
                 'note': entry.note, 'group': entry.group, 'kind': entry.kind,
+                # Task-specific UI spotlight, independent of core auto-install.
+                'spotlight_for': entry.spotlight_for,
                 'size_gb': float(entry.size_gb), 'memory_gb': float(entry.memory_gb),
                 'level': level or '', 'level_label': catalog.level_label(level) if level else '',
                 'installed': entry.tag in present,

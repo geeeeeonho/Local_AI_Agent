@@ -25,10 +25,16 @@ def group_catalog(catalog):
                 options.append(entry)
                 seen_options.add(tag)
                 assigned.add(tag)
+            # Featured options are still normal optional models, but the
+            # corresponding task-specific recommendation is shown beside the
+            # tier's primary card rather than hidden under "extra options".
+            featured = [entry for entry in options
+                        if entry.get('spotlight_for') == role['key']]
             tiers.append({
                 'number': tier['number'],
                 'level_label': tier['level_label'],
                 'recommended': primary,
+                'featured': featured,
                 'options': options,
             })
         groups.append({
@@ -36,7 +42,8 @@ def group_catalog(catalog):
             'title': role['title'],
             'desc': role.get('desc', ''),
             'tiers': tiers,
-            'optional_count': sum(len(tier['options']) for tier in tiers),
+            'optional_count': sum(len(tier['options']) - len(tier['featured'])
+                                  for tier in tiers),
         })
     return {
         'roles': groups,
