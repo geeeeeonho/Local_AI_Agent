@@ -35,8 +35,12 @@ def _resolve(mr, role_key, free):
     ladders = getattr(mr, "LADDERS", {})
     if getattr(role, "name", "") in ladders and hasattr(mr, "resolve_ladder"):
         picked = mr.resolve_ladder(role.name, free)
-        if picked:
-            tag = picked
+        if picked is None:
+            return {"tag": None,
+                    "reason": "현재 여유 메모리로 적재 가능한 모델이 없습니다. "
+                              "Models 화면에서 하 단계 모델을 수동 설치하거나 메모리를 확보하세요.",
+                    "label": getattr(role, "label", role_key)}
+        tag = picked
     return {"tag": tag, "reason": reason, "label": getattr(role, "label", role_key)}
 
 
@@ -245,6 +249,14 @@ def agent_setup(env=None, presenter=None, active_network=None):
                     selected = _resolve(mr, role_var.get(), free)
                 except Exception:
                     selected = {"tag": None, "reason": "resolve 실패", "label": role_var.get()}
+
+                if not selected.get("tag"):
+                    messagebox.showwarning(
+                        "모델 메모리 부족",
+                        selected.get("reason") or "현재 실행 가능한 모델이 없습니다.",
+                        parent=base,
+                    )
+                    return
 
                 _nm = net_var.get().strip().lower()
                 if mode_var.get() == "host" and _nm == "block":
