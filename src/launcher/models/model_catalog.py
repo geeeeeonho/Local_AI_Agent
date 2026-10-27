@@ -148,6 +148,11 @@ _ALL: List[CatalogEntry] = [
                  run_gb=9.5, ctx_k=128, vision=True,
                  group="advanced", recommended=False,
                  note="비-QAT 원본"),
+    CatalogEntry("gemma4:e2b-it-qat", "Gemma 경량 멀티모달 폴백", 4.3,
+                 "Gemma 4 E2B QAT 공식 GGUF. 128K·이미지·도구 호출을 지원하며 "
+                 "저사양 문서·범용의 별도 선택지입니다.",
+                 run_gb=4.7, ctx_k=128, vision=True,
+                 group="advanced", recommended=False, note="저사양 · 비전"),
     # ── 무검열 그룹 (번역·창작·검열 없는 범용) ──
     #  CORE 의 ARA 는 "거부율 최저" 로 뽑힌 특수 abliteration 이고, 아래는 크기별
     #  사다리를 메우는 축이다. 예전에는 15GB 와 5GB 사이가 통째로 비어 있어서,
