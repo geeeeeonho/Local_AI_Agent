@@ -239,7 +239,7 @@ _ALL: List[CatalogEntry] = [
                  "실행 호환성을 기기에서 검증한 뒤 기본값으로 전환하세요.",
                  run_gb=18.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
-                 note="실험 · OpenAI 호환성 확인 필요"),
+                 note="실험 · API 검증"),
     CatalogEntry("qwen3.5:9b", "Qwen 3.5 범용·도구·문서 중간", 6.6,
                  "공식 Qwen 3.5 9B. 도구 호출·멀티모달·256K를 제공하며 "
                  "코딩·한국어·문서 중간급 대체 후보입니다.",
@@ -250,6 +250,11 @@ _ALL: List[CatalogEntry] = [
                  "실측이 필요합니다. 저사양 옵션이며 기본 설치에서 제외합니다.",
                  run_gb=3.8, ctx_k=256, vision=True,
                  group="advanced", recommended=False, note="하 단계 · 선택"),
+    CatalogEntry("ministral-3:3b", "저사양 비전·툴콜 폴백", 3.0,
+                 "Ministral 3 3B 공식 Ollama 태그. 작은 메모리에서 비전·도구 호출을 "
+                 "수동으로 활성화할 때 선택할 수 있습니다.",
+                 run_gb=3.4, ctx_k=256, vision=True,
+                 group="advanced", recommended=False, note="저사양 · 툴콜"),
     CatalogEntry("ministral-3:14b", "도구·에이전트 중간 (Mistral)", 9.1,
                  "Ministral 3 14B. 도구 호출·JSON 출력·이미지 입력 지원. "
                  "로컬 Open Interpreter 호환성 검증 후 우선순위를 조정합니다.",
