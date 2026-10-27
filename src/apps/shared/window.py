@@ -791,13 +791,22 @@ class DesktopWindow:
         # Refresh should not turn an in-progress manual choice back into the
         # budget recommendation before the user presses Apply.
         previous_choices={tag: var.get() for tag,var in self.choice_vars.items()}
+        previous_defaults=getattr(self,'_catalog_choice_defaults',{})
+        # Preserve only intentional changes, not untouched old defaults.
+        # Otherwise an externally installed model may appear unchecked after
+        # refresh and be incorrectly marked for removal.
+        self._previous_catalog_choices={
+            tag: checked for tag, checked in previous_choices.items()
+            if checked != previous_defaults.get(tag,checked)
+        }
         for child in self.choice_body.winfo_children():
             child.destroy()
-        self._previous_catalog_choices=previous_choices
+        self._catalog_choice_defaults={}
         self.choice_vars={}
         self.choice_checkbuttons={}
         self.choice_statuses={}
         self.choice_status_labels={}
+        self.catalog_detail_widgets={}
         self.catalog_groups={}
         groups=group_catalog(catalog)
         # Keep these actions in the scrolling list, not the fixed top toolbar:
@@ -806,6 +815,10 @@ class DesktopWindow:
         tools.pack(fill='x',pady=(0,5))
         ttk.Label(tools,text='역할별 모델',style='Section.TLabel').pack(
             side='left',anchor='w')
+        if not hasattr(self,'catalog_install_count'):
+            self.catalog_install_count=tk.StringVar(master=self.root,value='')
+        ttk.Label(tools,textvariable=self.catalog_install_count,
+                  style='Muted.TLabel').pack(side='left',padx=(12,0))
         ttk.Button(tools,text='모두 접기',
                    command=lambda:self.fold_catalog_roles(False)).pack(
                        side='right',padx=(6,0))
@@ -840,7 +853,7 @@ class DesktopWindow:
                     continue
                 primary_section=self.add_catalog_group(
                     section.body,key+':tier:'+str(tier['number']),
-                    f"{label} 단계 (권장)",
+                    f"{label} 단계 (권장) · {'설치됨' if primary['installed'] else '미설치'}",
                     expanded=True,compact=True)
                 self.add_catalog_row(
                     primary_section.body,primary,
@@ -927,6 +940,7 @@ class DesktopWindow:
                 master=self.root,
                 value=getattr(self,'_previous_catalog_choices',{}).get(tag,checked))
             self.choice_vars[tag]=var
+            self._catalog_choice_defaults[tag]=checked
         card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=7)
         card.pack(fill='x',pady=3)
         state_text=tk.StringVar(master=self.root)
@@ -962,11 +976,34 @@ class DesktopWindow:
             note_label.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
             wrap_to_parent(note_label,inset=38,minimum=110)
         if model.get('desc'):
+            # Full descriptions are valuable, but repeating them for every
+            # recommended tier made the four-column comparison impractically
+            # tall. Display details only when requested, per shared model tag.
             desc=ttk.Label(card,text=model['desc'],
                            style='Manage.CardMuted.TLabel',
                            wraplength=150,justify='left')
-            desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
             wrap_to_parent(desc,inset=38,minimum=110)
+            opened=getattr(self,'_catalog_detail_state',{}).get(tag,False)
+            detail_button=ttk.Button(
+                card,text='설명 접기 ▲' if opened else '설명 보기 ▼',
+                style='Manage.Details.TButton',
+                command=lambda model_tag=tag:self.toggle_catalog_detail(model_tag))
+            detail_button.pack(anchor='w',padx=(16,0),pady=(2,0))
+            if opened:
+                desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            self.catalog_detail_widgets.setdefault(tag,[]).append((desc,detail_button))
+
+    def toggle_catalog_detail(self,tag):
+        if not hasattr(self,'_catalog_detail_state'):
+            self._catalog_detail_state={}
+        opened=not self._catalog_detail_state.get(tag,False)
+        self._catalog_detail_state[tag]=opened
+        for desc,button in self.catalog_detail_widgets.get(tag,()):
+            if opened:
+                desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
+            else:
+                desc.pack_forget()
+            button.configure(text='설명 접기 ▲' if opened else '설명 보기 ▼')
 
     def fold_catalog_roles(self, expanded):
         """Fold top-level role and extra groups, preserving nested tier states."""
@@ -994,6 +1031,9 @@ class DesktopWindow:
         # The visible install state must not depend on disk free-space
         # estimation succeeding. It is known from the catalogue scan.
         installed=self.catalog_installed()
+        if hasattr(self,'catalog_install_count'):
+            total=len(catalog['models'])+len(catalog['extra_installed'])
+            self.catalog_install_count.set(f'현재 설치 {len(installed)}/{total}개')
         for tag, labels in getattr(self,'choice_statuses',{}).items():
             selected=bool(self.choice_vars[tag].get())
             if tag in installed:
@@ -1010,6 +1050,8 @@ class DesktopWindow:
         try:plan=self.services.models.plan_changes(self.selected_tags(),installed=installed)
         except Exception as exc:
             self.choice_summary.set('선택 계산 실패: '+str(exc))
+            if hasattr(self,'choice_summary_label'):
+                self.choice_summary_label.configure(style='Model.SummaryRemove.TLabel')
             self.choice_storage.set('설치 계획을 확인할 수 없습니다.')
             self.choice_storage_label.configure(style='Alert.TLabel')
             self.apply_button.state(['disabled'])
@@ -1018,10 +1060,20 @@ class DesktopWindow:
         self._model_confirm_signature=None
         if hasattr(self,'apply_button'):
             self.apply_button.configure(text='선택대로 적용')
-        if hasattr(self,'_choice_plan_default'):
-            self.choice_plan.set(self._choice_plan_default)
+        if plan['remove']:
+            self.choice_plan.set(
+                f"주의 · {len(plan['remove'])}개가 삭제 대상입니다. "
+                "적용을 누르면 이 화면에서 한 번 더 확인합니다.")
+        elif plan['install']:
+            self.choice_plan.set(
+                f"{len(plan['install'])}개 다운로드 예정 · 여러 역할에 같은 모델이 있어도 한 번만 받습니다.")
+        else:
+            self.choice_plan.set("변경 사항 없음 · 체크된 모델은 그대로 유지합니다.")
         self.choice_summary.set(f"설치 예정 {len(plan['install'])}개 (최대 ~{plan['download_gb']:.1f} GB)"
                                 f"   ·   삭제 예정 {len(plan['remove'])}개")
+        if hasattr(self,'choice_summary_label'):
+            self.choice_summary_label.configure(
+                style='Model.SummaryRemove.TLabel' if plan['remove'] else 'Section.TLabel')
         self.choice_storage.set(self.storage_line(plan))
         # A selection that cannot fit is shown as a problem, not as a number the
         # user is expected to compare themselves mid-download.
