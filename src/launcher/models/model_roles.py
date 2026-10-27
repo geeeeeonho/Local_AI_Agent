@@ -174,94 +174,70 @@ _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이�
 # 역할별 후보 사다리 (모델, 권장 최소 여유 GB) — 아래 TIERS 에서 파생된다.
 LADDERS: dict = {}
 
-# >>> TIERS_v3 — 역할마다 정확히 3단계 (상/중/하).
+# >>> TIERS_v4 — three optional runtime levels, lean high/mid default installs.
 #
-#  하드웨어 전제: 모델에 내줄 수 있는 최대 메모리 ~20GB
-#  (model_catalog.MEMORY_BUDGET_GB, LLM_MEMORY_BUDGET_GB 로 조정).
-#  KV 캐시 몫을 빼면 가중치 상한은 18.4GB 다.
-#
-#  왜 3단계인가: 여유 메모리는 하루 종일 오르내린다(브라우저·Docker·샌드박스).
-#  한 단계만 받아 두면 그 단계가 안 맞는 순간 쓸 게 없어진다. 반대로 단계가
-#  너무 많으면 어느 것이 실제로 도는지 알 수 없고 디스크만 먹는다.
-#    상 — 다른 걸 거의 안 띄웠을 때. 15GB 급이 이 예산의 실질적 최고 품질이다.
-#         18GB 급은 여유 19.6GB 를 요구해 사실상 유휴 상태에서만 뜨므로,
-#         기본단계가 아니라 '대안' 으로 둔다(설치해 둔 사람에게만 걸린다).
-#    중 — 브라우저·Docker 를 같이 쓰는 평소 상태. 9GB 급.
-#    하 — 메모리가 빠듯할 때의 최후 단계. 5GB 급.
-#
-#  근거 요약(2026-09 기준):
-#   * 코딩은 Qwen3.6-27B 가 SWE-bench 77.2 로 이 체급 최고지만 18GB 다.
-#     20GB 예산에서 항상 도는 쪽은 15GB 의 Devstral Small 2 — 다중파일·디버깅
-#     루프에 특화됐고 384K 컨텍스트다. 그래서 상 단계 기본은 Devstral,
-#     Qwen3.6 은 유휴 시 대안.
-#   * 에이전트는 도구 왕복이 많아 속도가 곧 체감이다. ARA(15GB, MoE 활성 ~4B)가
-#     상 단계 기본이고, QAT 26B 는 유휴 시 대안.
-#   * 무검열은 도구 호출을 요구하지 않는다(번역·창작 목적).
-#   * 사무/범용은 gpt-oss(14GB, 추론 강도 조절)가 상 단계, 이미지가 필요하면
-#     Gemma 4 계열이 대안·중단계를 맡는다.
+# Default downloads are controlled separately by model_catalog._CORE_TAGS.
+# Keeping a low-level ladder does not mean downloading it automatically.
+# A low-memory PC can manually install the low tier when it needs one.
+# Qwen 3.8 is experimental: Ollama /v1/chat/completions compatibility must
+# be verified on the actual runtime before making it a default.
 TIERS = {
     "coding": [
         {"need": 15.0, "primary": "devstral-small-2:24b",
-         "alts": ["qwen3.6:27b",        # 유휴 시 — SWE-bench 77.2
-                  "qwen3-coder:30b",    # 유휴 시 — MoE, 훨씬 빠름
-                  "gpt-oss:20b"]},      # 추론 강도 조절
+         "alts": ["qwen3.6:27b", "qwen3.8:27b",
+                  "qwen3-coder:30b", "gpt-oss:20b"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["qwen3:14b",          # 코딩+대화 겸용
-                  "gemma4:12b"]},       # 다른 역할과 공유 (추가 디스크 0)
+         "alts": ["ministral-3:14b", "qwen3:14b", "gemma4:12b",
+                  "qwen3.5:9b"]},
         {"need": 4.7, "primary": "qwen2.5-coder:7b",
-         "alts": ["qwen3:8b",           # 7/8B 급 HumanEval 최고
-                  "gemma4:e4b-it-qat"]},
+         "alts": ["qwen3:8b", "qwen3.5:4b-q4_K_M"]},
     ],
     "agent": [
-        {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": ["gemma4:26b-a4b-it-qat",  # 유휴 시 — QAT 라 형식이 덜 깨짐
-                  "gemma4:26b",
-                  "gpt-oss:20b"]},
-        {"need": 9.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["gemma4:12b-it-qat", "gemma4:12b", "qwen3:14b"]},
-        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["gemma4:e4b", "qwen2.5-coder:7b", "qwen3:8b"]},
+        # QAT is a tool-capable checkpoint. Abliterated ARA remains exclusive
+        # to the uncensored group rather than silently driving automation.
+        {"need": 16.0, "primary": "gemma4:26b-a4b-it-qat",
+         "alts": ["gpt-oss:20b", "gemma4:26b", "qwen3.8:27b"]},
+        {"need": 7.6, "primary": "gemma4:12b",
+         "alts": ["ministral-3:14b", "qwen2.5-coder:14b",
+                  "gemma4:12b-it-qat", "qwen3.5:9b",
+                  "gemma4:e4b-it-qat", "gemma4:e4b", "qwen3:14b"]},
+        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
+         "alts": ["gemma4:e2b-it-qat", "qwen2.5-coder:7b", "qwen3:8b"]},
     ],
     "uncensored": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
          "alts": ["huihui_ai/gemma-4-abliterated:26b-qat",
-                  "huihui_ai/Qwen3.6-abliterated:27b"]},   # 번역·다국어 축
+                  "huihui_ai/Qwen3.6-abliterated:27b"]},
         {"need": 12.7, "primary": "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
-         "alts": ["huihui_ai/qwen3-abliterated:14b",  # 이전 중간 추천도 유지
+         "alts": ["huihui_ai/qwen3.5-abliterated:9b",
+                  "huihui_ai/qwen3-abliterated:14b",
                   "huihui_ai/gemma-4-abliterated:12b",
-                  "huihui_ai/qwen3-vl-abliterated:8b"]},   # 이미지 속 글자 번역
+                  "huihui_ai/qwen3-vl-abliterated:8b"]},
         {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b",
-         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M",        # 다른 계열
-                  "dolphin3:8b"]},                          # 파인튜닝계
+         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M",
+                  "dolphin3:8b"]},
     ],
     "office": [
-        # 사무 그룹의 본업은 스캔본·스크린샷 읽기다. 그래서 기본단계는 세 등급
-        # 모두 이미지를 볼 수 있어야 한다(테스트가 확인). gpt-oss 는 추론은
-        # 좋지만 이미지를 못 보므로 기본단계가 될 수 없다.
-        # Gemma 4 26B-A4B 는 Arena 1441(오픈 6위)·GPQA Diamond 84.3 으로 이
-        # 예산 안에서 범용 품질이 가장 높고, MoE 활성 ~4B 라 26B 급인데도 빠르다.
         {"need": 18.0, "primary": "gemma4:26b",
-         # 이 등급 후보는 전부 이미지를 볼 수 있어야 한다. gpt-oss 를 대안으로
-         # 두면 여유 16GB 구간에서 그게 뽑혀(18GB 가 안 뜨니까) 스캔본을 못 읽는
-         # 모델이 사무 역할에 앉는다. 그럴 바엔 이미지가 되는 아래 등급이 낫다.
-         "alts": ["qwen3.6:27b",             # 긴 문서 + 이미지
-                  "gemma4:26b-a4b-it-qat"]}, # QAT — 형식 준수
+         "alts": ["qwen3.6:27b", "qwen3.8:27b",
+                  "gemma4:26b-a4b-it-qat"]},
         {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["gemma4:12b-it-qat",
-                  "qwen3-vl:8b"]},      # CJK 스캔본 OCR
-        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["gemma4:e4b", "exaone3.5:7.8b"]},        # 한국어
+         "alts": ["qwen3.5:9b", "gemma4:12b-it-qat",
+                  "qwen3-vl:8b", "ministral-3:14b",
+                  "gemma4:e4b-it-qat", "gemma4:e4b"]},
+        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
+         "alts": ["gemma4:e2b-it-qat"]},
     ],
     "balanced": [
-        # 범용은 '자주 뜨는 쪽' 을 기본으로 둔다. 18GB 급은 여유 19.6GB 를
-        # 요구해 사실상 유휴 상태에서만 뜨므로, 여기서는 14GB 를 기본단계로
-        # 두고 Gemma 4 26B 를 대안에 남긴다(사무 그룹이 그쪽을 기본으로 받는다).
         {"need": 14.0, "primary": "gpt-oss:20b",
-         "alts": ["gemma4:26b", "qwen3.6:27b"]},
+         "alts": ["gemma4:26b", "qwen3.6:27b", "qwen3.8:27b",
+                  "gemma4:26b-a4b-it-qat"]},
         {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["gemma4:12b-it-qat", "qwen3:14b"]},
-        {"need": 5.0, "primary": "gemma4:e4b-it-qat",
-         "alts": ["gemma4:e4b", "exaone3.5:7.8b", "qwen3:8b"]},
+         "alts": ["qwen3.5:9b", "ministral-3:14b",
+                  "gemma4:12b-it-qat", "qwen3:14b",
+                  "gemma4:e4b-it-qat", "gemma4:e4b"]},
+        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
+         "alts": ["gemma4:e2b-it-qat", "exaone3.5:7.8b", "qwen3:8b"]},
     ],
 }
 
