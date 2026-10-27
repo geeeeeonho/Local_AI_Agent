@@ -605,3 +605,71 @@ def test_installed_badge_survives_a_storage_plan_failure(ui, monkeypatch):
     assert '설치됨' in w.choice_statuses[installed][0].get()
     assert '선택 계산 실패' in w.choice_summary.get()
     assert 'disabled' in w.apply_button.state()
+
+
+def test_model_manager_opens_on_the_choice_tab(ui):
+    w, _, _ = ui
+    open_models(w)
+    assert w.model_tabs.select() == str(w.model_pages['choose'])
+
+
+def test_compact_descriptions_can_expand_per_model_and_survive_refresh(ui):
+    w, _, _ = ui
+    open_models(w)
+    tag=next(m['tag'] for m in w._catalog['models'] if m.get('desc'))
+    before=w.selected_tags()
+    items=w.catalog_detail_widgets[tag]
+    assert items and all(not desc.winfo_manager() for desc, _ in items)
+    items[0][1].invoke()
+    assert all(desc.winfo_manager() == 'pack' for desc, _ in items)
+    assert all('설명 접기' in button.cget('text') for _, button in items)
+    assert w.selected_tags() == before
+    w.build_catalog_rows(w._catalog)
+    assert all(desc.winfo_manager() == 'pack'
+               for desc, _ in w.catalog_detail_widgets[tag])
+    w.catalog_detail_widgets[tag][0][1].invoke()
+    assert all(not desc.winfo_manager()
+               for desc, _ in w.catalog_detail_widgets[tag])
+
+
+def test_refresh_adopts_externally_installed_model_unless_user_overrode_it(ui):
+    import copy
+    w, _, _ = ui
+    open_models(w)
+    candidate=next(m['tag'] for m in w._catalog['models']
+                   if not m['installed'] and not m['recommended'])
+    assert not w.choice_vars[candidate].get()
+    fresh=copy.deepcopy(w._catalog)
+    next(m for m in fresh['models'] if m['tag'] == candidate)['installed']=True
+    w.show_catalog(fresh)
+    assert w.choice_vars[candidate].get()
+    assert '설치됨 · 유지' in w.choice_statuses[candidate][0].get()
+
+    # A real manual uncheck is still an intentional removal after refresh.
+    w.choice_vars[candidate].set(False)
+    w.build_catalog_rows(fresh)
+    w.update_choice_summary()
+    assert not w.choice_vars[candidate].get()
+    assert '삭제 예정' in w.choice_statuses[candidate][0].get()
+
+
+def test_model_installation_count_is_separate_from_pending_selection(ui):
+    w, svc, _ = ui
+    store_model(svc)
+    open_models(w)
+    assert '현재 설치 1/' in w.catalog_install_count.get()
+    w.set_selection('none')
+    assert '현재 설치 1/' in w.catalog_install_count.get()
+    assert '삭제 예정' in w.choice_plan.get()
+    assert w.choice_summary_label.cget('style') == 'Model.SummaryRemove.TLabel'
+    w.set_selection('recommended')
+    assert w.choice_summary_label.cget('style') == 'Section.TLabel'
+
+
+def test_checkboxes_explain_their_effect_on_installed_vs_missing(ui):
+    w, svc, _ = ui
+    installed=store_model(svc)
+    open_models(w)
+    missing=next(tag for tag in w.choice_vars if tag not in w.catalog_installed())
+    assert '해제=삭제' in w.choice_checkbuttons[installed][0].cget('text')
+    assert '이 모델 설치' in w.choice_checkbuttons[missing][0].cget('text')
