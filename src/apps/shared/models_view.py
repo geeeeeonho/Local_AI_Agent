@@ -33,7 +33,7 @@ class ModelAccordion:
                  else 'Manage.Accordion.TButton')
         self.button = ttk.Button(self.frame, style=style, command=self.toggle)
         self.button.pack(fill='x')
-        self.body = ttk.Frame(self.frame, padding=(14, 3, 0, 5))
+        self.body = ttk.Frame(self.frame, padding=(2, 2, 2, 4) if compact else (5, 4, 5, 7))
         self.set_expanded(expanded, notify=False)
 
     @property
@@ -55,6 +55,58 @@ class ModelAccordion:
 
     def toggle(self):
         self.set_expanded(not self._expanded)
+
+
+
+class CatalogColumns:
+    """Responsive role-card grid: four peers across when space permits.
+
+    A model tag may be very long, so cards use wrapped labels instead of
+    forcing the grid columns wider than the viewport. On narrower windows the
+    same widgets move to two or one column. No widgets or checkbox variables
+    are recreated during a resize.
+    """
+
+    MAX_COLUMNS = 4
+    MIN_COLUMN_WIDTH = 225
+
+    @classmethod
+    def columns_for_width(cls, width):
+        return max(1, min(cls.MAX_COLUMNS, int(width) // cls.MIN_COLUMN_WIDTH))
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill='x')
+        self.slots = []
+        self.columns = 0
+        self._placed = 0
+        parent.bind('<Configure>', self._resize, add='+')
+
+    def add(self):
+        slot = ttk.Frame(self.frame, padding=(3, 3))
+        self.slots.append(slot)
+        self.reflow()
+        return slot
+
+    def _resize(self, event):
+        self.reflow(event.width)
+
+    def reflow(self, width=None):
+        if width is None:
+            width = self.parent.winfo_width()
+        columns = self.columns_for_width(width)
+        if columns == self.columns and self._placed == len(self.slots):
+            return
+        self.columns, self._placed = columns, len(self.slots)
+        for slot in self.slots:
+            slot.grid_forget()
+        for column in range(self.MAX_COLUMNS):
+            self.frame.columnconfigure(column, weight=int(column < columns),
+                                       minsize=0)
+        for index, slot in enumerate(self.slots):
+            slot.grid(row=index // columns, column=index % columns,
+                      sticky='nsew', padx=2, pady=2)
 
 
 class Stack:
@@ -278,8 +330,8 @@ def _choose(parent, w):
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
-        '역할을 펼쳐 상·중·하 권장 모델을 확인하세요. 각 단계와 추가 옵션도 접거나 펼칠 수 있습니다. '
-        '같은 모델을 여러 역할에서 선택해도 설치는 한 번만 진행됩니다.'),
+        '역할 그룹은 넓은 화면에서 한 줄에 4개씩 표시됩니다. 상·중·하 단계와 추가 옵션은 각각 접을 수 있습니다. '
+        '상태 표시는 실제 설치 여부이며, 체크는 앞으로 설치·유지할 목록입니다.'),
         pad=(0, 6))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,
