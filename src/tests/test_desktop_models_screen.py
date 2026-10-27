@@ -566,11 +566,16 @@ def test_collapse_all_does_not_collapse_tiers_or_change_selections(ui):
     w, _, _ = ui
     open_models(w)
     before = w.selected_tags()
+    extras = [section for key, section in w.catalog_groups.items()
+              if key.startswith('extra:') and key.count(':') == 1]
+    assert extras
     w.fold_catalog_roles(False)
     assert not w.catalog_groups['role:coding'].expanded
+    assert all(not section.expanded for section in extras)
     assert w.catalog_groups['role:coding:tier:2'].expanded
     w.fold_catalog_roles(True)
     assert w.catalog_groups['role:coding'].expanded
+    assert all(section.expanded for section in extras)
     assert w.catalog_groups['role:coding:tier:2'].expanded
     assert w.selected_tags() == before
 
