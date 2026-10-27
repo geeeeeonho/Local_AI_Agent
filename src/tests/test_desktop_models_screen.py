@@ -459,6 +459,42 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     assert any(inside(box,highest) for box in w.choice_checkbuttons[high])
 
 
+def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
+    w, _, _ = ui
+    open_models(w)
+    tag = 'qwen3-vl:8b-instruct-q4_K_M'
+    legacy = 'qwen3-vl:8b'
+    mid = w.catalog_groups['role:office:tier:2'].body
+    extras = w.catalog_groups['role:office:options'].body
+
+    def inside(widget, container):
+        return str(widget).startswith(str(container) + '.')
+
+    # A specialist recommendation appears beside the general-purpose
+    # primary, not hidden in the collapsed extra-options list.
+    assert w.catalog_groups['role:office:tier:2'].expanded
+    assert any(inside(box, mid) for box in w.choice_checkbuttons[tag])
+    assert not any(inside(box, extras) for box in w.choice_checkbuttons[tag])
+    assert any(inside(box, extras) for box in w.choice_checkbuttons[legacy])
+    assert len(w.choice_checkbuttons[tag]) == 1
+    from tkinter import ttk
+    labels = [widget.cget('text') for widget in mid.winfo_children()
+              if isinstance(widget, ttk.Label)]
+    assert any('OCR 특화 추천' in text for text in labels)
+    assert any('기본 자동 설치에는 포함되지' in text for text in labels)
+
+    # Recommendation is not an auto-download and never adds a sixth CORE.
+    assert tag not in w._catalog['recommended']
+    assert not w.choice_vars[tag].get()
+    assert '미설치' in w.choice_statuses[tag][0].get()
+    w.choice_vars[tag].set(True)
+    w.update_choice_summary()
+    assert '설치 예정' in w.choice_statuses[tag][0].get()
+    w.set_selection('recommended')
+    assert not w.choice_vars[tag].get()
+    assert tag not in w.selected_tags()
+
+
 def test_shared_models_use_one_checkbox_variable_and_one_install_item(ui):
     w, _, _ = ui
     open_models(w)
