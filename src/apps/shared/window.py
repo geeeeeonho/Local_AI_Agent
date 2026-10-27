@@ -969,9 +969,9 @@ class DesktopWindow:
             wrap_to_parent(desc,inset=38,minimum=110)
 
     def fold_catalog_roles(self, expanded):
-        """Fold role groups without touching tier states or selected models."""
+        """Fold top-level role and extra groups, preserving nested tier states."""
         for key, section in getattr(self, 'catalog_groups', {}).items():
-            if key.startswith('role:') and key.count(':') == 1:
+            if key.count(':') == 1 and key.startswith(('role:', 'extra:')):
                 section.set_expanded(expanded)
 
     def selected_tags(self):
