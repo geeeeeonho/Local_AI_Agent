@@ -268,6 +268,8 @@ class ThemeController:
                       indicatorcolor=[('selected', p.chat), ('pressed', p.hover)],
                       indicatorbackground=[('selected', p.chat), ('active', p.hover)])
         # Failures need to be legible as failures, not one more muted line.
+        style.configure('Model.State.TLabel', background=p.manage_soft,
+                        foreground=p.success, font=('Segoe UI', 9, 'bold'))
         style.configure('Alert.TLabel', foreground=p.danger)
         # A readiness line has three states and they have to be told apart at a
         # glance; "the button is no longer greyed out" is not a signal anyone
