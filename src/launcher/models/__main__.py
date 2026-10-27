@@ -3,7 +3,7 @@
 
     set PYTHONPATH=%CD%\\src
     python -m launcher.models              현재 여유 메모리 기준
-    python -m launcher.models --plan       기본 설치 세트(3단계)만
+    python -m launcher.models --plan       기본 설치 세트(상·중 5종)만
     python -m launcher.models --free 12    특정 여유 메모리를 가정
 
 문서에 표를 베껴 두면 카탈로그와 갈라진다. 목록이 필요할 때는 항상 이걸 찍는다.
@@ -19,7 +19,7 @@ from . import model_classes as classes
 def _plan_lines():
     plan = catalog.plan_by_level()
     total = 0.0
-    out = ["메모리 예산 %.0fGB · 적재 상한 %.1fGB — 기본 설치 세트"
+    out = ["메모리 예산 %.0fGB · 적재 상한 %.1fGB — 상·중만 권장 (하 단계는 수동 설치)"
            % (catalog.MEMORY_BUDGET_GB, catalog.MAX_MODEL_GB)]
     for key in catalog.LEVEL_KEYS:
         tags = plan.get(key) or []
