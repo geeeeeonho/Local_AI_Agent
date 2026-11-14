@@ -83,6 +83,29 @@ class RoleCatalogGroupingTests(unittest.TestCase):
         self.assertNotIn(tag, catalog.recommended_for(20.0))
         self.assertNotIn(tag, catalog.plan_by_level(20.0)['mid'])
 
+    def test_only_curated_compact_fallbacks_remain_selectable(self):
+        from launcher.models import model_roles
+        removed = {'qwen3-vl:8b', 'qwen3.8:27b', 'gemma4:e4b',
+                   'qwen3:8b', 'ministral-3:3b'}
+        self.assertFalse(removed & catalog.catalog_tags())
+        self.assertEqual(len(catalog.catalog_tags()), 24)
+        for role, tiers in model_roles.TIERS.items():
+            self.assertEqual(len(tiers), 3, role)
+            for i, tier in enumerate(tiers):
+                self.assertLessEqual(len(tier.get('alts', ())), 1 if i == 2 else 2,
+                                     (role, i))
+                self.assertIn(tier['primary'], catalog.catalog_tags())
+                self.assertTrue(set(tier.get('alts', ())) <= catalog.catalog_tags())
+
+    def test_removed_catalog_entries_stay_manageable_if_already_installed(self):
+        removed = 'qwen3-vl:8b'
+        self.assertNotIn(removed, catalog.catalog_tags())
+        service = object.__new__(ModelService)
+        view = service.catalog(installed={removed}, budget_gb=20.0)
+        self.assertIn(removed, view['extra_installed'])
+        self.assertNotIn(removed, view['recommended'])
+        self.assertEqual(len(view['recommended']), 5)
+
     def test_unassigned_models_are_still_in_optional_group(self):
         self.assertEqual(
             {x['tag'] for x in self.groups['extra'] if x['kind'] == 'embed'},
