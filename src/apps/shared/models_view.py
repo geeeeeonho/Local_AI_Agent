@@ -319,6 +319,10 @@ def _scroll_frame(parent, w):
               wraplength=175, justify='left').pack(anchor='w', pady=(3, 8))
     w.uncatalogued_panel = ScrollArea(side)
     w.uncatalogued_body = w.uncatalogued_panel.body
+    w.uncatalogued_managed_body = ttk.Frame(w.uncatalogued_body)
+    w.uncatalogued_managed_body.pack(fill='x')
+    w.uncatalogued_external_body = ttk.Frame(w.uncatalogued_body)
+    w.uncatalogued_external_body.pack(fill='x')
     w.uncatalogued_panel.frame.configure(height=200)
     w.uncatalogued_panel.bind_content()
     return outer
