@@ -179,31 +179,24 @@ LADDERS: dict = {}
 # Default downloads are controlled separately by model_catalog._CORE_TAGS.
 # Keeping a low-level ladder does not mean downloading it automatically.
 # A low-memory PC can manually install the low tier when it needs one.
-# Qwen 3.8 is experimental: Ollama /v1/chat/completions compatibility must
-# be verified on the actual runtime before making it a default.
+# Keep alternatives curated: at most 2 for high/mid, 1 for low.
+# Existing off-catalog installs remain visible in the dedicated model panel.
 TIERS = {
     "coding": [
         {"need": 15.0, "primary": "devstral-small-2:24b",
-         "alts": ["qwen3.6:27b", "qwen3.8:27b",
-                  "qwen3-coder:30b", "gpt-oss:20b"]},
+         "alts": ["qwen3.6:27b", "qwen3-coder:30b"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["ministral-3:14b", "qwen3:14b", "gemma4:12b",
-                  "qwen3.5:9b"]},
+         "alts": ["qwen3.5:9b", "gemma4:12b"]},
         {"need": 4.7, "primary": "qwen2.5-coder:7b",
-         "alts": ["qwen3:8b", "qwen3.5:4b-q4_K_M"]},
+         "alts": ["qwen3.5:4b-q4_K_M"]},
     ],
     "agent": [
-        # QAT is a tool-capable checkpoint. Abliterated ARA remains exclusive
-        # to the uncensored group rather than silently driving automation.
         {"need": 16.0, "primary": "gemma4:26b-a4b-it-qat",
-         "alts": ["gpt-oss:20b", "gemma4:26b", "qwen3.8:27b"]},
+         "alts": ["gpt-oss:20b", "gemma4:26b"]},
         {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["ministral-3:14b", "qwen2.5-coder:14b",
-                  "gemma4:12b-it-qat", "qwen3.5:9b",
-                  "gemma4:e4b-it-qat", "gemma4:e4b", "qwen3:14b"]},
+         "alts": ["qwen3.5:9b", "ministral-3:14b"]},
         {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat", "ministral-3:3b",
-                  "qwen2.5-coder:7b", "qwen3:8b"]},
+         "alts": ["gemma4:e2b-it-qat"]},
     ],
     "uncensored": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
@@ -211,37 +204,27 @@ TIERS = {
                   "huihui_ai/Qwen3.6-abliterated:27b"]},
         {"need": 12.7, "primary": "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
          "alts": ["huihui_ai/qwen3.5-abliterated:9b",
-                  "huihui_ai/qwen3-abliterated:14b",
-                  "huihui_ai/gemma-4-abliterated:12b",
                   "huihui_ai/qwen3-vl-abliterated:8b"]},
         {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b",
-         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M",
-                  "dolphin3:8b"]},
+         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M"]},
     ],
     "office": [
         {"need": 18.0, "primary": "gemma4:26b",
-         "alts": ["qwen3.6:27b", "qwen3.8:27b",
-                  "gemma4:26b-a4b-it-qat"]},
+         "alts": ["qwen3.6:27b", "gemma4:26b-a4b-it-qat"]},
         {"need": 7.6, "primary": "gemma4:12b",
-         # Qwen3-VL Instruct Q4 is a task-specific OCR recommendation,
-         # deliberately NOT the general office primary or a core auto-install.
-         "alts": ["qwen3-vl:8b-instruct-q4_K_M", "qwen3.5:9b",
-                  "gemma4:12b-it-qat", "qwen3-vl:8b",
-                  "ministral-3:14b", "gemma4:e4b-it-qat", "gemma4:e4b"]},
+         # Qwen3-VL Instruct remains the specialised OCR spotlight; it is not
+         # the general-purpose office primary or an automatic download.
+         "alts": ["qwen3-vl:8b-instruct", "qwen3.5:9b"]},
         {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat", "ministral-3:3b"]},
+         "alts": ["gemma4:e2b-it-qat"]},
     ],
     "balanced": [
         {"need": 14.0, "primary": "gpt-oss:20b",
-         "alts": ["gemma4:26b", "qwen3.6:27b", "qwen3.8:27b",
-                  "gemma4:26b-a4b-it-qat"]},
+         "alts": ["gemma4:26b", "qwen3.6:27b"]},
         {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["qwen3.5:9b", "ministral-3:14b",
-                  "gemma4:12b-it-qat", "qwen3:14b",
-                  "gemma4:e4b-it-qat", "gemma4:e4b"]},
+         "alts": ["qwen3.5:9b", "ministral-3:14b"]},
         {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat", "ministral-3:3b",
-                  "exaone3.5:7.8b", "qwen3:8b"]},
+         "alts": ["gemma4:e2b-it-qat"]},
     ],
 }
 

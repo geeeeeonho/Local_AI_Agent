@@ -18,6 +18,7 @@ from .themes import themed
 from . import views
 from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
+from .widgets import ScrollArea
 
 
 class DesktopWindow:
@@ -63,6 +64,7 @@ class DesktopWindow:
         self._build()
         self.load_projects()
         self.navigate(self.spec.primary)
+        self.refresh_installed_summary()
         self.theme.refresh()
         if appearance_error:
             self.log('Theme preference could not be loaded: ' + appearance_error)
@@ -87,6 +89,21 @@ class DesktopWindow:
             ttk.Separator(sidebar).pack(fill='x',padx=20,pady=(14,6))
         ttk.Label(sidebar,text='Shared services\nLocal data stays local',style='Sidebar.TLabel',
                   justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=22,pady=18)
+        if 'models' in self.spec.pages:
+            self.sidebar_models = ttk.Frame(sidebar, padding=(12, 7))
+            self.sidebar_models.pack(side='bottom', fill='both', expand=True)
+            heading = ttk.Frame(self.sidebar_models)
+            heading.pack(fill='x')
+            ttk.Label(heading,text='설치된 모델',style='Sidebar.TLabel',
+                      font=('Segoe UI',9,'bold')).pack(side='left')
+            ttk.Button(heading,text='↻',width=3,command=self.refresh_installed_summary).pack(side='right')
+            self.sidebar_model_count = tk.StringVar(master=self.root,value='조회 전')
+            ttk.Label(self.sidebar_models,textvariable=self.sidebar_model_count,
+                      style='Muted.TLabel').pack(anchor='w',pady=(3,5))
+            self.sidebar_model_scroll = ScrollArea(self.sidebar_models)
+            self.sidebar_model_body = self.sidebar_model_scroll.body
+            ttk.Label(self.sidebar_model_body,text='모델 목록을 읽는 중...',
+                      style='Muted.TLabel',wraplength=185).pack(anchor='w')
         ttk.Separator(outer,orient='vertical').pack(side='left',fill='y')
         content=ttk.Frame(outer);content.pack(fill='both',expand=True)
         header=ttk.Frame(content,padding=(24,16));header.pack(fill='x')
@@ -168,6 +185,9 @@ class DesktopWindow:
         if key=='setup' and hasattr(self,'accounts_tree'):self.load_accounts()
         if key=='models' and self._catalog is None:
             self.load_models_screen()
+        if key=='models':
+            self.refresh_installed_summary()
+            self.refresh_external_store_settings()
 
     def _enqueue(self,event):
         try:self.events.put_nowait(event)
@@ -590,6 +610,7 @@ class DesktopWindow:
             totals=index['totals']
             store=self.services.models.storage()
             self.show_sharing(index.get('sharing'))
+            self.refresh_external_store_settings()
             free=store['free_bytes']
             kind=(' · 모든 계정 공용' if store.get('shared')
                   else ' · 이 계정 전용' if store.get('per_user') else '')
@@ -771,6 +792,116 @@ class DesktopWindow:
             parent=self.root)
 
     # ── model screen: catalog selection ──────────────────────────────────
+    def refresh_installed_summary(self):
+        """One bounded inventory scan updates the global sidebar and detail panel."""
+        if not hasattr(self, 'sidebar_model_body'):
+            return
+        self.run_task('models.installed', self.services.models.installed_summary,
+                      self.show_installed_summary, mutate=False, announce=False)
+
+    def show_installed_summary(self, snapshot):
+        models = snapshot.get('models', ())
+        self._installed_snapshot = snapshot
+        source = snapshot.get('source')
+        partial = snapshot.get('on_disk_complete') is False
+        if source == 'unknown':
+            count_text = '설치 상태 확인 불가'
+        else:
+            count_text = f'{len(models)}개 · 공용 저장소 + 서버'
+            if partial:
+                count_text += ' · 일부 확인 실패'
+        self.sidebar_model_count.set(count_text)
+        for widget in self.sidebar_model_body.winfo_children():
+            widget.destroy()
+        if not models:
+            note = ('모델 목록을 읽지 못했습니다. 서버와 저장소를 확인하세요.'
+                    if source == 'unknown' else '확인된 설치 모델이 없습니다.')
+            ttk.Label(self.sidebar_model_body,text=note,
+                      style='Muted.TLabel',wraplength=175).pack(anchor='w')
+        for model in models:
+            tag = model['tag']
+            label = model_display_name(tag, limit=24)
+            ttk.Button(self.sidebar_model_body, text=label,
+                       command=lambda t=tag:self.open_installed_model(t)).pack(
+                           fill='x',pady=2)
+            ttk.Label(self.sidebar_model_body,text=model['status'],
+                      style='Muted.TLabel',wraplength=170).pack(
+                          anchor='w',padx=3,pady=(0,4))
+        self.sidebar_model_scroll.bind_content()
+        # The right panel needs only uncurated models; never silently make a
+        # server-only model an installation/removal candidate.
+        self.show_uncatalogued_models(snapshot)
+
+    def open_installed_model(self, tag):
+        self.navigate('models')
+        self.model_tabs.select(self.model_pages['choose'])
+        self.log('설치 모델: ' + tag)
+
+    def show_uncatalogued_models(self, snapshot):
+        body = getattr(self, 'uncatalogued_body', None)
+        if body is None:
+            return
+        body = self.uncatalogued_external_body
+        for widget in body.winfo_children():
+            widget.destroy()
+        rows = [m for m in snapshot.get('models', ())
+                if not m['catalogued'] and m['on_disk'] is not True]
+        if not rows and not self.uncatalogued_managed_body.winfo_children():
+            ttk.Label(body,text='추가로 확인된 모델이 없습니다.',
+                      style='Muted.TLabel',wraplength=162).pack(anchor='w')
+        for model in rows:
+            frame=ttk.Frame(body,padding=(3,5))
+            frame.pack(fill='x',pady=2)
+            ttk.Label(frame,text=model_display_name(model['tag'],limit=23),
+                      style='Manage.Card.TLabel',wraplength=165).pack(anchor='w')
+            ttk.Label(frame,text=model['status'],style='Muted.TLabel',
+                      wraplength=165).pack(anchor='w')
+            tag=model['tag']
+            # Router-only models are never part of the shared-store deletion plan.
+            ttk.Label(frame,text='조회 전용 · 삭제 불가',style='Muted.TLabel',
+                      wraplength=165).pack(anchor='w')
+        self.uncatalogued_panel.bind_content()
+
+    def refresh_external_store_settings(self):
+        if not hasattr(self,'external_store_summary'):
+            return
+        self.run_task('models.external.path',
+                      self.services.models.external_store_settings,
+                      self.show_external_store_settings,
+                      mutate=False,announce=False)
+
+    def show_external_store_settings(self,state):
+        if not state.get('supported'):
+            message='일반 Ollama 환경변수를 확인할 수 없습니다.'
+        elif state.get('connected'):
+            message=('일반 Ollama 환경변수: 공용 저장소로 설정됨 · '
+                     '실행 중인 서버와 Ollama 앱의 Model location은 별도 확인 필요')
+        else:
+            actual=state.get('effective') or '(Windows 기본 저장소)'
+            message='일반 Ollama 신규 실행 경로: '+actual+' · 연결 필요'
+        self.external_store_summary.set(message)
+
+    def connect_external_ollama(self):
+        """Never modify another program's user/system configuration silently."""
+        path=str(self.services.model_dir)
+        if not messagebox.askyesno(
+                '일반 Ollama 저장 경로 연결',
+                'Windows의 OLLAMA_MODELS를 '+path+' 로 설정할까요?\n\n'
+                '다른 터미널에서 실행하는 ollama pull에도 적용됩니다.\n'
+                '기존 저장소의 모델은 자동 이동하지 않으며, 새 터미널과 '
+                'Ollama 서버를 다시 시작해야 적용됩니다.\n\n'
+                'Ollama 데스크톱 앱의 Settings → Model location 값이 '
+                '환경변수보다 우선 적용되는 버전도 있으므로 별도로 확인하세요.\n\n'
+                '기존 사용자 범위 설정이 있다면 변경될 수 있습니다.',
+                parent=self.root):
+            return
+        def done(result):
+            self.log(result.get('message','경로 연결 결과 없음'),
+                     level='info' if result.get('ok') else 'error')
+            self.show_external_store_settings(result.get('after') or {})
+        self.run_task('models.external.connect',
+                      self.services.models.connect_external_store,done)
+
     def load_models_screen(self):
         """First open: one store scan feeds both the catalogue and the stack."""
         def display(pair):
@@ -781,11 +912,13 @@ class DesktopWindow:
 
     def load_catalog(self):
         self.run_task('models.catalog',self.services.models.catalog,self.show_catalog,mutate=False)
+        self.refresh_installed_summary()
 
     def show_catalog(self,catalog):
         self._catalog=catalog
         self.build_catalog_rows(catalog)
         self.update_choice_summary()
+        self.refresh_installed_summary()
 
     def build_catalog_rows(self,catalog):
         # Refresh should not turn an in-progress manual choice back into the
@@ -916,20 +1049,37 @@ class DesktopWindow:
                     section.body,model,
                     checked=model['installed'] or model['recommended'],
                     status='선택 모델',show_role=True)
-        if catalog['extra_installed']:
-            section=self.add_catalog_group(
-                columns.add(),'extra:installed',
-                f"직접 설치 · {len(catalog['extra_installed'])}개",
-                expanded=False)
-            for tag in catalog['extra_installed']:
-                self.add_catalog_row(
-                    section.body,
-                    {'tag':tag,'role':'직접 받은 모델','level_label':'','note':'',
-                     'size_gb':0.0,'memory_gb':0.0,'installed':True,
-                     'desc':'카탈로그에 없는 모델입니다. 체크를 풀면 삭제합니다.'},
-                    checked=True,status='직접 설치')
+        # Uncurated local tags live in the always-visible narrow right panel.
+        # Keep the original managed checkboxes there so they are still included
+        # in change plans; never offer deletion for router-only tags.
+        for widget in self.uncatalogued_managed_body.winfo_children():
+            widget.destroy()
+        for tag in catalog['extra_installed']:
+            row=ttk.Frame(self.uncatalogued_managed_body,padding=(3,5))
+            row.pack(fill='x',pady=2)
+            ttk.Label(row,text=model_display_name(tag,limit=23),
+                      style='Manage.Card.TLabel',wraplength=162).pack(anchor='w')
+            var=tk.BooleanVar(master=self.root,
+                value=self._previous_catalog_choices.get(tag,True))
+            self.choice_vars[tag]=var
+            self._catalog_choice_defaults[tag]=True
+            self.choice_checkbuttons[tag]=[]
+            self.choice_statuses[tag]=[]
+            self.choice_status_labels[tag]=[]
+            status=tk.StringVar(master=self.root)
+            self.choice_statuses[tag].append(status)
+            label=ttk.Label(row,textvariable=status,style='Model.StateInstalled.TLabel',
+                            wraplength=162)
+            label.pack(anchor='w')
+            self.choice_status_labels[tag].append(label)
+            box=ttk.Checkbutton(row,text='유지 (해제=삭제)',variable=var,
+                                command=self.update_choice_summary,
+                                style='Card.TCheckbutton')
+            box.pack(anchor='w')
+            self.choice_checkbuttons[tag].append(box)
 
         self.choice_scroller.bind_content()
+        self.uncatalogued_panel.bind_content()
 
     def add_catalog_group(self,parent,key,title,*,expanded=False,compact=False):
         states=getattr(self,'_catalog_group_state',None)
@@ -1212,7 +1362,7 @@ class DesktopWindow:
             self.log(f"설치 {len(done['install'])}개 · 삭제 {len(done['remove'])}개 완료"
                      + (f" · 실패 {len(done['failed'])}개" if done['failed'] else ''),
                      level='error' if done['failed'] else 'info')
-            self.load_catalog();self.refresh_stack()
+            self.load_catalog();self.refresh_stack();self.refresh_installed_summary()
             if 'models' in self.pages:self.refresh_models()
 
         def failed(exc):

@@ -46,21 +46,21 @@ class RoleCatalogGroupingTests(unittest.TestCase):
             'hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0')
         self.assertNotIn('hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M',
                          [x['tag'] for x in role['tiers'][1]['options']])
-        self.assertIn('huihui_ai/qwen3-abliterated:14b',
+        self.assertIn('huihui_ai/qwen3.5-abliterated:9b',
                       [x['tag'] for x in role['tiers'][1]['options']])
         self.assertEqual(
             role['tiers'][2]['recommended']['tag'],
             'huihui_ai/qwen3-abliterated:8b')
 
-    def test_qwen3_vl_instruct_q4_is_visible_as_office_mid_ocr_spotlight(self):
-        tag = 'qwen3-vl:8b-instruct-q4_K_M'
+    def test_qwen3_vl_instruct_is_visible_as_office_mid_ocr_spotlight(self):
+        tag = 'qwen3-vl:8b-instruct'
         office = next(r for r in self.groups['roles'] if r['key'] == 'office')
         middle = office['tiers'][1]
         self.assertEqual(middle['level_label'], '중')
         self.assertEqual(middle['recommended']['tag'], 'gemma4:12b')
         self.assertEqual([row['tag'] for row in middle['featured']], [tag])
         self.assertIn(tag, [row['tag'] for row in middle['options']])
-        self.assertIn('qwen3-vl:8b', [row['tag'] for row in middle['options']])
+        self.assertNotIn('qwen3-vl:8b', catalog.catalog_tags())
         self.assertNotIn(tag, self.catalog['recommended'])
         self.assertFalse(next(row for row in self.catalog['models']
                               if row['tag'] == tag)['installed'])
@@ -69,7 +69,7 @@ class RoleCatalogGroupingTests(unittest.TestCase):
                              for t in office['tiers']))
 
     def test_ocr_spotlight_stays_separate_from_lean_default_installs(self):
-        tag = 'qwen3-vl:8b-instruct-q4_K_M'
+        tag = 'qwen3-vl:8b-instruct'
         entry = catalog.by_tag()[tag]
         self.assertEqual(entry.spotlight_for, 'office')
         self.assertTrue(entry.vision)
@@ -77,11 +77,34 @@ class RoleCatalogGroupingTests(unittest.TestCase):
         self.assertAlmostEqual(entry.size_gb, 6.2)
         self.assertGreaterEqual(entry.memory_gb, entry.size_gb)
         self.assertEqual(catalog.level_of(tag), 'mid')
-        self.assertIn('Q4_K_M', tag)
+        self.assertNotIn('qwen3-vl:8b-instruct-q4_K_M', catalog.by_tag())
         self.assertNotIn(tag, catalog.core_tags())
         self.assertEqual(len(catalog.core_tags()), 5)
         self.assertNotIn(tag, catalog.recommended_for(20.0))
         self.assertNotIn(tag, catalog.plan_by_level(20.0)['mid'])
+
+    def test_only_curated_compact_fallbacks_remain_selectable(self):
+        from launcher.models import model_roles
+        removed = {'qwen3-vl:8b', 'qwen3.8:27b', 'gemma4:e4b',
+                   'qwen3:8b', 'ministral-3:3b'}
+        self.assertFalse(removed & catalog.catalog_tags())
+        self.assertEqual(len(catalog.catalog_tags()), 24)
+        for role, tiers in model_roles.TIERS.items():
+            self.assertEqual(len(tiers), 3, role)
+            for i, tier in enumerate(tiers):
+                self.assertLessEqual(len(tier.get('alts', ())), 1 if i == 2 else 2,
+                                     (role, i))
+                self.assertIn(tier['primary'], catalog.catalog_tags())
+                self.assertTrue(set(tier.get('alts', ())) <= catalog.catalog_tags())
+
+    def test_removed_catalog_entries_stay_manageable_if_already_installed(self):
+        removed = 'qwen3-vl:8b'
+        self.assertNotIn(removed, catalog.catalog_tags())
+        service = object.__new__(ModelService)
+        view = service.catalog(installed={removed}, budget_gb=20.0)
+        self.assertIn(removed, view['extra_installed'])
+        self.assertNotIn(removed, view['recommended'])
+        self.assertEqual(len(view['recommended']), 5)
 
     def test_unassigned_models_are_still_in_optional_group(self):
         self.assertEqual(

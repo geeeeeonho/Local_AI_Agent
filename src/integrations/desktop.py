@@ -29,6 +29,17 @@ class ManagedInference:
         self.endpoint = 'http://127.0.0.1:' + str(int(cfg.OLLAMA_PORT))
         self.client = OllamaClient(self.endpoint)
 
+    def validate_mutation_store(self):
+        """Block pulls/removals through externally owned Ollama processes."""
+        cls = self.load('launcher.services.ollama').OllamaService
+        service = cls(self.env, model_dir=self.model_dir)
+        if not service.can_mutate_shared_store():
+            raise RuntimeError(
+                'Ollama의 공용 모델 저장소 소유권을 확인할 수 없습니다. '
+                '외부 Ollama 서버의 모델은 조회만 할 수 있습니다. '
+                '설치/삭제 전에 LocalAI 공용 broker를 사용하세요.'
+            )
+
     def local_models(self):
         """Delegate to the Ollama service so there is one way of asking."""
         cls = self.load('launcher.services.ollama').OllamaService
@@ -501,6 +512,15 @@ class DesktopBackend:
         service_cls = self.load('launcher.services.ollama').OllamaService
         service = service_cls(self.env, model_dir=self.model_dir)
         if service.ensure_running():
+            # Model management, unlike read-only inference, must not send
+            # pull/remove to an external listener that merely has matching
+            # tags. Matching tags cannot prove the backing store location.
+            checker = getattr(service, 'can_mutate_shared_store', None)
+            if callable(checker) and not checker():
+                raise RuntimeError(
+                    '외부 Ollama 서버는 조회만 지원합니다. '
+                    '설치/삭제는 LocalAI 공용 Ollama로 연결한 뒤 진행하세요.'
+                )
             return self.inference.endpoint
 
         # A present broker that failed to start (or is serving another store)

@@ -76,6 +76,33 @@ def test_opening_models_offers_the_catalogue_with_the_budget_set_checked(ui):
     assert '설치 예정' in w.choice_summary.get()
 
 
+def test_uncatalogued_install_appears_in_sidebar_and_compact_right_panel(ui):
+    w, svc, _ = ui
+    tag = store_model(svc, name='personal-custom')
+    open_models(w)
+    pump(w, lambda: any(m['tag'] == tag
+                        for m in getattr(w, '_installed_snapshot', {}).get('models', ())))
+    assert tag in w._catalog['extra_installed']
+    assert tag in w.choice_vars and w.choice_vars[tag].get()
+    assert any(tag.startswith(m['tag'].split(':')[0])
+               for m in w._installed_snapshot['models'])
+    assert w.uncatalogued_managed_body.winfo_children()
+    assert '개' in w.sidebar_model_count.get()
+
+
+def test_external_server_only_model_is_read_only_in_side_panel(ui):
+    w, svc, _ = ui
+    open_models(w)
+    snapshot = {'models': [
+        {'tag': 'not-in-local-store:9b', 'catalogued': False,
+         'on_disk': False, 'served': True,
+         'status': '현재 서버에서만 발견 · 읽기 전용'}
+    ]}
+    w.show_uncatalogued_models(snapshot)
+    assert w.uncatalogued_external_body.winfo_children()
+    assert 'not-in-local-store:9b' not in w.choice_vars
+
+
 def test_an_installed_model_stays_checked_so_it_is_not_silently_removed(ui):
     w, svc, _ = ui
     tag = store_model(svc)
@@ -444,7 +471,7 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     open_models(w)
     trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0'
     trevor_q4='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
-    previous='huihui_ai/qwen3-abliterated:14b'
+    previous='huihui_ai/qwen3.5-abliterated:9b'
     high='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
 
     def inside(widget, container):
@@ -462,8 +489,8 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
 def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
     w, _, _ = ui
     open_models(w)
-    tag = 'qwen3-vl:8b-instruct-q4_K_M'
-    legacy = 'qwen3-vl:8b'
+    tag = 'qwen3-vl:8b-instruct'
+
     mid = w.catalog_groups['role:office:tier:2'].body
     extras = w.catalog_groups['role:office:options'].body
 
@@ -475,7 +502,7 @@ def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
     assert w.catalog_groups['role:office:tier:2'].expanded
     assert any(inside(box, mid) for box in w.choice_checkbuttons[tag])
     assert not any(inside(box, extras) for box in w.choice_checkbuttons[tag])
-    assert any(inside(box, extras) for box in w.choice_checkbuttons[legacy])
+    assert 'qwen3-vl:8b' not in w.choice_vars
     assert len(w.choice_checkbuttons[tag]) == 1
     from tkinter import ttk
     labels = [widget.cget('text') for widget in mid.winfo_children()
@@ -730,3 +757,38 @@ def test_compact_name_keeps_quantization_suffix_and_expanded_view_has_full_tag(u
     assert tag in desc.cget('text')
     button.invoke()
     assert desc.winfo_manager() == 'pack'
+
+
+# ── unified installed model management ──────────────────────────────────
+def test_uncurated_models_are_compact_in_right_hand_panel(ui):
+    w, svc, _ = ui
+    tag = store_model(svc, name='personal-model')
+    open_models(w)
+    assert tag in w.choice_vars and w.choice_vars[tag].get()
+    assert str(w.choice_checkbuttons[tag][0]).startswith(
+        str(w.uncatalogued_managed_body) + '.')
+    assert w.uncatalogued_panel.frame.winfo_exists()
+
+
+def test_sidebar_lists_models_not_in_catalogue(ui):
+    w, svc, _ = ui
+    tag = store_model(svc, name='outside-catalogue')
+    open_models(w)
+    w.refresh_installed_summary()
+    pump(w, lambda: any(
+        tag.split(':')[0] in child.cget('text')
+        for child in w.sidebar_model_body.winfo_children()
+        if hasattr(child, 'cget') and 'text' in child.keys()))
+    assert tag in [m['tag'] for m in w._installed_snapshot['models']]
+
+
+def test_router_only_models_are_read_only_in_right_panel(ui):
+    w, svc, _ = ui
+    open_models(w)
+    summary = {'models': [
+        {'tag': 'foreign/uncurated:8b', 'catalogued': False,
+         'on_disk': False, 'served': True,
+         'status': '현재 서버에서만 발견 · 읽기 전용'}]}
+    w.show_installed_summary(summary)
+    assert 'foreign/uncurated:8b' not in w.choice_vars
+    assert w.uncatalogued_external_body.winfo_children()

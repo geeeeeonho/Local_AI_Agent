@@ -9,7 +9,7 @@ from tools.verify_model_catalog import check
 TREVOR = "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0"
 RETIRED_Q4 = "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M"
 HIGH = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"
-PREVIOUS = "huihui_ai/qwen3-abliterated:14b"
+PREVIOUS = "huihui_ai/qwen3.5-abliterated:9b"
 
 
 class ModelTierVisibilityTests(unittest.TestCase):

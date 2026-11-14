@@ -188,13 +188,13 @@ class MemoryFigureTests(unittest.TestCase):
             self.assertGreater(entry.size_gb, 0.0, entry.tag)
             self.assertGreater(entry.memory_gb, 0.0, entry.tag)
 
-    def test_e4b_effective_parameters_do_not_underestimate_weight_memory(self):
-        # E4B 'effective 4B' does not mean only ~4GB is resident.
-        # Official Ollama QAT artifact is about 6.1GB before KV cache.
-        e4b = catalog.by_tag()["gemma4:e4b-it-qat"]
-        self.assertAlmostEqual(e4b.size_gb, 6.1)
-        self.assertGreaterEqual(e4b.memory_gb, e4b.size_gb)
-        self.assertEqual(catalog.level_of(e4b.tag), "mid")
+    def test_small_gemma_qat_does_not_underestimate_weight_memory(self):
+        # The retained low-tier vision/tool fallback still needs room for
+        # KV cache beyond the downloaded artifact.
+        small = catalog.by_tag()["gemma4:e2b-it-qat"]
+        self.assertAlmostEqual(small.size_gb, 4.3)
+        self.assertGreaterEqual(small.memory_gb, small.size_gb)
+        self.assertEqual(catalog.level_of(small.tag), "low")
 
 
 class ToolCallingTests(unittest.TestCase):
@@ -422,13 +422,11 @@ class ModernModelPolicyTests(unittest.TestCase):
         self.assertFalse(entry.uncensored)
         self.assertTrue(entry.vision)
 
-    def test_qwen38_is_an_opt_in_advanced_model(self):
+    def test_experimental_qwen38_is_not_in_the_compact_catalog(self):
         tag = "qwen3.8:27b"
-        entry = catalog.by_tag()[tag]
-        self.assertTrue(entry.tools and entry.vision)
-        self.assertEqual(catalog.level_of(tag), "high")
-        self.assertNotIn(tag, catalog.recommended_for(20.0))
-        self.assertIn(tag, [m for m, _ in roles.LADDERS["coding"]])
+        self.assertNotIn(tag, catalog.catalog_tags())
+        self.assertNotIn(tag, {m for m, _ in roles.LADDERS["coding"]})
+        self.assertIn(tag, catalog.replaced_tags())
 
     def test_tuned_qwen35_9b_is_optional_in_uncensored_middle(self):
         tag = "huihui_ai/qwen3.5-abliterated:9b"

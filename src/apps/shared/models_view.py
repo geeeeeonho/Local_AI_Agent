@@ -302,11 +302,31 @@ def _tree_frame(parent, columns, headings, widths, height):
 
 
 def _scroll_frame(parent, w):
-    scroller = ScrollArea(parent, place=False)
+    """Catalog on the left, always-visible compact uncatalogued models at right."""
+    outer = ttk.Frame(parent)
+    outer.columnconfigure(0, weight=1)
+    outer.rowconfigure(0, weight=1)
+    scroller = ScrollArea(outer, place=False)
+    outer.scroller = scroller
+    scroller.frame.grid(row=0, column=0, sticky='nsew')
     w.page_scrolls['models.choose'] = scroller
     w.choice_body = scroller.body
-    scroller.frame.scroller = scroller
-    return scroller.frame
+
+    side = ttk.Frame(outer, padding=(7, 4), width=190)
+    side.grid(row=0, column=1, sticky='nsew')
+    side.grid_propagate(False)
+    ttk.Label(side, text='별도 설치 모델', style='Section.TLabel').pack(anchor='w')
+    ttk.Label(side, text='카탈로그 밖의 설치 모델', style='Muted.TLabel',
+              wraplength=175, justify='left').pack(anchor='w', pady=(3, 8))
+    w.uncatalogued_panel = ScrollArea(side)
+    w.uncatalogued_body = w.uncatalogued_panel.body
+    w.uncatalogued_managed_body = ttk.Frame(w.uncatalogued_body)
+    w.uncatalogued_managed_body.pack(fill='x')
+    w.uncatalogued_external_body = ttk.Frame(w.uncatalogued_body)
+    w.uncatalogued_external_body.pack(fill='x')
+    w.uncatalogued_panel.frame.configure(height=200)
+    w.uncatalogued_panel.bind_content()
+    return outer
 
 
 def build(parent, w):
@@ -390,7 +410,8 @@ def _disk(parent, w):
     layout.fixed(lambda box: _bar(box, (
         ('인덱스 갱신', w.refresh_models, 'Manage', False),
         ('모델 고르기', lambda: w.model_tabs.select(w.model_pages['choose']), None, False),
-        ('모든 계정 공용으로 고치기', w.repair_sharing, 'Manage', False))))
+        ('모든 계정 공용으로 고치기', w.repair_sharing, 'Manage', False),
+        ('일반 Ollama 경로 연결', w.connect_external_ollama, 'Manage', False))))
     w.model_summary = tk.StringVar(master=w.root, value=str(w.services.model_dir))
     layout.fixed(lambda box: _label(box, w.model_summary), pad=(0, 4))
     # Whether every Windows account can really use this store is a fact about
@@ -398,6 +419,8 @@ def _disk(parent, w):
     # does not know.
     w.sharing_summary = tk.StringVar(master=w.root, value='공용 상태 확인 중...')
     layout.fixed(lambda box: _label(box, w.sharing_summary), pad=(0, 8))
+    w.external_store_summary = tk.StringVar(master=w.root, value='일반 Ollama 경로 상태 미확인')
+    layout.fixed(lambda box: _label(box, w.external_store_summary), pad=(0, 7))
     w.model_tree = layout.grows(lambda box: _tree_frame(
         box, ('name', 'size', 'shared', 'exclusive', 'status'),
         ('Model', 'Size (GiB)', 'Shared', 'Exclusive', 'Files'),
