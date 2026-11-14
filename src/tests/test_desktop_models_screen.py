@@ -471,7 +471,7 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     open_models(w)
     trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0'
     trevor_q4='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
-    previous='huihui_ai/qwen3-abliterated:14b'
+    previous='huihui_ai/qwen3.5-abliterated:9b'
     high='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
 
     def inside(widget, container):
@@ -490,7 +490,7 @@ def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
     w, _, _ = ui
     open_models(w)
     tag = 'qwen3-vl:8b-instruct'
-    legacy = 'qwen3-vl:8b'
+
     mid = w.catalog_groups['role:office:tier:2'].body
     extras = w.catalog_groups['role:office:options'].body
 
@@ -502,7 +502,7 @@ def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
     assert w.catalog_groups['role:office:tier:2'].expanded
     assert any(inside(box, mid) for box in w.choice_checkbuttons[tag])
     assert not any(inside(box, extras) for box in w.choice_checkbuttons[tag])
-    assert any(inside(box, extras) for box in w.choice_checkbuttons[legacy])
+    assert 'qwen3-vl:8b' not in w.choice_vars
     assert len(w.choice_checkbuttons[tag]) == 1
     from tkinter import ttk
     labels = [widget.cget('text') for widget in mid.winfo_children()
