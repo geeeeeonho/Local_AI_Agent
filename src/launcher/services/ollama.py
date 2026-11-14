@@ -121,7 +121,9 @@ class OllamaService:
             return self._managed_store_usable()
         # A shared broker can have been started by another Windows account,
         # whose private runtime-state file is intentionally invisible here.
-        return _same_path(executable, self.exe) and self._managed_store_usable()
+        if _same_path(executable, self.exe):
+            return self._managed_store_usable()
+        return self._supported_external_executable(executable) and self._external_store_ready()
 
     def known_executables(self) -> tuple:
         """Executable paths LocalAI is allowed to manage."""
@@ -130,6 +132,25 @@ class OllamaService:
     def _is_known(self, executable: Optional[Path]) -> bool:
         return executable is not None and any(
             _same_path(executable, known) for known in self.known_executables())
+
+    def _supported_external_executable(self, executable: Optional[Path]) -> bool:
+        """Only recognise official executables at standard Ollama install paths."""
+        if executable is None:
+            return False
+        return any(
+            _same_path(executable, folder / name)
+            for folder in ollama_paths.install_candidates()
+            for name in ollama_paths.executable_names()
+        )
+
+    def _external_store_ready(self) -> bool:
+        """Non-empty shared inventory proves an external broker reads our store.
+
+        Two empty inventories alone cannot establish the path used for future
+        downloads, so never trust that case for managed model mutations.
+        """
+        situation, detail = self.inspect_store()
+        return situation == self.READY and bool(detail.get('served'))
 
     def _state_pid(self) -> Optional[int]:
         try:
@@ -826,11 +847,20 @@ class OllamaService:
                 # 증거를 본다 — 저장소가 일치하는지 서버에 직접 묻는다.
                 return self._accept_unidentified_server()
             if not _same_path(executable, self.exe):
+                # Reuse a standard Ollama install only when its shared, nonempty
+                # model inventory is proved. It remains externally owned:
+                # LocalAI must never terminate or restart this process.
+                if (self._supported_external_executable(executable)
+                        and self._external_store_ready()):
+                    self._ok("일반 Ollama가 공용 저장소를 사용 중입니다: " + str(executable))
+                    self._warn("외부 Ollama이므로 LocalAI가 종료하지 않습니다.")
+                    self._warn_if_cloud_enabled()
+                    return True
                 self._err(
-                    "포트 %s가 LocalAI 공용 Ollama가 아닌 프로세스에 의해 사용 중입니다: %s"
+                    "포트 %s의 외부 Ollama가 공용 저장소를 사용하는지 검증하지 못했습니다: %s"
                     % (config.OLLAMA_PORT, executable)
                 )
-                self._err("해당 Ollama를 종료한 뒤 다시 실행하세요.")
+                self._err("일반 Ollama의 모델 경로를 연결하고 서버를 다시 시작하세요.")
                 return False
 
             if self._state_matches(pid):
