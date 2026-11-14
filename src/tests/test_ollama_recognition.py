@@ -107,6 +107,28 @@ def test_external_ollama_empty_store_is_not_assumed_to_share_the_path(tmp_path, 
     assert svc.ensure_running(boot_timeout=1) is False
 
 
+def test_pinned_broker_can_mutate_only_when_shared_store_agrees(tmp_path, monkeypatch):
+    svc, store, exe = shared_service(tmp_path, monkeypatch)
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 4242)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: exe)
+    assert svc.can_mutate_shared_store() is True
+    monkeypatch.setattr(svc, "store_agrees", lambda: False)
+    assert svc.can_mutate_shared_store() is False
+
+
+def test_external_official_broker_cannot_mutate_even_with_matching_tags(tmp_path, monkeypatch):
+    svc, store, exe = shared_service(tmp_path, monkeypatch)
+    foreign = tmp_path / "Programs" / "Ollama" / "ollama.exe"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("external", encoding="utf-8")
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 4242)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: foreign)
+    assert svc.store_agrees() is True
+    assert svc.can_mutate_shared_store() is False
+
+
 def test_shared_store_matches_router_inventory(tmp_path, monkeypatch):
     svc, store, exe = shared_service(tmp_path, monkeypatch, tags=("qwen3:8b",))
     assert svc.store_agrees() is True
