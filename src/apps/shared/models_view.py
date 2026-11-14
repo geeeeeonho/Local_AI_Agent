@@ -307,6 +307,7 @@ def _scroll_frame(parent, w):
     outer.columnconfigure(0, weight=1)
     outer.rowconfigure(0, weight=1)
     scroller = ScrollArea(outer, place=False)
+    outer.scroller = scroller
     scroller.frame.grid(row=0, column=0, sticky='nsew')
     w.page_scrolls['models.choose'] = scroller
     w.choice_body = scroller.body
