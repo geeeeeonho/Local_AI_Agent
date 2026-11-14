@@ -76,6 +76,33 @@ def test_opening_models_offers_the_catalogue_with_the_budget_set_checked(ui):
     assert '설치 예정' in w.choice_summary.get()
 
 
+def test_uncatalogued_install_appears_in_sidebar_and_compact_right_panel(ui):
+    w, svc, _ = ui
+    tag = store_model(svc, name='personal-custom')
+    open_models(w)
+    pump(w, lambda: any(m['tag'] == tag
+                        for m in getattr(w, '_installed_snapshot', {}).get('models', ())))
+    assert tag in w._catalog['extra_installed']
+    assert tag in w.choice_vars and w.choice_vars[tag].get()
+    assert any(tag.startswith(m['tag'].split(':')[0])
+               for m in w._installed_snapshot['models'])
+    assert w.uncatalogued_managed_body.winfo_children()
+    assert '개' in w.sidebar_model_count.get()
+
+
+def test_external_server_only_model_is_read_only_in_side_panel(ui):
+    w, svc, _ = ui
+    open_models(w)
+    snapshot = {'models': [
+        {'tag': 'not-in-local-store:9b', 'catalogued': False,
+         'on_disk': False, 'served': True,
+         'status': '현재 서버에서만 발견 · 읽기 전용'}
+    ]}
+    w.show_uncatalogued_models(snapshot)
+    assert w.uncatalogued_external_body.winfo_children()
+    assert 'not-in-local-store:9b' not in w.choice_vars
+
+
 def test_an_installed_model_stays_checked_so_it_is_not_silently_removed(ui):
     w, svc, _ = ui
     tag = store_model(svc)
