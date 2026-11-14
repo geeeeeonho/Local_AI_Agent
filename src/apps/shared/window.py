@@ -64,6 +64,7 @@ class DesktopWindow:
         self._build()
         self.load_projects()
         self.navigate(self.spec.primary)
+        self.refresh_installed_summary()
         self.theme.refresh()
         if appearance_error:
             self.log('Theme preference could not be loaded: ' + appearance_error)
@@ -830,11 +831,13 @@ class DesktopWindow:
         body = getattr(self, 'uncatalogued_body', None)
         if body is None:
             return
+        body = self.uncatalogued_external_body
         for widget in body.winfo_children():
             widget.destroy()
-        rows = [m for m in snapshot.get('models', ()) if not m['catalogued']]
-        if not rows:
-            ttk.Label(body,text='현재 설치된 미등록 모델이 없습니다.',
+        rows = [m for m in snapshot.get('models', ())
+                if not m['catalogued'] and m['on_disk'] is not True]
+        if not rows and not getattr(self,'choice_vars',{}):
+            ttk.Label(body,text='현재 확인된 추가 모델이 없습니다.',
                       style='Muted.TLabel',wraplength=162).pack(anchor='w')
         for model in rows:
             frame=ttk.Frame(body,padding=(3,5))
@@ -844,15 +847,9 @@ class DesktopWindow:
             ttk.Label(frame,text=model['status'],style='Muted.TLabel',
                       wraplength=165).pack(anchor='w')
             tag=model['tag']
-            # The catalog's existing checkbox owns all managed install/delete
-            # decisions. The sidebar is informational, not a second remover.
-            if tag in self.choice_vars and model['on_disk'] is True:
-                ttk.Button(frame,text='모델 선택 화면에서 관리',
-                           command=lambda t=tag:self.open_installed_model(t)).pack(
-                               anchor='w',pady=(3,0))
-            elif model['on_disk'] is False:
-                ttk.Label(frame,text='다른 서버 모델 · 삭제 불가',
-                          style='Muted.TLabel',wraplength=165).pack(anchor='w')
+            # Router-only models are never part of the shared-store deletion plan.
+            ttk.Label(frame,text='조회 전용 · 삭제 불가',style='Muted.TLabel',
+                      wraplength=165).pack(anchor='w')
         self.uncatalogued_panel.bind_content()
 
     def refresh_external_store_settings(self):
@@ -1042,8 +1039,10 @@ class DesktopWindow:
         # Uncurated local tags live in the always-visible narrow right panel.
         # Keep the original managed checkboxes there so they are still included
         # in change plans; never offer deletion for router-only tags.
+        for widget in self.uncatalogued_managed_body.winfo_children():
+            widget.destroy()
         for tag in catalog['extra_installed']:
-            row=ttk.Frame(self.uncatalogued_body,padding=(3,5))
+            row=ttk.Frame(self.uncatalogued_managed_body,padding=(3,5))
             row.pack(fill='x',pady=2)
             ttk.Label(row,text=model_display_name(tag,limit=23),
                       style='Manage.Card.TLabel',wraplength=162).pack(anchor='w')
