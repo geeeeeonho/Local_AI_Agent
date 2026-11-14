@@ -87,3 +87,27 @@ def test_user_scope_fallback_when_machine_scope_denied(monkeypatch):
                         lambda path, **kw: state.__setitem__('user', str(path)) or True)
     result = sharing.connect_external_store(target, windows=True)
     assert result['ok'] and result['scope'] == 'user'
+
+
+def test_model_service_rejects_external_broker_for_download(tmp_path):
+    import pytest
+    calls = []
+    class Client:
+        def pull(self, name, **kwargs):
+            calls.append(name)
+
+    class Runtime:
+        def validate_mutation_store(self):
+            raise RuntimeError('externally owned Ollama')
+
+    class Inference:
+        model_dir = tmp_path / 'models'
+        client = Client()
+        runtime = Runtime()
+        def ensure_ready(self):
+            return 'http://127.0.0.1:11434'
+
+    service = ModelService(Inference())
+    with pytest.raises(RuntimeError, match='externally owned'):
+        service.install_model('test:latest')
+    assert calls == []
