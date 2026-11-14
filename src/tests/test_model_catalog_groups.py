@@ -46,7 +46,7 @@ class RoleCatalogGroupingTests(unittest.TestCase):
             'hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0')
         self.assertNotIn('hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M',
                          [x['tag'] for x in role['tiers'][1]['options']])
-        self.assertIn('huihui_ai/qwen3-abliterated:14b',
+        self.assertIn('huihui_ai/qwen3.5-abliterated:9b',
                       [x['tag'] for x in role['tiers'][1]['options']])
         self.assertEqual(
             role['tiers'][2]['recommended']['tag'],
@@ -60,7 +60,7 @@ class RoleCatalogGroupingTests(unittest.TestCase):
         self.assertEqual(middle['recommended']['tag'], 'gemma4:12b')
         self.assertEqual([row['tag'] for row in middle['featured']], [tag])
         self.assertIn(tag, [row['tag'] for row in middle['options']])
-        self.assertIn('qwen3-vl:8b', [row['tag'] for row in middle['options']])
+        self.assertNotIn('qwen3-vl:8b', catalog.catalog_tags())
         self.assertNotIn(tag, self.catalog['recommended'])
         self.assertFalse(next(row for row in self.catalog['models']
                               if row['tag'] == tag)['installed'])
