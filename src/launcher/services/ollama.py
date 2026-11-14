@@ -152,6 +152,23 @@ class OllamaService:
         situation, detail = self.inspect_store()
         return situation == self.READY and bool(detail.get('served'))
 
+    def can_mutate_shared_store(self) -> bool:
+        """Only LocalAI's pinned broker may receive model pull/remove actions.
+
+        A third-party Ollama can serve the same tags from a different model
+        directory. Comparing tag inventories is useful for read-only discovery,
+        but cannot prove that a pull or removal would touch our shared store.
+        """
+        if not self.is_running():
+            return False
+        pid = self._listener_pid()
+        if pid is None:
+            return False
+        executable = self._process_executable(pid)
+        if executable is None or not _same_path(executable, self.exe):
+            return False
+        return self.store_agrees() is True
+
     def _state_pid(self) -> Optional[int]:
         try:
             data = json.loads(self.runtime_state_file.read_text(encoding="utf-8"))
