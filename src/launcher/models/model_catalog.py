@@ -275,12 +275,13 @@ _ALL: List[CatalogEntry] = [
     # ── 사무·문서 (스캔 문서·스크린샷 읽기) ──
     #  한국어 스캔본·표·스크린샷을 읽어야 하는 사무 작업용. Gemma 4 도 이미지를
     #  보지만, CJK 문자 OCR 은 Qwen3-VL 이 확실히 낫다.
-    # Instruct Q4_K_M is an explicit, verified Ollama tag (not an alias
-    # for the default '8b' Thinking tag). Spotlight means discoverability,
+    # The 8b-instruct tag is an official alias for 8b-instruct-q4_K_M
+    # (same Ollama digest), not the default '8b' Thinking model.
+    # Spotlight means discoverability,
     # not automatic download; the five-model CORE set must stay unchanged.
-    CatalogEntry("qwen3-vl:8b-instruct-q4_K_M",
-                 "사무·문서 이미지/OCR 특화 추천 (Instruct Q4)", 6.2,
-                 "Qwen3-VL 8B Instruct Q4_K_M — 스캔 문서·스크린샷의 한글 OCR, "
+    CatalogEntry("qwen3-vl:8b-instruct",
+                 "사무·문서 이미지/OCR 특화 추천 (Instruct)", 6.2,
+                 "Qwen3-VL 8B Instruct (기본 Q4_K_M) — 스캔 문서·스크린샷의 한글 OCR, "
                  "표/이미지 구조 파악 및 UI 인식에 적합한 멀티모달 후보. "
                  "256K는 최대 지원 컨텍스트이지 8GB VRAM 적재 보장이 아닙니다. "
                  "이미지 수·컨텍스트에 따라 실행 메모리가 증가하며 "
@@ -291,7 +292,7 @@ _ALL: List[CatalogEntry] = [
     # Preserve the existing tag for users who already installed it.
     CatalogEntry("qwen3-vl:8b", "문서 OCR·이미지 (기존 8B 태그)", 6.2,
                  "기존 Qwen3-VL 8B 태그. 이미 설치한 사용자를 위해 선택지로 유지합니다. "
-                 "빠른 OCR 추출에는 별도 Instruct Q4_K_M 특화 추천을 우선 고려하세요.",
+                 "빠른 OCR 추출에는 별도 Instruct 특화 추천을 우선 고려하세요.",
                  run_gb=7.2, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  note="기존 8B 선택지"),
