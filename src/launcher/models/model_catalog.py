@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """model_catalog — 설치/관리용 모델 카탈로그 (단일 소스).
 
-MODEL_CATALOG_v7 — 기본 5종(상/중) + 선택형 하 단계·Qwen 3.8 후보. 모델용 메모리 예산 ~20GB.
+MODEL_CATALOG_v7 — 기본 5종(상/중) + 역할별 최소 대체 후보. 모델용 메모리 예산 ~20GB.
 
 메모리 예산이 이 파일의 출발점이다. MEMORY_BUDGET_GB 를 넘겨 적재할 수 없는
 모델은 아예 담지 않는다 — 목록에만 있으면 디스크만 먹고 사다리는 매번 그 아래로
@@ -130,25 +130,6 @@ _ALL: List[CatalogEntry] = [
                  run_gb=18.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  note="이미지·툴콜"),
-    CatalogEntry("gemma4:12b-it-qat", "중간 에이전트/범용 (QAT)", 7.2,
-                 "Gemma 4 12B QAT 공식 GGUF(약 7.2GB). 양자화 친화형 체크포인트. "
-                 "실행 메모리는 KV 캐시·컨텍스트에 따라 더 필요할 수 있습니다.",
-                 run_gb=7.6, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 note="형식 안정"),
-    CatalogEntry("gemma4:e4b-it-qat", "Gemma E4B QAT (선택)", 6.1,
-                 "공식 GGUF 약 6.1GB. E4B의 'effective' 파라미터 수가 실제 "
-                 "가중치 적재량을 뜻하지는 않습니다. 여유 메모리 추정값은 "
-                 "KV 캐시를 제외한 보수적 하한이며, 저사양 기본 폴백이 아닙니다.",
-                 run_gb=6.7, ctx_k=128, vision=True,
-                 group="advanced", recommended=False,
-                 note="이미지·툴콜"),
-    CatalogEntry("gemma4:e4b", "Gemma E4B 기본 (선택)", 9.5,
-                 "Ollama e4b 기본 태그는 변형에 따라 약 6.6~9.5GB입니다. "
-                 "메모리 계산에는 보수적으로 9.5GB를 사용합니다.",
-                 run_gb=9.5, ctx_k=128, vision=True,
-                 group="advanced", recommended=False,
-                 note="비-QAT 원본"),
     CatalogEntry("gemma4:e2b-it-qat", "Gemma 경량 멀티모달 폴백", 4.3,
                  "Gemma 4 E2B QAT 공식 GGUF. 128K·이미지·도구 호출을 지원하며 "
                  "저사양 문서·범용의 별도 선택지입니다.",
@@ -182,33 +163,16 @@ _ALL: List[CatalogEntry] = [
                  "달라집니다. 12GB GPU에는 일부 CPU 오프로딩이 필요할 수 있습니다.",
                  run_gb=12.7, ctx_k=256, tools=False,
                  uncensored=True, note="중간 추천 · Q8_0"),
-    CatalogEntry("huihui_ai/qwen3-abliterated:14b", "무검열 중간 (번역 주력)", 9.0,
-                 "무검열 14B — 이 체급 무검열 중 가장 최신 세대. 다국어가 강해 "
-                 "여유 10~15GB 구간의 번역·범용 주력.",
-                 run_gb=9.0, ctx_k=40,
-                 group="advanced", recommended=False,
-                 uncensored=True, note="다국어"),
     CatalogEntry("huihui_ai/qwen3-vl-abliterated:8b", "무검열 + 이미지", 6.1,
                  "무검열 Qwen3-VL 8B — 이미지 속 글자를 검열 없이 읽고 옮긴다. "
                  "스캔본·스크린샷 번역용. 256K.",
                  run_gb=6.1, ctx_k=256, vision=True, uncensored=True, note="이미지",
-                 group="advanced", recommended=False),
-    CatalogEntry("dolphin3:8b", "무검열 경량 (파인튜닝)", 5.0,
-                 "Dolphin 3.0 (Llama 3.1 8B) — 가중치를 깎는 abliteration 이 아니라 "
-                 "무검열 데이터로 재학습한 쪽. 함수 호출·수학까지 무난. 128K.",
-                 run_gb=5.0, ctx_k=128, uncensored=True, note="파인튜닝계",
                  group="advanced", recommended=False),
     CatalogEntry("mannix/llama3.1-8b-abliterated:q5_K_M", "무검열 경량 (Llama)", 5.7,
                  "Llama 3.1 8B abliterated — Ollama 에서 가장 많이 받은 abliterated Llama. "
                  "Qwen 이 안 맞을 때의 다른 계열 선택지.",
                  run_gb=5.7, ctx_k=128, uncensored=True, note="다른 계열",
                  group="advanced", recommended=False),
-    CatalogEntry("huihui_ai/gemma-4-abliterated:12b", "무검열 경량 (멀티모달)", 7.6,
-                 "무검열 12B — 이미지 입력·256K 를 유지한 채 검열만 뺀다. "
-                 "저사양에서 문서/이미지까지 다뤄야 할 때.",
-                 run_gb=7.6, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 uncensored=True, note="이미지"),
     # ── 코딩 ──
     CatalogEntry("qwen3-coder:30b", "코딩 MoE (속도 우선)", 18.0,
                  "30B-A3B MoE(활성 ~3B) — qwen3.6:27b 보다 품질은 조금 낮지만 훨씬 빠르다. "
@@ -222,25 +186,9 @@ _ALL: List[CatalogEntry] = [
                  run_gb=15.0, ctx_k=384, vision=True,
                  group="advanced", recommended=False,
                  note="에이전트 코딩"),
-    CatalogEntry("qwen3:14b", "범용+코딩 중간", 9.3,
-                 "Qwen3 14B — 대화·코드 도움·리팩터링의 중간 지점. 네이티브 도구 호출.",
-                 run_gb=9.3, ctx_k=40, note="범용 겸용",
-                 group="advanced", recommended=False),
-    CatalogEntry("qwen3:8b", "경량 코딩 (검열본)", 5.2,
-                 "Qwen3 8B — 7/8B 급에서 HumanEval 최고. 같은 체급의 abliterated 판은 "
-                 "코드블록 형식이 깨진다고 실측돼, 코드 실행에는 이 검열본을 쓴다.",
-                 run_gb=5.2, ctx_k=40, note="형식 안정",
-                 group="advanced", recommended=False),
     # Qwen 3.8은 Ollama 공식 태그(27B/Q4 약 18GB, 비전·툴콜)지만,
     # 일부 Ollama 0.32.13 ROCm 환경에서 OpenAI 호환 /v1/chat/completions
     # 무응답 이슈(#17790)가 있어 자동 설치하지 않습니다. 선택 후 실행 검증 필요.
-    CatalogEntry("qwen3.8:27b", "Qwen 3.8 코딩·에이전트 실험 후보", 18.0,
-                 "Qwen3.8 27B 공식 GGUF. 256K·이미지·툴콜 지원. "
-                 "Ollama 네이티브 /api/chat과 OpenAI 호환 /v1/chat/completions의 "
-                 "실행 호환성을 기기에서 검증한 뒤 기본값으로 전환하세요.",
-                 run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 note="실험 · API 검증"),
     CatalogEntry("qwen3.5:9b", "Qwen 3.5 범용·도구·문서 중간", 6.6,
                  "공식 Qwen 3.5 9B. 도구 호출·멀티모달·256K를 제공하며 "
                  "코딩·한국어·문서 중간급 대체 후보입니다.",
@@ -251,11 +199,6 @@ _ALL: List[CatalogEntry] = [
                  "실측이 필요합니다. 저사양 옵션이며 기본 설치에서 제외합니다.",
                  run_gb=3.8, ctx_k=256, vision=True,
                  group="advanced", recommended=False, note="하 단계 · 선택"),
-    CatalogEntry("ministral-3:3b", "저사양 비전·툴콜 폴백", 3.0,
-                 "Ministral 3 3B 공식 Ollama 태그. 작은 메모리에서 비전·도구 호출을 "
-                 "수동으로 활성화할 때 선택할 수 있습니다.",
-                 run_gb=3.4, ctx_k=256, vision=True,
-                 group="advanced", recommended=False, note="저사양 · 툴콜"),
     CatalogEntry("ministral-3:14b", "도구·에이전트 중간 (Mistral)", 9.1,
                  "Ministral 3 14B. 도구 호출·JSON 출력·이미지 입력 지원. "
                  "로컬 Open Interpreter 호환성 검증 후 우선순위를 조정합니다.",
@@ -289,13 +232,7 @@ _ALL: List[CatalogEntry] = [
                  run_gb=7.2, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  note="OCR 우선 추천", spotlight_for="office"),
-    # Preserve the existing tag for users who already installed it.
-    CatalogEntry("qwen3-vl:8b", "문서 OCR·이미지 (기존 8B 태그)", 6.2,
-                 "기존 Qwen3-VL 8B 태그. 이미 설치한 사용자를 위해 선택지로 유지합니다. "
-                 "빠른 OCR 추출에는 별도 Instruct 특화 추천을 우선 고려하세요.",
-                 run_gb=7.2, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 note="기존 8B 선택지"),
+    # Previously downloaded tags remain discoverable in the installed-only panel.
     # ── 범용/추론 ──
     CatalogEntry("gpt-oss:20b", "에이전트·추론 (MoE)", 14.0,
                  "OpenAI 오픈(Apache) 21B-A3.6B MoE — 에이전트 작업 겨냥 설계라 도구 호출이 "
@@ -303,12 +240,6 @@ _ALL: List[CatalogEntry] = [
                  run_gb=14.0, ctx_k=128,
                  group="advanced", recommended=False,
                  note="추론 강도 조절"),
-    CatalogEntry("exaone3.5:7.8b", "한국어 특화 경량", 4.8,
-                 "LG EXAONE 3.5 — 한·영 이중언어. 저사양에서 한국어 품질이 필요할 때. "
-                 "도구 호출은 기대하지 말 것.",
-                 run_gb=4.8, ctx_k=32, tools=False,
-                 group="advanced", recommended=False,
-                 note="한국어"),
     # ── RAG 임베더 (역할 사다리가 아님) ──
     # AnythingLLM 기본 임베더는 컨테이너 내장(native) 이라 최초 1회 HuggingFace 에서
     # 받는다. 오프라인이거나 한국어 검색 품질이 아쉬우면 아래를 받고
