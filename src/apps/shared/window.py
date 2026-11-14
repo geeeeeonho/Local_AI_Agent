@@ -802,11 +802,21 @@ class DesktopWindow:
     def show_installed_summary(self, snapshot):
         models = snapshot.get('models', ())
         self._installed_snapshot = snapshot
-        self.sidebar_model_count.set(f'{len(models)}개 · 공용 저장소 + 서버')
+        source = snapshot.get('source')
+        partial = snapshot.get('on_disk_complete') is False
+        if source == 'unknown':
+            count_text = '설치 상태 확인 불가'
+        else:
+            count_text = f'{len(models)}개 · 공용 저장소 + 서버'
+            if partial:
+                count_text += ' · 일부 확인 실패'
+        self.sidebar_model_count.set(count_text)
         for widget in self.sidebar_model_body.winfo_children():
             widget.destroy()
         if not models:
-            ttk.Label(self.sidebar_model_body,text='확인된 설치 모델이 없습니다.',
+            note = ('모델 목록을 읽지 못했습니다. 서버와 저장소를 확인하세요.'
+                    if source == 'unknown' else '확인된 설치 모델이 없습니다.')
+            ttk.Label(self.sidebar_model_body,text=note,
                       style='Muted.TLabel',wraplength=175).pack(anchor='w')
         for model in models:
             tag = model['tag']
@@ -836,8 +846,8 @@ class DesktopWindow:
             widget.destroy()
         rows = [m for m in snapshot.get('models', ())
                 if not m['catalogued'] and m['on_disk'] is not True]
-        if not rows and not getattr(self,'choice_vars',{}):
-            ttk.Label(body,text='현재 확인된 추가 모델이 없습니다.',
+        if not rows and not self.uncatalogued_managed_body.winfo_children():
+            ttk.Label(body,text='추가로 확인된 모델이 없습니다.',
                       style='Muted.TLabel',wraplength=162).pack(anchor='w')
         for model in rows:
             frame=ttk.Frame(body,padding=(3,5))
@@ -864,7 +874,8 @@ class DesktopWindow:
         if not state.get('supported'):
             message='일반 Ollama 환경변수를 확인할 수 없습니다.'
         elif state.get('connected'):
-            message='일반 Ollama 신규 실행 경로: 공용 저장소로 연결됨'
+            message=('일반 Ollama 환경변수: 공용 저장소로 설정됨 · '
+                     '실행 중인 서버와 Ollama 앱의 Model location은 별도 확인 필요')
         else:
             actual=state.get('effective') or '(Windows 기본 저장소)'
             message='일반 Ollama 신규 실행 경로: '+actual+' · 연결 필요'
@@ -879,6 +890,8 @@ class DesktopWindow:
                 '다른 터미널에서 실행하는 ollama pull에도 적용됩니다.\n'
                 '기존 저장소의 모델은 자동 이동하지 않으며, 새 터미널과 '
                 'Ollama 서버를 다시 시작해야 적용됩니다.\n\n'
+                'Ollama 데스크톱 앱의 Settings → Model location 값이 '
+                '환경변수보다 우선 적용되는 버전도 있으므로 별도로 확인하세요.\n\n'
                 '기존 사용자 범위 설정이 있다면 변경될 수 있습니다.',
                 parent=self.root):
             return
