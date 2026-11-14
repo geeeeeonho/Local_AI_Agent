@@ -489,7 +489,7 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
 def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
     w, _, _ = ui
     open_models(w)
-    tag = 'qwen3-vl:8b-instruct-q4_K_M'
+    tag = 'qwen3-vl:8b-instruct'
     legacy = 'qwen3-vl:8b'
     mid = w.catalog_groups['role:office:tier:2'].body
     extras = w.catalog_groups['role:office:options'].body
