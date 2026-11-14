@@ -252,6 +252,88 @@ def connect_external_store(model_dir=None, *, windows=None) -> dict:
             'message': message}
 
 
+def _published_variable(hive, subkey):
+    """Read a Windows environment registry value for future processes."""
+    try:
+        import winreg
+        with winreg.OpenKey(hive, subkey) as key:
+            value, _kind = winreg.QueryValueEx(key, VARIABLE)
+            return value.strip().strip('"') if isinstance(value, str) else ''
+    except FileNotFoundError:
+        return ''
+    except (OSError, ImportError):
+        return None
+
+
+def external_store_settings(model_dir=None, *, windows=None) -> dict:
+    """Report standalone Ollama's persistent per-user/machine model path.
+
+    A per-user override takes precedence over machine scope. This never
+    changes the currently running Ollama server's inherited environment.
+    """
+    from core import ollama_paths
+    path = Path(model_dir) if model_dir is not None else ollama_paths.SHARED_MODELS_DIR
+    result = {'path': str(path), 'supported': False, 'connected': None,
+              'machine': None, 'user': None, 'effective': None,
+              'user_conflict': False}
+    if not acl.on_windows(windows):
+        return result
+    try:
+        import winreg
+    except ImportError:
+        return result
+    user = _published_variable(winreg.HKEY_CURRENT_USER, 'Environment')
+    machine = _published_variable(
+        winreg.HKEY_LOCAL_MACHINE,
+        r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment')
+    effective = ((user or machine) if user is not None and machine is not None
+                 else None)
+    result.update(supported=True, user=user, machine=machine, effective=effective)
+    if effective is not None:
+        result['connected'] = bool(
+            effective and ollama_paths._same_windows_path(effective, path))
+    result['user_conflict'] = bool(
+        user and not ollama_paths._same_windows_path(user, path))
+    return result
+
+
+def connect_external_store(model_dir=None, *, windows=None) -> dict:
+    """Explicit opt-in to connect future standalone Ollama CLI/tray downloads.
+
+    Never terminate any external process or move files automatically.
+    """
+    from core import ollama_paths
+    path = Path(model_dir) if model_dir is not None else ollama_paths.SHARED_MODELS_DIR
+    before = external_store_settings(path, windows=windows)
+    if not before['supported']:
+        return {'ok': False, 'scope': '', 'before': before, 'after': before,
+                'message': 'Windows 환경변수 상태를 확인할 수 없습니다.'}
+    if before['connected'] is True:
+        return {'ok': True, 'scope': 'existing', 'before': before, 'after': before,
+                'message': '일반 Ollama의 모델 경로가 이미 공용 저장소와 일치합니다.'}
+    scope = ''
+    if publish_machine_variable(path, windows=windows):
+        scope = 'machine'
+        # Current-user overrides win over a successful machine setting.
+        if before['user_conflict'] and not publish_user_variable(path, windows=windows):
+            after = external_store_settings(path, windows=windows)
+            return {'ok': False, 'scope': scope, 'before': before, 'after': after,
+                    'message': '시스템 경로를 저장했지만 현재 사용자 경로를 고치지 못했습니다.'}
+    elif publish_user_variable(path, windows=windows):
+        scope = 'user'
+    after = external_store_settings(path, windows=windows)
+    ok = bool(scope) and after['connected'] is True
+    if not scope:
+        msg = '환경변수를 저장하지 못했습니다. Windows 권한을 확인하세요.'
+    elif not ok:
+        msg = '설정을 저장했지만 Windows 등록값을 검증하지 못했습니다.'
+    else:
+        msg = ('공용 경로 연결 완료 · 새로운 터미널과 일반 Ollama를 '
+               '다시 시작하면 적용됩니다.')
+    return {'ok': ok, 'scope': scope, 'before': before, 'after': after,
+            'message': msg}
+
+
 # Sentences for the screen, keyed by what the policy found.
 _MESSAGES = {
     policy.PER_USER_PATH:
