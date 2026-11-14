@@ -72,6 +72,41 @@ def test_external_ollama_on_the_port_is_not_substituted_for_shared_broker(tmp_pa
     assert svc.ensure_running(boot_timeout=1) is False
 
 
+def test_official_external_ollama_with_proven_shared_models_is_reused(tmp_path, monkeypatch):
+    from core import ollama_paths
+    svc, store, exe = shared_service(tmp_path, monkeypatch)
+    foreign = tmp_path / "Programs" / "Ollama" / "ollama.exe"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("external", encoding="utf-8")
+    monkeypatch.setattr(ollama_paths, "install_candidates",
+                        lambda environ=None: (foreign.parent,))
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 4242)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: foreign)
+    monkeypatch.setattr(svc, "_warn_if_cloud_enabled", lambda: None)
+    monkeypatch.setattr(svc, "_kill",
+                        lambda _pid: pytest.fail("external server must never be stopped"))
+
+    assert svc.is_managed_running() is True
+    assert svc.ensure_running(boot_timeout=1) is True
+
+
+def test_external_ollama_empty_store_is_not_assumed_to_share_the_path(tmp_path, monkeypatch):
+    from core import ollama_paths
+    svc, store, exe = shared_service(tmp_path, monkeypatch, tags=())
+    foreign = tmp_path / "Programs" / "Ollama" / "ollama.exe"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("external", encoding="utf-8")
+    monkeypatch.setattr(ollama_paths, "install_candidates",
+                        lambda environ=None: (foreign.parent,))
+    monkeypatch.setattr(svc, "is_running", lambda: True)
+    monkeypatch.setattr(svc, "_listener_pid", lambda: 4242)
+    monkeypatch.setattr(svc, "_process_executable", lambda _pid: foreign)
+
+    assert svc.is_managed_running() is False
+    assert svc.ensure_running(boot_timeout=1) is False
+
+
 def test_shared_store_matches_router_inventory(tmp_path, monkeypatch):
     svc, store, exe = shared_service(tmp_path, monkeypatch, tags=("qwen3:8b",))
     assert svc.store_agrees() is True
