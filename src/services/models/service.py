@@ -35,6 +35,13 @@ class ModelService:
         try:
             with file_lock(self.lock_path, timeout=0):
                 self.inference.ensure_ready()
+                # Actual ManagedInference validates the destination broker.
+                # Never trust a matching model list for destructive changes:
+                # a separately running Ollama may use another model store.
+                runtime = getattr(self.inference, 'runtime', None)
+                check = getattr(runtime, 'validate_mutation_store', None)
+                if callable(check):
+                    check()
                 try:
                     if operation == 'install':
                         self.client.pull(name, progress=lambda value:
