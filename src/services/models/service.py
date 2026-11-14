@@ -100,6 +100,57 @@ class ModelService:
         from integrations.ollama import inventory
         return inventory.read(self.model_dir, router=router)
 
+    def installed_summary(self):
+        """All installed local tags, including names outside the curated catalogue.
+
+        A tag present only on a different running Ollama server is displayed
+        read-only: absence from our model store is never deletion permission.
+        """
+        from launcher.models import model_catalog as catalog
+        from integrations.ollama.client import is_cloud_tag
+
+        snapshot = self.inventory_view()
+        disk = {tag.casefold(): tag for tag in (snapshot.on_disk or ())
+                if not is_cloud_tag(tag)}
+        server = {tag.casefold(): tag for tag in (snapshot.served or ())
+                  if not is_cloud_tag(tag)}
+        curated = {tag.casefold() for tag in catalog.catalog_tags()}
+        models = []
+        for key in sorted(set(disk) | set(server)):
+            on_disk = None if snapshot.on_disk is None else key in disk
+            served = None if snapshot.served is None else key in server
+            if on_disk and served:
+                status = '공용 저장소 · 실행 가능'
+            elif on_disk and served is False:
+                status = '공용 저장소 · 서버에서 보이지 않음'
+            elif on_disk:
+                status = '공용 저장소 · 서버 미확인'
+            elif served and on_disk is False:
+                status = '현재 서버에서만 발견 · 읽기 전용'
+            else:
+                status = '현재 서버에서 확인 · 저장소 미확인'
+            models.append({
+                'tag': disk.get(key) or server[key],
+                'catalogued': key in curated,
+                'on_disk': on_disk, 'served': served, 'status': status,
+            })
+        return {
+            'models': models, 'source': snapshot.source,
+            'store_path': snapshot.store_path,
+            'router_reachable': snapshot.router_reachable,
+            'on_disk_complete': snapshot.on_disk_complete,
+        }
+
+    def external_store_settings(self):
+        """Windows variables seen by standalone Ollama CLI/tray launches."""
+        from integrations.ollama import sharing
+        return sharing.external_store_settings(self.model_dir)
+
+    def connect_external_store(self):
+        """Explicit opt-in; never silently overwrite an Ollama path."""
+        from integrations.ollama import sharing
+        return sharing.connect_external_store(self.model_dir)
+
     def catalog(self, *, installed=None, budget_gb=None):
         """Catalog rows for the selection view, each with its install state."""
         from launcher.models import model_catalog as catalog
