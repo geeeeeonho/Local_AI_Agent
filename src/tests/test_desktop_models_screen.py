@@ -757,3 +757,38 @@ def test_compact_name_keeps_quantization_suffix_and_expanded_view_has_full_tag(u
     assert tag in desc.cget('text')
     button.invoke()
     assert desc.winfo_manager() == 'pack'
+
+
+# ── unified installed model management ──────────────────────────────────
+def test_uncurated_models_are_compact_in_right_hand_panel(ui):
+    w, svc, _ = ui
+    tag = store_model(svc, name='personal-model')
+    open_models(w)
+    assert tag in w.choice_vars and w.choice_vars[tag].get()
+    assert str(w.choice_checkbuttons[tag][0]).startswith(
+        str(w.uncatalogued_managed_body) + '.')
+    assert w.uncatalogued_panel.frame.winfo_exists()
+
+
+def test_sidebar_lists_models_not_in_catalogue(ui):
+    w, svc, _ = ui
+    tag = store_model(svc, name='outside-catalogue')
+    open_models(w)
+    w.refresh_installed_summary()
+    pump(w, lambda: any(
+        tag.split(':')[0] in child.cget('text')
+        for child in w.sidebar_model_body.winfo_children()
+        if hasattr(child, 'cget') and 'text' in child.keys()))
+    assert tag in [m['tag'] for m in w._installed_snapshot['models']]
+
+
+def test_router_only_models_are_read_only_in_right_panel(ui):
+    w, svc, _ = ui
+    open_models(w)
+    summary = {'models': [
+        {'tag': 'foreign/uncurated:8b', 'catalogued': False,
+         'on_disk': False, 'served': True,
+         'status': '현재 서버에서만 발견 · 읽기 전용'}]}
+    w.show_installed_summary(summary)
+    assert 'foreign/uncurated:8b' not in w.choice_vars
+    assert w.uncatalogued_external_body.winfo_children()
