@@ -273,3 +273,30 @@ class MoreBoundaryTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 translator.translate_file(path,model='mock-local:latest')
             self.assertEqual(out.read_text(encoding='utf-8'),'keep')
+
+class AdditionalIntegrityTests(unittest.TestCase):
+    def test_embedded_json_newlines_preserved_without_model_changes(self):
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name);path=root/'multiline.json'
+            text='Hello world.\n\nSecond paragraph.\nThird line.'
+            path.write_text(json.dumps({'text':text,'source':'let x = 1;'}),encoding='utf-8')
+            model=FakeChat()
+            result=TranslationService(FakeInference(),lambda _:model,
+                checkpoint_dir=root/'state').translate_file(path,model='mock-local:latest')
+            output=json.loads(result.text)
+            self.assertEqual(output['text'],text.replace('Hello','Hi'))
+            self.assertEqual(output['source'],'let x = 1;')
+            self.assertGreaterEqual(result.count,3)
+
+    def test_model_returning_truncated_text_cannot_publish(self):
+        class TruncatedModel(FakeChat):
+            def _translate(self,text):
+                return 'OK'
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name);path=root/'length.txt'
+            path.write_text('Hello with a lot of meaningful content. '*50,encoding='utf-8')
+            translator=TranslationService(FakeInference(),lambda _:TruncatedModel(),
+                                          checkpoint_dir=root/'state')
+            with self.assertRaisesRegex(ValueError,'failed validation'):
+                translator.translate_file(path,model='mock-local:latest')
+            self.assertFalse((root/'length.ko.txt').exists())
