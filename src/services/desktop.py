@@ -124,7 +124,8 @@ class DesktopServices:
         self.chat = ChatService(backend, self.inference, self.network, self.search,
                                 self.events, stores=self.records)
         self.agent = AgentLauncher(backend, self.network, self.events, stores=self.records)
-        self.translator = TranslationService(self.inference)
+        self.translator = TranslationService(
+            self.inference, checkpoint_dir=self.data / 'tools' / 'translation')
         self.system = SystemService(backend)
         self.setup = SetupService(
             backend, self.models, self.network, self.settings,
