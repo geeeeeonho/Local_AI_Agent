@@ -27,7 +27,7 @@ CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script'
 MAX_BATCH_CHARS = 3300
 MAX_BATCH_ITEMS = 10
 MAX_TOTAL_UNITS = 80000
-ROLLUP_EVERY = 12000
+ROLLUP_EVERY = 40000
 
 
 @dataclass(frozen=True)
