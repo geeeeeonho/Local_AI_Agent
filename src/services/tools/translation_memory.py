@@ -29,12 +29,17 @@ class TranslationMemory:
     rolling: str = ''
     since_rollup: int = 0
 
-    def prompt(self) -> str:
+    def prompt(self, relevant: str | None = None) -> str:
+        # Global memory is stable; only the terms/speakers used in this batch are sent.
+        terms = self.terms if relevant is None else {
+            key:value for key,value in self.terms.items() if key in relevant}
+        speakers = self.speakers if relevant is None else {
+            key:value for key,value in self.speakers.items() if key in relevant}
         return json.dumps({
             'document_summary': self.summary,
             'fixed_style': self.style,
-            'terminology': self.terms,
-            'speaker_profiles': self.speakers,
+            'terminology': terms,
+            'speaker_profiles': speakers,
             'story_so_far': self.rolling,
         }, ensure_ascii=False)
 
