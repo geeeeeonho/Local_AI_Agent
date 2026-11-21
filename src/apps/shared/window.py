@@ -16,12 +16,13 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
                       wrap_to_parent)
 from .themes import themed
 from . import views
+from .translation_controller import TranslationController
 from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
 from .widgets import ScrollArea
 
 
-class DesktopWindow:
+class DesktopWindow(TranslationController):
     def __init__(self, app, services, *, root=None, start_polling=True):
         self.app, self.spec, self.services = app, SPECS[app], services
         self.root = root if root is not None else tk.Tk()
@@ -188,6 +189,8 @@ class DesktopWindow:
         if key=='models':
             self.refresh_installed_summary()
             self.refresh_external_store_settings()
+        if key=='tools' and not self.translation_model.get() and not self.runner.busy('tools.models'):
+            self.refresh_translation_models()
 
     def _enqueue(self,event):
         try:self.events.put_nowait(event)
@@ -213,6 +216,10 @@ class DesktopWindow:
 
     def _handle_event(self,event):
         data=event.payload
+        if event.topic=='runtime.progress' and data.get('service')=='translator':
+            if hasattr(self,'translation_status'):
+                self.translation_status.set(str(data.get('message') or '번역 중...'))
+            return
         if event.topic.startswith('agent.') and self.agent_session is not None:
             if data.get('session')!=self.agent_session.id:return
             if self.agent_panel is not None:
