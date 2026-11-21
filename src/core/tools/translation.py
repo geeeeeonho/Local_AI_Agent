@@ -285,7 +285,7 @@ def _safe_boundary(text: str, start: int, limit: int) -> int:
         punct = max((text.rfind(char, begin, end) for char in '.!?;,:.\u3002\uff01\uff1f'), default=-1)
         if punct > start:
             end = punct + 1
-    for token in PROTECTED_TOKEN.finditer(text, start):
+    for token in PROTECTED_TOKEN.finditer(text, start, min(len(text), end + 80)):
         if token.start() >= end:
             break
         if token.start() < end < token.end():
