@@ -56,8 +56,8 @@ def _units(document: Document):
         prefixes.append(prefix)
         maps.append(tokens)
         units.extend(Piece(index, body, separator) for body,separator in parts)
-    if len(units) > MAX_TOTAL_UNITS:
-        raise ValueError('Document contains too many translation units for a single job')
+        if len(units) > MAX_TOTAL_UNITS:
+            raise ValueError('Document contains too many translation units for a single job')
     return units, prefixes, maps
 
 
