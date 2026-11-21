@@ -1,6 +1,7 @@
 """문서별 유한한 번역 메모리와 사용자별 SQLite 재개 기록을 관리한다."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -18,6 +19,8 @@ MAX_SUMMARY = 850
 MAX_ROLLING = 750
 MAX_STYLE = 160
 ROLLUP_RESET_THRESHOLD = 100000
+# 계획·요약 요청: JSON 강제, 추론 끔, 충분한 문맥과 짧은 출력 상한
+PLANNING_OPTIONS = {'format':'json','think':False,'num_ctx':8192,'num_predict':1024}
 
 
 @dataclass
@@ -68,11 +71,26 @@ class TranslationMemory:
                    rolling=clipped(data.get('rolling'),MAX_ROLLING),since_rollup=age)
 
 
+REASONING = re.compile(r'<(think|thinking|reasoning)>.*?(?:</\1>|$)', re.S | re.I)
+
+
+def strip_reasoning(text):
+    """추론 모델이 답변 앞에 붙이는 <think>…</think> 블록을 제거한다."""
+    return REASONING.sub('', text if isinstance(text, str) else '').strip()
+
+
 def json_object(text):
-    raw = text.strip()
+    raw = strip_reasoning(text)
     if raw.startswith('```'):
         raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw).strip()
-    value = json.loads(raw)
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        # "Here is the JSON:" 같은 앞말이 붙은 경우 첫 JSON 객체만 읽는다.
+        start = raw.find('{')
+        if start < 0:
+            raise
+        value, _ = json.JSONDecoder().raw_decode(raw, start)
     if not isinstance(value, dict):
         raise ValueError('Model output is not a JSON object')
     return value
@@ -141,7 +159,8 @@ def initial_memory(client, model, doc, target, style, *, cancelled=None):
                        'distributed_samples':samples,'repeated_entities':entities},ensure_ascii=False)
     try:
         parsed = json_object(client.chat(model,[{'role':'system','content':system},
-                                                {'role':'user','content':user}],temperature=.1))
+                                                {'role':'user','content':user}],temperature=.1,
+                                **PLANNING_OPTIONS))
     except (ValueError, KeyError, TypeError, RuntimeError):
         return default
     return TranslationMemory(
@@ -166,7 +185,8 @@ def update_rolling(client,model,memory, recent_pairs, *, cancelled=None):
                      'recent_translation':lines},ensure_ascii=False)
     try:
         new=json_object(client.chat(model,[{'role':'system','content':system},
-                                           {'role':'user','content':user}],temperature=.1))
+                                           {'role':'user','content':user}],temperature=.1,
+                                **PLANNING_OPTIONS))
         value=_clip(new.get('summary'),MAX_ROLLING)
         if value:
             memory.rolling=value
@@ -184,10 +204,20 @@ def job_key(path, output, source, model, target, kind, style, stage):
     return hashlib.sha256(material.encode('utf-8')).hexdigest()
 
 
+def default_protector():
+    """Windows에서는 체크포인트의 번역 문장을 DPAPI(현재 계정 전용)로 암호화한다."""
+    try:
+        from integrations.windows import dpapi
+        return dpapi.Protector() if dpapi.available() else None
+    except Exception:
+        return None
+
+
 class Checkpoint:
     """문서 단위 작업 기록. 완료된 번역 구간만 독립적으로 확정한다."""
-    def __init__(self, root: Path, key: str):
+    def __init__(self, root: Path, key: str, *, protector=None):
         self.root = Path(root)
+        self.protector = protector
         self.root.mkdir(parents=True,exist_ok=True,mode=0o700)
         if os.name != 'nt':
             self.root.chmod(0o700)
@@ -204,6 +234,18 @@ class Checkpoint:
             raise ValueError('Checkpoint job fingerprint mismatch')
         self.set('fingerprint',key)
 
+    def _seal(self, value):
+        if self.protector is None:
+            return value
+        return 'sealed:' + base64.b64encode(self.protector.protect(value.encode('utf-8'))).decode('ascii')
+
+    def _open(self, value):
+        if not value.startswith('sealed:'):
+            return value
+        if self.protector is None:
+            raise ValueError('Encrypted translation checkpoint cannot be read here')
+        return self.protector.unprotect(base64.b64decode(value[7:])).decode('utf-8')
+
     def get(self,key):
         row=self.connection.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone()
         return row[0] if row else None
@@ -214,16 +256,26 @@ class Checkpoint:
 
     def memory(self):
         value=self.get('memory')
-        return TranslationMemory.from_json(value) if value else None
+        return TranslationMemory.from_json(self._open(value)) if value else None
 
     def save_memory(self,memory):
-        self.set('memory',memory.to_json())
+        self.set('memory',self._seal(memory.to_json()))
+
+    def failed(self):
+        value=self.get('failed')
+        data=json.loads(value) if value else []
+        return {int(x) for x in data if isinstance(x,int)}
+
+    def save_failed(self,indexes):
+        self.set('failed',json.dumps(sorted(indexes)))
 
     def completed(self):
-        return {idx:translated for idx,translated in self.connection.execute('SELECT idx,text FROM units')}
+        return {idx:self._open(translated)
+                for idx,translated in self.connection.execute('SELECT idx,text FROM units')}
 
     def save_units(self, pairs):
-        self.connection.executemany('INSERT OR REPLACE INTO units (idx,text) VALUES (?,?)',pairs)
+        self.connection.executemany('INSERT OR REPLACE INTO units (idx,text) VALUES (?,?)',
+                                    [(idx,self._seal(text)) for idx,text in pairs])
         self.connection.commit()
 
     def close(self,*,success=False):
