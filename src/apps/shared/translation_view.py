@@ -18,6 +18,8 @@ def build(parent,w):
     w.translation_stage=tk.BooleanVar(master=w.root,value=False)
     w.translation_resume=tk.BooleanVar(master=w.root,value=True)
     w.translation_keep_failed=tk.BooleanVar(master=w.root,value=True)
+    w.translation_precise=tk.BooleanVar(master=w.root,value=False)
+    w.translation_progress=tk.DoubleVar(master=w.root,value=0)
     w.translation_status=tk.StringVar(master=w.root,value='파일을 선택한 뒤 분석하세요.')
     panel=ttk.LabelFrame(parent,text='파일 번역 설정',padding=12)
     panel.pack(fill='x',pady=(0,10))
@@ -55,6 +57,12 @@ def build(parent,w):
                     variable=w.translation_resume).pack(anchor='w',pady=(7,0))
     ttk.Checkbutton(panel,text='끝내 검증에 실패한 구간은 원문을 유지하고 계속 · 완료 후 줄 번호 표시',
                     variable=w.translation_keep_failed).pack(anchor='w',pady=(3,0))
+    ttk.Checkbutton(panel,text='정밀 모드 · 모델의 추론(thinking)을 켜서 관용구·뉘앙스를 더 검토 (지원 모델만, 여러 배 느림)',
+                    variable=w.translation_precise).pack(anchor='w',pady=(3,0))
+    ttk.Label(panel,text='고정 용어집 · 한 줄에 "원문 = 번역" (예: 佐藤 = 사토). 인명·핵심 용어는 반드시 이 번역을 사용합니다.',
+              style='Muted.TLabel').pack(anchor='w',pady=(8,2))
+    w.translation_glossary_text=text_box(panel,height=3,expand=False)
+    w.translation_glossary_text.configure(state='normal')   # 사용자가 입력하는 칸
     note(panel,'TXT/JSON/MD/SRT/VTT 지원. 긴 문서는 분할·묶음 처리하며 문서별 용어집을 공유합니다. '
          '최대 32MiB · 출력은 별도 새 파일만 생성합니다.')
 
@@ -67,6 +75,13 @@ def build(parent,w):
     w.translation_cancel_button.pack(side='left',padx=(8,0))
     ttk.Label(actions,textvariable=w.translation_status,style='Muted.TLabel',
               wraplength=520).pack(side='left',padx=(15,0),fill='x',expand=True)
+
+    bar=ttk.Frame(parent);bar.pack(fill='x',pady=(2,6))
+    w.translation_progress_bar=ttk.Progressbar(bar,variable=w.translation_progress,maximum=100,
+                                               mode='determinate')
+    w.translation_progress_bar.pack(side='left',fill='x',expand=True)
+    w.translation_progress_label=ttk.Label(bar,text='',width=26,style='Muted.TLabel')
+    w.translation_progress_label.pack(side='left',padx=(8,0))
 
     notebook=ttk.Notebook(parent);notebook.pack(fill='both',expand=True)
     original=ttk.Frame(notebook);translated=ttk.Frame(notebook);memory=ttk.Frame(notebook)

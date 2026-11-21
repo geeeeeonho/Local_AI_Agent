@@ -1,4 +1,5 @@
 """Tk 화면에서 번역 도구를 사용하기 위한 콜백. 실제 작업은 worker thread."""
+import time
 from pathlib import Path
 from threading import Event
 from tkinter import filedialog
@@ -71,22 +72,38 @@ class TranslationController:
                  'stage':self.translation_stage.get(),
                  'resume':self.translation_resume.get(),
                  'keep_failed':self.translation_keep_failed.get(),
+                 'precise':self.translation_precise.get(),
+                 'glossary':self.translation_glossary_text.get('1.0','end'),
                  'output_path':self.translation_output.get().strip() or None}
         self._translation_cancel=Event()
         self.translation_start_button.configure(state='disabled')
         self.translation_cancel_button.configure(state='normal')
         self.translation_status.set('Ollama 준비 및 번역 시작...')
+        self.set_translation_progress(0,0,'준비 중')
+        clock={}
         def progress(n,total):
+            # 작업 스레드에서 호출된다. 화면 갱신은 이벤트로 Tk 스레드에 넘긴다.
+            now=time.monotonic()
+            if 'start' not in clock:
+                clock['start'],clock['first']=now,n     # 이어하기로 이미 끝난 구간은 속도 계산에서 뺀다
+            eta=''
+            done_here=n-clock['first']
+            if done_here>0 and n<total:
+                eta='약 %s 남음'%_duration((now-clock['start'])/done_here*(total-n))
             self.services.events.emit('runtime.progress',{'service':'translator',
-                'message':'번역 중: %d/%d 구간'%(n,total)})
+                'done':n,'total':total,'eta':eta,
+                'message':'번역 중: %d/%d 구간%s'%(n,total,' · '+eta if eta else '')})
         def work():
             return self.services.translator.translate_file(
                 **options,progress=progress,
                 cancelled=lambda:self._translation_cancel.is_set() or self.runner.cancel.is_set())
         def unlock():
+            if not self.translation_progress.get()>=100:
+                self.translation_progress_label.configure(text='중지됨')
             self.translation_start_button.configure(state='normal')
             self.translation_cancel_button.configure(state='disabled')
         def done(result):
+            self.set_translation_progress(result.count,result.count,'')
             unlock()
             kept=result.kept_lines
             kept_note=(' · 원문 유지 %d줄(%s%s)'%(len(kept),', '.join(map(str,kept[:8])),
@@ -112,3 +129,18 @@ class TranslationController:
         if not self.run_task('tools.translate',work,done,mutate=False,long=True,
                              announce=False,error=failed):
             unlock()
+
+    def set_translation_progress(self,done,total,note=''):
+        percent=100.0*done/total if total else 0.0
+        self.translation_progress.set(percent)
+        text='%d%% · %d/%d'%(percent,done,total) if total else ''
+        if note:
+            text=(text+' · ' if text else '')+note
+        self.translation_progress_label.configure(text=text)
+
+
+def _duration(seconds):
+    seconds=int(seconds)
+    if seconds<60:return '%d초'%seconds
+    if seconds<3600:return '%d분'%(seconds//60)
+    return '%d시간 %d분'%(seconds//3600,seconds%3600//60)
