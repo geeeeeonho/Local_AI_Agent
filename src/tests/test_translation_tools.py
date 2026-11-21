@@ -13,8 +13,19 @@ class FakeInference:
 class FakeModel:
     def chat(self,name,messages,temperature=.2):
         assert name=='test-local:1'
-        item=messages[-1]['content'].split('번역할 문장:\n')[-1]
-        return item.replace('Hello','안녕하세요').replace('Open','열어')
+        system=messages[0]['content']
+        prompt=messages[-1]['content']
+        if system.startswith('You prepare a compact'):
+            return json.dumps({'summary':'A simple scripted conversation.',
+                               'style':'Natural speech.','terms':{},'speakers':{}})
+        if system.startswith('Summarize important facts'):
+            return json.dumps({'summary':'The conversation continues.'})
+        if prompt.startswith('TRANSLATE_SINGLE:\n'):
+            return prompt.split('TRANSLATE_SINGLE:\n')[-1].replace('Hello','안녕하세요').replace('Open','열어')
+        data=json.loads(prompt)
+        return json.dumps({'translations':[
+            row['text'].replace('Hello','안녕하세요').replace('Open','열어')
+            for row in data['items']]},ensure_ascii=False)
 
 class TranslationTests(unittest.TestCase):
     def test_txt_detects_script_and_protects_names(self):
@@ -49,7 +60,8 @@ class TranslationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'scene.txt'
             path.write_text('Alice: Hello {name}!\nBob: Open the door.\n',encoding='utf-8')
-            service=TranslationService(FakeInference(),lambda endpoint:FakeModel())
+            service=TranslationService(FakeInference(),lambda endpoint:FakeModel(),
+                                       checkpoint_dir=Path(tmp)/'checkpoints')
             done=service.translate_file(path,model='test-local:1')
             self.assertTrue(done.output.exists())
             self.assertIn('Alice: 안녕하세요 {name}!',done.text)
