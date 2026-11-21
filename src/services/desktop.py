@@ -12,6 +12,7 @@ from services.network.ownership import RuntimeOwner
 from services.search.service import SearchService
 from services.chat.service import ChatService
 from services.agent.launcher import AgentLauncher
+from services.tools.translation import TranslationService
 from services.system.desktop import SetupService, SystemService
 from services.records import SessionStores
 
@@ -123,6 +124,7 @@ class DesktopServices:
         self.chat = ChatService(backend, self.inference, self.network, self.search,
                                 self.events, stores=self.records)
         self.agent = AgentLauncher(backend, self.network, self.events, stores=self.records)
+        self.translator = TranslationService(self.inference)
         self.system = SystemService(backend)
         self.setup = SetupService(
             backend, self.models, self.network, self.settings,
