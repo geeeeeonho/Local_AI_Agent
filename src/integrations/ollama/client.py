@@ -118,19 +118,102 @@ class OllamaClient:
     def remove(self, name: str):
         self._json('/api/delete', {'model': model_name(name)}, 'DELETE', empty=True)
 
-    def chat(self, name: str, messages: list[dict], *, temperature: float = 0.2) -> str:
-        """로컬 모델에 번역 요청한다. 공통 루프백 전송 정책을 재사용한다."""
-        value = self._json('/api/chat', {
-            'model': local_model_name(name),
-            'messages': messages,
-            'stream': False,
-            'options': {'temperature': float(temperature)},
-        })
-        message = value.get('message')
-        content = message.get('content') if isinstance(message, dict) else None
-        if not isinstance(content, str):
-            raise ValueError('Ollama 응답에 번역 문자열이 없습니다')
-        return content
+    def chat(self, name: str, messages: list[dict], *, temperature: float = 0.2,
+             format=None, think=False, num_ctx=None, num_predict=None, cancelled=None) -> str:
+        """로컬 모델에 요청하고 답변 문자열을 돌려준다.
+
+        스트리밍으로 받으므로 소켓 제한 시간은 "전체 생성 시간"이 아니라 "토큰 사이 대기"에만
+        적용된다. 느린 CPU·대형 모델도 생성이 이어지는 한 끊기지 않으며, 토큰 사이마다 취소를
+        확인한다. ``think=False``는 추론 모델의 <think> 출력을 끈다. 이 옵션이나 ``format``을
+        모르는 구버전 Ollama가 거부하면 한 번만 해당 옵션 없이 다시 요청한다.
+        """
+        options = {'temperature': float(temperature)}
+        if num_ctx:
+            options['num_ctx'] = int(num_ctx)
+        if num_predict:
+            options['num_predict'] = int(num_predict)
+        payload = {'model': local_model_name(name), 'messages': messages,
+                   'stream': True, 'options': options}
+        if format is not None and not getattr(self, '_no_format', False):
+            payload['format'] = format
+        if think is not None and not getattr(self, '_no_think', False):
+            payload['think'] = bool(think)
+        try:
+            return self._chat_stream(payload, cancelled)
+        except RuntimeError as exc:
+            detail = str(exc).lower()
+            retry = False
+            if 'think' in payload and 'think' in detail:
+                self._no_think, retry = True, True
+                payload.pop('think')
+            if 'format' in payload and ('format' in detail or 'schema' in detail):
+                self._no_format, retry = True, True
+                payload.pop('format')
+            if not retry:
+                raise
+            return self._chat_stream(payload, cancelled)
+
+    def _chat_stream(self, payload, cancelled):
+        self._aborted = False
+        parts, size, reason = [], 0, ''
+        try:
+            with self._open(self._request('/api/chat', payload), self.timeout) as response:
+                self._active = response
+                while True:
+                    if cancelled is not None and cancelled():
+                        raise InterruptedError('Translation cancelled')
+                    raw = response.readline(_MAX_LINE + 1)
+                    if not raw:
+                        break
+                    if len(raw) > _MAX_LINE:
+                        raise RuntimeError('Ollama chat line exceeds size limit')
+                    if not raw.strip():
+                        continue
+                    message = json.loads(raw.decode('utf-8'))
+                    if not isinstance(message, dict):
+                        raise ValueError('Ollama chat chunk must be an object')
+                    if message.get('error'):
+                        raise RuntimeError(str(message['error']))
+                    body = message.get('message')
+                    content = body.get('content') if isinstance(body, dict) else None
+                    if isinstance(content, str) and content:
+                        parts.append(content)
+                        size += len(content)
+                        if size > _MAX_JSON:
+                            raise RuntimeError('Ollama chat response exceeds size limit')
+                    if message.get('done'):
+                        reason = str(message.get('done_reason') or '')
+                        break
+        except InterruptedError:
+            raise
+        except Exception:
+            if self._aborted:
+                raise InterruptedError('Translation cancelled') from None
+            raise
+        finally:
+            self._active = None
+        if self._aborted:
+            raise InterruptedError('Translation cancelled')
+        if reason == 'length':
+            raise ValueError('Model output hit the length limit')
+        return ''.join(parts)
+
+    def abort(self):
+        """다른 스레드에서 진행 중인 chat 응답을 즉시 끊는다(최선 노력)."""
+        self._aborted = True
+        response = getattr(self, '_active', None)
+        if response is None:
+            return
+        try:
+            import socket
+            sock = response.fp.raw._sock  # http.client 응답의 실제 소켓
+            sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            response.close()
+        except Exception:
+            pass
 
     def pull(self, name: str, progress=None):
         request = self._request('/api/pull', {'model': model_name(name), 'stream': True})

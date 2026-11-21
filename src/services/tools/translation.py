@@ -1,20 +1,23 @@
 """로컬 Ollama 번역: 제한된 문서 메모리와 안전한 중단 후 재개."""
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
 import tempfile
+import threading
+import time
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from core.tools.translation import (Document, Piece, SPEAKER, prepare, protect, read_source,
-                                    render, restore, split_masked)
+from core.tools.translation import (Document, Piece, prepare, protect, read_source,
+                                    render, restore, speaker_prefix, split_masked)
 from integrations.ollama.client import OllamaClient, local_model_name
-from .translation_memory import (Checkpoint, TranslationMemory, initial_memory,
-                                 job_key, json_object, prune, update_rolling)
+from .translation_memory import (Checkpoint, TranslationMemory, default_protector, initial_memory,
+                                 job_key, json_object, prune, strip_reasoning, update_rolling)
 
 LANGUAGES = {'한국어':'Korean','English':'English','日本語':'Japanese',
              '简体中文':'Simplified Chinese','Español':'Spanish'}
@@ -24,7 +27,7 @@ STYLES = {'faithful':'원문에 충실하게','natural':'자연스럽게, 정보
 CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투',
            'subtitle':'읽기 쉬운 자막','code':'기술 문서 및 코드 보호',
            'structured':'구조화 데이터 문자열 값'}
-MAX_BATCH_CHARS = 3300
+MAX_BATCH_CHARS = 2600
 MAX_BATCH_ITEMS = 10
 MAX_TOTAL_UNITS = 80000
 ROLLUP_EVERY = 40000
@@ -42,6 +45,14 @@ class Result:
     glossary: dict[str,str] = field(default_factory=dict)
     resumed_units: int = 0
     model_calls: int = 0
+    kept_lines: tuple[int, ...] = ()   # 검증에 실패해 원문을 유지한 줄 번호(1부터)
+
+# 모델 응답 형식을 Ollama 문법 제약(format)으로 강제한다.
+BATCH_SCHEMA = {'type':'object','properties':{'translations':{'type':'array','items':{'type':'string'}}},
+                'required':['translations']}
+SINGLE_SCHEMA = {'type':'object','properties':{'translation':{'type':'string'}},'required':['translation']}
+TRANSPORT_RETRIES = 2
+LABEL = re.compile(r'^\s*(?:translation|translated text|output|answer|번역(?:문|본| 결과)?|訳文|翻訳|翻译|译文|traducci[oó]n)\s*[:：]\s*', re.I)
 
 
 def _units(document: Document):
@@ -121,7 +132,7 @@ def _speaker(doc, unit):
     segment=doc.segments[unit.segment_index]
     start=doc.source.rfind('\n',0,segment.start)+1
     prefix=doc.source[start:segment.start]
-    match=SPEAKER.match(prefix)
+    match=speaker_prefix(prefix)
     return match.group().split(':',1)[0].strip() if match else ''
 
 
@@ -132,6 +143,20 @@ def _section(doc, unit):
     headings=[line.strip() for line in lines if re.match(
         r'^\s*(?:#{1,6}\s+|Chapter\s+\d+|Scene\s+\d+|\[Scene\s+\d+\])',line,re.I)]
     return headings[-1][:120] if headings else ''
+
+
+def _budget(prompt_chars, source_chars):
+    """프롬프트+예상 출력 길이로 문맥 창(num_ctx)과 출력 상한(num_predict)을 정한다.
+
+    Ollama 기본 문맥(2K~4K 토큰)에서는 긴 배치의 앞부분(지시문)이 잘려 나간다. 문자 2개를
+    토큰 1개로 보수적으로 잡는다(영문은 더 적고, 한중일은 비슷).
+    """
+    predict = min(8192, max(512, int(source_chars * 1.6) + 256))
+    need = prompt_chars // 2 + predict + 256
+    ctx = 4096
+    while ctx < need and ctx < 16384:
+        ctx *= 2
+    return ctx, predict
 
 
 def _ask(client,model,items,memory,target,style,kind,recent,doc,*,strict=False):
@@ -149,19 +174,56 @@ def _ask(client,model,items,memory,target,style,kind,recent,doc,*,strict=False):
     relevant=' '.join(item['text']+' '+item['speaker'] for item in unit_details)
     data = {'target_language':LANGUAGES[target], 'document_memory':memory.prompt(relevant),
             'recent_translations':recent, 'items':unit_details}
-    response=client.chat(model,[{'role':'system','content':system},
-                                {'role':'user','content':json.dumps(data,ensure_ascii=False)}],temperature=.15)
-    if len(response)>max(16000,sum(len(unit.text) for _,unit in items)*8+3000):
+    user=json.dumps(data,ensure_ascii=False)
+    source_chars=sum(len(unit.text) for _,unit in items)
+    ctx,predict=_budget(len(system)+len(user),source_chars)
+    response=client.chat(model,[{'role':'system','content':system},{'role':'user','content':user}],
+                         temperature=.15,format=BATCH_SCHEMA,think=False,num_ctx=ctx,num_predict=predict)
+    if len(response)>max(16000,source_chars*8+3000):
         raise ValueError('Translation response exceeds safe size')
     values=json_object(response).get('translations')
     if not isinstance(values,list) or len(values)!=len(items) or not all(isinstance(v,str) for v in values):
         raise ValueError('Model returned an incorrect batch structure')
-    return values
+    return [v.strip() for v in values]
 
 
-def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_for_segment,doc):
+def _clean_single(source, answer):
+    """단일 번역 응답에서 모델이 덧붙인 추론·코드펜스·'Translation:' 라벨·따옴표를 걷어낸다."""
+    text=strip_reasoning(answer)
+    try:
+        value=json_object(text).get('translation')
+        # JSON 객체로 답했는데 약속한 키가 없으면 그 JSON을 번역문으로 쓰지 않는다.
+        return value.strip() if isinstance(value,str) else ''
+    except (ValueError,TypeError):
+        pass
+    if text.startswith('```'):
+        text=re.sub(r'^```\w*\s*|\s*```$','',text).strip()
+    if LABEL.match(text) and not LABEL.match(source):
+        text=LABEL.sub('',text,count=1).strip()
+    for left,right in (('"','"'),("'","'"),('“','”'),('「','」')):
+        if len(text)>=2 and text.startswith(left) and text.endswith(right) and \
+                not source.strip().startswith(left):
+            text=text[1:-1].strip()
+    return text
+
+
+def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_for_segment,doc,
+                     *,cancelled=None,failures=None):
+    """배치를 번역한다. 형식 오류는 재시도→분할→단일 요청 순으로 좁힌다.
+
+    연결 끊김·시간 초과 같은 일시 오류는 잠시 쉬고 다시 시도하며, 시간 초과가 반복되면
+    출력이 짧아지도록 배치를 반으로 나눈다. ``failures``가 주어지면 끝내 검증을 통과하지
+    못한 구간은 원문을 그대로 두고 그 번호를 기록한다(작업 전체가 멈추지 않는다).
+    """
+    def stop_if_cancelled():
+        if cancelled and cancelled():
+            raise InterruptedError('Translation cancelled; progress is saved')
+
     last = None
-    for retry in range(2):
+    transport = 0
+    retry = 0
+    while retry < 2:
+        stop_if_cancelled()
         try:
             values=_ask(client,model,items,memory,target,style,kind,recent,doc,strict=bool(retry))
             for (idx,unit),value in zip(items,values):
@@ -169,23 +231,53 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
             return values
         except (ValueError,TypeError,KeyError) as exc:
             last=exc
+            retry+=1
+        except OSError as exc:
+            stop_if_cancelled()
+            if isinstance(exc,TimeoutError) and len(items)>1:
+                last=exc
+                break
+            transport+=1
+            if transport>TRANSPORT_RETRIES:
+                raise
+            time.sleep(min(2*transport,5))
+    def again(part):
+        return _translate_batch(client,model,part,memory,target,style,kind,recent,
+                                tokens_for_segment,doc,cancelled=cancelled,failures=failures)
     if len(items)>1:
         middle=len(items)//2
-        return (_translate_batch(client,model,items[:middle],memory,target,style,kind,
-                                 recent,tokens_for_segment,doc)
-                +_translate_batch(client,model,items[middle:],memory,target,style,kind,
-                                  recent,tokens_for_segment,doc))
+        return again(items[:middle])+again(items[middle:])
     # 일부 소형 모델은 단일 문장에서도 배열형 JSON 출력 계약을 지키지 못한다.
     idx,unit=items[0]
-    system=('Translate to '+LANGUAGES[target]+'. Output only translated text. '
-            'Preserve every __LOCALAI_KEEP_ token exactly. '
+    system=('Translate to '+LANGUAGES[target]+'. Return only JSON {"translation": "..."}. '
+            'Preserve every __LOCALAI_KEEP_ token exactly. No explanations. '
             'Use this document terminology and style: '+memory.prompt(unit.text+' '+_speaker(doc,unit)))
-    result=client.chat(model,[{'role':'system','content':system},
-                              {'role':'user','content':'TRANSLATE_SINGLE:\n'+unit.text}],temperature=.1)
+    ctx,predict=_budget(len(system)+len(unit.text)+40,len(unit.text))
+    for attempt in range(TRANSPORT_RETRIES+1):
+        stop_if_cancelled()
+        try:
+            answer=client.chat(model,[{'role':'system','content':system},
+                                      {'role':'user','content':'TRANSLATE_SINGLE:\n'+unit.text}],
+                               temperature=.1,format=SINGLE_SCHEMA,think=False,
+                               num_ctx=ctx,num_predict=predict)
+            break
+        except OSError:
+            stop_if_cancelled()
+            if attempt>=TRANSPORT_RETRIES:
+                raise
+            time.sleep(min(2*(attempt+1),5))
+        except ValueError as exc:   # 출력 길이 한도 초과 등
+            answer=''
+            last=exc
+            break
+    result=_clean_single(unit.text,answer)
     try:
         _validate(unit.text,result,memory,tokens_for_segment[unit.segment_index])
         return [result]
     except ValueError as exc:
+        if failures is not None:
+            failures.add(idx)
+            return [unit.text]
         raise ValueError('Translation unit %d failed validation: %s (batch error: %s)' %
                          (idx+1,exc,last)) from exc
 
@@ -231,21 +323,51 @@ def _save_new(path,result,encoding):
 
 
 class _CountedClient:
-    def __init__(self, client):
+    """호출 수를 세고, 확장 옵션을 모르는 단순 클라이언트(테스트용 등)에는 기본 인자만 넘긴다."""
+    EXTRAS = ('format','think','num_ctx','num_predict','cancelled')
+
+    def __init__(self, client, cancelled=None):
         self.client = client
         self.calls = 0
+        self.cancelled = cancelled
+        try:
+            params = inspect.signature(client.chat).parameters
+            self.accepts = {name for name in self.EXTRAS if name in params} | (
+                set(self.EXTRAS) if any(p.kind is p.VAR_KEYWORD for p in params.values()) else set())
+        except (TypeError, ValueError):
+            self.accepts = set()
 
-    def chat(self, *args, **kwargs):
+    def chat(self, model, messages, **kwargs):
         self.calls += 1
-        return self.client.chat(*args, **kwargs)
+        if self.cancelled is not None:
+            kwargs.setdefault('cancelled', self.cancelled)
+        allowed = {key:value for key,value in kwargs.items()
+                   if key == 'temperature' or key in self.accepts}
+        return self.client.chat(model, messages, **allowed)
+
+    def abort(self):
+        abort = getattr(self.client, 'abort', None)
+        if callable(abort):
+            abort()
 
 
 class TranslationService:
-    def __init__(self,inference,client_factory=None,*,checkpoint_dir=None):
+    def __init__(self,inference,client_factory=None,*,checkpoint_dir=None,protector='auto'):
         self.inference=inference
-        self.client_factory=client_factory or (lambda endpoint:OllamaClient(endpoint,timeout=180))
+        # 스트리밍이므로 timeout은 토큰 사이 최대 대기(첫 토큰 전 모델 적재 포함)다.
+        self.client_factory=client_factory or (lambda endpoint:OllamaClient(endpoint,timeout=600))
         self.checkpoint_dir=(Path(checkpoint_dir) if checkpoint_dir is not None else
                              Path.home()/'.localai'/'translation-cache')
+        self.protector=default_protector() if protector=='auto' else protector
+        self._active=None
+        self._abort=threading.Event()
+
+    def abort(self):
+        """취소·창 닫기 시 진행 중인 모델 응답을 기다리지 않고 끊는다."""
+        self._abort.set()
+        client=self._active
+        if client is not None:
+            client.abort()
 
     @staticmethod
     def inspect(path,kind='auto',stage=False):
@@ -254,7 +376,11 @@ class TranslationService:
 
     def translate_file(self,path,*,model,target='한국어',kind='auto',style='natural',stage=False,
                        output_path=None,progress:Callable[[int,int],None]|None=None,
-                       cancelled:Callable[[],bool]|None=None, resume=True) -> Result:
+                       cancelled:Callable[[],bool]|None=None, resume=True,
+                       keep_failed=False) -> Result:
+        self._abort.clear()
+        user_cancelled=cancelled
+        cancelled=lambda:self._abort.is_set() or bool(user_cancelled and user_cancelled())
         path=Path(path)
         model=local_model_name(model)
         if target not in LANGUAGES or style not in STYLES:
@@ -279,12 +405,20 @@ class TranslationService:
         available=self.inference.local_models()
         if available is None or model.lower() not in {str(x).lower() for x in available}:
             raise RuntimeError('Selected model is not available locally')
-        client=_CountedClient(self.client_factory(endpoint))
+        client=_CountedClient(self.client_factory(endpoint),cancelled)
+        self._active=client
         key=job_key(path,output,source,model,target,doc.selected,style,stage)
         prune(self.checkpoint_dir)
         if not resume:
             (self.checkpoint_dir/(key+'.sqlite3')).unlink(missing_ok=True)
-        checkpoint=Checkpoint(self.checkpoint_dir,key)
+        checkpoint=Checkpoint(self.checkpoint_dir,key,protector=self.protector)
+        try:
+            checkpoint.memory();checkpoint.completed()
+        except Exception:
+            # 다른 계정·손상된 기록은 읽지 않고 버린 뒤 처음부터 진행한다.
+            checkpoint.close()
+            (self.checkpoint_dir/(key+'.sqlite3')).unlink(missing_ok=True)
+            checkpoint=Checkpoint(self.checkpoint_dir,key,protector=self.protector)
         success=False
         try:
             memory=checkpoint.memory()
@@ -292,6 +426,7 @@ class TranslationService:
                 memory=initial_memory(client,model,doc,target,style,cancelled=cancelled)
                 checkpoint.save_memory(memory)
             complete=checkpoint.completed()
+            failures=checkpoint.failed()
             resumed=len(complete)
             if progress:
                 progress(resumed,len(units))
@@ -303,10 +438,14 @@ class TranslationService:
                     continue
                 items=[(idx,units[idx]) for idx in pending]
                 recent=_recent(units,complete,pending[0])
+                before=len(failures)
                 translated=_translate_batch(client,model,items,memory,target,style,
-                                            doc.selected,recent,maps,doc)
+                                            doc.selected,recent,maps,doc,cancelled=cancelled,
+                                            failures=failures if keep_failed else None)
                 pairs=list(zip(pending,translated))
                 checkpoint.save_units(pairs)
+                if len(failures)!=before:
+                    checkpoint.save_failed(failures)
                 complete.update(pairs)
                 memory.since_rollup+=sum(len(units[idx].text) for idx in pending)
                 if memory.since_rollup>=ROLLUP_EVERY:
@@ -326,7 +465,10 @@ class TranslationService:
                 raise FileExistsError('Another process has created the output file')
             _save_new(output,output_text,'utf-8' if encoding=='cp949' else encoding)
             success=True
+            kept=tuple(sorted({doc.source.count('\n',0,doc.segments[units[i].segment_index].start)+1
+                               for i in failures if i<len(units)}))
             return Result(output,output_text,doc.detected,doc.selected,len(units),
-                          memory.summary,memory.style,dict(memory.terms),resumed,client.calls)
+                          memory.summary,memory.style,dict(memory.terms),resumed,client.calls,kept)
         finally:
+            self._active=None
             checkpoint.close(success=success)

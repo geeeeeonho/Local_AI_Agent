@@ -7,17 +7,19 @@ class TaskRunner:
     def __init__(self):
         self._mutations = ThreadPoolExecutor(max_workers=1, thread_name_prefix='localai-write')
         self._reads = ThreadPoolExecutor(max_workers=2, thread_name_prefix='localai-read')
+        # 몇 시간씩 걸릴 수 있는 작업(파일 번역)은 별도 스레드를 써서 화면 조회를 막지 않는다.
+        self._long = ThreadPoolExecutor(max_workers=1, thread_name_prefix='localai-long')
         self._tasks = {}
         self._mutating = {}
         self.cancel = threading.Event()
         self.stopped = False
 
-    def submit(self, key, fn, done, error, *, mutate=True):
+    def submit(self, key, fn, done, error, *, mutate=True, long=False):
         if self.stopped or key in self._tasks:
             return False
-        pool = self._mutations if mutate else self._reads
+        pool = self._long if long else (self._mutations if mutate else self._reads)
         self._tasks[key] = (pool.submit(fn), done, error)
-        self._mutating[key] = bool(mutate)
+        self._mutating[key] = bool(mutate) and not long
         return True
 
     def busy(self, key=None):
@@ -58,6 +60,7 @@ class TaskRunner:
         self.stopped = True
         self._mutations.shutdown(wait=True, cancel_futures=True)
         self._reads.shutdown(wait=True, cancel_futures=True)
+        self._long.shutdown(wait=True, cancel_futures=True)
         # Release unconsumed UI callbacks on the calling GUI thread. Keeping
         # these cycles could finalize Tk variables later on a worker thread.
         self._tasks.clear()

@@ -53,9 +53,11 @@ class TranslationController:
                       error=lambda e:self.translation_status.set('모델 조회 실패: '+str(e)))
 
     def cancel_translation(self):
-        if hasattr(self,'_translation_cancel'):
-            self._translation_cancel.set()
-            self.translation_status.set('중단 요청됨 · 현재 모델 응답 후 중단합니다.')
+        if not self.runner.busy('tools.translate'):
+            self.translation_status.set('진행 중인 번역이 없습니다.');return
+        self._translation_cancel.set()
+        self.services.translator.abort()
+        self.translation_status.set('중단 중 · 완료한 구간은 저장되어 다음에 이어집니다.')
 
     def start_translation(self):
         if self.runner.busy('tools.translate'): return
@@ -68,6 +70,7 @@ class TranslationController:
                  'style':STYLES[self.translation_style.get()],
                  'stage':self.translation_stage.get(),
                  'resume':self.translation_resume.get(),
+                 'keep_failed':self.translation_keep_failed.get(),
                  'output_path':self.translation_output.get().strip() or None}
         self._translation_cancel=Event()
         self.translation_start_button.configure(state='disabled')
@@ -85,19 +88,27 @@ class TranslationController:
             self.translation_cancel_button.configure(state='disabled')
         def done(result):
             unlock()
-            self.translation_status.set('번역 완료: %d구간 · 재개 %d구간 · %s' %
-                                        (result.count,result.resumed_units,result.output))
-            self.translation_output.set(str(result.output))
+            kept=result.kept_lines
+            kept_note=(' · 원문 유지 %d줄(%s%s)'%(len(kept),', '.join(map(str,kept[:8])),
+                       ' …' if len(kept)>8 else '')) if kept else ''
+            self.translation_status.set('번역 완료: %d구간 · 재개 %d구간%s · %s' %
+                                        (result.count,result.resumed_units,kept_note,result.output))
+            # 다음 번역(다른 언어 등)이 이전 결과 경로를 재사용하지 않도록 비운다.
+            self.translation_output.set('')
             set_text(self.translation_result_text,result.text[:12000])
             glossary='\n'.join(f'{source} → {target}' for source,target in result.glossary.items())
             set_text(self.translation_memory_text,
                      '문서 요약\n'+result.memory_summary+'\n\n문체\n'+result.memory_style+
                      '\n\n고정 용어집\n'+(glossary or '(추출된 항목 없음)')+
+                     ('\n\n원문 유지(검증 실패) 줄\n'+', '.join(map(str,kept)) if kept else '')+
                      '\n\n문서 메모리는 해당 번역 작업에만 사용됩니다. 작업 완료 후 재개 기록은 삭제됩니다.')
             self.translation_tabs.select(1)
         def failed(exc):
             unlock()
-            self.translation_status.set('번역 실패: '+str(exc))
-        if not self.run_task('tools.translate',work,done,mutate=False,
+            if isinstance(exc,InterruptedError):
+                self.translation_status.set('번역 중단됨 · 같은 설정으로 다시 시작하면 이어서 진행합니다.')
+            else:
+                self.translation_status.set('번역 실패: '+str(exc))
+        if not self.run_task('tools.translate',work,done,mutate=False,long=True,
                              announce=False,error=failed):
             unlock()

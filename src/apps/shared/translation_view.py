@@ -17,6 +17,7 @@ def build(parent,w):
     w.translation_language=tk.StringVar(master=w.root,value='한국어')
     w.translation_stage=tk.BooleanVar(master=w.root,value=False)
     w.translation_resume=tk.BooleanVar(master=w.root,value=True)
+    w.translation_keep_failed=tk.BooleanVar(master=w.root,value=True)
     w.translation_status=tk.StringVar(master=w.root,value='파일을 선택한 뒤 분석하세요.')
     panel=ttk.LabelFrame(parent,text='파일 번역 설정',padding=12)
     panel.pack(fill='x',pady=(0,10))
@@ -52,6 +53,8 @@ def build(parent,w):
     ttk.Button(row,text='저장 위치',command=w.choose_translation_output).pack(side='left',padx=(6,0))
     ttk.Checkbutton(panel,text='중단한 번역 이어하기 · 문서 메모리와 완료 구간 재사용',
                     variable=w.translation_resume).pack(anchor='w',pady=(7,0))
+    ttk.Checkbutton(panel,text='끝내 검증에 실패한 구간은 원문을 유지하고 계속 · 완료 후 줄 번호 표시',
+                    variable=w.translation_keep_failed).pack(anchor='w',pady=(3,0))
     note(panel,'TXT/JSON/MD/SRT/VTT 지원. 긴 문서는 분할·묶음 처리하며 문서별 용어집을 공유합니다. '
          '최대 32MiB · 출력은 별도 새 파일만 생성합니다.')
 

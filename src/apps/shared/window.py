@@ -303,7 +303,7 @@ class DesktopWindow(TranslationController):
         parts=[p for p in (model,status+layer,pct.strip(' ·'),amount) if p]
         self.model_progress_text.set(' · '.join(parts)[:180])
 
-    def run_task(self,key,fn,done=None,*,mutate=True,announce=True,error=None):
+    def run_task(self,key,fn,done=None,*,mutate=True,announce=True,error=None,long=False):
         if self.closing:return False
         def finish(value):
             if done and not self.closing:done(value)
@@ -311,7 +311,7 @@ class DesktopWindow(TranslationController):
         def failed(exc):
             self.log(key+': '+str(exc),level='error')
             if error is not None and not self.closing:error(exc)
-        ok=self.runner.submit(key,fn,finish,failed,mutate=mutate)
+        ok=self.runner.submit(key,fn,finish,failed,mutate=mutate and not long,long=long)
         if ok and announce:self.log(key+' ...')
         if ok and mutate:
             # Changes run one at a time. Queued behind another one - possibly
@@ -1546,6 +1546,9 @@ class DesktopWindow(TranslationController):
         self.closing=True
         self._setup_cancel.set()
         self.runner.cancel.set();self._polling=False
+        # 번역 중이면 모델 응답을 기다리지 않고 끊어 창이 '응답 없음'으로 멈추지 않게 한다.
+        translator=getattr(self.services,'translator',None)
+        if translator is not None and hasattr(translator,'abort'):translator.abort()
         session=self.services.agent.session
         if session is not None:
             session.closing.set()
