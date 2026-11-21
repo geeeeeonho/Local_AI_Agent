@@ -1,4 +1,4 @@
-"""Bounded local-only document translation with resumable context memory."""
+"""로컬 Ollama 번역: 제한된 문서 메모리와 안전한 중단 후 재개."""
 from __future__ import annotations
 
 import json
@@ -87,7 +87,7 @@ def _recent(units, saved, start, count=4):
 
 
 def _term_applies(term):
-    # Enforcement is reserved for stable identifiers; ordinary nouns may inflect.
+    # 일반 명사는 문법에 따라 활용되므로 안정적인 식별자에만 고정 용어 검증을 적용한다.
     return len(term) >= 3 and bool(re.fullmatch(r'[A-Z][A-Z0-9_/-]*',term))
 
 
@@ -175,7 +175,7 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
                                  recent,tokens_for_segment,doc)
                 +_translate_batch(client,model,items[middle:],memory,target,style,kind,
                                   recent,tokens_for_segment,doc))
-    # A few small local models ignore array-shaped JSON for a single sentence.
+    # 일부 소형 모델은 단일 문장에서도 배열형 JSON 출력 계약을 지키지 못한다.
     idx,unit=items[0]
     system=('Translate to '+LANGUAGES[target]+'. Output only translated text. '
             'Preserve every __LOCALAI_KEEP_ token exactly. '
@@ -204,7 +204,7 @@ def _assemble(doc,units,prefixes,maps,saved):
 
 
 def _save_new(path,result,encoding):
-    # Write fully and fsync before publishing the new filename. Hard-link avoids overwrite races.
+    # 임시 파일에 쓰고 동기화한 다음 새 파일명으로 게시해 덮어쓰기 경쟁을 방지한다.
     fd,temp = tempfile.mkstemp(prefix='.localai-translation-',suffix='.tmp',dir=path.parent)
     try:
         with os.fdopen(fd,'w',encoding=encoding,newline='') as stream:
@@ -216,7 +216,7 @@ def _save_new(path,result,encoding):
         except FileExistsError:
             raise
         except OSError:
-            # Some removable/network drives do not support hard links.
+            # 일부 외장·네트워크 드라이브는 하드 링크를 지원하지 않는다.
             target_fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             try:
                 with open(temp,'rb') as source, os.fdopen(target_fd,'wb') as dest:
