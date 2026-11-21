@@ -211,10 +211,12 @@ if __name__ == '__main__':
 
 class MoreBoundaryTests(unittest.TestCase):
     def test_large_doc_auto_detection_only_reads_prefix_for_classification(self):
-        text = ('Alice: Hello there.\nBob: Hello again.\n' * 20) + ('One ordinary line.\n' * 100000)
+        text = ('Alice: Hello there.\nBob: Hello again.\n' * 20) + ('One ordinary line.\n' * 5000)
         doc = prepare(text,'.txt')
         self.assertEqual(doc.detected,'script')
-        self.assertEqual(len(doc.segments),100040)
+        self.assertEqual(len(doc.segments),5040)
+        with self.assertRaisesRegex(ValueError,'too many'):
+            prepare('Hello world.\n'*81000,'.txt')
 
     def test_file_modified_during_translation_rejected(self):
         class ModifyingClient(FakeChat):
