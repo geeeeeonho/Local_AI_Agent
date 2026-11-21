@@ -16,6 +16,7 @@ def build(parent,w):
     w.translation_style=tk.StringVar(master=w.root,value='자연스러운 번역')
     w.translation_language=tk.StringVar(master=w.root,value='한국어')
     w.translation_stage=tk.BooleanVar(master=w.root,value=False)
+    w.translation_resume=tk.BooleanVar(master=w.root,value=True)
     w.translation_status=tk.StringVar(master=w.root,value='파일을 선택한 뒤 분석하세요.')
     panel=ttk.LabelFrame(parent,text='파일 번역 설정',padding=12)
     panel.pack(fill='x',pady=(0,10))
@@ -49,8 +50,10 @@ def build(parent,w):
     row=line('출력 파일')
     ttk.Entry(row,textvariable=w.translation_output).pack(side='left',fill='x',expand=True)
     ttk.Button(row,text='저장 위치',command=w.choose_translation_output).pack(side='left',padx=(6,0))
-    note(panel,'TXT/JSON/MD/SRT/VTT 지원. 코드·변수·JSON 키·타임코드 보존. '
-         '출력 경로를 비우면 별도 새 파일을 생성하며 원본은 수정하지 않습니다.')
+    ttk.Checkbutton(panel,text='중단한 번역 이어하기 · 문서 메모리와 완료 구간 재사용',
+                    variable=w.translation_resume).pack(anchor='w',pady=(7,0))
+    note(panel,'TXT/JSON/MD/SRT/VTT 지원. 긴 문서는 분할·묶음 처리하며 문서별 용어집을 공유합니다. '
+         '최대 32MiB · 출력은 별도 새 파일만 생성합니다.')
 
     actions=ttk.Frame(parent);actions.pack(fill='x',pady=4)
     w.translation_start_button=ttk.Button(actions,text='번역 시작',style='Accent.TButton',
@@ -63,10 +66,13 @@ def build(parent,w):
               wraplength=520).pack(side='left',padx=(15,0),fill='x',expand=True)
 
     notebook=ttk.Notebook(parent);notebook.pack(fill='both',expand=True)
-    original=ttk.Frame(notebook);translated=ttk.Frame(notebook)
+    original=ttk.Frame(notebook);translated=ttk.Frame(notebook);memory=ttk.Frame(notebook)
     notebook.add(original,text='원본');notebook.add(translated,text='번역본')
+    notebook.add(memory,text='문서 메모리')
     w.translation_source_text=text_box(original,height=10)
     w.translation_result_text=text_box(translated,height=10)
+    w.translation_memory_text=text_box(memory,height=10)
     w.translation_tabs=notebook
     set_text(w.translation_source_text,'분석된 파일의 앞부분이 표시됩니다.')
     set_text(w.translation_result_text,'번역 결과가 표시됩니다.')
+    set_text(w.translation_memory_text,'번역을 완료하면 요약·문체·고정 용어집을 확인할 수 있습니다.')
