@@ -1,4 +1,4 @@
-"""Bounded structure-preserving translation preparation and reconstruction."""
+"""문서 크기를 제한하면서 구조를 보존하는 번역 전처리·복원 규칙."""
 from __future__ import annotations
 
 import hashlib
@@ -138,7 +138,7 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
                 continue
             if stripped in ('WEBVTT',) or stripped.startswith('WEBVTT '):
                 continue
-            # A VTT cue identifier precedes the timing line; it is not a subtitle.
+            # VTT에서 시간정보 바로 앞의 식별자는 자막 텍스트가 아니다.
             if not TIMESTAMP.match(line):
                 remainder = source[line_match.end():]
                 next_line = re.search(r'[^\r\n]+', remainder)
