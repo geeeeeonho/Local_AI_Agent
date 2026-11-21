@@ -67,6 +67,7 @@ class TranslationController:
                  'kind':KINDS[self.translation_kind.get()],
                  'style':STYLES[self.translation_style.get()],
                  'stage':self.translation_stage.get(),
+                 'resume':self.translation_resume.get(),
                  'output_path':self.translation_output.get().strip() or None}
         self._translation_cancel=Event()
         self.translation_start_button.configure(state='disabled')
@@ -84,9 +85,15 @@ class TranslationController:
             self.translation_cancel_button.configure(state='disabled')
         def done(result):
             unlock()
-            self.translation_status.set('번역 완료: %d구간 · %s'%(result.count,result.output))
+            self.translation_status.set('번역 완료: %d구간 · 재개 %d구간 · %s' %
+                                        (result.count,result.resumed_units,result.output))
             self.translation_output.set(str(result.output))
             set_text(self.translation_result_text,result.text[:12000])
+            glossary='\n'.join(f'{source} → {target}' for source,target in result.glossary.items())
+            set_text(self.translation_memory_text,
+                     '문서 요약\n'+result.memory_summary+'\n\n문체\n'+result.memory_style+
+                     '\n\n고정 용어집\n'+(glossary or '(추출된 항목 없음)')+
+                     '\n\n문서 메모리는 해당 번역 작업에만 사용됩니다. 작업 완료 후 재개 기록은 삭제됩니다.')
             self.translation_tabs.select(1)
         def failed(exc):
             unlock()
