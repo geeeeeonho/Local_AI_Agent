@@ -118,6 +118,20 @@ class OllamaClient:
     def remove(self, name: str):
         self._json('/api/delete', {'model': model_name(name)}, 'DELETE', empty=True)
 
+    def chat(self, name: str, messages: list[dict], *, temperature: float = 0.2) -> str:
+        """로컬 모델에 번역 요청한다. 공통 루프백 전송 정책을 재사용한다."""
+        value = self._json('/api/chat', {
+            'model': local_model_name(name),
+            'messages': messages,
+            'stream': False,
+            'options': {'temperature': float(temperature)},
+        })
+        message = value.get('message')
+        content = message.get('content') if isinstance(message, dict) else None
+        if not isinstance(content, str):
+            raise ValueError('Ollama 응답에 번역 문자열이 없습니다')
+        return content
+
     def pull(self, name: str, progress=None):
         request = self._request('/api/pull', {'model': model_name(name), 'stream': True})
         success = False
