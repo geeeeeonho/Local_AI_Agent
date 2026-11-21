@@ -12,6 +12,7 @@ SUPPORTED = frozenset({'.txt', '.json', '.md', '.markdown', '.srt', '.vtt'})
 TYPES = frozenset({'auto', 'general', 'novel', 'script', 'subtitle', 'code', 'structured'})
 MAX_SOURCE_BYTES = 32 * 1024 * 1024
 MAX_UNIT_CHARS = 1400
+MAX_SEGMENTS = 80000
 TIMESTAMP = re.compile(r'^\s*(?:\d{2}:)?\d{2}:\d{2}[,.]\d{3}\s*-->')
 SPEAKER = re.compile(r'^\s*(?:[-*]\s*)?[\w][\w .-]{0,30}:[ \t]+', re.UNICODE)
 FENCE = re.compile(r'^\s*(`{3,}|~{3,})')
@@ -162,6 +163,8 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
                 continue
             if '|' in line and line.count('|') >= 2:
                 segments.extend(_table_cells(source, line_match.start(), line_match.start() + len(line)))
+                if len(segments) > MAX_SEGMENTS:
+                    raise ValueError('Document contains too many translation segments')
                 continue
         direction = STAGE.fullmatch(line)
         if direction and not stage:
@@ -185,6 +188,8 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
         candidate = _trim_span(source, start, end)
         if candidate:
             segments.append(candidate)
+            if len(segments) > MAX_SEGMENTS:
+                raise ValueError('Document contains too many translation segments')
     if fenced:
         raise ValueError('Unclosed Markdown/code fence; refusing ambiguous translation')
     return segments
@@ -227,6 +232,8 @@ class _JSON:
         literal, end = self.decoder.raw_decode(source, pos)
         if isinstance(literal, str) and key.lower() not in SAFE_JSON_KEYS and any(x.isalpha() for x in literal):
             self.result.append(Segment(pos, end, literal, True))
+            if len(self.result) > MAX_SEGMENTS:
+                raise ValueError('Document contains too many JSON string values')
         return end
 
 
