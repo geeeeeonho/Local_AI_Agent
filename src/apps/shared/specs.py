@@ -10,14 +10,14 @@ class AppSpec:
 
 
 SPECS = {
-    'studio': AppSpec('LocalAI Studio', 'home', ('home','chat','agent','models','network','system','settings','setup')),
+    'studio': AppSpec('LocalAI Studio', 'home', ('home','chat','agent','tools','models','network','system','settings','setup')),
     'chat': AppSpec('LocalAI Chat', 'chat', ('chat','models','network','settings','setup')),
     'interpreter': AppSpec('LocalAI Interpreter', 'agent', ('agent','models','network','settings','setup')),
     'setup': AppSpec('LocalAI Setup', 'setup', ('setup','models','network','system','settings')),
 }
 LABELS = {
     'home': 'Home', 'chat': 'Chat', 'projects': 'Projects', 'agent': 'Agent',
-    'models': 'Models', 'network': 'Network', 'system': 'System',
+    'tools': 'Tools', 'models': 'Models', 'network': 'Network', 'system': 'System',
     'settings': 'Settings', 'setup': 'Setup / Repair',
 }
 DESCRIPTIONS = {
@@ -25,6 +25,7 @@ DESCRIPTIONS = {
     'chat': 'AnythingLLM 채팅 · 문서 · Workspace · RAG',
     'projects': '문서 Workspace와 코드 작업 폴더를 연결합니다.',
     'agent': 'Open Interpreter · 명령 · 승인 · 파일 변경',
+    'tools': '로컬 모델 기반 파일 번역 · 구조 보호 · 자막/대본 지원',
     'models': '지금 선택될 모델 · 받을 모델 고르기 · 디스크 사용량',
     'network': 'Direct / WARP / Tor / Block · 실행 중인 정책은 임의로 바뀌지 않습니다.',
     'system': '실제 서비스 상태와 현재 저장 경로',
@@ -35,7 +36,7 @@ DESCRIPTIONS = {
 
 # Purpose, position and typography all carry hierarchy; not color alone.
 NAV_GROUPS = (
-    ('WORK', ('chat', 'agent')),
+    ('WORK', ('chat', 'agent', 'tools')),
     ('MANAGE', ('models', 'setup')),
     ('GENERAL', ('home', 'network', 'system', 'settings')),
 )
