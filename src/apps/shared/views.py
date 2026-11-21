@@ -4,7 +4,7 @@ from tkinter import ttk, filedialog
 from .widgets import (heading, note, text_box, PanelHost, ScrollArea, set_text,
                       status_line)
 from .specs import LABELS, DESCRIPTIONS
-from . import models_view
+from . import models_view, translation_view
 
 
 def row(parent):
@@ -145,6 +145,10 @@ def projects(parent,w):
          'Agent 모델은 시작 설정에서 다시 확인하세요.')
 
     scroller.bind_content()
+
+
+def tools(parent,w):
+    translation_view.build(parent,w)
 
 
 def models(parent,w):
@@ -321,7 +325,7 @@ def accounts_card(parent,w):
     w.sync_account_buttons()
 
 
-BUILDERS={'home':home,'chat':chat,'agent':agent,'models':models,
+BUILDERS={'home':home,'chat':chat,'agent':agent,'tools':tools,'models':models,
           'network':network,'system':system,'settings':settings,'setup':setup}
 
 
