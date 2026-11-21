@@ -313,6 +313,11 @@ def split_masked(masked: str, *, limit=MAX_UNIT_CHARS):
     pieces = []
     while cursor < len(masked):
         cutoff = _safe_boundary(masked, cursor, limit)
+        newline = masked.find('\n', cursor, cutoff)
+        carriage = masked.find('\r', cursor, cutoff)
+        boundaries = [value for value in (newline, carriage) if value >= cursor]
+        if boundaries:
+            cutoff = min(boundaries)
         body = masked[cursor:cutoff].rstrip()
         if not body:
             raise ValueError('Untranslatable chunk boundary')
