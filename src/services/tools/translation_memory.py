@@ -1,4 +1,4 @@
-"""Bounded document context and private, resumable SQLite checkpoints."""
+"""문서별 유한한 번역 메모리와 사용자별 SQLite 재개 기록을 관리한다."""
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +30,7 @@ class TranslationMemory:
     since_rollup: int = 0
 
     def prompt(self, relevant: str | None = None) -> str:
-        # Global memory is stable; only the terms/speakers used in this batch are sent.
+        # 전역 메모리를 유지하면서 현재 배치에 등장하는 용어·화자만 전달한다.
         terms = self.terms if relevant is None else {
             key:value for key,value in self.terms.items() if key in relevant}
         speakers = self.speakers if relevant is None else {
@@ -112,7 +112,7 @@ def sample_document(doc, *, budget=5500):
 
 
 def repeated_entities(doc, *, limit=56):
-    # Analyze the entire document once, rather than trusting a head-only sample.
+    # 문서 첫머리만 보지 않고 전 구간을 한 번 훑어 반복 명칭을 추출한다.
     names = Counter()
     pattern = r'(?<!\w)(?:[A-Z][A-Z0-9_/-]{2,}|[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})(?!\w)'
     for match in re.finditer(pattern, doc.source):
@@ -185,7 +185,7 @@ def job_key(path, output, source, model, target, kind, style, stage):
 
 
 class Checkpoint:
-    """One document job; each completed unit is committed independently."""
+    """문서 단위 작업 기록. 완료된 번역 구간만 독립적으로 확정한다."""
     def __init__(self, root: Path, key: str):
         self.root = Path(root)
         self.root.mkdir(parents=True,exist_ok=True,mode=0o700)
