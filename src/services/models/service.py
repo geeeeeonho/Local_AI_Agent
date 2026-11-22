@@ -182,12 +182,12 @@ class ModelService:
         if analysis and analysis.get('available'):
             from services.models.advisor import fit_for
             table = catalog.by_tag()
-            recommended = {
-                tag for tag in recommended
-                if (lambda fit: fit['source'] != 'llmfit' or (
-                    fit['mode'] == 'gpu' and fit['fit'] != 'too_tight'
-                ))(fit_for(tag, table[tag].memory_gb, analysis))
-            }
+            for tag in tuple(recommended):
+                estimate = fit_for(tag, table[tag].memory_gb, analysis)
+                if (estimate['source'] == 'llmfit'
+                        and (estimate['mode'] in ('offload', 'cpu')
+                             or estimate['fit'] == 'too_tight')):
+                    recommended.discard(tag)
         models = []
         for entry in catalog.all_entries():
             level = catalog.level_of(entry.tag)
