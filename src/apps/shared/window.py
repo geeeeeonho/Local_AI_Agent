@@ -32,7 +32,7 @@ class DesktopWindow(TranslationController, ToolsController):
         try:
             appearance = services.settings.theme()
         except (OSError, ValueError) as exc:
-            appearance, appearance_error = 'dark', str(exc)
+            appearance, appearance_error = 'light', str(exc)
         self.theme = theme(self.root, appearance)
         self.theme_choice = tk.StringVar(master=self.root, value=appearance)
         self._appearance_generation = 0
