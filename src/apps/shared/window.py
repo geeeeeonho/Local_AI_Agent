@@ -17,12 +17,13 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
 from .themes import themed
 from . import views
 from .translation_controller import TranslationController
+from .tools_view import ToolsController
 from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
 from .widgets import ScrollArea
 
 
-class DesktopWindow(TranslationController):
+class DesktopWindow(TranslationController, ToolsController):
     def __init__(self, app, services, *, root=None, start_polling=True):
         self.app, self.spec, self.services = app, SPECS[app], services
         self.root = root if root is not None else tk.Tk()
@@ -189,8 +190,6 @@ class DesktopWindow(TranslationController):
         if key=='models':
             self.refresh_installed_summary()
             self.refresh_external_store_settings()
-        if key=='tools' and not self.translation_model.get() and not self.runner.busy('tools.models'):
-            self.refresh_translation_models()
 
     def _enqueue(self,event):
         try:self.events.put_nowait(event)
@@ -218,7 +217,7 @@ class DesktopWindow(TranslationController):
         data=event.payload
         if event.topic=='runtime.progress' and data.get('service')=='translator':
             if hasattr(self,'translation_status'):
-                self.translation_status.set(str(data.get('message') or '번역 중...'))
+                self.translation_say('Working',str(data.get('message') or '번역 중...'))
                 if isinstance(data.get('total'),int):
                     self.set_translation_progress(data.get('done') or 0,data['total'],data.get('eta') or '')
             return

@@ -123,7 +123,7 @@ class JapaneseTests(unittest.TestCase):
             def chat(self, name, messages, temperature=.2):
                 seen.append(messages[0]['content'])
                 return super().chat(name, messages, temperature)
-        translate('佐伯が戻ってきた。\n', Spy())
+        translate('佐伯が戻ってきた。\n', Spy(lambda items: json.dumps({'translations': ['사에키가 돌아왔다.']})))
         self.assertTrue(any('Japanese→Korean' in system for system in seen))
 
     def test_glossary_text_format(self):
@@ -131,10 +131,10 @@ class JapaneseTests(unittest.TestCase):
                          {'佐伯': '사에키', '記述': '서술'})
 
     def test_user_glossary_is_enforced(self):
-        wrong = Model(lambda items: json.dumps({'translations': [x.replace('佐伯', '사케') for x in items]}))
+        wrong = Model(lambda items: json.dumps({'translations': ['사케가 돌아왔다.' for _ in items]}))
         with self.assertRaisesRegex(ValueError, 'glossary'):
             translate('佐伯が戻ってきた。\n', wrong, glossary='佐伯 = 사에키')
-        right = Model(lambda items: json.dumps({'translations': [x.replace('佐伯', '사에키') for x in items]}))
+        right = Model(lambda items: json.dumps({'translations': ['사에키가 돌아왔다.' for _ in items]}))
         self.assertIn('사에키', translate('佐伯が戻ってきた。\n', right, glossary='佐伯 = 사에키').text)
 
 

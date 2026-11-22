@@ -302,6 +302,9 @@ class ThemeController:
                         foreground=p.fg, rowheight=32, borderwidth=0)
         style.configure('Treeview.Heading', background=p.sidebar, foreground=p.fg, padding=8)
         style.map('Treeview', background=[('selected', p.selected)], foreground=[('selected', p.fg)])
+        # Clam의 기본 진행 막대는 베이지 바탕에 흰 막대라 어두운 테마에서 진행이 거의 안 보인다.
+        style.configure('Horizontal.TProgressbar', background=p.chat, troughcolor=p.surface,
+                        bordercolor=p.border, lightcolor=p.chat, darkcolor=p.chat, thickness=14)
         for orientation in ('Vertical', 'Horizontal'):
             style.configure(orientation + '.TScrollbar', background=p.border, troughcolor=p.bg,
                             arrowcolor=p.muted, bordercolor=p.border, lightcolor=p.border,

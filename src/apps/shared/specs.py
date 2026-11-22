@@ -25,7 +25,7 @@ DESCRIPTIONS = {
     'chat': 'AnythingLLM 채팅 · 문서 · Workspace · RAG',
     'projects': '문서 Workspace와 코드 작업 폴더를 연결합니다.',
     'agent': 'Open Interpreter · 명령 · 승인 · 파일 변경',
-    'tools': '로컬 모델 기반 파일 번역 · 구조 보호 · 자막/대본 지원',
+    'tools': '로컬 모델로 쓰는 부가 기능 · 파일 번역 등',
     'models': '지금 선택될 모델 · 받을 모델 고르기 · 디스크 사용량',
     'network': 'Direct / WARP / Tor / Block · 실행 중인 정책은 임의로 바뀌지 않습니다.',
     'system': '실제 서비스 상태와 현재 저장 경로',

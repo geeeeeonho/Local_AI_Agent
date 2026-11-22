@@ -50,7 +50,7 @@ class TranslationMemory:
         }, ensure_ascii=False)
 
     def to_json(self) -> str:
-        data = {key:value for key,value in self.__dict__.items() if key not in ('guide','enforced','think')}
+        data = {key:value for key,value in self.__dict__.items() if key not in ('guide','enforced','think','target','source_language')}
         return json.dumps(data, ensure_ascii=False)
 
     @classmethod

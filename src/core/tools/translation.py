@@ -14,6 +14,8 @@ MAX_SOURCE_BYTES = 32 * 1024 * 1024
 MAX_UNIT_CHARS = 1400
 MAX_SEGMENTS = 80000
 TIMESTAMP = re.compile(r'^\s*(?:\d{2}:)?\d{2}:\d{2}[,.]\d{3}\s*-->')
+# 대본·회의록의 줄머리 시간표시: [00:01:23.456] / [01:23] / 00:01:23,456 (뒤에 공백)
+TIMECODE_PREFIX = re.compile(r'^\s*(?:\[\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\]|\d{1,2}:\d{2}:\d{2}(?:[.,]\d{1,3})?(?=\s))\s*')
 NONBLANK_LINE = re.compile(r'[^\r\n]+')
 LINE = re.compile(r'[^\r\n]*(?:\r\n|\n|\r|$)')
 # 화자 이름: 숫자로 시작하지 않고, 반각 ': ' 또는 전각 '：' 뒤에 대사가 온다.
@@ -149,7 +151,8 @@ def detect(source: str, suffix: str) -> str:
             lines.append(match.group())
             if len(lines) >= 180:
                 break
-    if suffix in ('.srt', '.vtt') or sum(bool(TIMESTAMP.match(x)) for x in lines) >= 2:
+    if suffix in ('.srt', '.vtt') or sum(bool(TIMESTAMP.match(x)) for x in lines) >= 2 or \
+            sum(bool(TIMECODE_PREFIX.match(x)) for x in lines) >= max(2, len(lines) // 2):
         return 'subtitle'
     speakers = sum(bool(speaker_prefix(line)) for line in lines)
     if speakers >= 2 and speakers / max(1, len(lines)) >= .16:
@@ -251,6 +254,15 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
                 continue
         if not stripped or TIMESTAMP.match(line) or (suffix == '.srt' and stripped.isdecimal()):
             continue
+        # 줄머리 시간표시는 구조로 보고 번역 대상에서 뺀다(모델이 숫자를 바꾸지 못하게).
+        base = line_match.start()
+        timecode = TIMECODE_PREFIX.match(line)
+        if timecode:
+            base += timecode.end()
+            line = line[timecode.end():]
+            stripped = line.strip()
+            if not stripped:
+                continue
         if markdown:
             indented = line.startswith(('    ', '\t'))
             if LIST_ITEM.match(line):
@@ -262,7 +274,7 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
             elif previous_blank or MARKDOWN_HEADING.match(line):
                 in_list = False
             if '|' in line and line.count('|') >= 2:
-                for cell in _table_cells(source, line_match.start(), line_match.start() + len(line),
+                for cell in _table_cells(source, base, base + len(line),
                                          code_filter):
                     add(cell)
                 continue
@@ -274,10 +286,10 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
             continue
         if not direction and code_filter and looks_like_code(line):
             continue
-        start, end = line_match.start(), line_match.start() + len(line)
+        start, end = base, base + len(line)
         if direction:
             start += line.index('[') + 1
-            end = line_match.start() + line.rindex(']')
+            end = base + line.rindex(']')
         else:
             prefix = MARKDOWN_PREFIX.match(line) if markdown else None
             if prefix:
