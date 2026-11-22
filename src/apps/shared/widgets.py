@@ -40,14 +40,14 @@ def wrap_to_parent(label, *, inset=40, minimum=280):
 
 def heading(parent, title, description, kind=None):
     title_style = kind + '.Title.TLabel' if kind else 'Title.TLabel'
-    ttk.Label(parent,text=title,style=title_style).pack(anchor='w',pady=(0,6))
+    ttk.Label(parent,text=title,style=title_style).pack(anchor='w',pady=(0,3))
     text=ttk.Label(parent,text=description,style='Muted.TLabel',wraplength=760,justify='left')
-    text.pack(anchor='w',pady=(0,22));wrap_to_parent(text)
+    text.pack(anchor='w',pady=(0,9));wrap_to_parent(text)
 
 
 def note(parent, text, *, side='top'):
     label=ttk.Label(parent,text=text,style='Muted.TLabel',wraplength=780,justify='left')
-    label.pack(anchor='w',pady=(5,12),side=side,fill='x')
+    label.pack(anchor='w',pady=(3,7),side=side,fill='x')
     return wrap_to_parent(label)
 
 
