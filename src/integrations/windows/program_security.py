@@ -146,6 +146,13 @@ def _acl_is_safe(descriptor, policy, *, require_protected=False):
     aces = re.findall(r"\(([^()]*)\)", dacl)
     if not aces:
         return False
+    aliases = {
+        "S-1-5-32-545": "BU",  # BUILTIN Users
+        "S-1-1-0": "WD",       # Everyone
+        "S-1-5-11": "AU",      # Authenticated Users
+    }
+    principal_aliases = {policy.principal().upper()}
+    principal_aliases.add(aliases.get(policy.principal().upper(), ""))
     readable = False
     for ace in aces:
         fields = ace.split(";")
@@ -154,7 +161,7 @@ def _acl_is_safe(descriptor, policy, *, require_protected=False):
         kind, rights, who = fields[0].upper(), fields[2], fields[5].upper()
         mask = sddl.mask(rights)
         if kind in ("A", "OA", "XA"):
-            if who == policy.principal().upper() and sddl.grants_read(mask):
+            if who in principal_aliases and sddl.grants_read(mask):
                 readable = True
             if who not in trusted and mask & _MUTATING_RIGHTS:
                 return False
