@@ -36,9 +36,9 @@ DESCRIPTIONS = {
 
 # Purpose, position and typography all carry hierarchy; not color alone.
 NAV_GROUPS = (
-    ('WORK', ('chat', 'agent', 'tools')),
+    ('WORK', ('chat', 'agent', 'tools', 'home')),
     ('MANAGE', ('models', 'setup')),
-    ('GENERAL', ('home', 'network', 'system', 'settings')),
+    ('GENERAL', ('network', 'system', 'settings')),
 )
 
 
