@@ -1289,12 +1289,18 @@ class DesktopWindow(TranslationController, ToolsController):
         label.pack(anchor='w',fill='x',pady=(0,3))
         self.choice_status_labels.setdefault(tag,[]).append(label)
         visible_name=model_display_name(tag) if model.get('desc') else tag
-        name_label=ttk.Label(card,text=visible_name,style='Manage.Card.TLabel',
-                             wraplength=175,justify='left')
-        name_label.pack(anchor='w',fill='x')
-        wrap_to_parent(name_label,inset=18,minimum=120)
-        ttk.Button(card,text='GPU에서 보기',style='Manage.Details.TButton',
-                   command=lambda t=tag:self.inspect_model(t)).pack(anchor='w',pady=(3,2))
+        # Put the inspector beside the title instead of adding a fourth row
+        # of controls to every compact model card.
+        heading=ttk.Frame(card,style='Manage.CardBody.TFrame')
+        heading.pack(fill='x')
+        name_label=ttk.Label(heading,text=visible_name,
+                             style='Manage.Card.TLabel',wraplength=140,
+                             justify='left')
+        name_label.pack(side='left',fill='x',expand=True)
+        wrap_to_parent(name_label,inset=94,minimum=110)
+        ttk.Button(heading,text='GPU 보기',style='Manage.Details.TButton',
+                   command=lambda t=tag:self.inspect_model(t)).pack(
+                       side='right',padx=(3,0))
         # The checkbox's meaning depends on what is actually on disk.
         # "selected" is a future intent, never proof that the file exists.
         choice_label='이 모델 유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
