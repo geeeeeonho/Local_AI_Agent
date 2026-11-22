@@ -155,7 +155,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(acl, 'run', lambda command, **kw: calls.append(('acl', command[:3]))
                         or types.SimpleNamespace(returncode=0, stdout='', stderr=''))
     monkeypatch.setattr(windows, 'token_group_sids', lambda: set())
-    monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else None)
+    monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else 'S-1-5-21-111-222-333-1011')
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: calls.append(('uac', script)) or True)
     monkeypatch.setattr(step.app_step, 'deploy', lambda source, target: calls.append(('deploy', target)) or True)
     monkeypatch.setattr(program_security, 'verify', lambda root, policy: [])
