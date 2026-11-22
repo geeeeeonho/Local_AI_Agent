@@ -166,6 +166,21 @@ class DesktopWindow(TranslationController, ToolsController):
             self.activity.pack_forget()
         self.activity_button.configure(text='기록 접기' if self._activity_visible else '기록 펼치기')
 
+    def toggle_sidebar_models(self):
+        """The inventory summary stays visible, while the long list is optional."""
+        if not hasattr(self, 'sidebar_model_scroll'):
+            return
+        self.sidebar_models_expanded = not self.sidebar_models_expanded
+        if self.sidebar_models_expanded:
+            self.sidebar_models.pack_configure(fill='both', expand=True)
+            self.sidebar_model_scroll.frame.pack(fill='both', expand=True)
+            self.sidebar_models_toggle.configure(text='목록 ▾')
+            self.sidebar_model_scroll.bind_content()
+        else:
+            self.sidebar_model_scroll.frame.pack_forget()
+            self.sidebar_models.pack_configure(fill='x', expand=False)
+            self.sidebar_models_toggle.configure(text='목록 ▸')
+
     def _fit_activity(self,event=None):
         """Keep the log to its share of the window, in whole lines."""
         if event is not None and getattr(event,'widget',None) is not self.root:
