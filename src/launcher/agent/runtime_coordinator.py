@@ -20,6 +20,36 @@ from .backend_factory import create_backend
 from .service import AgentService
 
 
+# Only the immutable container ID we created may be stopped. A reused SearXNG
+# container (including one started by a different account) is never claimed.
+_AGENT_SEARCH_CONTAINER_ID = None
+
+
+def stop_owned_search() -> bool:
+    """Release the SearXNG container started by this Agent after all sessions stop."""
+    global _AGENT_SEARCH_CONTAINER_ID
+    owned = _AGENT_SEARCH_CONTAINER_ID
+    if not owned:
+        return True
+    try:
+        result = DockerService.run(
+            ["inspect", "--format", "{{.Id}}", owned], timeout=10)
+        if result is None:
+            return False
+        if result.returncode != 0:
+            # Already removed, or daemon stopped: nothing to terminate.
+            _AGENT_SEARCH_CONTAINER_ID = None
+            return True
+        if (result.stdout or "").strip() != owned:
+            return False
+        if not DockerService.stop_container(owned, timeout=3):
+            return False
+    except Exception:
+        return False
+    _AGENT_SEARCH_CONTAINER_ID = None
+    return True
+
+
 def _ensure_ollama(env: Path, presenter) -> bool:
     try:
         from launcher.services.ollama import OllamaService
@@ -81,6 +111,7 @@ def prepare_runtime(
     Direct, Host+Block is rejected, and Sandbox Block must have the managed
     internal network before the agent can start.
     """
+    global _AGENT_SEARCH_CONTAINER_ID
     env = Path(env)
     selected = network_policy.normalize_mode(selected)
 
@@ -142,6 +173,17 @@ def prepare_runtime(
                     presenter.warn(
                         "SearXNG를 시작하지 못했습니다. 검색 기능은 사용할 수 없을 수 있습니다."
                     )
+                else:
+                    # Capture ID, not a reusable name. Never stop another
+                    # process's container just because it inherited the name.
+                    owned = DockerService.run(
+                        ["inspect", "--format", "{{.Id}}", searxng_runtime.CONTAINER],
+                        timeout=10)
+                    value = (owned.stdout or "").strip() if owned and owned.returncode == 0 else ""
+                    if len(value) == 64 and all(c in "0123456789abcdef" for c in value.lower()):
+                        _AGENT_SEARCH_CONTAINER_ID = value
+                    else:
+                        presenter.warn("SearXNG 실행 ID 확인 실패: 안전을 위해 자동 종료 소유권을 주장하지 않습니다.")
         except Exception as exc:
             presenter.warn("SearXNG 준비 생략: " + str(exc))
     elif search and selected is not network_policy.NetworkMode.BLOCK:
@@ -270,4 +312,4 @@ class RuntimeCoordinator:
         return "stopped"
 
 
-__all__ = ["RuntimeCoordinator", "mount_signature", "prepare_runtime"]
+__all__ = ["RuntimeCoordinator", "mount_signature", "prepare_runtime", "stop_owned_search"]
