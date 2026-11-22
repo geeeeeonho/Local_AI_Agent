@@ -79,7 +79,7 @@ _COLOR_OPTIONS = ('background', 'foreground', 'activebackground',
 
 
 class ThemeController:
-    def __init__(self, root, name='light')
+    def __init__(self, root, name='light'):
         if name not in PALETTES:
             raise ValueError('unknown desktop theme')
         self.root = root
