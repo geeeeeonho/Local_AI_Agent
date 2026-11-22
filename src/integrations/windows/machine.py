@@ -55,15 +55,40 @@ def run_script(script: str, *, timeout=120):
                    timeout=timeout)
 
 
-def run_as_admin(script: str, *, log=None, timeout=900) -> bool:
-    """Run ``script`` with administrator rights: directly if already elevated,
-    otherwise through one UAC prompt. True when it ran and exited 0."""
+def run_as_admin(script: str, *, log=None, timeout=900, report_path=None) -> bool:
+    """Elevate once and report actual script failure, not misleading UAC denial.
+
+    A diagnostic file is emitted by the elevated script itself only on
+    nonzero exit. This path must be random and guarded by the caller; no
+    file from an arbitrary path is executed or trusted as an instruction.
+    """
     say = log or (lambda message: None)
+
+    def report_failure(code, stderr=''):
+        say('관리자 권한 작업은 시작됐지만 실패했습니다 (종료 코드 %d).' % code)
+        details = ''
+        if report_path is not None:
+            try:
+                details = Path(report_path).read_text(encoding='utf-8-sig')[:1600].strip()
+            except OSError:
+                pass
+        if not details and stderr:
+            details = str(stderr).strip()[-1600:]
+        if details:
+            say('실패 단계: ' + details)
+        elif report_path is not None:
+            say('상세 원인 기록을 읽지 못했습니다. 확인 위치: ' + str(report_path))
+
     if os.environ.get(privacy.NO_ELEVATION_VARIABLE, '').strip() in ('1', 'true', 'yes'):
         say('관리자 작업을 건너뜁니다 (%s=1).' % privacy.NO_ELEVATION_VARIABLE)
         return False
     if acl.is_elevated():
-        return acl.succeeded(run_script(script, timeout=timeout))
+        result = run_script(script, timeout=timeout)
+        if acl.succeeded(result):
+            return True
+        report_failure(result.returncode if result is not None else 1,
+                       (result.stderr or '') if result is not None else '')
+        return False
     say('Windows 관리자 승인이 필요합니다. 확인 창(UAC)에서 [예]를 누르세요.')
     code, error = acl.run_elevated(
         powershell(),
@@ -72,12 +97,14 @@ def run_as_admin(script: str, *, log=None, timeout=900) -> bool:
         timeout=timeout)
     if code is None:
         if error == acl.ERROR_CANCELLED:
-            say('관리자 승인이 취소되었습니다.')
+            say('Windows 관리자 승인이 취소되었습니다.')
         elif error is not None:
-            say('관리자 권한으로 실행하지 못했습니다: ' + acl.describe_error(error))
+            say('관리자 프로세스를 시작하지 못했습니다: ' + acl.describe_error(error))
+        else:
+            say('관리자 프로세스를 시작하거나 결과를 확인하지 못했습니다.')
         return False
     if code != 0:
-        say('관리자 작업이 실패했습니다 (종료 코드 %d).' % code)
+        report_failure(code)
     return code == 0
 
 
