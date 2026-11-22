@@ -208,6 +208,8 @@ class ScrollArea:
     """
     def __init__(self, parent, *, place=True):
         self.frame = ttk.Frame(parent)
+        # An outer ScrollArea must not bind wheel handlers into nested areas.
+        self.frame._localai_scroll_owner = self
         # ``place=False`` leaves the frame for a grid-managed parent to position;
         # packing into one is a Tk error, not a layout preference.
         if place:
@@ -275,6 +277,9 @@ class ScrollArea:
         """
         bound = self._bound
         def visit(widget):
+            if widget is not self.canvas and getattr(
+                    widget, '_localai_scroll_owner', self) is not self:
+                return
             key = str(widget)
             if key not in bound:
                 bound.add(key)
@@ -288,6 +293,9 @@ class ScrollArea:
         # Widgets destroyed since the last pass must not keep their names alive.
         alive = set()
         def collect(widget):
+            if widget is not self.canvas and getattr(
+                    widget, '_localai_scroll_owner', self) is not self:
+                return
             alive.add(str(widget))
             for child in widget.winfo_children():
                 collect(child)
