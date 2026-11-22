@@ -112,6 +112,17 @@ class OllamaClient:
             raise ValueError('Ollama tags response has no valid models array')
         return models
 
+    def loaded_models(self) -> list[dict]:
+        """Currently loaded models, not installed tags (Ollama /api/ps).
+
+        VRAM 'free' is misleading while an older model is still loaded. Callers
+        may auto-prefer a GPU-fitting model only when the daemon is idle.
+        """
+        models = self._json('/api/ps').get('models')
+        if not isinstance(models, list) or not all(isinstance(m, dict) for m in models):
+            raise ValueError('Ollama running-model response has no valid models array')
+        return models
+
     def show(self, name: str) -> dict:
         return self._json('/api/show', {'model': model_name(name)})
 
