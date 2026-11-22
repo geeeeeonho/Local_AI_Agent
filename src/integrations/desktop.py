@@ -282,7 +282,20 @@ class DesktopBackend:
         try:
             roles = self.load('launcher.models.model_roles')
             catalog = self.load('launcher.models.model_catalog')
-            chosen = roles.resolve_ladder('balanced', installed=set(installed))
+            gpu_budget = None
+            try:
+                # Existing loaded models occupy VRAM. Choosing based on a raw
+                # nvidia-smi 'free' sample would incorrectly downgrade them.
+                if not self.inference.client.loaded_models():
+                    from core.gpu_memory import detect_gpu_memory
+                    gpu = detect_gpu_memory()
+                    gpu_budget = gpu.budget_gib if gpu else None
+            except Exception:
+                # Old Ollama, unavailable GPU, or probe timeout: preserve the
+                # exact previous RAM-based selection instead of guessing.
+                pass
+            chosen = roles.resolve_ladder(
+                'balanced', installed=set(installed), gpu_budget_gb=gpu_budget)
             matched = catalog.find_installed(chosen, installed) if chosen else None
             if matched:
                 if log:
