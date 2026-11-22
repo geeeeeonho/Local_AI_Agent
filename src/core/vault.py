@@ -146,8 +146,21 @@ def is_private_path(path) -> bool:
     return target == root or root in target.parents
 
 
+def require_private_record_encryption(path) -> None:
+    """Windows 개인 기록에는 DPAPI가 반드시 필요합니다 (평문 폴백 금지).
+
+    다른 운영체제에서 사용하는 개발/테스트 파일은 기존 동작을 유지합니다.
+    개인 기록 보호를 꺼두는 환경변수도 Windows에서는 거부합니다.
+    """
+    if os.name == 'nt' and is_private_path(path) and protector() is None:
+        raise VaultError('Windows 개인 기록 암호화(DPAPI)를 사용할 수 없습니다. '
+                         '평문 저장을 거부합니다. 현재 사용자로 실행하고 '
+                         'LOCAL_AI_VAULT 설정 및 Windows 자격 증명을 확인하세요.')
+
+
 def should_protect(path) -> bool:
-    return enabled() and is_private_path(path)
+    require_private_record_encryption(path)
+    return is_private_path(path) and enabled()
 
 
 # ── protected files ──────────────────────────────────────────────────────
@@ -807,7 +820,7 @@ class Store:
 
 __all__ = ['MAGIC_FILE', 'MAGIC_ARCHIVE', 'LINE_PREFIX', 'DISABLE_VARIABLE',
            'VaultError', 'Undecryptable', 'set_aside', 'register_default', 'protector', 'using', 'enabled', 'is_private_path',
-           'should_protect', 'is_protected_bytes', 'seal_bytes', 'open_bytes',
+           'should_protect', 'require_private_record_encryption', 'is_protected_bytes', 'seal_bytes', 'open_bytes',
            'read_bytes', 'read_text', 'encode_for', 'write_bytes_atomic',
            'write_text_atomic', 'protect_line', 'open_line', 'iter_lines',
            'ProtectedTextWriter', 'open_log', 'protect_lines_in_place',
