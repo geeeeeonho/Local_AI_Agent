@@ -7,7 +7,7 @@ from core.window_size import (MINIMUM_SIZE, PREFERRED_SIZE,
                               centred_geometry, fitted_size)
 
 
-def theme(root, name='dark'):
+def theme(root, name='light'):
     controller = getattr(root, '_localai_theme', None)
     if controller is None:
         return ThemeController(root, name)
