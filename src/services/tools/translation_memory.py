@@ -50,7 +50,7 @@ class TranslationMemory:
         }, ensure_ascii=False)
 
     def to_json(self) -> str:
-        data = {key:value for key,value in self.__dict__.items() if key not in ('guide','enforced','think')}
+        data = {key:value for key,value in self.__dict__.items() if key not in ('guide','enforced','think','target','source_language')}
         return json.dumps(data, ensure_ascii=False)
 
     @classmethod
@@ -135,24 +135,27 @@ def sample_document(doc, *, budget=5500):
 
 # 일본어 인명 후보: 경칭이 붙은 한자/가타카나, 또는 문장 첫머리에서 조사(が/は/も)가 붙은 2~4자 한자
 _CJK_NAME = re.compile(
-    r'([\u4e00-\u9fff\u30a0-\u30ff]{2,6})(?:さん|くん|君|様|さま|先生|先輩|氏|ちゃん|殿|社長|部長|課長)'
+    r'([\u4e00-\u9fff\u30a0-\u30ff]{2,6})(?:さん|くん|君|様|さま|先生|先輩|氏|ちゃん|殿|社長|部長|課長|老师|老師|女士|小姐|同学|同學)'
+    r'|([\uac00-\ud7a3]{2,4})(?=씨|님|선생|선배|군|양|사장|부장|과장)'
     r'|(?:^|[。！？\n「『（\s])([\u4e00-\u9fff]{2,4}|[\u30a1-\u30fa\u30fc]{2,8})(?=[がはもの、])')
 
 
 def repeated_entities(doc, *, limit=56):
     # 문서 첫머리만 보지 않고 전 구간을 한 번 훑어 반복 명칭을 추출한다.
     names = Counter()
-    pattern = r'(?<!\w)(?:[A-Z][A-Z0-9_/-]{2,}|[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})(?!\w)'
+    upper, lower = 'A-ZÀ-ÖØ-ÞА-ЯЁ', 'a-zß-öø-ÿа-яё'
+    pattern = (r'(?<!\w)(?:[A-Z][A-Z0-9_/-]{2,}|[%s][%s]{2,}(?:\s+[%s][%s]{2,}){0,2})(?!\w)'
+               % (upper, lower, upper, lower))
     for match in re.finditer(pattern, doc.source):
         name=match.group()
         if name in names or len(names)<4096:
             names[name] += 1
     honorific = Counter()
     for match in _CJK_NAME.finditer(doc.source):
-        name = match.group(1) or match.group(2)
+        name = match.group(1) or match.group(2) or match.group(3)
         if name in names or len(names)<4096:
             names[name] += 1
-            if match.group(1):
+            if match.group(1) or match.group(2):
                 honorific[name] += 1
     # 경칭이 붙은 이름은 한 번만 나와도 후보로 둔다(인명일 가능성이 높다).
     names = [(name, count) for name,count in names.items()

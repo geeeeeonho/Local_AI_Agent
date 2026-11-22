@@ -4,7 +4,7 @@ from tkinter import ttk, filedialog
 from .widgets import (heading, note, text_box, PanelHost, ScrollArea, set_text,
                       status_line)
 from .specs import LABELS, DESCRIPTIONS
-from . import models_view, translation_view
+from . import models_view, tools_view
 
 
 def row(parent):
@@ -148,7 +148,7 @@ def projects(parent,w):
 
 
 def tools(parent,w):
-    translation_view.build(parent,w)
+    tools_view.build(parent,w)
 
 
 def models(parent,w):

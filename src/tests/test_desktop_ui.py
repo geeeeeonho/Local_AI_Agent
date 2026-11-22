@@ -37,7 +37,7 @@ def ui(tmp_path):
 
 def test_all_studio_pages_are_persistent(ui):
     w,_,_=ui
-    expected={'home','chat','agent','models','network','system','settings','setup'}
+    expected={'home','chat','agent','tools','models','network','system','settings','setup'}
     assert set(w.pages)==expected
     for key in expected:
         page=w.pages[key];w.navigate(key);pump(w)
@@ -599,3 +599,16 @@ def test_that_button_lands_on_the_screen_that_can_restart_it(ui):
     w.chat_status.action.invoke();pump(w)
     assert w.current_page=='models'
     assert called==['ollama']
+
+
+def test_tools_page_lists_tools_and_opens_translation(ui):
+    # 간단하게: 목록에서 고르면 번역 화면이 열리고, 상태·진행률·시작 버튼이 있다.
+    w,_,_=ui
+    w.services.translator.local_models=lambda:['m:1']
+    w.navigate('tools');pump(w)
+    assert w.tool_hub.winfo_ismapped() and not w.tool_area.winfo_ismapped()
+    w.open_tool('translate');pump(w)
+    assert w.tool_area.winfo_ismapped() and w.translation_start_button.winfo_ismapped()
+    assert w.translation_progress_bar.winfo_ismapped() and w.translation_status_label.winfo_ismapped()
+    w.show_tool_hub();pump(w)
+    assert w.tool_hub.winfo_ismapped()
