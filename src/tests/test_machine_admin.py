@@ -94,9 +94,22 @@ def test_deleting_records_targets_only_a_folder_directly_in_users():
 
 
 def test_membership_changes_take_a_sid_and_a_known_group():
-    assert "Invoke('Remove'" in windows.membership_script(machine.USERS_GROUP, OTHER, False)
+    script = windows.membership_script(machine.USERS_GROUP, OTHER, False)
+    assert "Invoke('Remove'" in script
     assert windows.membership_script('Administrators', OTHER, True) is None
     assert windows.membership_script(machine.ADMINS_GROUP, 'bob', True) is None
+
+
+def test_membership_verification_does_not_use_unsupported_winnt_sid_ismember():
+    # Microsoft: WinNT Add/Remove accept a SID ADsPath, but IsMember on the
+    # same SID path cannot verify membership and produced exit code 1.
+    script = windows.first_install_script(ME, ROOT, APP)
+    assert "Invoke('Members')" in script
+    assert "InvokeMember('objectSid'" in script
+    assert "Test-LocalAISidMember" in script
+    assert "psbase.Invoke('IsMember'" not in script
+    assert "'WinNT://'" in script
+
 
 
 def test_an_admin_script_runs_through_one_uac_prompt(monkeypatch):
