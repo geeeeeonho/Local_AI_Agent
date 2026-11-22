@@ -128,3 +128,50 @@ def test_gui_idle_tick_uses_250ms_and_agent_tick_uses_100ms(monkeypatch):
     w.agent_session = SimpleNamespace(poll_once=lambda: None)
     w._tick()
     assert w.root.intervals[-1] == 100
+
+
+def test_owned_agent_search_stops_only_captured_immutable_id(monkeypatch):
+    from launcher.agent import runtime_coordinator as coordinator
+    cid = "a" * 64
+    coordinator._AGENT_SEARCH_CONTAINER_ID = cid
+    seen = []
+
+    def inspect(args, timeout=None):
+        seen.append(("inspect", args[-1]))
+        return SimpleNamespace(returncode=0, stdout=cid + "\n")
+
+    def stop(identifier, timeout=None):
+        seen.append(("stop", identifier))
+        return True
+
+    monkeypatch.setattr(coordinator.DockerService, "run", inspect)
+    monkeypatch.setattr(coordinator.DockerService, "stop_container", stop)
+    try:
+        assert coordinator.stop_owned_search() is True
+        assert ("stop", cid) in seen
+        assert coordinator._AGENT_SEARCH_CONTAINER_ID is None
+    finally:
+        coordinator._AGENT_SEARCH_CONTAINER_ID = None
+
+
+def test_agent_search_does_not_stop_replaced_container(monkeypatch):
+    from launcher.agent import runtime_coordinator as coordinator
+    coordinator._AGENT_SEARCH_CONTAINER_ID = "a" * 64
+    monkeypatch.setattr(
+        coordinator.DockerService, "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="b" * 64))
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Must not terminate a container whose ID changed.")
+    monkeypatch.setattr(coordinator.DockerService, "stop_container", forbidden)
+    try:
+        assert coordinator.stop_owned_search() is False
+    finally:
+        coordinator._AGENT_SEARCH_CONTAINER_ID = None
+
+
+def test_session_close_releases_agent_search_after_sessions(tmp_path):
+    svc, backend = make(tmp_path)
+    recorded = []
+    backend.agent_search_stop = lambda: recorded.append("cleanup") or True
+    assert svc.close()
+    assert recorded == ["cleanup"]
