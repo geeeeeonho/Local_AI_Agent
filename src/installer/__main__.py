@@ -195,7 +195,7 @@ def _run_install(args) -> int:
         policy = machine.load(ROOT / machine.POLICY_FILENAME)
         if policy is None:
             raise RuntimeError("LocalAI 관리자 정책을 읽지 못해 설치를 완료할 수 없습니다.")
-        program_security.ensure(ROOT, policy, log=utils.info)
+        program_security.ensure(ROOT, policy, log=utils.info, force=True)
 
     status = "partial" if failed_components else "installed"
     utils.write_install_manifest(
