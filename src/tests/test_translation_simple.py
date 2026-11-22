@@ -366,3 +366,66 @@ class FolderFlowTests(unittest.TestCase):
         names = ['qwen2.5-coder:7b', 'gemma4:12b', 'nomic-embed-text']
         self.assertEqual(recommend_model(names), 'gemma4:12b')
         self.assertEqual(recommend_model(names, last='qwen2.5-coder:7b'), 'qwen2.5-coder:7b')
+
+
+class OutputSafetyTests(unittest.TestCase):
+    """보고서 사례: 메타데이터 섞임·제어 코드·시스템 태그·화자명 중복·게임 스크립트 — 간단하게."""
+
+    def test_game_control_codes_and_system_tags_are_protected(self):
+        from core.tools.translation import protect, PROTECTED_TOKEN
+        masked = PROTECTED_TOKEN.sub('▢', protect('\\N[2]は\\V[23]個！\\.\\| [SYSTEM] PENDING_REVIEW')[0])
+        self.assertEqual(masked, '▢は▢個！▢▢ ▢ ▢')
+
+    def test_metadata_echo_is_rejected_even_at_the_last_retry(self):
+        model = Model(lambda items: json.dumps({'translations': ['id: 0, text: 번역' for _ in items]}))
+        result = translate('佐伯が来た。\n', model, keep_failed=True)
+        self.assertNotIn('id:', result.text)            # 끝까지 실패하면 원문 유지, 오염은 저장하지 않음
+        self.assertEqual(result.kept_lines, (1,))
+
+    def test_slash_damage_is_rejected(self):
+        from core.tools.translation import protect
+        from services.tools.translation import _validate
+        from services.tools.translation_memory import TranslationMemory
+        masked, tokens = protect('ゴールドを手に入れた')
+        with self.assertRaises(ValueError):
+            _validate(masked, '/V[23]골드를 얻었다', TranslationMemory(), tokens)
+
+    def test_added_speaker_label_is_removed(self):
+        model = Model(lambda items: json.dumps({'translations': ['앨리스: 기다려!' for _ in items]}))
+        self.assertEqual(translate('Alice: Wait!\nBob: No.\n', model).text.splitlines()[0], 'Alice: 기다려!')
+
+    def test_rpg_maker_scripts_and_plugin_commands_are_not_translated(self):
+        src = json.dumps({'list': [{'code': 401, 'parameters': ['こんにちは']},
+                                   {'code': 355, 'parameters': ["$gameVariables.setValue(1,'テスト')"]},
+                                   {'code': 356, 'parameters': ['ShowQuest 試練']},
+                                   {'code': 101, 'parameters': ['Actor1', 0, 0, 2, 'ハロルド']}],
+                          'note': '<shop:ポーション>'}, ensure_ascii=False)
+        self.assertEqual(texts(src, '.json'), ['こんにちは', 'ハロルド'])
+
+    def test_items_are_matched_by_id_even_when_reordered(self):
+        def reply(items):
+            data = [{'id': 0, 'text': items[0]}] if len(items) == 1 else []
+            return json.dumps({'translations': data or [{'id': i, 'text': t} for i, t in enumerate(items)]})
+        class Reordered(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                rows = [{'id': r['id'], 'text': r['text'].replace('Hello', '안녕')} for r in data['items']]
+                return json.dumps({'translations': list(reversed(rows))}, ensure_ascii=False)
+        out = translate(''.join('Hello %d.\n' % i for i in range(30)), Reordered()).text
+        self.assertEqual(out.splitlines()[25], '안녕 25.')
+
+    def test_learned_terms_are_reused_in_later_batches(self):
+        seen = []
+        class Learner(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                seen.append(json.loads(data['document_memory'])['terminology'])
+                rows = [{'id': r['id'], 'text': r['text'].replace('佐伯', '사에키').replace('が来た', '가 왔다')}
+                        for r in data['items']]
+                return json.dumps({'translations': rows, 'new_terms': {'佐伯': '사에키'}}, ensure_ascii=False)
+        translate(''.join('佐伯が来た%s。\n' % ('。' * (i % 3)) for i in range(45)), Learner())
+        self.assertEqual(seen[-1], {'佐伯': '사에키'})

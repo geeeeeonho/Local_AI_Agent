@@ -32,6 +32,10 @@ MARKDOWN_HEADING = re.compile(r'^\s{0,3}#{1,6}\s')
 LIST_ITEM = re.compile(r'^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\S')
 STAGE = re.compile(r'^\s*\[([^\]\r\n]+)\]\s*$')
 PROTECT = re.compile(
+    # 게임·메시지 제어 코드: RPG Maker \N[2] \V[23] \C[4] \I[64] \FS[24] \.  \|  \!  \>  \<  \^  \{  \$ …
+    r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\]|<[^>\r\n]*>)?|\\[^\sA-Za-z0-9]|'
+    # 시스템 태그와 내부 식별자: [SYSTEM] [SCENE] [BGM:battle1] PENDING_REVIEW MAX_HP
+    r'\[[A-Z][A-Z0-9_]*(?:[:=][^\]\r\n]*)?\]|(?<![\w])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![\w])|'
     r'`[^`\r\n]+`|'
     # HTML 주석, Markdown 각주·참조 정의 라벨, 수식
     r'<!--.*?-->|\[\^[^\]\r\n]+\]|^\[[^\]\r\n]+\]:|'
@@ -57,7 +61,7 @@ ICU_PROTECT = re.compile(
     r'(?:=\d+|[A-Za-z_]\w*)\s*\{(?=[^{}]*\})|\}|#|' + PROTECT.pattern, re.UNICODE)
 PROTECTED_TOKEN = re.compile(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__')
 # 번역 전후 개수가 같아야 하는 구조 기호(괄호·꺾쇠·강조·코드·수식 표시)
-STRUCTURE_MARKS = ('{', '}', '[', ']', '<', '>', '**', '~~', '`')  # $는 '$5→5달러'처럼 정상 변환이 있어 제외
+STRUCTURE_MARKS = ('{', '}', '[', ']', '<', '>', '**', '~~', '`', '\\')  # $는 '$5→5달러'처럼 정상 변환이 있어 제외
 SAFE_JSON_KEYS = frozenset({
     'id', 'uuid', 'guid', 'key', 'api_key', 'url', 'uri', 'href', 'link', 'path', 'filename', 'file',
     'command', 'cmd', 'code', 'source', 'src', 'script', 'hash', 'checksum', 'version',
@@ -66,7 +70,13 @@ SAFE_JSON_KEYS = frozenset({
     'mode', 'color', 'colour', 'icon', 'image', 'img', 'class', 'classname', 'style', 'format',
     'unit', 'encoding', 'charset', 'timezone', 'date', 'time', 'timestamp', 'email', 'phone',
     'action', 'event', 'role', 'permission', 'scope', 'target', 'route', 'template', 'variant',
+    'note', 'meta', 'plugin', 'plugins', 'filename', 'battleback1name', 'battleback2name',
+    'charactername', 'facename', 'battlername', 'parallaxname', 'tilesetnames', 'animationname',
 })
+# RPG Maker MV/MZ 이벤트 명령: 화면에 보이는 문장만 번역한다. 그 밖의 명령(스크립트 355/655,
+# 플러그인 356/357, 주석 108/408, 그림·소리 파일 이름 등)의 parameters는 절대 건드리지 않는다.
+# 값: 번역할 parameters 위치(None = 모든 문자열)
+RPG_TEXT_COMMANDS = {401: None, 405: None, 102: (0,), 402: (1,), 101: (4,), 320: (1,), 324: (1,), 325: (1,)}
 # 'user_id' 'imageUrl' 'file-path' 처럼 식별자 성격의 접미사가 붙은 키
 SAFE_JSON_KEY_SUFFIX = re.compile(
     r'(?:^|[_\-.])(?:id|ids|url|urls|uri|path|paths|key|hash|code|type|slug|token|ref|src|file|dir|'
@@ -358,16 +368,25 @@ class _JSON:
         source = self.source
         if source[pos] == '{':
             pos = self.space(pos + 1)
+            code, parameters = None, None
             while source[pos] != '}':
                 name, pos = self.decoder.raw_decode(source, pos)
                 pos = self.space(pos)
                 if source[pos] != ':':
                     raise ValueError('Invalid JSON field separator')
-                pos = self.value(pos + 1, str(name))
+                if name == 'parameters' and self.source[self.space(pos + 1)] == '[':
+                    pos, parameters = self.parameters(pos + 1)
+                else:
+                    if name == 'code':
+                        literal, _end = self.decoder.raw_decode(source, self.space(pos + 1))
+                        code = literal if isinstance(literal, int) and not isinstance(literal, bool) else None
+                    pos = self.value(pos + 1, str(name))
                 pos = self.space(pos)
                 if source[pos] != ',':
                     break
                 pos = self.space(pos + 1)
+            if parameters is not None and code is not None:
+                self.filter_command(code, parameters)
             return pos + 1
         if source[pos] == '[':
             pos = self.space(pos + 1)
@@ -384,6 +403,35 @@ class _JSON:
             if len(self.result) > MAX_SEGMENTS:
                 raise ValueError('Document contains too many JSON string values')
         return end
+
+
+    def parameters(self, pos):
+        """'parameters' 배열을 읽으며 각 위치에서 나온 번역 구간 범위를 기억한다."""
+        pos = self.space(pos)
+        spans, index = [], 0
+        pos = self.space(pos + 1)
+        while self.source[pos] != ']':
+            begin = len(self.result)
+            pos = self.value(pos, 'parameters')
+            spans.append((index, begin, len(self.result)))
+            index += 1
+            pos = self.space(pos)
+            if self.source[pos] != ',':
+                break
+            pos = self.space(pos + 1)
+        return pos + 1, spans
+
+    def filter_command(self, code, spans):
+        """RPG Maker 이벤트 명령이면 화면 문장 위치만 남기고 나머지 구간은 번역 대상에서 뺀다."""
+        allowed = RPG_TEXT_COMMANDS.get(code, ())
+        if allowed is None:
+            return
+        drop = set()
+        for index, begin, end in spans:
+            if index not in allowed:
+                drop.update(range(begin, end))
+        if drop:
+            self.result[:] = [item for number, item in enumerate(self.result) if number not in drop]
 
 
 def prepare(source: str, suffix: str, *, kind='auto', stage=False) -> Document:
@@ -407,7 +455,9 @@ def prepare(source: str, suffix: str, *, kind='auto', stage=False) -> Document:
     return Document(source, suffix, detected, selected, tuple(segments))
 
 
-def protect(text: str):
+def protect(text: str, allow=()):
+    """보호할 부분을 토큰으로 바꾼다. allow(사용자 고정 용어집의 원문)에 있는 말은 식별자 모양이어도
+    번역하라는 뜻이므로 보호하지 않는다."""
     mapping = {}
     nonce = hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]
     suffix = 0
@@ -415,6 +465,8 @@ def protect(text: str):
         suffix += 1
         nonce = hashlib.sha256((text + str(suffix)).encode('utf-8')).hexdigest()[:8]
     def replace(match):
+        if match.group() in allow:
+            return match.group()
         token = f'__LOCALAI_KEEP_{nonce}_{len(mapping):04d}__'
         mapping[token] = match.group()
         return token
@@ -554,3 +606,35 @@ def read_source(path: Path, limit=MAX_SOURCE_BYTES):
     if wide and (len(hangul) / len(wide) < .6 or sum(map(common, hangul)) / max(1, len(hangul)) < .9):
         raise ValueError('Cannot determine the text encoding; save the file as UTF-8 and retry')
     return value, 'cp949'
+
+
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def verify_codes(doc: Document, output: str, allow=()):
+    """저장 직전 문서 전체 검사: 원문과 번역문의 제어 코드·태그·변수·식별자 목록이 같아야 한다.
+    (구간 검증을 통과했더라도 조립·인코딩 과정의 실수까지 막는 마지막 안전장치)"""
+    from collections import Counter
+    if doc.suffix == '.json':
+        before = '\n'.join(_strings(json.loads(doc.source)))
+        after = '\n'.join(_strings(json.loads(output)))
+    else:
+        before, after = doc.source, output
+    def codes(text):
+        found = Counter(match.group() for match in PROTECT.finditer(text) if match.group() not in allow)
+        found.update(match.group() for match in re.finditer(r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\])?', text))
+        return found
+    old, new = codes(before), codes(after)
+    if old != new:
+        missing = list((old - new).elements())[:5]
+        extra = list((new - old).elements())[:5]
+        raise ValueError('Control codes/tags changed during translation; not saved (missing %s, extra %s)'
+                         % (missing, extra))

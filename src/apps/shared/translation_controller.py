@@ -33,20 +33,43 @@ class TranslationController:
         self._translation_prefs_loaded=True
         self._translation_last_model=''
         def apply(prefs):
+            self._translation_loading=True
             fields=self._translation_fields()
             allowed={'target':TARGETS,'source':SOURCES,'kind':tuple(KINDS),'style':tuple(STYLES)}
             for key,value in prefs.items():
                 if key in fields and (key not in allowed or value in allowed[key]):
                     fields[key].set(value)
             self._translation_last_model=prefs.get('model','')
+            self._translation_last_dir=prefs.get('last_dir','')
+            if prefs.get('glossary'):
+                self.translation_glossary_text.delete('1.0','end')
+                self.translation_glossary_text.insert('1.0',prefs['glossary'])
             self.toggle_translation_advanced(prefs.get('advanced',False),save=False)
+            self._translation_loading=False
+            # 이후 바꾸는 값은 바로(0.8초 모아서) 저장한다: 모델·언어·고급 설정·용어집
+            for variable in self._translation_fields().values():
+                variable.trace_add('write',lambda *_:self.schedule_translation_save())
+            self.translation_glossary_text.bind('<KeyRelease>',lambda _e:self.schedule_translation_save(),add='+')
             self.refresh_translation_models()
         self.run_task('tools.prefs',self.services.settings.translation_preferences,apply,
                       mutate=False,announce=False,error=lambda _e:self.refresh_translation_models())
 
+    def schedule_translation_save(self):
+        if getattr(self,'_translation_loading',False) or self.closing:
+            return
+        pending=getattr(self,'_translation_save_job',None)
+        if pending is not None:
+            self.root.after_cancel(pending)
+        self._translation_save_job=self.root.after(800,self.save_translation_preferences)
+
     def save_translation_preferences(self):
+        self._translation_save_job=None
         values={key:variable.get() for key,variable in self._translation_fields().items()}
         values['advanced']=bool(getattr(self,'_translation_advanced_open',False))
+        values['last_dir']=getattr(self,'_translation_last_dir','') or ''
+        values['glossary']=self.translation_glossary_text.get('1.0','end').strip()[:20000]
+        if not values['model']:
+            values['model']=getattr(self,'_translation_last_model','')
         self.runner.submit('tools.prefs.save',
             lambda:self.services.settings.set_translation_preferences(values),
             lambda _:None,lambda exc:self.log('번역 기본값 저장 실패: '+str(exc),level='error'),mutate=False)
@@ -64,7 +87,7 @@ class TranslationController:
         if scroller is not None:
             scroller.bind_content()
         if save:
-            self.save_translation_preferences()
+            self.schedule_translation_save()
 
     def update_translation_destination(self):
         """결과가 어디에 생기는지 미리 보여 주고, 시작 가능 여부에 맞춰 버튼을 켜고 끈다."""
@@ -98,16 +121,28 @@ class TranslationController:
 
     def choose_translation_file(self):
         value=filedialog.askopenfilename(parent=self.root,title='번역할 파일',
+              initialdir=self._translation_start_dir(),
               filetypes=[('텍스트/JSON/자막','*.txt *.json *.md *.markdown *.srt *.vtt'),
                          ('모든 파일','*.*')])
         if value:
+            self._remember_translation_dir(Path(value).parent)
             self.translation_path.set(value)
             self.translation_output.set('')
             self.analyze_translation_file()
 
+    def _translation_start_dir(self):
+        folder=getattr(self,'_translation_last_dir','')
+        return folder if folder and Path(folder).is_dir() else ''
+
+    def _remember_translation_dir(self,folder):
+        self._translation_last_dir=str(folder)
+        self.schedule_translation_save()
+
     def choose_translation_folder(self):
-        value=filedialog.askdirectory(parent=self.root,title='번역할 폴더',mustexist=True)
+        value=filedialog.askdirectory(parent=self.root,title='번역할 폴더',mustexist=True,
+                                      initialdir=self._translation_start_dir())
         if value:
+            self._remember_translation_dir(Path(value).parent)
             self.translation_path.set(value)
             self.translation_output.set('')
             self.analyze_translation_file()
