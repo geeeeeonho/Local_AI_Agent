@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
-from core.tools.translation import (verify_codes, SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
+from core.tools.translation import (verify_codes, IDENTIFIER, system_context, SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
                                     render, restore, speaker_prefix, split_masked)
 from integrations.ollama.client import OllamaClient, local_model_name
 from collections import Counter
@@ -22,6 +22,7 @@ from .translation_memory import (Checkpoint, TranslationMemory, default_protecto
                                  job_key, json_object, prune, strip_reasoning, update_rolling)
 
 from .languages import (LANGUAGES as LANGUAGE_TABLE, ReviewError, check_output, detect_language,
+                        BY_NAME as LANGUAGE_BY_NAME, SCRIPTS as LANGUAGE_SCRIPTS,
                         language, build_guide as _language_guide)
 
 # 화면 표시 이름 → 프롬프트용 영어 이름 / 출력 파일 접미사 (번역 대상 언어만)
@@ -206,6 +207,11 @@ def _validate(unit_text, answer, memory, tokens):
     for source,target in memory.enforced.items():
         if source in unit_text and target not in answer:
             raise ValueError('User glossary term not used: '+source+' → '+target)
+    # 이미 정해진 한중일 인명·용어(계획·학습)가 이 구간에 나오면 같은 번역을 써야 한다(재시도 후 검토 표시).
+    for source,target in memory.terms.items():
+        if (len(source)>=2 and _CJK_TERM.search(source) and source in unit_text and target
+                and source not in memory.enforced and target not in answer):
+            raise ReviewError('Inconsistent term: '+source+' → '+target)
     check_output(unit_text,answer,getattr(memory,'source_language',''),getattr(memory,'target',''),
                  ' '.join(memory.terms.values()))
     return answer
@@ -298,6 +304,65 @@ def _ask(client,model,items,memory,target,style,kind,recent,doc,*,strict=False):
     return [v.strip() for v in values],(learned if isinstance(learned,dict) else {})
 
 
+# 작업 시작 시 문맥 창 크기를 가장 큰 배치에 맞춰 한 번에 정한다(작업 중 커지며 생기는 재적재 방지).
+JOB_CONTEXT = 12288
+JOB_CONTEXT_THINKING = 20480
+_CJK_TERM = re.compile(r'[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7a3]')
+
+
+def _foreign_names(doc,target):
+    """번역 언어가 쓰지 않는 문자로 된 화자 이름표(예: 한국어로 번역하는데 'ハロルド'). 라틴 문자 이름은 그대로 둔다."""
+    language=LANGUAGE_BY_NAME.get(LANGUAGES[target])
+    if language is None:
+        return []
+    foreign=[re.compile('['+chars+']') for name,chars in LANGUAGE_SCRIPTS.items()
+             if name!='latin' and name not in language.scripts]
+    names=[]
+    for label in doc.labels:
+        if label.text not in names and any(pattern.search(label.text) for pattern in foreign):
+            names.append(label.text)
+    return names
+
+
+def _translate_names(client,model,names,memory,target):
+    """화자 이름표를 한 번에 번역한다(문서당 요청 1회, 같은 이름은 항상 같은 번역). 실패한 이름은 원문 유지."""
+    known={name:memory.terms[name] for name in names if memory.terms.get(name)}
+    missing=[name for name in names if name not in known]
+    if missing:
+        system=('Translate these speaker names (person names or roles) into '+LANGUAGES[target]+'. '
+                'Write person names by their original pronunciation in the target script. '
+                'Return ONLY JSON {"names":{"<source>":"<translation>"}}. '+(memory.guide or ''))
+        try:
+            reply=json_object(client.chat(model,[{'role':'system','content':system},
+                {'role':'user','content':json.dumps({'names':missing},ensure_ascii=False)}],
+                temperature=.1,format={'type':'object','properties':{'names':{'type':'object'}},
+                                       'required':['names']},think=False,num_ctx=4096,num_predict=1024))
+            values=reply.get('names') if isinstance(reply.get('names'),dict) else {}
+        except (ValueError,TypeError,KeyError):
+            values={}
+        for name in missing:
+            value=values.get(name)
+            if not isinstance(value,str) or not value.strip() or len(value)>40 or '\n' in value:
+                continue
+            try:
+                check_output(name,value.strip(),getattr(memory,'source_language',''),getattr(memory,'target',''))
+            except ReviewError:
+                continue
+            known[name]=value.strip()
+            if len(memory.terms)<MAX_LEARNED_TERMS:
+                memory.terms.setdefault(name,value.strip())
+    return known
+
+
+def _inconsistent_units(units,complete,memory,failures):
+    """나중에 정해진 한중일 인명·용어와 다르게 옮겨진(정해지기 전에 번역된) 구간 번호."""
+    terms=[(key,value) for key,value in memory.terms.items()
+           if len(key)>=2 and _CJK_TERM.search(key) and value and key not in memory.enforced]
+    return [index for index,unit in enumerate(units)
+            if index in complete and index not in failures
+            and any(key in unit.text and value not in complete[index] for key,value in terms)]
+
+
 def _learn_terms(memory,learned,items,values):
     """모델이 처음 옮긴 고유명사·용어를 문서 메모리에 더한다. 원문에 실제로 있고 번역문에도 쓰인
     것만, 기존 용어를 덮어쓰지 않고 상한까지만. 이후 배치·파일에서 같은 번역을 쓰게 된다."""
@@ -320,9 +385,11 @@ def _strip_added_label(unit_text,speaker,answer):
     원문 구간 자체가 이름표로 시작하면(예: '注意：…') 손대지 않는다."""
     if not speaker or _LABEL_PREFIX.match(unit_text):
         return answer
-    match=_LABEL_PREFIX.match(answer)
-    if match and len(answer)>match.end():
-        return answer[match.end():]
+    for _ in range(3):                # '앨리스: 앨리스: …'처럼 겹쳐 붙은 경우까지
+        match=_LABEL_PREFIX.match(answer)
+        if not match or len(answer)<=match.end():
+            break
+        answer=answer[match.end():]
     return answer
 
 
@@ -433,7 +500,7 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
                          (idx+1,exc,last)) from exc
 
 
-def _assemble(doc,units,prefixes,maps,saved):
+def _assemble(doc,units,prefixes,maps,saved,names=None):
     result = [[] for _ in doc.segments]
     for index,unit in enumerate(units):
         if index not in saved:
@@ -443,7 +510,7 @@ def _assemble(doc,units,prefixes,maps,saved):
     for segment_index in range(len(doc.segments)):
         outputs.append(restore(prefixes[segment_index]+''.join(result[segment_index]),
                                maps[segment_index]))
-    return render(doc,outputs)
+    return render(doc,outputs,names)
 
 
 def _save_new(path,result,encoding):
@@ -732,6 +799,8 @@ class TranslationService:
             raise ValueError('No translation units were found')
         endpoint=self._ready(model)
         client=_CountedClient(self.client_factory(endpoint),cancelled,self._contexts)
+        floor=JOB_CONTEXT_THINKING if precise else JOB_CONTEXT
+        self._contexts[model]=max(self._contexts.get(model,0),floor)
         self._active=client
         source_name=resolve_source(doc,source_language)
         if source_name==LANGUAGES[target]:
@@ -778,10 +847,17 @@ class TranslationService:
             memory.think=bool(precise)
             memory.target=LANGUAGES[target] if self.check_language else ''
             memory.source_language=source_name
+            # 용어집에 있는 식별자 모양 고유명사(LUMEN_PROJECT)는 문장 속에서만 쓰였다면 번역한다.
+            # 시스템 값 자리(status=…, 状態: …, [ … ])에 한 번이라도 쓰인 식별자는 계속 보호한다.
+            allow=frozenset(user_terms)|frozenset(
+                key for key in memory.terms if IDENTIFIER.fullmatch(key) and not system_context(doc.source,key))
+            if allow!=frozenset(user_terms):
+                units,prefixes,maps=_units(doc,allow)
             complete=checkpoint.completed()
             failures=checkpoint.failed()
             review=set(json.loads(checkpoint.get('review') or '[]'))
             resumed=len(complete)
+            known_terms=len(memory.terms)
             if progress:
                 progress(resumed,len(units))
             for group in _batch_ranges(units):
@@ -801,6 +877,8 @@ class TranslationService:
                                             review=review)
                 pairs=list(zip(pending,translated))
                 checkpoint.save_units(pairs)
+                if len(memory.terms)!=known_terms:      # 배운 용어를 바로 저장(중단·재개 후에도 유지)
+                    known_terms=len(memory.terms);checkpoint.save_memory(memory)
                 if len(failures)!=before:
                     checkpoint.save_failed(failures)
                 if review:
@@ -816,8 +894,27 @@ class TranslationService:
                     progress(len(complete),len(units))
             if cancelled and cancelled():
                 raise InterruptedError('Translation cancelled; progress is saved')
-            output_text=_assemble(doc,units,prefixes,maps,complete)
-            verify_codes(doc,output_text,frozenset(user_terms))
+            # 용어 일관성 보정: 용어가 정해지기 전에 번역된 구간을 그 용어를 넣어 한 번 더 번역한다.
+            repair=_inconsistent_units(units,complete,memory,failures) if memory.target else []
+            for group in _batch_ranges([units[i] for i in repair]):
+                if cancelled and cancelled():
+                    raise InterruptedError('Translation cancelled; progress is saved')
+                pending=[repair[i] for i in group]
+                items=[(idx,units[idx]) for idx in pending]
+                try:
+                    translated=_translate_batch(client,model,items,memory,target,style,doc.selected,
+                                                _recent(units,complete,pending[0]),maps,doc,
+                                                cancelled=cancelled,failures=None,review=review)
+                except ValueError:
+                    continue                  # 보정에 실패하면 이미 검증을 통과한 기존 번역을 그대로 둔다
+                pairs=list(zip(pending,translated))
+                checkpoint.save_units(pairs);complete.update(pairs)
+            names=_translate_names(client,model,_foreign_names(doc,target),memory,target) \
+                if doc.labels and memory.target else {}
+            if len(memory.terms)!=known_terms:
+                checkpoint.save_memory(memory)
+            output_text=_assemble(doc,units,prefixes,maps,complete,names)
+            verify_codes(doc,output_text,allow)
             latest=sorted(complete)[-10:]
             if shared:
                 # 다음 파일이 이어받도록 이 파일 끝까지의 줄거리를 갱신한다(파일당 요청 1회).

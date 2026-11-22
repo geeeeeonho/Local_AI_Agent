@@ -34,8 +34,12 @@ STAGE = re.compile(r'^\s*\[([^\]\r\n]+)\]\s*$')
 PROTECT = re.compile(
     # 게임·메시지 제어 코드: RPG Maker \N[2] \V[23] \C[4] \I[64] \FS[24] \.  \|  \!  \>  \<  \^  \{  \$ …
     r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\]|<[^>\r\n]*>)?|\\[^\sA-Za-z0-9]|'
-    # 시스템 태그와 내부 식별자: [SYSTEM] [SCENE] [BGM:battle1] PENDING_REVIEW MAX_HP
-    r'\[[A-Z][A-Z0-9_]*(?:[:=][^\]\r\n]*)?\]|(?<![\w])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![\w])|'
+    # 시스템 태그와 내부 식별자: [SYSTEM] [SCENE 01] [BGM:battle1] PENDING_REVIEW MAX_HP MK-04
+    r'\[[A-Z][A-Z0-9_]*(?:[ -][A-Z0-9][A-Z0-9_]*)*(?:\s*[:=][^\]\r\n]*)?\]|'
+    r'(?<![\w-])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![\w-])|(?<![\w-])[A-Z]{1,6}-\d+[A-Z0-9-]*(?![\w-])|'
+    # 설정·시스템 값: archive_session=MK-04, status=PENDING_REVIEW, mode="fast"
+    # 값은 ASCII 식별자 문자까지만(전각 쉼표·한중일 글자가 이어져도 삼키지 않는다)
+    r'(?<![\w.-])[A-Za-z_][A-Za-z0-9_.-]*=(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[A-Za-z0-9_.:/@+%-]+)|'
     r'`[^`\r\n]+`|'
     # HTML 주석, Markdown 각주·참조 정의 라벨, 수식
     r'<!--.*?-->|\[\^[^\]\r\n]+\]|^\[[^\]\r\n]+\]:|'
@@ -60,6 +64,17 @@ ICU_PROTECT = re.compile(
     r'\{\s*\w+\s*,\s*(?:plural|select|selectordinal)\s*,(?:\s*offset:\d+)?|'
     r'(?:=\d+|[A-Za-z_]\w*)\s*\{(?=[^{}]*\})|\}|#|' + PROTECT.pattern, re.UNICODE)
 PROTECTED_TOKEN = re.compile(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__')
+SYSTEM_TAG = re.compile(r'\[[A-Z][A-Z0-9_]*(?:[ -][A-Z0-9][A-Z0-9_]*)*(?:\s*[:=][^\]\r\n]*)?\]')
+IDENTIFIER = re.compile(r'[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{1,6}-\d+[A-Z0-9-]*')
+
+
+def system_context(source: str, term: str) -> bool:
+    """식별자가 문서 어딘가에서 시스템 값 자리(=, :, 괄호·꺾쇠 안, JSON 값 전체)에 쓰였는가.
+    그런 식별자는 용어집에 있어도 번역하지 않는다(문장 속 고유명사로만 쓰인 것만 번역 허용)."""
+    word = re.escape(term)
+    return bool(re.search(r'(?:[=:：]\s*|[\[<{(/]\s*)' + word + r'(?![\w-])', source)
+                or re.search(r'(?<![\w-])' + word + r'\s*[=\]>)}/]', source)
+                or re.search(r'"\s*' + word + r'\s*"', source))
 # 번역 전후 개수가 같아야 하는 구조 기호(괄호·꺾쇠·강조·코드·수식 표시)
 STRUCTURE_MARKS = ('{', '}', '[', ']', '<', '>', '**', '~~', '`', '\\')  # $는 '$5→5달러'처럼 정상 변환이 있어 제외
 SAFE_JSON_KEYS = frozenset({
@@ -162,6 +177,8 @@ class Document:
     detected: str
     selected: str
     segments: tuple[Segment, ...]
+    # 대본·자막 줄머리의 화자 이름표('ハロルド：'의 'ハロルド'). 대사와 따로 번역한다(같은 이름은 한 번).
+    labels: tuple[Segment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -226,7 +243,7 @@ def _table_cells(source: str, start: int, end: int, code_filter: bool):
     return items
 
 
-def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
+def _plain(source: str, suffix: str, stage: bool, kind: str, labels=None) -> list[Segment]:
     segments = []
     fenced = None
     markdown = suffix in ('.md', '.markdown')
@@ -320,6 +337,8 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
                     add(cell)
                 continue
         direction = STAGE.fullmatch(line)
+        if direction and SYSTEM_TAG.fullmatch(line.strip()):
+            continue                     # '[SCENE 01]' '[SYSTEM]' 같은 시스템 태그 줄은 번역하지 않는다
         if direction and dialogue and not stage:
             continue
         if kind == 'code' and not (markdown and MARKDOWN_HEADING.match(line)) and \
@@ -337,6 +356,9 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
                 start += prefix.end()
             speaker = speaker_prefix(source[start:end]) if dialogue else None
             if speaker:
+                if labels is not None:
+                    name_start = start + speaker.start(1)
+                    labels.append(Segment(name_start, name_start + len(speaker.group(1)), speaker.group(1)))
                 start += speaker.end()
         add(_trim_span(source, start, end, code_filter and not direction))
     if fenced:
@@ -451,7 +473,9 @@ def prepare(source: str, suffix: str, *, kind='auto', stage=False) -> Document:
             raise ValueError('Invalid or excessively nested JSON') from exc
         segments = parser.result
     else:
-        segments = _plain(source, suffix, stage, selected)
+        labels = []
+        segments = _plain(source, suffix, stage, selected, labels)
+        return Document(source, suffix, detected, selected, tuple(segments), tuple(labels))
     return Document(source, suffix, detected, selected, tuple(segments))
 
 
@@ -539,12 +563,17 @@ def split_masked(masked: str, *, limit=MAX_UNIT_CHARS):
     return prefix, pieces
 
 
-def render(doc: Document, outputs: list[str]) -> str:
+def render(doc: Document, outputs: list[str], names: dict | None = None) -> str:
+    """names: 화자 이름표 번역({원문 이름: 번역}). 없는 이름은 원문 그대로 둔다."""
     if len(outputs) != len(doc.segments):
         raise ValueError('Number of translated segments differs from input')
     pieces = []
     cursor = 0
-    for segment, translated in zip(doc.segments, outputs):
+    pairs = list(zip(doc.segments, outputs))
+    if names:
+        pairs += [(label, names[label.text]) for label in doc.labels if names.get(label.text)]
+        pairs.sort(key=lambda pair: pair[0].start)
+    for segment, translated in pairs:
         if not isinstance(translated, str) or not translated.strip():
             raise ValueError('Empty translated segment')
         if not segment.json_string and ('\r' in translated or '\n' in translated):

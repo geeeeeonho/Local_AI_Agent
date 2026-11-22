@@ -429,3 +429,33 @@ class OutputSafetyTests(unittest.TestCase):
                 return json.dumps({'translations': rows, 'new_terms': {'佐伯': '사에키'}}, ensure_ascii=False)
         translate(''.join('佐伯が来た%s。\n' % ('。' * (i % 3)) for i in range(45)), Learner())
         self.assertEqual(seen[-1], {'佐伯': '사에키'})
+
+
+class IdentifierTests(unittest.TestCase):
+    """식별자 보호와 용어집 번역의 경계 — 간단하게."""
+
+    def test_user_glossary_translates_an_identifier_shaped_name(self):
+        seen = []
+        class Spy(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' in data:
+                    seen.extend(item['text'] for item in data['items'])
+                    return json.dumps({'translations': ['루멘 프로젝트 팀.' for _ in data['items']]},
+                                      ensure_ascii=False)
+                return '{}'
+        out = translate('Hello LUMEN_PROJECT team.\n', Spy(), glossary='LUMEN_PROJECT = 루멘 프로젝트')
+        self.assertIn('LUMEN_PROJECT', seen[0])          # 보호하지 않고 모델에 보여 준다
+        self.assertEqual(out.text, '루멘 프로젝트 팀.\n')
+
+    def test_identifier_in_system_position_stays_protected_even_if_in_planner_terms(self):
+        from core.tools.translation import system_context
+        self.assertTrue(system_context('状態: PENDING_REVIEW\n', 'PENDING_REVIEW'))
+        self.assertTrue(system_context('status=PENDING_REVIEW\n', 'PENDING_REVIEW'))
+        self.assertFalse(system_context('Hello the LUMEN_PROJECT team.\n', 'LUMEN_PROJECT'))
+
+    def test_scene_tag_line_and_key_values_are_not_translated(self):
+        self.assertEqual(texts('[SCENE 01]\nアリス：行くよ。\n', '.txt'), ['行くよ。'])
+        from core.tools.translation import protect, PROTECTED_TOKEN
+        masked = PROTECTED_TOKEN.sub('▢', protect('status=PENDING_REVIEW，编号 MK-04。')[0])
+        self.assertEqual(masked, '▢，编号 ▢。')       # 전각 쉼표 뒤 중국어는 번역 대상으로 남는다

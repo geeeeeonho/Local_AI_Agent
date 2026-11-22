@@ -35,9 +35,9 @@ class FakeChat:
         self.requests.append((system, prompt))
         if system.startswith('You prepare a compact'):
             self.planning_calls += 1
-            return json.dumps({'summary':'A technical novel about the LUMENPROJECT crew.',
+            return json.dumps({'summary':'A technical novel about the LUMEN_PROJECT crew.',
                                'style':'Consistent polite dialogue.',
-                               'terms':{'LUMENPROJECT':'Lumen Translation'},
+                               'terms':{'LUMEN_PROJECT':'Lumen Translation'},
                                'speakers':{'Alice':'polite'}},ensure_ascii=False)
         if system.startswith('Summarize important facts'):
             self.rollup_calls += 1
@@ -53,7 +53,7 @@ class FakeChat:
         return json.dumps({'translations':[self._translate(row['text']) for row in items]},ensure_ascii=False)
 
     def _translate(self,text):
-        value=text.replace('Hello', 'Hi').replace('LUMENPROJECT',
+        value=text.replace('Hello', 'Hi').replace('LUMEN_PROJECT',
               'Wrong Project' if self.break_terms else 'Lumen Translation')
         return value
 
@@ -67,7 +67,7 @@ class LongTranslationTests(unittest.TestCase):
     def test_150_line_document_batched_and_remembers_terms(self):
         with tempfile.TemporaryDirectory() as name:
             root=Path(name); path=root/'book.txt'
-            content=''.join(f'Alice: Hello the LUMENPROJECT team, chapter {i}.\n' for i in range(150))
+            content=''.join(f'Alice: Hello the LUMEN_PROJECT team, chapter {i}.\n' for i in range(150))
             path.write_text(content,encoding='utf-8')
             mock=FakeChat()
             result=self.service(root,mock).translate_file(path,model='mock-local:latest')
@@ -75,9 +75,9 @@ class LongTranslationTests(unittest.TestCase):
             self.assertLess(mock.translation_calls,30)
             self.assertEqual(result.count,150)
             self.assertIn('Lumen Translation',result.text)
-            self.assertNotIn('LUMENPROJECT',result.text)
-            self.assertIn('LUMENPROJECT',path.read_text(encoding='utf-8'))
-            self.assertEqual(result.glossary['LUMENPROJECT'],'Lumen Translation')
+            self.assertNotIn('LUMEN_PROJECT',result.text)
+            self.assertIn('LUMEN_PROJECT',path.read_text(encoding='utf-8'))
+            self.assertEqual(result.glossary['LUMEN_PROJECT'],'Lumen Translation')
             self.assertEqual(result.resumed_units,0)
             self.assertEqual(len(list((root/'checkpoint').glob('*.sqlite3'))),0)
             for system,prompt in mock.requests:
@@ -101,7 +101,7 @@ class LongTranslationTests(unittest.TestCase):
     def test_json_large_text_and_nested_structure(self):
         with tempfile.TemporaryDirectory() as name:
             root=Path(name);path=root/'large.json'
-            data={'title':'Hello LUMENPROJECT',
+            data={'title':'Hello LUMEN_PROJECT',
                   'metadata':{'version':5,'source':'console.log("Hello")',
                               'link':'https://example.org'},
                   'text':'Hello '+('First sentence. '*2000),
@@ -135,7 +135,7 @@ class LongTranslationTests(unittest.TestCase):
     def test_glossary_conflict_rejected_then_resumes(self):
         with tempfile.TemporaryDirectory() as name:
             root=Path(name);path=root/'terms.txt'
-            path.write_text('Hello LUMENPROJECT.\nHello LUMENPROJECT again.\n',encoding='utf-8')
+            path.write_text('Hello LUMEN_PROJECT.\nHello LUMEN_PROJECT again.\n',encoding='utf-8')
             bad=FakeChat(break_terms=True)
             with self.assertRaisesRegex(ValueError,'terminology'):
                 self.service(root,bad).translate_file(path,model='mock-local:latest')
