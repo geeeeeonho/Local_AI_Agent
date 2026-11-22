@@ -5,6 +5,7 @@
 """
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -366,3 +367,169 @@ class FolderFlowTests(unittest.TestCase):
         names = ['qwen2.5-coder:7b', 'gemma4:12b', 'nomic-embed-text']
         self.assertEqual(recommend_model(names), 'gemma4:12b')
         self.assertEqual(recommend_model(names, last='qwen2.5-coder:7b'), 'qwen2.5-coder:7b')
+
+
+class OutputSafetyTests(unittest.TestCase):
+    """보고서 사례: 메타데이터 섞임·제어 코드·시스템 태그·화자명 중복·게임 스크립트 — 간단하게."""
+
+    def test_game_control_codes_and_system_tags_are_protected(self):
+        from core.tools.translation import protect, PROTECTED_TOKEN
+        masked = PROTECTED_TOKEN.sub('▢', protect('\\N[2]は\\V[23]個！\\.\\| [SYSTEM] PENDING_REVIEW')[0])
+        self.assertEqual(masked, '▢は▢個！▢▢ ▢ ▢')
+
+    def test_metadata_echo_is_rejected_even_at_the_last_retry(self):
+        model = Model(lambda items: json.dumps({'translations': ['id: 0, text: 번역' for _ in items]}))
+        result = translate('佐伯が来た。\n', model, keep_failed=True)
+        self.assertNotIn('id:', result.text)            # 끝까지 실패하면 원문 유지, 오염은 저장하지 않음
+        self.assertEqual(result.kept_lines, (1,))
+
+    def test_slash_damage_is_rejected(self):
+        from core.tools.translation import protect
+        from services.tools.translation import _validate
+        from services.tools.translation_memory import TranslationMemory
+        masked, tokens = protect('ゴールドを手に入れた')
+        with self.assertRaises(ValueError):
+            _validate(masked, '/V[23]골드를 얻었다', TranslationMemory(), tokens)
+
+    def test_added_speaker_label_is_removed(self):
+        model = Model(lambda items: json.dumps({'translations': ['앨리스: 기다려!' for _ in items]}))
+        self.assertEqual(translate('Alice: Wait!\nBob: No.\n', model).text.splitlines()[0], 'Alice: 기다려!')
+
+    def test_rpg_maker_scripts_and_plugin_commands_are_not_translated(self):
+        src = json.dumps({'list': [{'code': 401, 'parameters': ['こんにちは']},
+                                   {'code': 355, 'parameters': ["$gameVariables.setValue(1,'テスト')"]},
+                                   {'code': 356, 'parameters': ['ShowQuest 試練']},
+                                   {'code': 101, 'parameters': ['Actor1', 0, 0, 2, 'ハロルド']}],
+                          'note': '<shop:ポーション>'}, ensure_ascii=False)
+        self.assertEqual(texts(src, '.json'), ['こんにちは', 'ハロルド'])
+
+    def test_items_are_matched_by_id_even_when_reordered(self):
+        def reply(items):
+            data = [{'id': 0, 'text': items[0]}] if len(items) == 1 else []
+            return json.dumps({'translations': data or [{'id': i, 'text': t} for i, t in enumerate(items)]})
+        class Reordered(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                rows = [{'id': r['id'], 'text': r['text'].replace('Hello', '안녕')} for r in data['items']]
+                return json.dumps({'translations': list(reversed(rows))}, ensure_ascii=False)
+        out = translate(''.join('Hello %d.\n' % i for i in range(30)), Reordered()).text
+        self.assertEqual(out.splitlines()[25], '안녕 25.')
+
+    def test_learned_terms_are_reused_in_later_batches(self):
+        seen = []
+        class Learner(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                seen.append(json.loads(data['document_memory'])['terminology'])
+                rows = [{'id': r['id'], 'text': r['text'].replace('佐伯', '사에키').replace('が来た', '가 왔다')}
+                        for r in data['items']]
+                return json.dumps({'translations': rows, 'new_terms': {'佐伯': '사에키'}}, ensure_ascii=False)
+        # 같은 문장은 한 번만 번역하므로 서로 다른 45줄로 여러 번의 요청이 일어나게 한다.
+        translate(''.join('佐伯が来た%d。\n' % i for i in range(45)), Learner())
+        self.assertEqual(seen[-1], {'佐伯': '사에키'})
+
+
+class IdentifierTests(unittest.TestCase):
+    """식별자 보호와 용어집 번역의 경계 — 간단하게."""
+
+    def test_user_glossary_translates_an_identifier_shaped_name(self):
+        seen = []
+        class Spy(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' in data:
+                    seen.extend(item['text'] for item in data['items'])
+                    return json.dumps({'translations': ['루멘 프로젝트 팀.' for _ in data['items']]},
+                                      ensure_ascii=False)
+                return '{}'
+        out = translate('Hello LUMEN_PROJECT team.\n', Spy(), glossary='LUMEN_PROJECT = 루멘 프로젝트')
+        self.assertIn('LUMEN_PROJECT', seen[0])          # 보호하지 않고 모델에 보여 준다
+        self.assertEqual(out.text, '루멘 프로젝트 팀.\n')
+
+    def test_identifier_in_system_position_stays_protected_even_if_in_planner_terms(self):
+        from core.tools.translation import system_context
+        self.assertTrue(system_context('状態: PENDING_REVIEW\n', 'PENDING_REVIEW'))
+        self.assertTrue(system_context('status=PENDING_REVIEW\n', 'PENDING_REVIEW'))
+        self.assertFalse(system_context('Hello the LUMEN_PROJECT team.\n', 'LUMEN_PROJECT'))
+
+    def test_scene_tag_line_and_key_values_are_not_translated(self):
+        self.assertEqual(texts('[SCENE 01]\nアリス：行くよ。\n', '.txt'), ['行くよ。'])
+        from core.tools.translation import protect, PROTECTED_TOKEN
+        masked = PROTECTED_TOKEN.sub('▢', protect('status=PENDING_REVIEW，编号 MK-04。')[0])
+        self.assertEqual(masked, '▢，编号 ▢。')       # 전각 쉼표 뒤 중국어는 번역 대상으로 남는다
+
+
+class FinalReviewTests(unittest.TestCase):
+    """같은 문장 재사용 · 마지막 원문 대조 검수(반려→수정→보고) · 구조 문맥 — 간단하게."""
+
+    def test_same_sentence_is_translated_once(self):
+        sent = []
+        class Counter_(Model):
+            def chat(self, name, messages, temperature=.2):
+                if messages[-1]['content'].startswith('{'):
+                    sent.extend(item['text'] for item in json.loads(messages[-1]['content']).get('items', []))
+                return super().chat(name, messages, temperature)
+        result = translate('Hello Kim.\nHello Kim.\nHello Lee.\n', Counter_())
+        self.assertEqual(sorted(sent), ['Hello Kim.', 'Hello Lee.'])
+        self.assertEqual((result.text, result.reused), ('안녕 Kim.\n안녕 Kim.\n안녕 Lee.\n', 1))
+
+    def lines(self, n):
+        return ''.join('こんにちは、今日は駅で友達と%d時に会う約束をしています。\n' % i for i in range(n))
+
+    def test_truncated_line_is_rejected_and_retranslated_with_the_reason(self):
+        notes = []
+        class Truncates(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                rows = []
+                for item in data['items']:
+                    full = '안녕하세요 오늘은 역에서 친구와 %s시에 만나기로 했어요.' % re.sub(r'\D', '', item['text'])
+                    if 'previous_problem' in item:
+                        notes.append(item['previous_problem'])
+                    elif item['text'].startswith('こんにちは、今日は駅で友達と3時'):
+                        full = '안녕 3'                    # 줄 단위 검증은 통과하지만 원문 대비 너무 짧다
+                    rows.append({'id': item['id'], 'text': full})
+                return json.dumps({'translations': rows}, ensure_ascii=False)
+        result = translate(self.lines(12), Truncates())
+        self.assertEqual(result.audit_fixed, 1)
+        self.assertIn('too short', notes[0])
+        self.assertNotIn('안녕 3\n', result.text)
+
+    def test_problem_that_cannot_be_fixed_is_reported(self):
+        class Stubborn(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                return json.dumps({'translations': [
+                    {'id': i['id'], 'text': '안녕 3' if i['text'].startswith('こんにちは、今日は駅で友達と3時') else
+                     '안녕하세요 오늘은 역에서 친구와 %s시에 만나기로 했어요.' % re.sub(r'\D', '', i['text'])}
+                    for i in data['items']]}, ensure_ascii=False)
+        result = translate(self.lines(12), Stubborn())
+        self.assertEqual([line for line, _ in result.audit], [4])
+
+    def test_rpg_dialogue_gets_speaker_and_item_text_gets_its_name(self):
+        from services.tools.translation import _units, _speaker, _section
+        doc = prepare(json.dumps({'list': [{'code': 101, 'parameters': ['', 0, 0, 2, 'アオイ']},
+                                           {'code': 401, 'parameters': ['ようこそ。']}],
+                                  'items': [{'name': '潮霧草', 'description': '海岸の薬草。'}]},
+                                 ensure_ascii=False), '.json')
+        units = {u.text: u for u in _units(doc)[0]}
+        self.assertEqual(_speaker(doc, units['ようこそ。']), 'アオイ')
+        self.assertEqual(_section(doc, units['海岸の薬草。']), '潮霧草')
+
+    def test_block_header_is_the_section_for_extracted_text(self):
+        from services.tools.translation import _units, _section
+        doc = prepare('# 説明\n===== [BTL_001] 廃機関区 =====\n戦闘開始！\n', '.txt')
+        unit = [u for u in _units(doc)[0] if u.text == '戦闘開始！'][0]
+        self.assertIn('廃機関区', _section(doc, unit))
+
+    def test_greek_symbols_in_the_source_are_not_leftovers(self):
+        from services.tools.languages import check_output
+        check_output('采用α分支，σ为0.004。', 'α 분기를 쓰고 σ는 0.004이다.', 'Simplified Chinese', 'Korean')

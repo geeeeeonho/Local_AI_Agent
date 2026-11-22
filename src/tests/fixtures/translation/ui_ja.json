@@ -1,0 +1,10 @@
+{
+  "status": "PENDING_REVIEW",
+  "archive_session": "MK-04",
+  "messages": {
+    "greet": "こんにちは、{name}さん！",
+    "save": "[SYSTEM] セーブしました。",
+    "quest": "佐伯は%sを見つけた。",
+    "state": "状態: PENDING_REVIEW"
+  }
+}

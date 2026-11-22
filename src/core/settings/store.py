@@ -78,7 +78,9 @@ class SettingsStore:
     # 번역 도구에서 지난번에 고른 값(언어·모델·고급 설정). 다음에 열 때 그대로 채워 선택을 줄인다.
     TRANSLATION_KEYS = {'target': str, 'model': str, 'source': str, 'kind': str, 'style': str,
                         'shared': bool, 'resume': bool, 'keep_failed': bool, 'precise': bool,
-                        'stage': bool, 'advanced': bool}
+                        'stage': bool, 'advanced': bool, 'last_dir': str, 'glossary': str}
+    # 문자열 길이 상한(기본 300자). 폴더 경로와 용어집은 더 길 수 있다.
+    TRANSLATION_LIMITS = {'last_dir': 2000, 'glossary': 20000}
 
     def translation_preferences(self) -> dict:
         data = schema_one(self.store.read())
@@ -87,12 +89,12 @@ class SettingsStore:
             return {}
         return {key: item for key, item in value.items()
                 if key in self.TRANSLATION_KEYS and isinstance(item, self.TRANSLATION_KEYS[key])
-                and (not isinstance(item, str) or len(item) <= 300)}
+                and (not isinstance(item, str) or len(item) <= self.TRANSLATION_LIMITS.get(key, 300))}
 
     def set_translation_preferences(self, values: dict) -> None:
         clean = {key: item for key, item in dict(values).items()
                  if key in self.TRANSLATION_KEYS and isinstance(item, self.TRANSLATION_KEYS[key])
-                 and (not isinstance(item, str) or len(item) <= 300)}
+                 and (not isinstance(item, str) or len(item) <= self.TRANSLATION_LIMITS.get(key, 300))}
         def change(data):
             data = schema_one(data)
             data['translation'] = clean

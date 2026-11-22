@@ -627,3 +627,14 @@ def test_translation_needs_only_a_path_and_writes_next_to_it(ui, tmp_path):
     w.translation_path.set(str(folder));pump(w)
     assert str(w.translation_start_button['state'])=='normal'
     assert '"novel.ko"' in w.translation_destination.cget('text')
+
+
+def test_translation_choices_are_remembered(ui):
+    # 간단하게: 모델·언어를 바꾸면 저장되고, 다음에 열 때 그대로 채워진다.
+    w,svc,_=ui
+    w.services.translator.local_models=lambda:['gemma4:12b','qwen3:8b']
+    w.navigate('tools');w.open_tool('translate')
+    pump(w,lambda:w.translation_model.get()=='gemma4:12b')
+    w.translation_model.set('qwen3:8b');w.translation_language.set('English')
+    pump(w,lambda:svc.settings.translation_preferences().get('model')=='qwen3:8b',timeout=4)
+    assert svc.settings.translation_preferences()['target']=='English'

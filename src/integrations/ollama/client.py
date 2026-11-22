@@ -119,7 +119,8 @@ class OllamaClient:
         self._json('/api/delete', {'model': model_name(name)}, 'DELETE', empty=True)
 
     def chat(self, name: str, messages: list[dict], *, temperature: float = 0.2,
-             format=None, think=False, num_ctx=None, num_predict=None, cancelled=None) -> str:
+             format=None, think=False, num_ctx=None, num_predict=None, cancelled=None,
+             keep_alive=None) -> str:
         """로컬 모델에 요청하고 답변 문자열을 돌려준다.
 
         스트리밍으로 받으므로 소켓 제한 시간은 "전체 생성 시간"이 아니라 "토큰 사이 대기"에만
@@ -134,6 +135,8 @@ class OllamaClient:
             options['num_predict'] = int(num_predict)
         payload = {'model': local_model_name(name), 'messages': messages,
                    'stream': True, 'options': options}
+        if keep_alive:
+            payload['keep_alive'] = keep_alive
         if format is not None and not getattr(self, '_no_format', False):
             payload['format'] = format
         if think is not None and not getattr(self, '_no_think', False):

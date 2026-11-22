@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 PLAN_VERSION = 2
-MAX_GLOSSARY = 28
+MAX_GLOSSARY = 40         # 처음 계획에서 정하는 용어 수
+MAX_TERMS = 240           # 번역 중 배운 용어까지 포함한 저장 상한(프롬프트에는 해당 배치에 나오는 것만)
 MAX_SPEAKERS = 16
 MAX_SUMMARY = 850
 MAX_ROLLING = 750
@@ -41,12 +42,13 @@ class TranslationMemory:
             key:value for key,value in self.terms.items() if key in relevant}
         speakers = self.speakers if relevant is None else {
             key:value for key,value in self.speakers.items() if key in relevant}
+        # 잘 바뀌지 않는 항목을 앞에 둔다(프롬프트 앞부분 재사용). 용어·화자는 배치마다 달라진다.
         return json.dumps({
             'document_summary': self.summary,
             'fixed_style': self.style,
+            'story_so_far': self.rolling,
             'terminology': terms,
             'speaker_profiles': speakers,
-            'story_so_far': self.rolling,
         }, ensure_ascii=False)
 
     def to_json(self) -> str:
@@ -71,7 +73,7 @@ class TranslationMemory:
             age=0
         return cls(summary=clipped(data.get('summary'),MAX_SUMMARY),
                    style=clipped(data.get('style'),MAX_STYLE),
-                   terms=items('terms',MAX_GLOSSARY),speakers=items('speakers',MAX_SPEAKERS),
+                   terms=items('terms',MAX_TERMS),speakers=items('speakers',MAX_SPEAKERS),
                    rolling=clipped(data.get('rolling'),MAX_ROLLING),since_rollup=age)
 
 

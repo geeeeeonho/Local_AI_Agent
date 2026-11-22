@@ -1,0 +1,28 @@
+[SCENE 01]
+佐伯：\N[1]、準備はいい？\.\|行くぞ！
+ミア：status=PENDING_REVIEW のままだよ。
+佐伯：\C[4]赤い宝石\C[0]を\V[23]個手に入れた！
+ミア：archive_session=MK-04 を確認して、佐伯さん。
+佐伯：\N[1]、準備はいい？\.\|行くぞ！
+ミア：status=PENDING_REVIEW のままだよ。
+佐伯：\C[4]赤い宝石\C[0]を\V[23]個手に入れた！
+ミア：archive_session=MK-04 を確認して、佐伯さん。
+[SYSTEM] セーブしました。
+佐伯：\N[1]、準備はいい？\.\|行くぞ！
+ミア：status=PENDING_REVIEW のままだよ。
+佐伯：\C[4]赤い宝石\C[0]を\V[23]個手に入れた！
+ミア：archive_session=MK-04 を確認して、佐伯さん。
+佐伯：\N[1]、準備はいい？\.\|行くぞ！
+ミア：status=PENDING_REVIEW のままだよ。
+佐伯：\C[4]赤い宝石\C[0]を\V[23]個手に入れた！
+ミア：archive_session=MK-04 を確認して、佐伯さん。
+[SYSTEM] セーブしました。
+佐伯：\N[1]、準備はいい？\.\|行くぞ！
+ミア：status=PENDING_REVIEW のままだよ。
+佐伯：\C[4]赤い宝石\C[0]を\V[23]個手に入れた！
+ミア：archive_session=MK-04 を確認して、佐伯さん。
+佐伯：\N[1]、準備はいい？\.\|行くぞ！
+ミア：status=PENDING_REVIEW のままだよ。
+佐伯：\C[4]赤い宝石\C[0]を\V[23]個手に入れた！
+ミア：archive_session=MK-04 を確認して、佐伯さん。
+[SYSTEM] セーブしました。

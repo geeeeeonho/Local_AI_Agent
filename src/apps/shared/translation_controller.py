@@ -33,20 +33,43 @@ class TranslationController:
         self._translation_prefs_loaded=True
         self._translation_last_model=''
         def apply(prefs):
+            self._translation_loading=True
             fields=self._translation_fields()
             allowed={'target':TARGETS,'source':SOURCES,'kind':tuple(KINDS),'style':tuple(STYLES)}
             for key,value in prefs.items():
                 if key in fields and (key not in allowed or value in allowed[key]):
                     fields[key].set(value)
             self._translation_last_model=prefs.get('model','')
+            self._translation_last_dir=prefs.get('last_dir','')
+            if prefs.get('glossary'):
+                self.translation_glossary_text.delete('1.0','end')
+                self.translation_glossary_text.insert('1.0',prefs['glossary'])
             self.toggle_translation_advanced(prefs.get('advanced',False),save=False)
+            self._translation_loading=False
+            # 이후 바꾸는 값은 바로(0.8초 모아서) 저장한다: 모델·언어·고급 설정·용어집
+            for variable in self._translation_fields().values():
+                variable.trace_add('write',lambda *_:self.schedule_translation_save())
+            self.translation_glossary_text.bind('<KeyRelease>',lambda _e:self.schedule_translation_save(),add='+')
             self.refresh_translation_models()
         self.run_task('tools.prefs',self.services.settings.translation_preferences,apply,
                       mutate=False,announce=False,error=lambda _e:self.refresh_translation_models())
 
+    def schedule_translation_save(self):
+        if getattr(self,'_translation_loading',False) or self.closing:
+            return
+        pending=getattr(self,'_translation_save_job',None)
+        if pending is not None:
+            self.root.after_cancel(pending)
+        self._translation_save_job=self.root.after(800,self.save_translation_preferences)
+
     def save_translation_preferences(self):
+        self._translation_save_job=None
         values={key:variable.get() for key,variable in self._translation_fields().items()}
         values['advanced']=bool(getattr(self,'_translation_advanced_open',False))
+        values['last_dir']=getattr(self,'_translation_last_dir','') or ''
+        values['glossary']=self.translation_glossary_text.get('1.0','end').strip()[:20000]
+        if not values['model']:
+            values['model']=getattr(self,'_translation_last_model','')
         self.runner.submit('tools.prefs.save',
             lambda:self.services.settings.set_translation_preferences(values),
             lambda _:None,lambda exc:self.log('번역 기본값 저장 실패: '+str(exc),level='error'),mutate=False)
@@ -64,7 +87,7 @@ class TranslationController:
         if scroller is not None:
             scroller.bind_content()
         if save:
-            self.save_translation_preferences()
+            self.schedule_translation_save()
 
     def update_translation_destination(self):
         """결과가 어디에 생기는지 미리 보여 주고, 시작 가능 여부에 맞춰 버튼을 켜고 끈다."""
@@ -98,16 +121,28 @@ class TranslationController:
 
     def choose_translation_file(self):
         value=filedialog.askopenfilename(parent=self.root,title='번역할 파일',
+              initialdir=self._translation_start_dir(),
               filetypes=[('텍스트/JSON/자막','*.txt *.json *.md *.markdown *.srt *.vtt'),
                          ('모든 파일','*.*')])
         if value:
+            self._remember_translation_dir(Path(value).parent)
             self.translation_path.set(value)
             self.translation_output.set('')
             self.analyze_translation_file()
 
+    def _translation_start_dir(self):
+        folder=getattr(self,'_translation_last_dir','')
+        return folder if folder and Path(folder).is_dir() else ''
+
+    def _remember_translation_dir(self,folder):
+        self._translation_last_dir=str(folder)
+        self.schedule_translation_save()
+
     def choose_translation_folder(self):
-        value=filedialog.askdirectory(parent=self.root,title='번역할 폴더',mustexist=True)
+        value=filedialog.askdirectory(parent=self.root,title='번역할 폴더',mustexist=True,
+                                      initialdir=self._translation_start_dir())
         if value:
+            self._remember_translation_dir(Path(value).parent)
             self.translation_path.set(value)
             self.translation_output.set('')
             self.analyze_translation_file()
@@ -249,9 +284,9 @@ class TranslationController:
                        ' …' if len(kept)>8 else '')) if kept else ''
             review=result.review_lines
             review_note=(' · 검토 필요 %d줄'%len(review)) if review else ''
-            self.translation_say('Ready','번역 완료: %d구간 · 재개 %d구간%s%s · %s' %
-                                 (result.count,result.resumed_units,kept_note,review_note,result.output),
-                                 log=True)
+            self.translation_say('Ready','번역 완료: %d구간 · 재개 %d구간%s%s%s · %s' %
+                                 (result.count,result.resumed_units,kept_note,review_note,
+                                  audit_note(result),result.output),log=True)
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
             self.root.bell()
@@ -264,6 +299,7 @@ class TranslationController:
                      '\n\n고정 용어집\n'+(glossary or '(추출된 항목 없음)')+
                      ('\n\n원문 유지(검증 실패) 줄\n'+', '.join(map(str,kept)) if kept else '')+
                      ('\n\n검토 필요(원문 단어 일부 남음) 줄\n'+', '.join(map(str,review)) if review else '')+
+                     audit_text(result)+
                      '\n\n문서 메모리는 해당 번역 작업에만 사용됩니다. 작업 완료 후 재개 기록은 삭제됩니다.')
             self.translation_tabs.select(1)
         def folder_finished(result):
@@ -273,9 +309,12 @@ class TranslationController:
             review=sum(len(r.review_lines) for _,r in result.translated)
             kept=sum(len(r.kept_lines) for _,r in result.translated)
             state='Failed' if result.failed and not result.translated else 'Ready'
-            self.translation_say(state,'폴더 번역 완료: 번역 %d개 · 건너뜀 %d개 · 실패 %d개 · 복사 %d개%s%s · %s' % (
+            fixed=sum(r.audit_fixed for _,r in result.translated)
+            left=sum(len(r.audit) for _,r in result.translated)
+            self.translation_say(state,'폴더 번역 완료: 번역 %d개 · 건너뜀 %d개 · 실패 %d개 · 복사 %d개%s%s%s · %s' % (
                 len(result.translated),len(result.skipped),len(result.failed),result.copied,
                 (' · 검토 필요 %d줄'%review) if review else '',(' · 원문 유지 %d줄'%kept) if kept else '',
+                (' · 검수 자동 수정 %d · 확인 필요 %d줄'%(fixed,left)) if fixed or left else ' · 원문 대조 검수 통과',
                 result.output),log=True,level='error' if state=='Failed' else 'info')
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
@@ -284,7 +323,8 @@ class TranslationController:
             reasons={'already translated':'이미 번역됨','already in the target language':'이미 번역 언어',
                      'no translatable text':'번역할 문장 없음(복사)'}
             lines=['번역한 파일']
-            lines+=['  %s  (%d구간%s%s)'%(rel,r.count,(' · 검토 %s줄'%','.join(map(str,r.review_lines[:6])))
+            lines+=['  %s  (%d구간%s%s%s)'%(rel,r.count,(' · 검수 확인 필요 '+', '.join('%d줄'%n for n,_ in r.audit[:6]))
+                     if r.audit else '',(' · 검토 %s줄'%','.join(map(str,r.review_lines[:6])))
                      if r.review_lines else '',(' · 원문 유지 %s줄'%','.join(map(str,r.kept_lines[:6])))
                      if r.kept_lines else '') for rel,r in result.translated] or ['  (없음)']
             if result.skipped:
@@ -367,3 +407,26 @@ def friendly_error(exc):
         if key in lower:
             return message+' ('+text[:160]+')'
     return text
+
+
+# 최종 원문 대조 검수 결과를 한국어로 보여 준다.
+_AUDIT_REASONS=(('untranslated','번역 안 됨(원문과 같음)'),('too short','원문보다 지나치게 짧음(잘림 의심)'),
+                ('too long','원문보다 지나치게 긺(덧붙임 의심)'),('inconsistent','인명·용어 표기 불일치'),
+                ('left in','원문 문자 남음'),('another language','다른 언어 단어 섞임'),
+                ('left untranslated','원문 단어 남음'),('Number','숫자 바뀜'),('similar','번역 안 됨(원문과 거의 같음)'))
+
+
+def audit_reason(text):
+    return next((label for key,label in _AUDIT_REASONS if key.lower() in text.lower()),text)
+
+
+def audit_note(result):
+    if not result.audit_fixed and not result.audit:
+        return ' · 원문 대조 검수 통과'
+    return ' · 검수 자동 수정 %d · 확인 필요 %d줄'%(result.audit_fixed,len(result.audit))
+
+
+def audit_text(result):
+    head='\n\n원문 대조 검수: 같은 문장 재사용 %d · 반려 후 다시 번역해 고침 %d · 확인 필요 %d줄'%(
+        result.reused,result.audit_fixed,len(result.audit))
+    return head+''.join('\n  %d줄: %s'%(line,audit_reason(reason)) for line,reason in result.audit[:40])
