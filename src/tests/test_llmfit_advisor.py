@@ -78,3 +78,24 @@ def test_bar_clamps_overflow_but_keeps_real_number():
 
 def test_unknown_gpu_is_not_an_empty_gpu():
     assert projection(None, fit_for("x", 7))["available"] is False
+
+
+def test_cpu_offload_memory_is_not_claimed_as_gpu_vram():
+    analyzed = {"models": {"demo:latest": {
+        "memory_gb": 15.0, "mode": "offload", "fit": "good",
+        "score": 60, "source": "llmfit",
+    }}}
+    estimate = fit_for("demo:latest", 12.0, analyzed)
+    assert estimate["source"] == "llmfit"
+    assert estimate["need_gib"] is None
+    assert estimate["total_memory_gib"] == 15.0
+    assert projection({"total_gib": 16, "free_gib": 8}, estimate)["need_pct"] is None
+
+
+def test_llmfit_cannot_undercut_conservative_known_ollama_memory():
+    analyzed = {"models": {"model:q8": {
+        "memory_gb": 7.0, "mode": "gpu", "fit": "good",
+        "source": "llmfit",
+    }}}
+    estimate = fit_for("model:q8", 11.0, analyzed)
+    assert estimate["need_gib"] == 11.0
