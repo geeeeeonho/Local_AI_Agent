@@ -1085,11 +1085,14 @@ class DesktopWindow(TranslationController, ToolsController):
             self.catalog_install_count=tk.StringVar(master=self.root,value='')
         ttk.Label(tools,textvariable=self.catalog_install_count,
                   style='Muted.TLabel').pack(side='left',padx=(12,0))
-        ttk.Button(tools,text='모두 접기',
-                   command=lambda:self.fold_catalog_roles(False)).pack(
-                       side='right',padx=(6,0))
-        ttk.Button(tools,text='모두 펼치기',
-                   command=lambda:self.fold_catalog_roles(True)).pack(side='right')
+        self._roles_all_expanded=True
+        def toggle_all_roles():
+            self._roles_all_expanded=not self._roles_all_expanded
+            self.fold_catalog_roles(self._roles_all_expanded)
+            all_roles.configure(text='전체 접기' if self._roles_all_expanded
+                                else '전체 펼치기')
+        all_roles=ttk.Button(tools,text='전체 접기',command=toggle_all_roles)
+        all_roles.pack(side='right')
         columns=CatalogColumns(self.choice_body)
         self.catalog_columns=columns
 
@@ -1120,7 +1123,9 @@ class DesktopWindow(TranslationController, ToolsController):
                 primary_section=self.add_catalog_group(
                     section.body,key+':tier:'+str(tier['number']),
                     f"{label} 단계 (권장) · {'설치됨' if primary['installed'] else '미설치'}",
-                    expanded=True,compact=True)
+                    expanded=bool(primary['installed'] or primary['recommended']
+                                  or (not catalog['recommended'] and tier['number']==3)),
+                    compact=True)
                 self.add_catalog_row(
                     primary_section.body,primary,
                     checked=primary['installed'] or primary['recommended'],
