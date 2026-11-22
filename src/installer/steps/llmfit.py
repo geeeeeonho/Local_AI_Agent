@@ -42,7 +42,7 @@ def install(paths, *, log=None):
     url = BASE + "/" + archive
     try:
         checksum_text = _download(url + ".sha256", limit=1024).decode("utf-8")
-        match = re.match(r"^([a-fA-F0-9]{64})\\s+", checksum_text.strip())
+        match = re.match(r"^([a-fA-F0-9]{64})\s+", checksum_text.strip())
         if not match:
             raise ValueError("공식 SHA-256 파일 형식이 유효하지 않습니다")
         payload = _download(url, limit=MAX_ZIP)
