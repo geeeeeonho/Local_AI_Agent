@@ -107,35 +107,38 @@ def analyze(*, context=8192, gpu_capacity_gib=None, refresh=False, timeout=15.0)
         if cached and not refresh and time.monotonic() - cached[0] < CACHE_SECONDS:
             return cached[1]
 
-    binary = executable()
-    if binary is None:
-        return {"available": False, "models": {}, "reason": "LLMfit 실행 파일 없음"}
-    command = [str(binary), "--max-context", str(context)]
-    if capacity is not None:
-        command.append("--memory=%.2fGiB" % capacity)
-    command.extend(["fit", "--json"])
-    options = {
-        "capture_output": True, "text": True, "encoding": "utf-8",
-        "errors": "replace", "timeout": max(1.0, min(30.0, float(timeout))),
-        "check": False,
-    }
-    if os.name == "nt":
-        options["creationflags"] = 0x08000000
-    try:
-        completed = subprocess.run(command, **options)
-        if completed.returncode != 0:
-            raise ValueError("LLMfit 종료 코드 %d" % completed.returncode)
-        if len(completed.stdout.encode("utf-8")) > MAX_OUTPUT_BYTES:
-            raise ValueError("LLMfit 응답 크기 초과")
-        models = _models(json.loads(completed.stdout))
-        if not models:
-            raise ValueError("LLMfit 모델 매핑 결과 없음")
-        result = {"available": True, "models": models, "reason": ""}
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as exc:
-        result = {"available": False, "models": {}, "reason": str(exc)[:200]}
-    with _LOCK:
-        _CACHE[key] = (time.monotonic(), result)
-    return result
+        # The catalogue and GPU widget can request the same analysis at once.
+        # Keep the inexpensive lookup and bounded CLI call under one reentrant
+        # lock, avoiding two parallel native binary processes on a small PC.
+        binary = executable()
+        if binary is None:
+            return {"available": False, "models": {}, "reason": "LLMfit 실행 파일 없음"}
+        command = [str(binary), "--max-context", str(context)]
+        if capacity is not None:
+            command.append("--memory=%.2fGiB" % capacity)
+        command.extend(["fit", "--json"])
+        options = {
+            "capture_output": True, "text": True, "encoding": "utf-8",
+            "errors": "replace", "timeout": max(1.0, min(30.0, float(timeout))),
+            "check": False,
+        }
+        if os.name == "nt":
+            options["creationflags"] = 0x08000000
+        try:
+            completed = subprocess.run(command, **options)
+            if completed.returncode != 0:
+                raise ValueError("LLMfit 종료 코드 %d" % completed.returncode)
+            if len(completed.stdout.encode("utf-8")) > MAX_OUTPUT_BYTES:
+                raise ValueError("LLMfit 응답 크기 초과")
+            models = _models(json.loads(completed.stdout))
+            if not models:
+                raise ValueError("LLMfit 모델 매핑 결과 없음")
+            result = {"available": True, "models": models, "reason": ""}
+        except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as exc:
+            result = {"available": False, "models": {}, "reason": str(exc)[:200]}
+        with _LOCK:
+            _CACHE[key] = (time.monotonic(), result)
+        return result
 
 
 def clear_cache():
