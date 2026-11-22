@@ -32,9 +32,11 @@ class AgentLauncher:
         except Exception:
             # No session was started, so nothing can be writing the stores.
             self._seal()
+            self._cleanup_unstarted_search()
             raise
         if binding is None or (cancel is not None and cancel()):
             self._seal()
+            self._cleanup_unstarted_search()
             if not network_was_prepared:
                 self.network.reset()
             return None
@@ -44,6 +46,7 @@ class AgentLauncher:
             if closed:
                 self.session = None
                 self._seal()
+                self._cleanup_unstarted_search()
                 if not network_was_prepared:
                     self.network.reset()
             raise RuntimeError('Interpreter startup failed. Check Setup / Repair.')
@@ -59,6 +62,19 @@ class AgentLauncher:
         self._seal()
         self.events.emit('agent.stopped', {})
         return True
+
+    def _cleanup_unstarted_search(self):
+        """The Agent wizard can cancel after optional SearXNG was started."""
+        stop = getattr(self.backend, 'agent_search_stop', None)
+        if callable(stop):
+            try:
+                if not stop():
+                    self.events.emit('runtime.error', {
+                        'service': 'agent.search',
+                        'detail': 'Cancelled Agent search container could not be stopped safely.'})
+            except Exception as exc:
+                self.events.emit('runtime.error', {
+                    'service': 'agent.search', 'detail': str(exc)})
 
     def _seal(self):
         """Seal agent stores once no session runs. Never raises."""
