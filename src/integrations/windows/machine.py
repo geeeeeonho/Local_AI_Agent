@@ -210,7 +210,10 @@ def _group_lines() -> List[str]:
         lines.append(
             "if (-not [ADSI]::Exists('WinNT://' + $env:COMPUTERNAME + '/%s,group')) "
             "{ try { $made = $computer.Create('group', %s); $made.SetInfo() } "
-            "catch { $failed = 1 } }" % (group, quote(group)))
+            "catch { $failed = 1; "
+            "if ($null -ne $localaiIssues) { "
+            "[void]$localaiIssues.Add('create group %s: ' + $_.Exception.Message) } } }"
+            % (group, quote(group), group))
     return lines
 
 
@@ -220,8 +223,11 @@ def _member_line(group: str, sid: str, present: bool) -> str:
     return ("try { $g = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/%s,group'); "
             "$m = 'WinNT://%s'; "
             "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { [void]$g.psbase.Invoke('%s', $m) }; "
-            "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { $failed = 1 } } catch { $failed = 1 }"
-            % (group, sid, want, verb, want))
+            "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { $failed = 1; "
+            "if ($null -ne $localaiIssues) { [void]$localaiIssues.Add('member %s: membership not verified') } "
+            "} } catch { $failed = 1; if ($null -ne $localaiIssues) { "
+            "[void]$localaiIssues.Add('member %s: ' + $_.Exception.Message) } }"
+            % (group, sid, want, verb, want, group, group))
 
 
 def _shortcut_lines(app_dir: Path) -> List[str]:
@@ -238,7 +244,7 @@ def _shortcut_lines(app_dir: Path) -> List[str]:
 
 
 def first_install_script(user_sid: str, root: Path, app_dir: Path,
-                         *, shortcuts=True) -> Optional[str]:
+                         *, shortcuts=True, report_path=None) -> Optional[str]:
     """Groups, this account as administrator, the shared root locked, shortcuts.
 
     The root keeps SYSTEM and Administrators, gives this account and
@@ -249,10 +255,12 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
     """
     if not machine.is_sid(user_sid):
         return None
-    lines = ['$failed = 0'] + _group_lines() + [
+    lines = ['$failed = 0',
+             '$localaiIssues = New-Object System.Collections.Generic.List[string]'] + _group_lines() + [
         _member_line(machine.ADMINS_GROUP, user_sid, True),
         "$admins = $null; try { $admins = (New-Object System.Security.Principal.NTAccount(%s))"
-        ".Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $failed = 1 }"
+        ".Translate([System.Security.Principal.SecurityIdentifier]).Value } "
+        "catch { $failed = 1; [void]$localaiIssues.Add('admin group SID: ' + $_.Exception.Message) }"
         % quote(machine.ADMINS_GROUP),
     ]
     if lockable_root(root):
@@ -267,6 +275,26 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
             group_variable='$admins')
     if shortcuts:
         lines += _shortcut_lines(app_dir)
+    if report_path is not None:
+        # The random report path is created exclusively by elevated PowerShell.
+        # It lives under the protected program root and is read by the
+        # unelevated UI if the script exits non-zero.
+        from pathlib import Path
+        report = Path(report_path)
+        if report.parent != Path(root) or not report.name.startswith('.localai-admin-'):
+            raise ValueError("Unsafe administrator diagnostics path")
+        lines.extend([
+            'if ($failed -ne 0) {',
+            "  try {",
+            "    $reportText = @($localaiIssues | Select-Object -First 8) -join [Environment]::NewLine",
+            "    if (-not $reportText) { $reportText = 'Unspecified Windows administrator step failed' }",
+            "    $payload = [System.Text.Encoding]::UTF8.GetBytes($reportText)",
+            "    $file = [System.IO.File]::Open(" + quote(report) +
+            ", [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)",
+            "    try { $file.Write($payload, 0, $payload.Length) } finally { $file.Dispose() }",
+            "  } catch { }",
+            '}',
+        ])
     lines.append('exit $failed')
     return '\n'.join(lines)
 
@@ -280,7 +308,9 @@ def lock_root_lines(root: Path, *, admin_sids: Iterable[str], principal: str,
     if group_variable:
         lines.append("if (%s) { $grants += @('/grant:r', ('*' + %s + ':(OI)(CI)F')) }"
                      % (group_variable, group_variable))
-    lines.append("& icacls.exe %s /inheritance:r @grants /Q | Out-Null; "
+    lines.append("& icacls.exe %s /inheritance:r @grants /Q 2>&1 | Out-String | ForEach-Object { "
+                 "if ($LASTEXITCODE -ne 0) { $failed = 1; if ($null -ne $localaiIssues) { "
+                 "[void]$localaiIssues.Add('root ACL: ' + $_) } } }; "
                  "if ($LASTEXITCODE -ne 0) { $failed = 1 }" % quote(root))
     return lines
 
