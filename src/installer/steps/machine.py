@@ -60,45 +60,65 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
         warn("현재 계정의 SID를 확인하지 못해 LocalAI 관리자 설정을 건너뜁니다.")
         return "user"
 
+    from integrations.windows import program_security
+
+    if not windows.lockable_root(root):
+        raise RuntimeError("공용 프로그램 경로에 안전한 ACL을 적용할 수 없습니다: " + str(root))
+
     if policy is None:
         owner = acl.owner_sid(root)
         if not machine.first_admin_candidate(owner, sid):
-            info("LocalAI를 처음 설치한 계정(%s)에서 Setup을 실행하면 관리자 설정이 "
-                 "완료됩니다. 이 계정은 개인 폴더만 준비합니다." % owner)
+            info("첫 설치 계정에서 관리 권한을 확정해야 합니다. "
+                 "이 계정은 개인 폴더만 준비합니다.")
             return "user"
         section("LocalAI 관리자 설정 (처음 설치)")
-        info("이 계정을 LocalAI 관리자로 지정하고, 공용 프로그램을 %s 에 설치합니다." % app_dir)
-        app_step.deploy(project_root, app_dir)
+        info("먼저 Windows 권한을 잠근 뒤 공용 프로그램을 배포합니다.")
         script = windows.first_install_script(sid, root, app_dir)
-        elevated = bool(script) and windows.run_as_admin(script, log=info)
+        # Never deploy executable files to a writable shared folder while
+        # awaiting a UAC answer. A declined UAC is a failed installation.
+        if not script or not windows.run_as_admin(script, log=info):
+            raise RuntimeError(
+                "Windows 관리자 승인이 취소되었거나 프로그램 보호에 실패했습니다. "
+                "공용 프로그램 설치를 중단합니다.")
         policy = machine.new_policy(
-            sid,
-            admins_group_sid=windows.group_sid(machine.ADMINS_GROUP),
+            sid, admins_group_sid=windows.group_sid(machine.ADMINS_GROUP),
             users_group_sid=windows.group_sid(machine.USERS_GROUP))
-        if not elevated:
-            warn("Windows 관리자 승인 없이 진행합니다. 그룹과 공용 바로가기는 만들지 못했고, "
-                 "이 계정만 LocalAI 관리자로 기록합니다. 나중에 Setup을 다시 실행하면 "
-                 "다시 시도합니다.")
-            policy.notes["groups_pending"] = True
-            if windows.lockable_root(root) and not acl.succeeded(
-                    acl.run(windows.lock_root_command(root, policy), timeout=600)):
-                warn("공용 폴더 권한을 잠그지 못했습니다: %s" % root)
-        _write_policy(policy_path, policy)
+        reasons = program_security.verify(root, policy)
+        if reasons:
+            raise RuntimeError("프로그램 ACL 검증 실패: " + "; ".join(reasons[:4]))
+        if not _write_policy(policy_path, policy):
+            raise RuntimeError("관리 정책을 안전하게 저장하지 못했습니다.")
+        if not app_step.deploy(project_root, app_dir):
+            raise RuntimeError("보호된 공용 프로그램 배포에 실패했습니다.")
+        # The deployed files inherit root RX for ordinary accounts. An
+        # untrusted owner or explicit child grant must still abort setup.
+        reasons = program_security.verify(root, policy)
+        if reasons:
+            raise RuntimeError("공용 프로그램 배포 후 ACL 검증 실패: " +
+                               "; ".join(reasons[:4]))
         ok("LocalAI 관리자: 이 계정 (%s)" % sid)
         return "admin"
 
     if policy.is_admin(sid, windows.token_group_sids()) or acl.is_elevated():
         if policy.notes.get("groups_pending"):
+            # Upgrade old installations, but never claim success until UAC
+            # and the inherited permission repair have both completed.
             script = windows.first_install_script(sid, root, app_dir)
-            if script and windows.run_as_admin(script, log=info):
-                policy.admins_group_sid = windows.group_sid(machine.ADMINS_GROUP)
-                policy.users_group_sid = windows.group_sid(machine.USERS_GROUP)
-                policy.notes.pop("groups_pending", None)
-                _write_policy(policy_path, policy)
-        if windows.lockable_root(root) and not acl.succeeded(
-                acl.run(windows.lock_root_command(root, policy), timeout=600)):
-            warn("공용 폴더 권한을 다시 맞추지 못했습니다: %s" % root)
-        app_step.deploy(project_root, app_dir)
+            if not script or not windows.run_as_admin(script, log=info):
+                raise RuntimeError("LocalAI 관리자 그룹 복구를 승인하지 않았습니다.")
+            policy.admins_group_sid = windows.group_sid(machine.ADMINS_GROUP)
+            policy.users_group_sid = windows.group_sid(machine.USERS_GROUP)
+            policy.notes.pop("groups_pending", None)
+            if not _write_policy(policy_path, policy):
+                raise RuntimeError("관리 정책 갱신에 실패했습니다.")
+        # Reapply the same protection to pre-existing explicit child grants.
+        program_security.ensure(root, policy, log=info)
+        if not app_step.deploy(project_root, app_dir):
+            raise RuntimeError("보호된 공용 프로그램 업데이트에 실패했습니다.")
+        reasons = program_security.verify(root, policy)
+        if reasons:
+            raise RuntimeError("프로그램 업데이트 후 ACL 검증 실패: " +
+                               "; ".join(reasons[:4]))
         return "admin"
 
     info("공용 프로그램과 실행환경은 LocalAI 관리자가 관리합니다. "
