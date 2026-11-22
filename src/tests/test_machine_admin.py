@@ -328,6 +328,22 @@ def test_an_ordinary_accounts_setup_leaves_shared_permissions_alone(tmp_path, mo
     assert not any('/grant' in command for command in ran), ran
 
 
+def test_ordinary_account_setup_does_not_create_missing_shared_runtime_dirs(monkeypatch, tmp_path):
+    from installer.core import filesystem as fs
+    env = tmp_path / "environment"
+    store = tmp_path / "models"
+    account = tmp_path / "users" / "second"
+    monkeypatch.setattr(fs, "ensure_private_account", lambda p: True)
+    monkeypatch.setattr(fs, "repair_stale_children", lambda p: [])
+    monkeypatch.setattr(fs, "protect_existing_records", lambda p: None)
+    fs.create_environment(env, model_dir=store, account_root=account,
+                          manage_shared=False)
+    assert account.is_dir()
+    assert (account / "workspace").is_dir()
+    assert not env.exists(), "no ordinary account can create the shared environment"
+    assert not (env / "desktop-runtime.lock").exists()
+
+
 def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
     """LOCAL_AI_ROOT can point anywhere; cutting inheritance there must not."""
     system = tmp_path / 'Windows'
