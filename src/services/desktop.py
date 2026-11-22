@@ -167,6 +167,17 @@ class DesktopServices:
         search_ok = self._stop('search', self.search)
         if not agent_ok or not chat_ok or not search_ok:
             return False
+        # Some Agent sessions explicitly start SearXNG via the legacy runner.
+        # Release that owned container only AFTER both Chat and Agent finish.
+        search_release = getattr(self.backend, 'agent_search_stop', None)
+        if callable(search_release):
+            try:
+                if not search_release():
+                    return False
+            except Exception as exc:
+                self.events.emit('runtime.error',
+                                 {'service': 'agent.search', 'detail': str(exc)})
+                return False
         self.network.mode = None
         return True
 
