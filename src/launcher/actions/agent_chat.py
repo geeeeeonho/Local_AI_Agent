@@ -140,6 +140,31 @@ def _match_installed_model(tag: str, p: Presenter) -> str | None:
             free = None
         host = "127.0.0.1:" + str(getattr(config, "OLLAMA_PORT", 11434))
         matched, note = model_roles.auto_match_installed(tag, role_name, free, host=host)
+        # Agent role selection is automatic, unlike an explicit Chat tag.
+        # When Ollama is idle, prefer a role-compatible installed model that
+        # can stay entirely on the GPU. Do not evict a loaded model merely
+        # because nvidia-smi reports little remaining VRAM.
+        if role_name:
+            try:
+                from core.gpu_memory import detect_gpu_memory
+                from integrations.ollama.client import OllamaClient
+                idle = not OllamaClient("http://" + host, timeout=2).loaded_models()
+                if idle:
+                    gpu = detect_gpu_memory()
+                    present = model_roles.installed_models(host=host, timeout=2)
+                    if gpu is not None and present:
+                        gpu_choice = model_roles.resolve_ladder(
+                            role_name, free, installed=present,
+                            gpu_budget_gb=gpu.budget_gib)
+                        if gpu_choice:
+                            matched = next((item for item in present
+                                           if item.casefold() == gpu_choice.casefold()),
+                                           gpu_choice)
+                            if matched != tag:
+                                note = ("GPU 우선 자동 선택: " + matched +
+                                        " (VRAM 안전 여유 기준)")
+            except (OSError, ValueError, RuntimeError, TimeoutError):
+                pass
         if matched is None:
             p.error(note or "설치된 에이전트 모델이 없습니다 — RUN.bat --manage에서 모델을 설치하세요.")
             return None
