@@ -68,13 +68,11 @@ class OllamaService:
         # recording a pid there let a second signed-in user read the first
         # user's pid as their own and stop a server they had not started.
         state = Path(state_dir) if state_dir is not None else project_paths.LOGS_DIR
-        # This account's own fallback for the server log. The broker serves
-        # every account, so on Windows its output goes to the shared,
-        # write-only log instead (project_paths.ollama_log_dir()).
+        # A shared Ollama daemon serves more than one account. Its raw stdout
+        # cannot be assigned to one user, so never persist it on this machine.
+        # Per-account lifecycle diagnostics remain in encrypted lifelog records.
         self.private_log = state / "ollama_run.log"
-        self.log_file = self.private_log
-        if state_dir is None and _shared_log():
-            self.log_file = project_paths.ollama_log_dir() / "server.log"
+        self.log_file = None
         self.runtime_state_file = state / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
@@ -171,7 +169,8 @@ class OllamaService:
 
     def _state_pid(self) -> Optional[int]:
         try:
-            data = json.loads(self.runtime_state_file.read_text(encoding="utf-8"))
+            from core import vault
+            data = json.loads(vault.read_text(self.runtime_state_file))
             return int(data["pid"])
         except (OSError, ValueError, TypeError, KeyError):
             return None
@@ -524,9 +523,9 @@ class OllamaService:
             "port": int(config.OLLAMA_PORT),
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
-        temp = self.runtime_state_file.with_suffix(".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temp.replace(self.runtime_state_file)
+        from core import vault
+        vault.write_text_atomic(self.runtime_state_file,
+                                json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
     def _remove_runtime_state(self) -> None:
         try:
