@@ -144,6 +144,7 @@ def test_root_lock_for_an_existing_admin_needs_no_prompt():
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     from installer.steps import machine as step
+    from integrations.windows import program_security
     root = tmp_path / 'LocalAI'
     root.mkdir()
     calls = []
@@ -157,6 +158,9 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else None)
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: calls.append(('uac', script)) or True)
     monkeypatch.setattr(step.app_step, 'deploy', lambda source, target: calls.append(('deploy', target)) or True)
+    monkeypatch.setattr(program_security, 'verify', lambda root, policy: [])
+    monkeypatch.setattr(program_security, 'ensure',
+                        lambda root, policy, **kw: calls.append(('protect', root)) or True)
     return step, root, calls
 
 
@@ -165,18 +169,18 @@ def test_the_first_installer_becomes_administrator_with_one_prompt(setup):
     assert step.current_role(root) == 'admin'
     assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
     kinds = [call[0] for call in calls]
-    assert kinds == ['deploy', 'uac'], 'the program is in place before the shortcut points at it'
+    assert kinds == ['uac', 'deploy'], 'executable files must not be deployed before UAC'
     policy = machine.load(root / machine.POLICY_FILENAME)
     assert policy.admins == (ME,) and policy.admins_group_sid == GROUP
 
 
-def test_declining_the_prompt_still_records_the_admin_and_locks_what_it_can(setup, monkeypatch):
+def test_declining_the_prompt_aborts_without_deploying_or_recording_admin(setup, monkeypatch):
     step, root, calls = setup
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: False)
-    assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
-    policy = machine.load(root / machine.POLICY_FILENAME)
-    assert policy.notes.get('groups_pending') is True
-    assert ('acl', ['icacls', str(root), '/inheritance:r']) in calls
+    with pytest.raises(RuntimeError, match='관리자 승인'):
+        step.ensure(root, root / 'app', Path('/checkout'))
+    assert not (root / machine.POLICY_FILENAME).exists()
+    assert all(call[0] != 'deploy' for call in calls)
 
 
 def test_another_account_is_an_ordinary_user_and_changes_nothing_shared(setup, monkeypatch):
@@ -192,7 +196,38 @@ def test_a_later_admin_setup_keeps_the_program_current_without_a_prompt(setup):
     (root / machine.POLICY_FILENAME).write_text(
         machine.new_policy(ME, admins_group_sid=GROUP).to_json(), encoding='utf-8')
     assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
-    assert [call[0] for call in calls] == ['acl', 'deploy']
+    assert [call[0] for call in calls] == ['protect', 'deploy']
+
+
+def test_unregistered_other_account_cannot_finish_an_unprotected_install(setup, monkeypatch):
+    step, root, calls = setup
+    monkeypatch.setattr(acl, 'owner_sid', lambda path: OTHER)
+    with pytest.raises(RuntimeError, match='아직 LocalAI 관리자'):
+        step.ensure(root, root / 'app', Path('/checkout'))
+    assert not calls
+
+
+def test_acl_inspection_failure_blocks_deployment(setup, monkeypatch):
+    step, root, calls = setup
+    from integrations.windows import program_security
+    monkeypatch.setattr(program_security, 'verify',
+                        lambda root, policy: ['DACL: unexpected Users Modify'])
+    with pytest.raises(RuntimeError, match='ACL 검증'):
+        step.ensure(root, root / 'app', Path('/checkout'))
+    assert all(call[0] != 'deploy' for call in calls)
+
+
+def test_existing_admin_acl_repair_failure_never_updates_program(setup, monkeypatch):
+    step, root, calls = setup
+    from integrations.windows import program_security
+    (root / machine.POLICY_FILENAME).write_text(
+        machine.new_policy(ME, admins_group_sid=GROUP).to_json(), encoding='utf-8')
+    def fail(*args, **kwargs):
+        raise RuntimeError('ACL repair failed')
+    monkeypatch.setattr(program_security, 'ensure', fail)
+    with pytest.raises(RuntimeError, match='ACL repair failed'):
+        step.ensure(root, root / 'app', Path('/checkout'))
+    assert all(call[0] != 'deploy' for call in calls)
 
 
 def test_a_group_member_is_an_administrator_too(setup, monkeypatch):
