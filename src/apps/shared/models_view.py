@@ -301,6 +301,40 @@ def _tree_frame(parent, columns, headings, widths, height):
     return wrapper
 
 
+def _gpu_panel(side, w):
+    """Read-only, percentage-based VRAM inspector for one highlighted model."""
+    frame = ttk.Frame(side)
+    frame.pack(fill='x', pady=(0, 12))
+    ttk.Label(frame, text='GPU · 모델 적합도', style='Section.TLabel').pack(anchor='w')
+    w.gpu_hardware_line = tk.StringVar(master=w.root, value='GPU 정보 조회 전')
+    ttk.Label(frame, textvariable=w.gpu_hardware_line, style='Muted.TLabel',
+              wraplength=222, justify='left').pack(anchor='w', pady=(3, 4))
+    ttk.Button(frame, text='GPU 분석 새로고침', command=w.refresh_gpu_advisor).pack(
+        anchor='w', pady=(0, 5))
+    w.gpu_selected_model = tk.StringVar(master=w.root, value='모델 카드를 선택하세요')
+    ttk.Label(frame, textvariable=w.gpu_selected_model, style='Manage.Card.TLabel',
+              wraplength=222, justify='left').pack(anchor='w', pady=(3, 6))
+
+    w.gpu_bars = {}
+    for key, title in (
+        ('used', '현재 GPU 사용량 (실측)'),
+        ('model', '선택 모델 예상 VRAM'),
+        ('projected', '함께 적재할 경우 예상 총량'),
+    ):
+        ttk.Label(frame, text=title, style='Muted.TLabel').pack(anchor='w')
+        bar = ttk.Progressbar(frame, mode='determinate', maximum=100)
+        bar.pack(fill='x', pady=(2, 0))
+        number = tk.StringVar(master=w.root, value='확인 전')
+        ttk.Label(frame, textvariable=number, style='Muted.TLabel').pack(
+            anchor='e', pady=(0, 5))
+        w.gpu_bars[key] = (bar, number)
+    w.gpu_fit_note = tk.StringVar(master=w.root,
+        value='설치 체크와 VRAM 적재는 별개입니다. 한 번에 한 모델만 예측합니다.')
+    ttk.Label(frame, textvariable=w.gpu_fit_note, style='Muted.TLabel',
+              wraplength=222, justify='left').pack(anchor='w')
+    ttk.Separator(side).pack(fill='x', pady=(0, 8))
+
+
 def _scroll_frame(parent, w):
     """Catalog on the left, always-visible compact uncatalogued models at right."""
     outer = ttk.Frame(parent)
@@ -312,9 +346,10 @@ def _scroll_frame(parent, w):
     w.page_scrolls['models.choose'] = scroller
     w.choice_body = scroller.body
 
-    side = ttk.Frame(outer, padding=(7, 4), width=190)
+    side = ttk.Frame(outer, padding=(7, 4), width=245)
     side.grid(row=0, column=1, sticky='nsew')
     side.grid_propagate(False)
+    _gpu_panel(side, w)
     ttk.Label(side, text='별도 설치 모델', style='Section.TLabel').pack(anchor='w')
     ttk.Label(side, text='카탈로그 밖의 설치 모델', style='Muted.TLabel',
               wraplength=175, justify='left').pack(anchor='w', pady=(3, 8))
@@ -375,8 +410,8 @@ def _choose(parent, w):
         ('전체 해제', lambda: w.set_selection('none'), None, False),
         ('목록 새로고침', w.load_catalog, None, False))))
     layout.fixed(lambda box: _note(box,
-        '기본 예산 20GB에서는 상·중 5종을 권장하며 작은 예산에서는 더 적게 선택합니다. '
-        '하 단계는 필요할 때 직접 체크하세요. '
+        '권장 모델은 가능한 경우 GPU의 총 VRAM과 안전 여유를 기준으로 고릅니다. '
+        '모델 카드의 [GPU에서 보기]를 누르면 오른쪽에 적재 예상량을 표시합니다. '
         '이미 설치된 모델은 기본 세트를 다시 선택해도 유지합니다. '
         '설치 상태와 앞으로 적용할 체크 상태는 서로 다릅니다.'),
         pad=(0, 6))
