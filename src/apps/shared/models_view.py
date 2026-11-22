@@ -12,7 +12,7 @@ Ollama still owns the store.
 import tkinter as tk
 from tkinter import ttk
 
-from .widgets import PanelHost, ScrollArea, note, set_text, text_box, wrap_to_parent
+from .widgets import PanelHost, ScrollArea, Disclosure, note, set_text, text_box, wrap_to_parent
 
 
 def model_display_name(tag, limit=35):
@@ -145,7 +145,7 @@ class Stack:
         self.row = 0
         parent.columnconfigure(0, weight=1)
 
-    def fixed(self, build, *, pad=(0, 10)):
+    def fixed(self, build, *, pad=(0, 5)):
         """One row that keeps the height it asks for, whatever else happens.
 
         "Asks for" is re-read whenever the widget changes, not frozen at build
@@ -174,7 +174,7 @@ class Stack:
         self.row += 1
         return widget
 
-    def grows(self, build, *, pad=(0, 8)):
+    def grows(self, build, *, pad=(0, 4)):
         """The one row that absorbs and gives up space."""
         widget = build(self.parent)
         widget.grid(row=self.row, column=0, sticky='nsew', pady=pad)
@@ -302,37 +302,74 @@ def _tree_frame(parent, columns, headings, widths, height):
 
 
 def _gpu_panel(side, w):
-    """Read-only, percentage-based VRAM inspector for one highlighted model."""
-    frame = ttk.Frame(side)
-    frame.pack(fill='x', pady=(0, 12))
-    ttk.Label(frame, text='GPU · 모델 적합도', style='Section.TLabel').pack(anchor='w')
-    w.gpu_hardware_line = tk.StringVar(master=w.root, value='GPU 정보 조회 전')
-    ttk.Label(frame, textvariable=w.gpu_hardware_line, style='Muted.TLabel',
-              wraplength=222, justify='left').pack(anchor='w', pady=(3, 4))
-    ttk.Button(frame, text='GPU 분석 새로고침', command=w.refresh_gpu_advisor).pack(
-        anchor='w', pady=(0, 5))
-    w.gpu_selected_model = tk.StringVar(master=w.root, value='모델 카드를 선택하세요')
-    ttk.Label(frame, textvariable=w.gpu_selected_model, style='Manage.Card.TLabel',
-              wraplength=222, justify='left').pack(anchor='w', pady=(3, 6))
+    """VRAM in three comparable 100% bars, always independent of install choices."""
+    frame=ttk.Frame(side)
+    frame.pack(fill='x',pady=(0,7))
+    top=ttk.Frame(frame)
+    top.pack(fill='x')
+    ttk.Label(top,text='GPU 메모리',style='Section.TLabel').pack(side='left')
+    ttk.Button(top,text='↻',width=2,command=w.refresh_gpu_advisor).pack(side='right')
+    w.gpu_hardware_line=tk.StringVar(master=w.root,value='GPU 확인 전')
+    ttk.Label(frame,textvariable=w.gpu_hardware_line,style='Muted.TLabel',
+              wraplength=207,justify='left').pack(anchor='w',pady=(2,4))
+    w.gpu_selected_model=tk.StringVar(master=w.root,value='모델을 선택하세요')
+    ttk.Label(frame,textvariable=w.gpu_selected_model,style='Manage.Card.TLabel',
+              wraplength=207,justify='left').pack(anchor='w',pady=(0,6))
 
-    w.gpu_bars = {}
-    for key, title in (
-        ('used', '현재 GPU 사용량 (실측)'),
-        ('model', '선택 모델 예상 VRAM'),
-        ('projected', '함께 적재할 경우 예상 총량'),
+    w.gpu_bars={}
+    for key,title in (
+        ('used','현재 사용'),('model','선택 모델'),('projected','추가 적재 시'),
     ):
-        ttk.Label(frame, text=title, style='Muted.TLabel').pack(anchor='w')
-        bar = ttk.Progressbar(frame, mode='determinate', maximum=100)
-        bar.pack(fill='x', pady=(2, 0))
-        number = tk.StringVar(master=w.root, value='확인 전')
-        ttk.Label(frame, textvariable=number, style='Muted.TLabel').pack(
-            anchor='e', pady=(0, 5))
-        w.gpu_bars[key] = (bar, number)
-    w.gpu_fit_note = tk.StringVar(master=w.root,
-        value='설치 체크와 VRAM 적재는 별개입니다. 한 번에 한 모델만 예측합니다.')
-    ttk.Label(frame, textvariable=w.gpu_fit_note, style='Muted.TLabel',
-              wraplength=222, justify='left').pack(anchor='w')
-    ttk.Separator(side).pack(fill='x', pady=(0, 8))
+        info=ttk.Frame(frame);info.pack(fill='x')
+        ttk.Label(info,text=title,style='Muted.TLabel').pack(side='left')
+        number=tk.StringVar(master=w.root,value='확인 전')
+        ttk.Label(info,textvariable=number,style='Muted.TLabel').pack(side='right')
+        bar=ttk.Progressbar(frame,mode='determinate',maximum=100)
+        bar.pack(fill='x',pady=(2,6))
+        w.gpu_bars[key]=(bar,number)
+
+    w.gpu_fit_note=tk.StringVar(master=w.root,
+        value='모델의 GPU 적재량은 선택해서 확인합니다.')
+    ttk.Label(frame,textvariable=w.gpu_fit_note,style='Muted.TLabel',
+              wraplength=207,justify='left').pack(anchor='w')
+    ttk.Separator(side).pack(fill='x',pady=(5,7))
+
+
+def _selection_toolbar(parent, w):
+    """Simple default choice with optional batch selection tools."""
+    frame=ttk.Frame(parent)
+    main=ttk.Frame(frame)
+    main.pack(fill='x')
+    _button(main, '권장 세트', lambda: w.set_selection('recommended'), 'Manage')
+    _button(main, '새로고침', w.load_catalog)
+    details=ttk.Frame(frame)
+    expanded=[False]
+    def toggle():
+        expanded[0]=not expanded[0]
+        if expanded[0]:
+            details.pack(fill='x',pady=(3,0))
+        else:
+            details.pack_forget()
+        more.configure(text='전체 선택 · 해제 ▾' if expanded[0] else '전체 선택 · 해제 ▸')
+    more=ttk.Button(main,text='전체 선택 · 해제 ▸',
+                    style='Manage.Details.TButton',command=toggle)
+    more.pack(side='right')
+    _button(details,'전체 선택',lambda:w.set_selection('all'))
+    _button(details,'전체 해제',lambda:w.set_selection('none'))
+    return frame
+
+
+def _disk_toolbar(parent, w):
+    """Advanced disk repair actions should never overflow the header."""
+    frame=ttk.Frame(parent)
+    _bar(frame, (
+        ('인덱스 갱신',w.refresh_models,'Manage',False),
+        ('모델 고르기',lambda:w.model_tabs.select(w.model_pages['choose']),None,False)))
+    disclosure=Disclosure(frame,'저장소 · 공용 설정')
+    _bar(disclosure.body, (
+        ('모든 계정 공용으로 고치기',w.repair_sharing,'Manage',False),
+        ('일반 Ollama 경로 연결',w.connect_external_ollama,'Manage',False)))
+    return frame
 
 
 def _scroll_frame(parent, w):
@@ -346,21 +383,38 @@ def _scroll_frame(parent, w):
     w.page_scrolls['models.choose'] = scroller
     w.choice_body = scroller.body
 
-    side = ttk.Frame(outer, padding=(7, 4), width=245)
+    side = ttk.Frame(outer, padding=(7, 4), width=240)
     side.grid(row=0, column=1, sticky='nsew')
     side.grid_propagate(False)
     _gpu_panel(side, w)
-    ttk.Label(side, text='별도 설치 모델', style='Section.TLabel').pack(anchor='w')
-    ttk.Label(side, text='카탈로그 밖의 설치 모델', style='Muted.TLabel',
-              wraplength=175, justify='left').pack(anchor='w', pady=(3, 8))
+
+    w.uncatalogued_expanded=False
     w.uncatalogued_panel = ScrollArea(side)
     w.uncatalogued_body = w.uncatalogued_panel.body
     w.uncatalogued_managed_body = ttk.Frame(w.uncatalogued_body)
     w.uncatalogued_managed_body.pack(fill='x')
     w.uncatalogued_external_body = ttk.Frame(w.uncatalogued_body)
     w.uncatalogued_external_body.pack(fill='x')
-    w.uncatalogued_panel.frame.configure(height=200)
-    w.uncatalogued_panel.bind_content()
+    w.uncatalogued_panel.frame.configure(height=160)
+    w.uncatalogued_panel.frame.pack_forget()
+    def toggle_more():
+        w.uncatalogued_expanded=not w.uncatalogued_expanded
+        if w.uncatalogued_expanded:
+            w.uncatalogued_panel.frame.pack(fill='both',expand=True)
+            w.uncatalogued_panel.bind_content()
+        else:
+            w.uncatalogued_panel.frame.pack_forget()
+        more.configure(text='기타 설치 모델 ▾' if w.uncatalogued_expanded
+                       else '기타 설치 모델 ▸')
+    more=ttk.Button(side,text='기타 설치 모델 ▸',
+                    style='Manage.Details.TButton',command=toggle_more)
+    more.pack(fill='x',anchor='w')
+    # On a narrow window return some width to the actual model catalogue.
+    def size_side(event):
+        wanted=205 if event.width<700 else 240
+        if int(side.cget('width'))!=wanted:
+            side.configure(width=wanted)
+    outer.bind('<Configure>',size_side,add='+')
     return outer
 
 
@@ -372,7 +426,7 @@ def build(parent, w):
              ('disk', '디스크 사용량', _disk))
     w.model_pages = {}
     for key, title, builder in pages:
-        page = ttk.Frame(w.model_tabs, padding=(6, 14))
+        page = ttk.Frame(w.model_tabs, padding=(5, 7))
         w.model_tabs.add(page, text=title)
         w.model_pages[key] = page
         builder(page, w)
@@ -404,17 +458,10 @@ def _stack(parent, w):
 
 def _choose(parent, w):
     layout = Stack(parent)
-    layout.fixed(lambda box: _bar(box, (
-        ('권장 세트', lambda: w.set_selection('recommended'), 'Manage', False),
-        ('전체 선택', lambda: w.set_selection('all'), None, False),
-        ('전체 해제', lambda: w.set_selection('none'), None, False),
-        ('목록 새로고침', w.load_catalog, None, False))))
+    layout.fixed(lambda box: _selection_toolbar(box,w),pad=(0,3))
     layout.fixed(lambda box: _note(box,
-        '권장 모델은 가능한 경우 GPU의 총 VRAM과 안전 여유를 기준으로 고릅니다. '
-        '모델 카드의 [GPU에서 보기]를 누르면 오른쪽에 적재 예상량을 표시합니다. '
-        '이미 설치된 모델은 기본 세트를 다시 선택해도 유지합니다. '
-        '설치 상태와 앞으로 적용할 체크 상태는 서로 다릅니다.'),
-        pad=(0, 6))
+        '체크 = 설치 또는 유지 · GPU에서 보기는 모델 실행 예상량만 확인합니다.'),
+        pad=(0,3))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,
     # so the header shares one row and gives the rest back.
@@ -433,20 +480,12 @@ def _choose(parent, w):
     w.apply_button = layout.fixed(lambda box: _apply_row(box, w)).buttons[0]
     w.model_progress_text = tk.StringVar(master=w.root, value='대기')
     layout.fixed(lambda box: _progress_row(box, w), pad=(0, 6))
-    # One line, not three. The rule is the whole explanation; the rest was
-    # detail that cost the list two more rows every time the screen opened.
-    layout.fixed(lambda box: _note(box,
-        '체크 = 있어야 함 · 체크하면 설치하고, 설치된 모델의 체크를 풀면 삭제합니다.'),
-        pad=(0, 4))
+
 
 
 def _disk(parent, w):
     layout = Stack(parent)
-    layout.fixed(lambda box: _bar(box, (
-        ('인덱스 갱신', w.refresh_models, 'Manage', False),
-        ('모델 고르기', lambda: w.model_tabs.select(w.model_pages['choose']), None, False),
-        ('모든 계정 공용으로 고치기', w.repair_sharing, 'Manage', False),
-        ('일반 Ollama 경로 연결', w.connect_external_ollama, 'Manage', False))))
+    layout.fixed(lambda box:_disk_toolbar(box,w),pad=(0,4))
     w.model_summary = tk.StringVar(master=w.root, value=str(w.services.model_dir))
     layout.fixed(lambda box: _label(box, w.model_summary), pad=(0, 4))
     # Whether every Windows account can really use this store is a fact about
