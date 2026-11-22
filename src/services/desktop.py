@@ -45,16 +45,15 @@ class DesktopServices:
                 (data / name).mkdir(parents=True, exist_ok=True)
             return
 
-        privacy = None
-        try:
-            from integrations.windows import privacy as privacy_module
-            privacy = privacy_module
-            # Fix the account DACL before creating children. This matters for a
-            # normal user who just created users/<account> through the parent-
-            # only creation grant.
-            privacy.ensure_private(account)
-        except Exception:
-            pass
+        from integrations.windows import privacy
+        from core import vault
+        # 개인정보 폴더 ACL을 확인할 수 없거나 수리할 수 없으면 실행을 중단합니다.
+        # 이 검증이 누락되면 Windows의 상속 권한으로 다른 계정에서 읽을 수 있습니다.
+        locked = privacy.ensure_private(account)
+        if locked is not True:
+            raise RuntimeError('현재 Windows 계정의 개인 폴더 접근 권한을 검증하지 못했습니다. '
+                               'Setup / Repair에서 계정별 폴더 권한을 복구한 후 다시 시작하세요.')
+        vault.require_private_record_encryption(data)
 
         try:
             data.mkdir(parents=True, exist_ok=True)
@@ -83,13 +82,10 @@ class DesktopServices:
                     raise RuntimeError(
                         "현재 계정의 상태 폴더를 쓸 수 없습니다: %s" % folder
                     ) from exc
-            if privacy is not None:
-                try:
-                    # Always cover existing children too: the exact failure seen in
-                    # production is runtime-state.json.lock, not the directory.
-                    privacy.make_private(folder)
-                except Exception:
-                    pass
+            # 이전 버전의 잘못된 ACL을 기존 파일까지 복구합니다.
+            # 실패한 경우 민감 정보 저장을 허용하지 않습니다.
+            if privacy.ensure_private(folder) is not True:
+                raise RuntimeError('개인 상태 폴더 보안 검증 실패: %s. Setup / Repair를 실행하세요.' % folder)
 
     def __init__(self, *, project_root, env, model_dir, data=None, backend=None):
         self.project_root, self.env, self.model_dir = map(Path, (project_root, env, model_dir))
