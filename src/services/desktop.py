@@ -22,15 +22,13 @@ from services.records import SessionStores
 class DesktopServices:
     @staticmethod
     def _prepare_private_state(data: Path) -> None:
-        """Repair small per-account state folders before any JsonStore opens.
+        """Prepare each account's private state before any personal storage opens.
 
-        A stale lock created by an elevated/older run can deny the normal token
-        even when the account root itself is correctly private. Runtime/settings/
-        projects are small control-state trees, so recursively normalising their
-        ACLs here is cheap. Per-account runtime/settings/project locks stay in
-        this private tree; the model mutation lock is machine-wide beside the
-        shared model store and is deliberately not prepared here.
+        In Windows, ACL validation and the account-bound DPAPI key must be
+        available. A failure is fatal, never a silent plaintext fallback.
         """
+        import os
+
         data = Path(data)
         account = data.parent
         try:
@@ -41,60 +39,54 @@ class DesktopServices:
                 "관리자 또는 기존 설치 계정에서 Setup을 한 번 실행해 "
                 "C:\\LocalAI\\users 공용 부모 권한을 갱신하세요." % account
             ) from exc
-        if __import__('os').name != 'nt':
-            data.mkdir(parents=True, exist_ok=True)
-            if privacy.ensure_private(data) is not True:
-            raise RuntimeError('개인 데이터 폴더 보안 검증 실패: %s' % data)
-        # 로그는 user_data 밖에 있지만 반드시 같은 계정의 개인 영역입니다.
-        personal_logs = account / 'logs'
-        personal_logs.mkdir(parents=True, exist_ok=True)
-        if privacy.ensure_private(personal_logs) is not True:
-            raise RuntimeError('개인 로그 폴더 보안 검증 실패: %s' % personal_logs)
 
-        for name in ('runtime', 'settings', 'projects'):
+        # Test/developer platforms do not use Windows ACL or DPAPI.
+        if os.name != 'nt':
+            data.mkdir(parents=True, exist_ok=True)
+            for name in ('runtime', 'settings', 'projects'):
                 (data / name).mkdir(parents=True, exist_ok=True)
             return
 
         from integrations.windows import privacy
         from core import vault
-        # 개인정보 폴더 ACL을 확인할 수 없거나 수리할 수 없으면 실행을 중단합니다.
-        # 이 검증이 누락되면 Windows의 상속 권한으로 다른 계정에서 읽을 수 있습니다.
-        locked = privacy.ensure_private(account)
-        if locked is not True:
-            raise RuntimeError('현재 Windows 계정의 개인 폴더 접근 권한을 검증하지 못했습니다. '
-                               'Setup / Repair에서 계정별 폴더 권한을 복구한 후 다시 시작하세요.')
-        vault.require_private_record_encryption(data)
+
+        if privacy.ensure_private(account) is not True:
+            raise RuntimeError(
+                '현재 Windows 계정의 개인 폴더 접근 권한을 확인하지 못했습니다. '
+                'Setup / Repair에서 계정별 ACL을 복구하세요: %s' % account)
 
         try:
             data.mkdir(parents=True, exist_ok=True)
         except PermissionError:
-            try:
-                # 이미 검증한 계정 경로에 대해서만 수리를 시도합니다.
-                privacy.make_private(account)
-                data.mkdir(parents=True, exist_ok=True)
-            except Exception as exc:
+            if not privacy.make_private(account):
+                raise RuntimeError('계정 폴더 권한 복구 실패: %s' % account)
+            data.mkdir(parents=True, exist_ok=True)
+
+        # Both user_data and logs are private; logs live alongside user_data,
+        # never in a machine-shared top-level log folder.
+        personal_logs = account / 'logs'
+        personal_logs.mkdir(parents=True, exist_ok=True)
+        for folder in (data, personal_logs):
+            if privacy.ensure_private(folder) is not True:
                 raise RuntimeError(
-                    "현재 계정의 user_data 폴더를 쓸 수 없습니다: %s" % data
-                ) from exc
+                    '개인 데이터/로그 폴더의 ACL 검증 실패: %s. '
+                    'Setup / Repair를 실행하세요.' % folder)
+
+        vault.require_private_record_encryption(data)
+        vault.require_private_record_encryption(personal_logs)
 
         for name in ('runtime', 'settings', 'projects'):
             folder = data / name
             try:
                 folder.mkdir(parents=True, exist_ok=True)
             except PermissionError:
-                try:
-                    if privacy is None:
-                        raise RuntimeError("Windows ACL helper is unavailable")
-                    privacy.make_private(data)
-                    folder.mkdir(parents=True, exist_ok=True)
-                except Exception as exc:
-                    raise RuntimeError(
-                        "현재 계정의 상태 폴더를 쓸 수 없습니다: %s" % folder
-                    ) from exc
-            # 이전 버전의 잘못된 ACL을 기존 파일까지 복구합니다.
-            # 실패한 경우 민감 정보 저장을 허용하지 않습니다.
+                if not privacy.make_private(data):
+                    raise RuntimeError('상태 폴더 권한 복구 실패: %s' % data)
+                folder.mkdir(parents=True, exist_ok=True)
             if privacy.ensure_private(folder) is not True:
-                raise RuntimeError('개인 상태 폴더 보안 검증 실패: %s. Setup / Repair를 실행하세요.' % folder)
+                raise RuntimeError(
+                    '개인 상태 폴더 보안 검증 실패: %s. '
+                    'Setup / Repair를 실행하세요.' % folder)
 
     def __init__(self, *, project_root, env, model_dir, data=None, backend=None):
         self.project_root, self.env, self.model_dir = map(Path, (project_root, env, model_dir))
