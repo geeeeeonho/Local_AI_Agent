@@ -227,7 +227,8 @@ class ModelService:
             # Remote tags occupy no disk, so the store never sees them; report
             # them separately rather than letting them look like local models.
             'cloud_installed': sorted(tag for tag in present if is_cloud_tag(tag)),
-            'plan': {key: list(tags) for key, tags in catalog.plan_by_level(budget).items()},
+            'plan': {key: [tag for tag in tags if tag in recommended]
+                     for key, tags in catalog.plan_by_level(budget).items()},
             'levels': [(key, catalog.level_label(key)) for key in catalog.LEVEL_KEYS],
         }
 
