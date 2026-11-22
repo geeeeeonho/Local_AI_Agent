@@ -26,12 +26,35 @@ class ModelService:
         self.inference.ensure_ready()
         return self.client.list_models()
 
+    def management_access(self, *, refresh=False):
+        """Whether this account may install/remove models here, and why not."""
+        from integrations import model_access
+        return model_access.management_access(self.model_dir, refresh=refresh)
+
     def refresh_index(self):
+        # MODEL_INDEX.json/MODEL_FILES.csv live in the shared store, which only
+        # administrators may write. Everyone else reads the store directly.
+        if not self.management_access()['allowed']:
+            return None
         return index.refresh(self.model_dir, log=lambda message:
                              self.events.emit('runtime.progress', {'service': 'models', 'message': message}))
 
+    def require_management(self, name=None):
+        from integrations import model_access
+        try:
+            model_access.require_management(self.model_dir)
+        except PermissionError as exc:
+            message = str(exc) or model_access.DENIED
+            self.events.emit('runtime.error', {
+                'service': 'models', 'model': name, 'detail': message,
+            })
+            raise RuntimeError(message) from exc
+
     def _change(self, name, operation):
         name = model_name(name) if operation == 'remove' else local_model_name(name)
+        # Checked before the lock, the broker or any download: an ordinary
+        # account must not even start a change the ACL would refuse midway.
+        self.require_management(name)
         try:
             with file_lock(self.lock_path, timeout=0):
                 self.inference.ensure_ready()
@@ -66,7 +89,8 @@ class ModelService:
         except PermissionError as exc:
             message = (
                 "공용 모델 관리 경로를 쓸 권한이 없습니다: %s. "
-                "Setup의 설치 / 복구를 실행해 모델 저장소 권한을 갱신하세요."
+                "모델 변경은 LocalAI 관리자 계정에서만 할 수 있습니다. 관리자인데도 "
+                "이 메시지가 보이면 [설치 / 복구]로 모델 저장소 권한을 다시 보호하세요."
                 % self.lock_path.parent
             )
             self.events.emit('runtime.error', {
@@ -389,18 +413,23 @@ class ModelService:
         """
         from integrations.ollama import sharing
         state = sharing.read(self.model_dir)
+        access = self.management_access()
         return {'path': state.path, 'every_account': state.every_account,
                 'readable_by_users': state.readable_by_users,
                 'manageable_by_users': state.manageable_by_users,
-                'blockers': list(state.blockers), 'repairable': state.repairable,
+                'blockers': list(state.blockers),
+                'repairable': state.repairable and access['allowed'],
+                'can_manage': access['allowed'], 'manage_reason': access['reason'],
                 'reasons': list(sharing.describe(state))}
 
     def repair_sharing(self):
-        """Grant shared model-management access. Idempotent."""
+        """Readable by every account, writable only by administrators. Idempotent."""
         from integrations.ollama import sharing
+        self.require_management(None)
         result = sharing.repair(self.model_dir)
         after = result['after']
         payload = {'path': result['path'], 'every_account': result['every_account'],
+                   'can_manage': True, 'manage_reason': '',
                    'readable_by_users': after.readable_by_users,
                    'manageable_by_users': after.manageable_by_users,
                    'blockers': list(result['blockers']),

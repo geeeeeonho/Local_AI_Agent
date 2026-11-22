@@ -156,6 +156,9 @@ def setup(tmp_path, monkeypatch):
                         or types.SimpleNamespace(returncode=0, stdout='', stderr=''))
     monkeypatch.setattr(windows, 'token_group_sids', lambda: set())
     monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else None)
+    # LocalAI-Admins as Windows lists it now (the first-install UAC adds ME).
+    monkeypatch.setattr(windows, 'group_member_sids',
+                        lambda name: {ME} if name == machine.ADMINS_GROUP else set())
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: calls.append(('uac', script)) or True)
     monkeypatch.setattr(step.app_step, 'deploy', lambda source, target: calls.append(('deploy', target)) or True)
     monkeypatch.setattr(program_security, 'verify', lambda root, policy: [])
@@ -323,6 +326,7 @@ def test_an_ordinary_accounts_setup_leaves_shared_permissions_alone(tmp_path, mo
     monkeypatch.setattr('integrations.ollama.sharing._run', lambda command, **kw: ran.append(command)
                         or types.SimpleNamespace(returncode=0))
     monkeypatch.setattr(filesystem, 'repair_stale_children', lambda account: [])
+    (tmp_path / 'users').mkdir()   # the administrator's Setup made the parent
     filesystem.create_environment(tmp_path / 'env', model_dir=tmp_path / 'models',
                                   account_root=tmp_path / 'users' / 'T', manage_shared=False)
     assert not any('/grant' in command for command in ran), ran
@@ -336,12 +340,88 @@ def test_ordinary_account_setup_does_not_create_missing_shared_runtime_dirs(monk
     monkeypatch.setattr(fs, "ensure_private_account", lambda p: True)
     monkeypatch.setattr(fs, "repair_stale_children", lambda p: [])
     monkeypatch.setattr(fs, "protect_existing_records", lambda p: None)
+    (tmp_path / "users").mkdir()
+    store.mkdir()   # the administrator's store, read-only for this account
     fs.create_environment(env, model_dir=store, account_root=account,
                           manage_shared=False)
     assert account.is_dir()
     assert (account / "workspace").is_dir()
     assert not env.exists(), "no ordinary account can create the shared environment"
     assert not (env / "desktop-runtime.lock").exists()
+    assert not (store / ".localai").exists(), "the shared model control plane is admin-only"
+    assert list(store.iterdir()) == []
+
+
+def test_ordinary_account_setup_needs_the_administrators_users_parent(monkeypatch, tmp_path):
+    from installer.core import filesystem as fs
+    monkeypatch.setattr(fs, "ensure_private_account", lambda p: True)
+    with pytest.raises(RuntimeError, match="관리자"):
+        fs.create_environment(tmp_path / "environment", model_dir=tmp_path / "models",
+                              account_root=tmp_path / "users" / "second",
+                              manage_shared=False)
+    assert not (tmp_path / "users").exists()
+
+
+def test_admins_only_the_file_lists_are_dropped_before_granting_full_control(setup, monkeypatch):
+    step, root, calls = setup
+    from integrations.windows import program_security
+    seen = []
+    monkeypatch.setattr(program_security, 'ensure',
+                        lambda root, policy, **kw: seen.append(policy) or True)
+    tampered = machine.new_policy(ME, admins_group_sid=GROUP).with_admin(OTHER)
+    (root / machine.POLICY_FILENAME).write_text(tampered.to_json(), encoding='utf-8')
+    assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
+    assert seen and OTHER not in seen[0].admin_sids()
+    assert machine.load(root / machine.POLICY_FILENAME).admins == (ME,), 'file cleaned'
+
+
+def test_a_listed_sid_outside_the_group_is_an_ordinary_user(setup, monkeypatch):
+    step, root, calls = setup
+    (root / machine.POLICY_FILENAME).write_text(
+        machine.new_policy(OTHER, admins_group_sid=GROUP).with_admin(ME).to_json(), encoding='utf-8')
+    monkeypatch.setattr(windows, 'group_member_sids', lambda name: {OTHER})
+    assert step.current_role(root) == 'user'
+    assert step.ensure(root, root / 'app', Path('/checkout')) == 'user'
+    assert calls == []
+
+
+def test_a_legacy_install_is_repaired_only_through_uac_for_this_account(setup, monkeypatch):
+    step, root, calls = setup
+    legacy = machine.new_policy(ME).with_admin(OTHER)
+    legacy.notes['groups_pending'] = True
+    (root / machine.POLICY_FILENAME).write_text(legacy.to_json(), encoding='utf-8')
+    assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
+    assert [call[0] for call in calls][:1] == ['uac']
+    repaired = machine.load(root / machine.POLICY_FILENAME)
+    assert repaired.admins == (ME,) and repaired.admins_group_sid == GROUP
+    assert 'groups_pending' not in repaired.notes
+
+
+def test_a_legacy_install_whose_uac_is_declined_changes_nothing(setup, monkeypatch):
+    step, root, calls = setup
+    legacy = machine.new_policy(ME)
+    legacy.notes['groups_pending'] = True
+    (root / machine.POLICY_FILENAME).write_text(legacy.to_json(), encoding='utf-8')
+    monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: False)
+    with pytest.raises(RuntimeError, match='승인'):
+        step.ensure(root, root / 'app', Path('/checkout'))
+    assert all(call[0] != 'deploy' for call in calls)
+
+
+def test_reconcile_keeps_only_what_windows_vouches_for():
+    policy = machine.new_policy(ME, admins_group_sid='S-1-5-32-545',
+                                users_group_sid='S-1-5-32-545').with_admin(OTHER)
+    policy.access = machine.ACCESS_MEMBERS
+    trusted = machine.reconcile(policy, admins_group_sid=GROUP, users_group_sid=None,
+                                admin_members={ME.lower()})
+    assert trusted.admins == (ME,)
+    assert trusted.admins_group_sid == GROUP
+    assert trusted.principal() == 'S-1-5-32-545' and trusted.users_group_sid is None
+    unknown = machine.reconcile(policy, admins_group_sid=GROUP, users_group_sid=None,
+                                admin_members=None)
+    assert unknown.admins == (), 'unknown membership keeps nobody'
+    assert machine.reconcile(None, admins_group_sid=None, users_group_sid=None,
+                             admin_members=None) is None
 
 
 def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
@@ -355,3 +435,14 @@ def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
     assert not windows.lockable_root(system)
     assert not windows.lockable_root(tmp_path / 'Users'), 'holds every profile'
     assert not windows.lockable_root(tmp_path), 'would include the Windows folder'
+
+
+def test_group_members_are_read_by_sid_and_unreadable_is_unknown(monkeypatch):
+    out = types.SimpleNamespace(returncode=0, stdout='noise S-1-5-21-0-0-0-9\nmembers=%s,%s\n'
+                                % (ME, OTHER), stderr='')
+    monkeypatch.setattr(windows, 'run_script', lambda script, **kw: out)
+    assert windows.group_member_sids(machine.ADMINS_GROUP) == {ME.upper(), OTHER.upper()}
+    assert windows.group_member_sids('Administrators') is None, 'only the two LocalAI groups'
+    monkeypatch.setattr(windows, 'run_script', lambda script, **kw:
+                        types.SimpleNamespace(returncode=1, stdout='', stderr='x'))
+    assert windows.group_member_sids(machine.ADMINS_GROUP) is None

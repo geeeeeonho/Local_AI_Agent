@@ -28,7 +28,9 @@ class AccountAdmin:
 
     # ── reading ──────────────────────────────────────────────────────────
     def _policy(self) -> Optional[machine.Policy]:
-        return machine.load(self.policy_path)
+        # Only administrators Windows itself confirms (LocalAI-Admins
+        # membership, live group SIDs) - never a SID machine.json merely lists.
+        return windows.trusted_policy(machine.load(self.policy_path))
 
     def _identity(self):
         return acl.current_user_sid(), windows.token_group_sids()

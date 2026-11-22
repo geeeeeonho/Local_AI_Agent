@@ -1466,11 +1466,13 @@ class DesktopWindow(TranslationController, ToolsController):
             self.sharing_summary.set(self.SHARING_UNKNOWN);return
         every=state.get('every_account')
         if every is True:
-            text='이 PC의 모든 Windows 계정이 같은 모델 저장소를 함께 관리합니다.'
+            text='이 PC의 모든 Windows 계정이 같은 모델을 사용합니다 · 설치·삭제는 LocalAI 관리자만 합니다.'
         elif every is None:
             text=self.SHARING_UNKNOWN
         else:
-            text='공용 모델 관리 설정이 완전하지 않습니다. '+' '.join(state.get('reasons') or ())
+            text='공용 모델 저장소 보호가 완전하지 않습니다. '+' '.join(state.get('reasons') or ())
+        if state.get('can_manage') is False:
+            text+=' · '+(state.get('manage_reason') or '이 계정은 모델을 바꿀 수 없습니다.')
         self.sharing_summary.set(text)
         button=getattr(self,'sharing_button',None)
         if button is not None:
@@ -1482,9 +1484,9 @@ class DesktopWindow(TranslationController, ToolsController):
         def done(result):
             self.show_sharing(result)
             if result.get('every_account') is True:
-                self.log('공용 설정을 고쳤습니다: '+result['path'])
+                self.log('모델 저장소를 보호했습니다 (읽기: 모든 계정 · 변경: 관리자): '+result['path'])
             else:
-                self.log('공용 설정을 끝내지 못했습니다. 관리자 권한으로 다시 시도하세요. '
+                self.log('모델 저장소 보호를 끝내지 못했습니다. LocalAI 관리자 계정에서 다시 시도하세요. '
                          +' '.join(result.get('reasons') or ()),level='error')
         self.run_task('models.sharing',self.services.models.repair_sharing,done)
 
@@ -1511,6 +1513,16 @@ class DesktopWindow(TranslationController, ToolsController):
 
     def apply_selection(self):
         if self.runner.busy('models.apply'):return
+        # Only a LocalAI administrator changes the shared store. Say so before
+        # computing a plan, starting Ollama or downloading anything.
+        check=getattr(self.services.models,'management_access',None)
+        if callable(check):
+            try:access=check(refresh=True)
+            except Exception as exc:access={'allowed':False,'reason':'권한 확인 실패: '+str(exc)}
+            if not access.get('allowed',True):
+                reason=access.get('reason') or '이 계정은 모델을 설치·삭제할 수 없습니다.'
+                if hasattr(self,'choice_plan'):self.choice_plan.set(reason)
+                self.log(reason,level='error');return
         try:plan=self.services.models.plan_changes(self.selected_tags(),installed=self.catalog_installed())
         except Exception as exc:self.log('선택 계산 실패: '+str(exc),level='error');return
         if not plan['install'] and not plan['remove']:

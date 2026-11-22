@@ -78,10 +78,13 @@ class SetupService:
         return self.backend.restart_ollama_for_store(log=self._models_log)
 
     def install_model(self, name):
+        # Refuse an ordinary account before any broker start or Ollama install.
+        self.models.require_management(name)
         self.ensure_model_runtime(download=True)
         return self.models.install_model(name)
 
     def remove_model(self, name):
+        self.models.require_management(name)
         self.ensure_model_runtime(download=False)
         return self.models.remove_model(name)
 

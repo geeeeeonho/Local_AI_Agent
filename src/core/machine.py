@@ -132,6 +132,37 @@ def load(path) -> Optional[Policy]:
         return None
 
 
+def reconcile(policy: Optional[Policy], *, admins_group_sid: Optional[str],
+              users_group_sid: Optional[str],
+              admin_members: Optional[Iterable[str]]) -> Optional[Policy]:
+    """The policy as far as Windows itself vouches for it.
+
+    ``machine.json`` only *remembers* decisions. Anyone who could ever write it
+    (an old install whose root still inherited ``Authenticated Users: Modify``,
+    for instance) could have added a SID or pointed a group field at
+    ``BUILTIN\\Users``. Both group SIDs are therefore replaced by the live SIDs
+    of the local groups - only a Windows administrator can create or fill
+    those - and a directly listed administrator is kept only while Windows
+    reports that SID as a member of ``LocalAI-Admins``. Unknown membership
+    (``admin_members`` is None) keeps nobody: failing closed costs a UAC
+    prompt, failing open hands out full control of the program.
+    """
+    if policy is None:
+        return None
+    members = {str(sid).upper() for sid in (admin_members or ())}
+    admins_group = admins_group_sid if is_sid(admins_group_sid) else None
+    users_group = users_group_sid if is_sid(users_group_sid) else None
+    admins = tuple(sid for sid in policy.admins
+                   if admins_group and sid.upper() in members)
+    access = policy.access
+    if access == ACCESS_MEMBERS and not users_group:
+        access = ACCESS_EVERYONE
+    return Policy(admins=admins, access=access, admins_group_sid=admins_group,
+                  users_group_sid=users_group, created_by=policy.created_by,
+                  created_at=policy.created_at, schema=policy.schema,
+                  notes=dict(policy.notes))
+
+
 def first_admin_candidate(owner: Optional[str], user_sid: Optional[str]) -> bool:
     """May this account become the first administrator?
 
@@ -149,4 +180,4 @@ def first_admin_candidate(owner: Optional[str], user_sid: Optional[str]) -> bool
 
 __all__ = ['ADMINS_GROUP', 'USERS_GROUP', 'ACCESS_EVERYONE', 'ACCESS_MEMBERS',
            'POLICY_FILENAME', 'Policy', 'new_policy', 'parse', 'load', 'is_sid',
-           'first_admin_candidate']
+           'first_admin_candidate', 'reconcile']

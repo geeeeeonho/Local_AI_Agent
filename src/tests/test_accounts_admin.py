@@ -31,6 +31,11 @@ def machine_root(tmp_path, monkeypatch):
     monkeypatch.setattr(acl, 'on_windows', lambda windows=None: True)
     monkeypatch.setattr(acl, 'current_user_sid', lambda: ME)
     monkeypatch.setattr(windows, 'token_group_sids', lambda: set())
+    # Windows vouches for both groups and for every admin listed in the file.
+    monkeypatch.setattr(windows, 'group_sid', lambda name: {
+        machine.ADMINS_GROUP: ADMINS, machine.USERS_GROUP: USERS}.get(name))
+    monkeypatch.setattr(windows, 'group_member_sids', lambda name: (
+        set(state['admins']) if name == machine.ADMINS_GROUP else set(state['members'])))
     monkeypatch.setattr(windows, 'list_accounts', lambda: {
         'users': [{'name': 'ghwork', 'sid': ME, 'disabled': False},
                   {'name': 'bob', 'sid': BOB, 'disabled': False}],
@@ -72,8 +77,10 @@ def test_making_an_administrator_changes_the_group_the_policy_and_the_acl(machin
     assert '다시 로그인' in message
     assert state['calls'][0][0] == 'uac' and ("WinNT://%s" % BOB) in state['calls'][0][1]
     assert machine.load(root / machine.POLICY_FILENAME).is_admin(BOB)
-    lock = state['calls'][-1][1]
+    acl_calls = [call[1] for call in state['calls'] if call[0] == 'acl']
+    lock = acl_calls[-1]
     assert lock[:3] == ['icacls', str(root), '/inheritance:r'] and '*%s:(OI)(CI)F' % BOB in lock
+    assert state['calls'][-1][0] == 'protect', 'program files re-protected after the role change'
 
 
 def test_removing_an_administrator_also_removes_their_explicit_grant(machine_root):
@@ -123,7 +130,9 @@ def test_limiting_access_moves_every_shared_grant_to_the_group(machine_root):
     removed = [c for c in commands if '/remove:g' in c]
     granted = ' '.join(' '.join(c) for c in commands)
     assert all(c[3] == '*S-1-5-32-545' for c in removed) and len(removed) == 6
-    for place, rights in (('models', '(OI)(CI)(M)'), ('environment', '(OI)(CI)(RX)'),
+    # The model store is read-only for allowed accounts: only admins change it.
+    assert '(M)' not in granted
+    for place, rights in (('models', '(OI)(CI)(RX)'), ('environment', '(OI)(CI)(RX)'),
                           ('users', '(RD,X,AD,RA,REA)')):
         assert '*%s:%s' % (USERS, rights) in granted, place
     assert machine.load(root / machine.POLICY_FILENAME).principal() == USERS
@@ -135,11 +144,10 @@ def test_limiting_access_moves_every_shared_grant_to_the_group(machine_root):
     assert any(c[3] == '*' + USERS for c in (call[1] for call in state['calls']) if '/remove:g' in c)
 
 
-def test_without_the_users_group_access_cannot_be_limited(machine_root):
+def test_without_the_users_group_access_cannot_be_limited(machine_root, monkeypatch):
     root, state = machine_root
-    policy = machine.load(root / machine.POLICY_FILENAME)
-    policy.users_group_sid = None
-    (root / machine.POLICY_FILENAME).write_text(policy.to_json(), encoding='utf-8')
+    # What counts is the group on this machine, not a SID the file remembers.
+    monkeypatch.setattr(windows, 'group_sid', lambda name: ADMINS if name == machine.ADMINS_GROUP else None)
     with pytest.raises(RuntimeError, match='LocalAI-Users'):
         AccountAdmin(root).set_access(machine.ACCESS_MEMBERS)
 
@@ -156,3 +164,26 @@ def test_records_folder_matches_the_accounts_own_folder_name():
     from core import accounts
     from pathlib import Path
     assert admin_module.folder_for(Path('/r'), '홍길동') == Path('/r') / 'users' / accounts.slug('홍길동')
+
+
+def test_a_sid_only_the_file_lists_is_not_an_administrator(machine_root, monkeypatch):
+    """machine.json may once have been writable; Windows group membership decides."""
+    root, state = machine_root
+    policy = machine.load(root / machine.POLICY_FILENAME).with_admin(BOB)
+    (root / machine.POLICY_FILENAME).write_text(policy.to_json(), encoding='utf-8')
+    monkeypatch.setattr(acl, 'current_user_sid', lambda: BOB)
+    assert not AccountAdmin(root).is_admin()
+    with pytest.raises(RuntimeError, match='관리자만'):
+        AccountAdmin(root).set_access(machine.ACCESS_MEMBERS)
+    assert state['calls'] == []
+
+
+def test_a_group_field_pointed_at_everyone_is_replaced_by_the_real_group(machine_root):
+    root, state = machine_root
+    policy = machine.load(root / machine.POLICY_FILENAME)
+    policy.admins_group_sid = 'S-1-5-32-545'   # BUILTIN\Users: "everyone is admin"
+    (root / machine.POLICY_FILENAME).write_text(policy.to_json(), encoding='utf-8')
+    AccountAdmin(root).set_admin(BOB, True)
+    protected = [call[1] for call in state['calls'] if call[0] == 'protect']
+    assert protected and all('S-1-5-32-545' not in p.admin_sids() for p in protected)
+    assert ADMINS in protected[-1].admin_sids()

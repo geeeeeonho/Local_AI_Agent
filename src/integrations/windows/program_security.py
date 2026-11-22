@@ -1,13 +1,15 @@
-"""Windows security boundary for the shared LocalAI *program*, not user data.
+"""Windows security boundary for everything LocalAI shares, not user data.
 
-Only administrators may replace code or runtimes in C:\\LocalAI\\app,
-C:\\LocalAI\\environment and C:\\LocalAI\\ollama. The model library deliberately
-remains writable by users under the existing model-sharing contract.
+Only administrators may replace code, runtimes or models in
+C:\\LocalAI\\app, C:\\LocalAI\\environment, C:\\LocalAI\\ollama and
+C:\\LocalAI\\models. Every allowed account reads and runs them; a standard
+account that could change a model manifest or blob would change what every
+other account's assistant runs, so the model library is protected too.
 
 The protection script is run through UAC; it takes ownership of protected
 objects, removes *all* pre-existing explicit permissions on the shared root,
-and resets stale ACLs on protected program subtrees. Never traverse models
-or users: their permissions are separate and must not be changed here.
+and resets stale ACLs on protected subtrees. It never traverses users:
+private account folders keep their own permissions.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from pathlib import Path
 from core import machine, sddl
 from . import acl, privacy
 
-_PROTECTED = ("app", "environment", "ollama")
+_PROTECTED = ("app", "environment", "ollama", "models")
 _ADMINISTRATORS = privacy.ADMINISTRATORS_SID
 _SYSTEM = privacy.SYSTEM_SID
 _MUTATING_RIGHTS = (
@@ -57,6 +59,8 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
         "$localaiRoot = " + _quote(root),
         "$localaiProtected = @(" + ", ".join(
             _quote(root / name) for name in _PROTECTED) + ")",
+        # Scoped: lines after this block (shortcuts) keep their own handling.
+        "$localaiPreviousPreference = $ErrorActionPreference",
         "$ErrorActionPreference = 'Stop'",
         "try {",
         "  $rootNode = Get-Item -LiteralPath $localaiRoot -Force",
@@ -121,7 +125,8 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
         _quote("*" + principal + ":(R,W)") + " /Q 2>&1 | Out-Null",
         "    if ($LASTEXITCODE -ne 0) { throw 'Unable to restore runtime lock access' }",
         "  }",
-        "} catch { Write-Error $_; $failed = 1 }",
+        "} catch { Write-Error $_ -ErrorAction Continue; $failed = 1 }",
+        "finally { $ErrorActionPreference = $localaiPreviousPreference }",
     ]
     return lines
 
@@ -203,7 +208,11 @@ def verify(root, policy: machine.Policy):
     targets.extend((root / machine.POLICY_FILENAME,
                     root / "app" / "RUN.bat",
                     root / "app" / "src",
-                    root / "ollama" / "ollama.exe"))
+                    root / "ollama" / "ollama.exe",
+                    root / "models" / ".localai",
+                    root / "models" / ".localai" / "registry.json",
+                    root / "models" / "manifests",
+                    root / "models" / "blobs"))
     reasons = []
     for path in targets:
         if not path.exists() and not path.is_symlink():

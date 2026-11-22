@@ -4,10 +4,13 @@ The managed library lives at ``C:\\LocalAI\\models``. Every LocalAI broker is
 started with that path explicitly, so per-user or machine-scope
 ``OLLAMA_MODELS`` registry values do not decide LocalAI sharing.
 
-For LocalAI accounts, sharing requires two facts:
+For LocalAI accounts, sharing requires three facts:
 
 * the library is the machine-wide LocalAI store, not a profile-local path;
-* ``BUILTIN\\Users`` can read and modify the model store.
+* the accounts allowed to use LocalAI can read it;
+* those accounts can **not** modify it. Installing and removing models is a
+  LocalAI administrator's job: a standard account that could replace a
+  manifest or blob would change the model every other account runs.
 
 Standalone Ollama compatibility is handled separately when LocalAI publishes
 ``OLLAMA_MODELS``; it is not part of the LocalAI sharing state.
@@ -26,7 +29,7 @@ VARIABLE = 'OLLAMA_MODELS'
 NOT_SHARED_PATH = 'not_shared_path'
 PER_USER_PATH = 'per_user_path'
 NOT_READABLE = 'not_readable'
-NOT_MANAGEABLE = 'not_manageable'
+USERS_CAN_MODIFY = 'users_can_modify'
 
 
 # ── reading an ACL without depending on the display language ─────────────
@@ -53,7 +56,10 @@ def readable_from_sddl(descriptor: str, principal: Optional[str] = None) -> Opti
 
 
 def manageable_from_sddl(descriptor: str, principal: Optional[str] = None) -> Optional[bool]:
-    """Can the allowed accounts manage model-store children? None if unparsable."""
+    """Can the allowed (non-admin) accounts modify the store? None if unparsable.
+
+    ``True`` is a *security finding*: only administrators may change models.
+    """
     return sddl.modify_access(descriptor, _principals(principal))
 
 
@@ -82,8 +88,8 @@ class Sharing:
             found.append(NOT_SHARED_PATH)
         if self.windows and self.readable_by_users is False:
             found.append(NOT_READABLE)
-        elif self.windows and self.manageable_by_users is False:
-            found.append(NOT_MANAGEABLE)
+        if self.windows and self.manageable_by_users is True:
+            found.append(USERS_CAN_MODIFY)
         return tuple(found)
 
     @property
@@ -109,7 +115,7 @@ class Sharing:
         Offered when something is wrong that we may fix, and also when we
         could not read the ACL: the model-access repair is idempotent.
         """
-        fixable = {NOT_READABLE, NOT_MANAGEABLE}
+        fixable = {NOT_READABLE, USERS_CAN_MODIFY}
         blockers = set(self.blockers)
         if blockers:
             return blockers <= fixable

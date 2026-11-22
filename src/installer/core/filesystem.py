@@ -20,15 +20,15 @@ RUNTIME_LOCK_NAME = "desktop-runtime.lock"
 
 
 def ensure_shared_model_access(model_dir: Path, windows: Optional[bool] = None) -> bool:
-    """모든 로컬 사용자가 공용 모델을 설치/삭제할 권한을 보장한다.
+    """공용 모델 저장소: 모든 허용 계정은 읽기/실행, 변경은 LocalAI 관리자만.
 
-    environment/ollama는 RX 전용을 유지하고, 실제로 공유 변경되는 models에만
-    BUILTIN\\Users Modify를 부여한다.
+    예전 설치가 남긴 ``BUILTIN\\Users`` Modify 권한도 제거한다. 모델 설치·삭제,
+    manifest/blob, registry와 mutation lock 변경은 관리자 계정만 할 수 있다.
     """
     from integrations.ollama import sharing
-    if sharing.ensure_manageable(model_dir, windows=windows):
+    if sharing.ensure_read_only(model_dir, windows=windows):
         return True
-    warn("공용 모델 폴더 수정 권한 설정 실패")
+    warn("공용 모델 폴더 읽기 전용 권한 설정 실패")
     return False
 
 
@@ -130,7 +130,12 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
     # otherwise only the installer/admin account can ever get its own private
     # users/<account> folder.
     users_root = account.parent
-    users_root.mkdir(parents=True, exist_ok=True)
+    if manage_shared:
+        users_root.mkdir(parents=True, exist_ok=True)
+    elif not users_root.is_dir():
+        raise RuntimeError(
+            "공용 사용자 폴더가 없습니다: %s. LocalAI 관리자 계정에서 먼저 "
+            "RUN.bat --install을 실행하세요." % users_root)
     if manage_shared and not ensure_accounts_parent_access(users_root):
         warn("다른 Windows 계정의 사용자 폴더 생성 권한을 설정하지 못했습니다: %s" % users_root)
 
@@ -204,31 +209,34 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
             raise
         ok(f"  {name:<20} → {p}")
 
-    # 공용 런타임/Ollama는 실행만 공유한다. models만 모든 계정이
-    # 설치/삭제할 수 있는 machine-wide mutable state다.
+    # 공용 런타임/Ollama/모델 저장소는 모두 읽기·실행만 공유한다. 변경은
+    # LocalAI 관리자 Setup과 관리자 계정의 Models 화면만 할 수 있다.
     if manage_shared:
         ensure_shared_runtime_access((env, paths["ollama"]))
 
-    # Canonical LocalAI store: widen only this subtree before creating the
-    # shared control files, so a standard second account can repair/use it.
     if model_dir is None and manage_shared:
         ensure_shared_model_access(models)
 
     model_control = model_control_dir(models)
     registry = model_registry_path(models)
     mutation_lock = model_mutation_lock_path(models)
-    try:
-        model_control.mkdir(parents=True, exist_ok=True)
-        if not registry.exists():
-            # Do not silently choose one account's per-account registry.
-            registry.write_text("{}\n", encoding="utf-8")
-        if not mutation_lock.exists():
-            mutation_lock.write_bytes(b"\0")
-    except OSError as exc:
-        raise RuntimeError(
-            "공용 모델 관리 폴더를 준비할 수 없습니다: %s (%s)" %
-            (model_control, exc)
-        ) from exc
+    if manage_shared:
+        try:
+            model_control.mkdir(parents=True, exist_ok=True)
+            if not registry.exists():
+                # Do not silently choose one account's per-account registry.
+                registry.write_text("{}\n", encoding="utf-8")
+            if not mutation_lock.exists():
+                mutation_lock.write_bytes(b"\0")
+        except OSError as exc:
+            raise RuntimeError(
+                "공용 모델 관리 폴더를 준비할 수 없습니다: %s (%s)" %
+                (model_control, exc)
+            ) from exc
+    elif not model_control.is_dir():
+        # A standard account only reads the shared control plane. Its absence
+        # is an administrator's Setup to run, never this account's to create.
+        warn("공용 모델 관리 폴더가 없습니다 (관리자 Setup 필요): %s" % model_control)
     paths["model_control"] = model_control
     paths["model_registry"] = registry
     paths["model_mutation_lock"] = mutation_lock
