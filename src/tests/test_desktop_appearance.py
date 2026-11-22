@@ -17,7 +17,7 @@ from test_desktop_services import make  # noqa: E402
 def test_theme_default_does_not_create_settings(tmp_path):
     from core.settings.store import SettingsStore
     path = tmp_path / 'settings.json'
-    assert SettingsStore(path).theme() == 'dark'
+    assert SettingsStore(path).theme() == 'light'
     assert not path.exists()
 
 
@@ -106,11 +106,11 @@ def test_theme_switch_updates_raw_widgets_without_losing_text_or_session(ui):
     session = object()
     w.agent_session = session
     previous = box.cget('background')
-    w.theme_choice.set('light')
+    w.theme_choice.set('dark')
     w.save_theme()
     pump(w, lambda: not w.runner.busy('appearance.save'))
-    assert svc.settings.theme() == 'light'
-    assert w.theme.name == 'light'
+    assert svc.settings.theme() == 'dark'
+    assert w.theme.name == 'dark'
     assert box.cget('background') != previous
     assert w.pages['chat'] is page and w.chat_text is box and w.hosts['agent'].frame is host
     assert box.get('1.0', 'end-1c') == 'existing conversation\nkeep this'
@@ -161,10 +161,10 @@ def test_all_apps_restore_theme_before_display(tmp_path, app):
 def test_theme_refreshes_from_another_window_without_runtime_changes(ui):
     from core.settings.store import SettingsStore
     w, svc, backend = ui
-    SettingsStore(svc.settings.store.path).set_theme('light')
+    SettingsStore(svc.settings.store.path).set_theme('dark')
     w.sync_theme()
     pump(w, lambda: not w.runner.busy('appearance.sync'))
-    assert w.theme.name == 'light'
+    assert w.theme.name == 'dark'
     assert not backend.calls
 
 

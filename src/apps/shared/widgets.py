@@ -7,7 +7,7 @@ from core.window_size import (MINIMUM_SIZE, PREFERRED_SIZE,
                               centred_geometry, fitted_size)
 
 
-def theme(root, name='dark'):
+def theme(root, name='light'):
     controller = getattr(root, '_localai_theme', None)
     if controller is None:
         return ThemeController(root, name)
@@ -40,14 +40,14 @@ def wrap_to_parent(label, *, inset=40, minimum=280):
 
 def heading(parent, title, description, kind=None):
     title_style = kind + '.Title.TLabel' if kind else 'Title.TLabel'
-    ttk.Label(parent,text=title,style=title_style).pack(anchor='w',pady=(0,6))
+    ttk.Label(parent,text=title,style=title_style).pack(anchor='w',pady=(0,3))
     text=ttk.Label(parent,text=description,style='Muted.TLabel',wraplength=760,justify='left')
-    text.pack(anchor='w',pady=(0,22));wrap_to_parent(text)
+    text.pack(anchor='w',pady=(0,9));wrap_to_parent(text)
 
 
 def note(parent, text, *, side='top'):
     label=ttk.Label(parent,text=text,style='Muted.TLabel',wraplength=780,justify='left')
-    label.pack(anchor='w',pady=(5,12),side=side,fill='x')
+    label.pack(anchor='w',pady=(3,7),side=side,fill='x')
     return wrap_to_parent(label)
 
 
@@ -166,6 +166,40 @@ class PanelHost:
             self._hide(self.frame)
 
 
+class Disclosure:
+    """Reusable progressive-disclosure panel for secondary controls.
+
+    All child widgets are built once and retained while collapsed; forms keep
+    their values, bindings and validation. A hidden option is still reachable
+    through a keyboard-focusable button.
+    """
+    def __init__(self, parent, title, *, expanded=False):
+        self.title = title
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill='x', pady=(2, 5))
+        self.button = ttk.Button(
+            self.frame, style='Manage.Details.TButton', command=self.toggle)
+        self.button.pack(anchor='w', fill='x')
+        self.body = ttk.Frame(self.frame, padding=(8, 5, 4, 8))
+        self.expanded = not expanded
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded):
+        expanded = bool(expanded)
+        if self.expanded != expanded:
+            if expanded:
+                self.body.pack(fill='x')
+            else:
+                self.body.pack_forget()
+        self.expanded = expanded
+        self.button.configure(
+            text=('▼  ' if expanded else '▶  ') +
+                 self.title + (' 접기' if expanded else ' 펼치기'))
+
+    def toggle(self):
+        self.set_expanded(not self.expanded)
+
+
 class ScrollArea:
     """Keep static forms/actions reachable on small screens and high-DPI text.
 
@@ -174,6 +208,8 @@ class ScrollArea:
     """
     def __init__(self, parent, *, place=True):
         self.frame = ttk.Frame(parent)
+        # An outer ScrollArea must not bind wheel handlers into nested areas.
+        self.frame._localai_scroll_owner = self
         # ``place=False`` leaves the frame for a grid-managed parent to position;
         # packing into one is a Tk error, not a layout preference.
         if place:
@@ -241,6 +277,9 @@ class ScrollArea:
         """
         bound = self._bound
         def visit(widget):
+            if widget is not self.canvas and getattr(
+                    widget, '_localai_scroll_owner', self) is not self:
+                return
             key = str(widget)
             if key not in bound:
                 bound.add(key)
@@ -254,6 +293,9 @@ class ScrollArea:
         # Widgets destroyed since the last pass must not keep their names alive.
         alive = set()
         def collect(widget):
+            if widget is not self.canvas and getattr(
+                    widget, '_localai_scroll_owner', self) is not self:
+                return
             alive.add(str(widget))
             for child in widget.winfo_children():
                 collect(child)

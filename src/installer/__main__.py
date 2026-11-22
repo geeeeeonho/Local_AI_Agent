@@ -11,6 +11,7 @@ from installer import utils, resources, lang_setup
 from installer.steps import machine as machine_step
 from installer.steps import ollama
 from installer.steps import python_tools
+from installer.steps import llmfit as llmfit_step
 from installer.steps import sandbox
 from installer.steps import searxng
 from installer.steps import tor
@@ -105,6 +106,17 @@ def _run_install(args) -> int:
         utils.info("모델 다운로드 생략 (--skip-model)")
     else:
         utils.info("모델은 설치 완료 후 RUN.bat --manage > Models에서 선택하고 받습니다.")
+
+    # Optional, read-only fit analyzer. Never make core installation depend on it.
+    if role != "user":
+        if llmfit_step.install(paths, log=utils.info):
+            components.append("llmfit")
+        else:
+            skipped_components.append("llmfit")
+            utils.warn("LLMfit 준비 실패: 모델 카탈로그 추정값을 사용합니다.")
+    else:
+        skipped_components.append("llmfit")
+        utils.info("LLMfit 공용 설치는 LocalAI 관리자 Setup에서 진행합니다.")
 
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")

@@ -32,7 +32,7 @@ class DesktopWindow(TranslationController, ToolsController):
         try:
             appearance = services.settings.theme()
         except (OSError, ValueError) as exc:
-            appearance, appearance_error = 'dark', str(exc)
+            appearance, appearance_error = 'light', str(exc)
         self.theme = theme(self.root, appearance)
         self.theme_choice = tk.StringVar(master=self.root, value=appearance)
         self._appearance_generation = 0
@@ -54,12 +54,14 @@ class DesktopWindow(TranslationController, ToolsController):
         self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
         self._model_records = {};self._projects = {};self.project_boxes = []
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
+        self._gpu_advisor_snapshot = None; self._gpu_inspected_model = None
         self._model_confirm_signature = None
         self._accounts = {}
         self.current_page = None
         self.agent_panel = None;self.agent_session = None
         self._chat_progress = [];self._chat_starting = False
         self._setup_cancel = threading.Event()
+        self._activity_setup_temporary = False
         self.chat_state = tk.StringVar(master=self.root,
             value='준비 안 됨 · [Chat 시작]을 누르면 Network → Ollama → AnythingLLM 순으로 확인합니다.')
         self.agent_state = tk.StringVar(master=self.root,
@@ -83,41 +85,82 @@ class DesktopWindow(TranslationController, ToolsController):
 
     def _build(self):
         outer=ttk.Frame(self.root);outer.pack(fill='both',expand=True)
-        sidebar=ttk.Frame(outer,style='Sidebar.TFrame',width=235)
-        sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False)
-        ttk.Label(sidebar,text='LOCAL AI',style='Brand.TLabel').pack(anchor='w',padx=22,pady=(25,4))
-        ttk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),style='Sidebar.TLabel').pack(anchor='w',padx=23,pady=(0,22))
-        captions={'WORK':'\uc8fc\uc694 \uc791\uc5c5','MANAGE':'\ubaa8\ub378 \u00b7 \uc124\uce58 \uad00\ub9ac','GENERAL':'\ud658\uacbd \u00b7 \uc124\uc815'}
-        for group,keys in navigation_groups(self.app):
-            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',font=('Segoe UI',9,'bold')).pack(anchor='w',padx=22,pady=(8,8))
-            for key in keys:
-                b=ttk.Button(sidebar,text=LABELS[key],style=nav_style(key),command=lambda k=key:self.navigate(k))
-                b.pack(fill='x',padx=12,pady=3);self.nav[key]=b
-            ttk.Separator(sidebar).pack(fill='x',padx=20,pady=(14,6))
-        ttk.Label(sidebar,text='Shared services\nLocal data stays local',style='Sidebar.TLabel',
-                  justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=22,pady=18)
+        sidebar=ttk.Frame(outer,style='Sidebar.TFrame',width=198)
+        sidebar.pack(side='left',fill='y')
+        sidebar.pack_propagate(False)
+
+        # Fixed inventory summary below a scrollable navigation column.
+        # The navigation may grow when "더보기" is expanded or Windows DPI
+        # increases; no navigation button should be clipped off-window.
         if 'models' in self.spec.pages:
-            self.sidebar_models = ttk.Frame(sidebar, padding=(12, 7))
-            self.sidebar_models.pack(side='bottom', fill='both', expand=True)
-            heading = ttk.Frame(self.sidebar_models)
+            self.sidebar_models=ttk.Frame(sidebar,style='Sidebar.TFrame',
+                                          padding=(8,4))
+            self.sidebar_models.pack(side='bottom',fill='x')
+            self.sidebar_models_expanded=False
+            heading=ttk.Frame(self.sidebar_models,style='Sidebar.TFrame')
             heading.pack(fill='x')
-            ttk.Label(heading,text='설치된 모델',style='Sidebar.TLabel',
+            ttk.Label(heading,text='설치 모델',style='Sidebar.TLabel',
                       font=('Segoe UI',9,'bold')).pack(side='left')
-            ttk.Button(heading,text='↻',width=3,command=self.refresh_installed_summary).pack(side='right')
-            self.sidebar_model_count = tk.StringVar(master=self.root,value='조회 전')
+            ttk.Button(heading,text='↻',width=2,
+                       command=self.refresh_installed_summary).pack(side='right')
+            self.sidebar_models_toggle=ttk.Button(
+                heading,text='목록 ▸',command=self.toggle_sidebar_models)
+            self.sidebar_models_toggle.pack(side='right')
+            self.sidebar_model_count=tk.StringVar(master=self.root,value='조회 전')
             ttk.Label(self.sidebar_models,textvariable=self.sidebar_model_count,
-                      style='Muted.TLabel').pack(anchor='w',pady=(3,5))
-            self.sidebar_model_scroll = ScrollArea(self.sidebar_models)
-            self.sidebar_model_body = self.sidebar_model_scroll.body
+                      style='Sidebar.TLabel').pack(anchor='w',pady=(3,5))
+            self.sidebar_model_scroll=ScrollArea(self.sidebar_models)
+            self.sidebar_model_scroll.frame.pack_forget()
+            self.sidebar_model_body=self.sidebar_model_scroll.body
             ttk.Label(self.sidebar_model_body,text='모델 목록을 읽는 중...',
-                      style='Muted.TLabel',wraplength=185).pack(anchor='w')
+                      style='Muted.TLabel',wraplength=160).pack(anchor='w')
+
+        ttk.Label(sidebar,text='Local data stays local',style='Sidebar.TLabel',
+                  justify='left',font=('Segoe UI',9)).pack(
+                      side='bottom',anchor='w',padx=9,pady=5)
+        self.nav_scroll=ScrollArea(sidebar)
+        nav_body=self.nav_scroll.body
+        self.nav_scroll.frame.configure(style='Sidebar.TFrame')
+        nav_body.configure(style='Sidebar.TFrame')
+        themed(self.nav_scroll.canvas,background='sidebar')
+
+        ttk.Label(nav_body,text='LOCAL AI',style='Brand.TLabel').pack(
+            anchor='w',padx=15,pady=(10,2))
+        ttk.Label(nav_body,text=self.spec.title.replace('LocalAI ',''),
+                  style='Sidebar.TLabel').pack(
+                      anchor='w',padx=16,pady=(0,7))
+        captions={'WORK':'주요 작업','MANAGE':'모델 · 설치','GENERAL':'환경 · 설정'}
+        self.advanced_nav_frame=None
+        self.advanced_nav_visible=False
+        for group,keys in navigation_groups(self.app):
+            ttk.Label(nav_body,text=captions[group],style='Sidebar.TLabel',
+                      font=('Segoe UI',9,'bold')).pack(
+                          anchor='w',padx=16,pady=(3,2))
+            for key in keys:
+                if group=='GENERAL' and key!='home':
+                    if self.advanced_nav_frame is None:
+                        self.advanced_nav_toggle=ttk.Button(
+                            nav_body,text='더보기 ▸',style='Nav.TButton',
+                            command=self.toggle_advanced_navigation)
+                        self.advanced_nav_toggle.pack(fill='x',padx=8,pady=1)
+                        self.advanced_nav_frame=ttk.Frame(
+                            nav_body,style='Sidebar.TFrame')
+                    host=self.advanced_nav_frame
+                else:
+                    host=nav_body
+                widget=ttk.Button(host,text=LABELS[key],style=nav_style(key),
+                                  command=lambda k=key:self.navigate(k))
+                widget.pack(fill='x',padx=8,pady=1)
+                self.nav[key]=widget
+            ttk.Separator(nav_body).pack(fill='x',padx=13,pady=(4,2))
+        self.nav_scroll.bind_content()
         ttk.Separator(outer,orient='vertical').pack(side='left',fill='y')
         content=ttk.Frame(outer);content.pack(fill='both',expand=True)
-        header=ttk.Frame(content,padding=(24,16));header.pack(fill='x')
+        header=ttk.Frame(content,padding=(15,9));header.pack(fill='x')
         ttk.Label(header,text=self.spec.title,style='Section.TLabel').pack(side='left')
         ttk.Label(header,textvariable=self.health,style='Muted.TLabel').pack(side='right')
         ttk.Separator(content).pack(fill='x')
-        footer=ttk.Frame(content,padding=(18,8));footer.pack(side='bottom',fill='x')
+        footer=ttk.Frame(content,padding=(12,5));footer.pack(side='bottom',fill='x')
         # The toggle sits with the status line, not above the log, so the log's
         # own height is never what you have to click through to get it back.
         self.activity_button=ttk.Button(footer,width=12,command=self.toggle_activity)
@@ -135,7 +178,7 @@ class DesktopWindow(TranslationController, ToolsController):
                               selectbackground='selected',selectforeground='fg')
         self.activity.tag_configure('alert',foreground=self.theme.palette.danger)
         try:self._activity_visible=self.services.settings.activity_visible()
-        except (OSError,ValueError):self._activity_visible=True
+        except (OSError,ValueError):self._activity_visible=False
         self._apply_activity_visibility()
         self.page_area=ttk.Frame(content);self.page_area.pack(fill='both',expand=True)
         self._apply_activity_visibility()
@@ -154,12 +197,48 @@ class DesktopWindow(TranslationController, ToolsController):
             # area claims the remaining space with expand=True. Re-packed after
             # it, the log came back with nothing left to occupy and stayed
             # invisible - folding it was a one-way door.
-            options={'side':'bottom','fill':'x','padx':24,'pady':(4,0)}
+            options={'side':'bottom','fill':'x','padx':14,'pady':(3,0)}
             if getattr(self,'page_area',None) is not None:options['before']=self.page_area
             self.activity.pack(**options)
         elif self.activity.winfo_ismapped():
             self.activity.pack_forget()
         self.activity_button.configure(text='기록 접기' if self._activity_visible else '기록 펼치기')
+
+    def _set_advanced_navigation(self, shown):
+        frame=getattr(self,'advanced_nav_frame',None)
+        if frame is None or self.advanced_nav_visible == bool(shown):
+            return
+        self.advanced_nav_visible=bool(shown)
+        if shown:
+            frame.pack(after=self.advanced_nav_toggle,fill='x')
+        else:
+            frame.pack_forget()
+        self.advanced_nav_toggle.configure(
+            text='더보기 ▾' if shown else '더보기 ▸')
+        self.nav_scroll.bind_content()
+        if shown:
+            # Make the newly revealed settings reachable even at 880x560.
+            self.root.after_idle(lambda: self.nav_scroll.canvas.yview_moveto(1.0))
+        else:
+            self.root.after_idle(lambda: self.nav_scroll.canvas.yview_moveto(0.0))
+
+    def toggle_advanced_navigation(self):
+        self._set_advanced_navigation(not self.advanced_nav_visible)
+
+    def toggle_sidebar_models(self):
+        """The inventory summary stays visible, while the long list is optional."""
+        if not hasattr(self, 'sidebar_model_scroll'):
+            return
+        self.sidebar_models_expanded = not self.sidebar_models_expanded
+        if self.sidebar_models_expanded:
+            self.sidebar_models.pack_configure(fill='both', expand=True)
+            self.sidebar_model_scroll.frame.pack(fill='both', expand=True)
+            self.sidebar_models_toggle.configure(text='목록 ▾')
+            self.sidebar_model_scroll.bind_content()
+        else:
+            self.sidebar_model_scroll.frame.pack_forget()
+            self.sidebar_models.pack_configure(fill='x', expand=False)
+            self.sidebar_models_toggle.configure(text='목록 ▸')
 
     def _fit_activity(self,event=None):
         """Keep the log to its share of the window, in whole lines."""
@@ -173,6 +252,8 @@ class DesktopWindow(TranslationController, ToolsController):
             self.activity.configure(height=wanted)
 
     def toggle_activity(self):
+        # An explicit choice wins over any temporary Setup log expansion.
+        self._activity_setup_temporary=False
         self._activity_visible=not self._activity_visible
         self._apply_activity_visibility()
         self.runner.submit('activity.save',
@@ -184,6 +265,12 @@ class DesktopWindow(TranslationController, ToolsController):
             self.show_project_links()
             return
         if key not in self.pages: return
+        if key!='setup' and self._activity_setup_temporary:
+            self._activity_setup_temporary=False
+            self._activity_visible=False
+            self._apply_activity_visibility()
+        if key in ('network','system','settings'):
+            self._set_advanced_navigation(True)
         self.pages[key].tkraise();self.current_page=key
         for name,button in self.nav.items():
             button.configure(style=nav_style(name,name==key))
@@ -208,7 +295,7 @@ class DesktopWindow(TranslationController, ToolsController):
     def log(self,text,*,level='info'):
         # A failure used to look exactly like progress on the same muted line.
         text=str(text)
-        self.message.set(text[:220])
+        self.message.set(text[:90] + ('…' if len(text)>90 else ''))
         self.message_label.configure(style='Alert.TLabel' if level=='error' else 'Muted.TLabel')
         self.activity.configure(state='normal')
         start=self.activity.index('end-1c')
@@ -818,6 +905,85 @@ class DesktopWindow(TranslationController, ToolsController):
             % (int(result.get('on_disk') or 0),result.get('store') or ''),
             parent=self.root)
 
+    # Read-only GPU advisor; never changes install checkboxes or starts Ollama.
+    def refresh_gpu_advisor(self):
+        if hasattr(self, 'gpu_hardware_line'):
+            self.gpu_hardware_line.set('GPU / LLMfit 분석 중...')
+        self.run_task('models.gpu.advisor',
+                      self.services.models.gpu_advisor_snapshot,
+                      self.show_gpu_advisor, mutate=False, announce=False)
+
+    def show_gpu_advisor(self, snapshot):
+        self._gpu_advisor_snapshot = snapshot
+        self.update_gpu_advisor_view()
+
+    def inspect_model(self, tag):
+        self._gpu_inspected_model = str(tag)
+        self.update_gpu_advisor_view()
+
+    def update_gpu_advisor_view(self):
+        if not hasattr(self, 'gpu_bars'):
+            return
+        from services.models.advisor import fit_for, projection
+        from launcher.models import model_catalog
+        snapshot = self._gpu_advisor_snapshot or {}
+        tag = self._gpu_inspected_model
+        self.gpu_selected_model.set(
+            '모델: ' + model_display_name(tag, limit=30) if tag
+            else '모델 카드를 선택하세요')
+        entry = model_catalog.by_tag().get(tag) if tag else None
+        estimate = snapshot.get('estimates', {}).get(tag)
+        if estimate is None:
+            estimate = fit_for(tag, entry.memory_gb if entry else None)
+        loaded = {str(name).casefold() for name in snapshot.get('loaded_tags', ())}
+        same = bool(snapshot.get('loaded_known') and tag and tag.casefold() in loaded)
+        values = projection(snapshot.get('gpu'), estimate, same_model_loaded=same)
+        if not values['available']:
+            self.gpu_hardware_line.set(values['reason'])
+            for bar, variable in self.gpu_bars.values():
+                bar.configure(value=0)
+                variable.set('알 수 없음')
+            self.gpu_fit_note.set('GPU 정보가 없어 기존 메모리 추정값을 유지합니다.')
+            return
+        total = values['total_gib']
+        self.gpu_hardware_line.set(
+            f"VRAM {total:.1f} GiB · 남음 {values['free_gib']:.1f} GiB"
+            + (' · LLMfit 사용' if snapshot.get('llmfit_available')
+               else ' · 카탈로그 근사'))
+        for key, amount, pct in (
+            ('used', values['used_gib'], values['used_pct']),
+            ('model', values['need_gib'], values['need_pct']),
+            ('projected', values['projected_gib'], values['projected_pct']),
+        ):
+            bar, variable = self.gpu_bars[key]
+            bar.configure(value=0 if pct is None else pct)
+            variable.set(
+                '알 수 없음' if amount is None else
+                f"{amount:.1f}GiB · {amount/total*100:.0f}%"
+                + (' ↑' if key == 'projected'
+                   and values['overflow_gib'] > 0 else '')
+            )
+        if not tag:
+            note = '모델 카드를 선택하면 해당 모델 하나만 예상합니다.'
+        elif values['need_gib'] is None:
+            if estimate.get('mode') in ('offload', 'cpu'):
+                note = 'LLMfit: CPU/RAM 오프로딩 예상 · 전용 GPU 점유량은 별도 추정 불가'
+            else:
+                note = '이 모델은 GPU 메모리 요구량 추정 정보가 없습니다.'
+        elif same:
+            note = 'Ollama에 이미 적재된 모델: GPU 사용량을 중복 합산하지 않습니다.'
+        else:
+            origin = 'LLMfit' if estimate['source'] == 'llmfit' else '카탈로그 근사'
+            mode = estimate.get('mode')
+            run = (' · GPU 실행' if mode == 'gpu' else
+                   ' · CPU 오프로딩 가능' if mode in ('offload','cpu') else '')
+            note = (f"{origin} · 안전 여유 제외 {values['budget_gib']:.1f} GiB"
+                    + (' · GPU 적재 여유 있음' if values['over_capacity'] is False
+                       else ' · GPU 여유 부족') + run)
+            if not snapshot.get('loaded_known'):
+                note += ' · Ollama 적재 상태 미확인'
+        self.gpu_fit_note.set(note + '\n실제 점유량은 컨텍스트와 다른 앱 사용량에 따라 달라집니다.')
+
     # ── model screen: catalog selection ──────────────────────────────────
     def refresh_installed_summary(self):
         """One bounded inventory scan updates the global sidebar and detail panel."""
@@ -862,6 +1028,7 @@ class DesktopWindow(TranslationController, ToolsController):
     def open_installed_model(self, tag):
         self.navigate('models')
         self.model_tabs.select(self.model_pages['choose'])
+        self.inspect_model(tag)
         self.log('설치 모델: ' + tag)
 
     def show_uncatalogued_models(self, snapshot):
@@ -936,14 +1103,20 @@ class DesktopWindow(TranslationController, ToolsController):
             self.show_catalog(catalog)
             self.show_stack(stack)
         self.run_task('models.overview',self.services.models.overview,display,mutate=False)
+        self.refresh_gpu_advisor()
 
     def load_catalog(self):
         self.run_task('models.catalog',self.services.models.catalog,self.show_catalog,mutate=False)
         self.refresh_installed_summary()
+        self.refresh_gpu_advisor()
 
     def show_catalog(self,catalog):
         self._catalog=catalog
+        tags={row['tag'] for row in catalog['models']}
+        if self._gpu_inspected_model not in tags:
+            self._gpu_inspected_model=next((tag for tag in catalog['recommended'] if tag in tags),None)
         self.build_catalog_rows(catalog)
+        self.update_gpu_advisor_view()
         self.update_choice_summary()
         self.refresh_installed_summary()
 
@@ -979,11 +1152,14 @@ class DesktopWindow(TranslationController, ToolsController):
             self.catalog_install_count=tk.StringVar(master=self.root,value='')
         ttk.Label(tools,textvariable=self.catalog_install_count,
                   style='Muted.TLabel').pack(side='left',padx=(12,0))
-        ttk.Button(tools,text='모두 접기',
-                   command=lambda:self.fold_catalog_roles(False)).pack(
-                       side='right',padx=(6,0))
-        ttk.Button(tools,text='모두 펼치기',
-                   command=lambda:self.fold_catalog_roles(True)).pack(side='right')
+        self._roles_all_expanded=True
+        def toggle_all_roles():
+            self._roles_all_expanded=not self._roles_all_expanded
+            self.fold_catalog_roles(self._roles_all_expanded)
+            all_roles.configure(text='전체 접기' if self._roles_all_expanded
+                                else '전체 펼치기')
+        all_roles=ttk.Button(tools,text='전체 접기',command=toggle_all_roles)
+        all_roles.pack(side='right')
         columns=CatalogColumns(self.choice_body)
         self.catalog_columns=columns
 
@@ -1014,7 +1190,9 @@ class DesktopWindow(TranslationController, ToolsController):
                 primary_section=self.add_catalog_group(
                     section.body,key+':tier:'+str(tier['number']),
                     f"{label} 단계 (권장) · {'설치됨' if primary['installed'] else '미설치'}",
-                    expanded=True,compact=True)
+                    expanded=bool(primary['installed'] or primary['recommended']
+                                  or (not catalog['recommended'] and tier['number']==3)),
+                    compact=True)
                 self.add_catalog_row(
                     primary_section.body,primary,
                     checked=primary['installed'] or primary['recommended'],
@@ -1086,6 +1264,7 @@ class DesktopWindow(TranslationController, ToolsController):
             row.pack(fill='x',pady=2)
             ttk.Label(row,text=model_display_name(tag,limit=23),
                       style='Manage.Card.TLabel',wraplength=162).pack(anchor='w')
+            ttk.Button(row,text='GPU에서 보기',command=lambda t=tag:self.inspect_model(t)).pack(anchor='w')
             var=tk.BooleanVar(master=self.root,
                 value=self._previous_catalog_choices.get(tag,True))
             self.choice_vars[tag]=var
@@ -1137,10 +1316,18 @@ class DesktopWindow(TranslationController, ToolsController):
         label.pack(anchor='w',fill='x',pady=(0,3))
         self.choice_status_labels.setdefault(tag,[]).append(label)
         visible_name=model_display_name(tag) if model.get('desc') else tag
-        name_label=ttk.Label(card,text=visible_name,style='Manage.Card.TLabel',
-                             wraplength=175,justify='left')
-        name_label.pack(anchor='w',fill='x')
-        wrap_to_parent(name_label,inset=18,minimum=120)
+        # Put the inspector beside the title instead of adding a fourth row
+        # of controls to every compact model card.
+        heading=ttk.Frame(card,style='Manage.CardBody.TFrame')
+        heading.pack(fill='x')
+        name_label=ttk.Label(heading,text=visible_name,
+                             style='Manage.Card.TLabel',wraplength=140,
+                             justify='left')
+        name_label.pack(side='left',fill='x',expand=True)
+        wrap_to_parent(name_label,inset=94,minimum=110)
+        ttk.Button(heading,text='GPU 보기',style='Manage.Details.TButton',
+                   command=lambda t=tag:self.inspect_model(t)).pack(
+                       side='right',padx=(3,0))
         # The checkbox's meaning depends on what is actually on disk.
         # "selected" is a future intent, never proof that the file exists.
         choice_label='이 모델 유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
@@ -1516,7 +1703,8 @@ class DesktopWindow(TranslationController, ToolsController):
 
         # Setup work is exactly the moment users need the activity stream. Open
         # it for this session without changing their saved fold preference.
-        if not getattr(self,'_activity_visible',True):
+        if not getattr(self,'_activity_visible',False):
+            self._activity_setup_temporary=True
             self._activity_visible=True
             self._apply_activity_visibility()
 

@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 from .widgets import (heading, note, text_box, PanelHost, ScrollArea, set_text,
-                      status_line)
+                      status_line, Disclosure)
 from .specs import LABELS, DESCRIPTIONS
 from . import models_view, tools_view
 
@@ -27,21 +27,38 @@ def mode_row(parent,w):
 
 def home(parent,w):
     note(parent,'주요 작업은 Chat과 Agent에서. 준비가 필요할 때만 모델을 관리하세요.')
-    tasks=ttk.Frame(parent);tasks.pack(fill='x',pady=(4,20))
+    tasks=ttk.Frame(parent);tasks.pack(fill='x',pady=(3,10))
     tasks.columnconfigure((0,1),weight=1,uniform='main')
+    task_cards=[]
     for column,key in enumerate(('chat','agent')):
         kind=key.title()
-        card=ttk.Frame(tasks,style=kind+'.Card.TFrame',padding=24)
-        card.grid(row=0,column=column,sticky='nsew',padx=(0,8) if column==0 else (8,0))
+        card=ttk.Frame(tasks,style=kind+'.Card.TFrame',padding=15)
+        card.grid(row=0,column=column,sticky='nsew',padx=(0,6) if column==0 else (6,0))
+        task_cards.append(card)
         ttk.Label(card,text='01 / CHAT' if key=='chat' else '02 / AGENT',
                   style=kind+'.Card.TLabel',font=('Segoe UI',11,'bold')).pack(anchor='w')
         title='대화와 문서' if key=='chat' else '코딩과 자동화'
         detail=('프로젝트 · Workspace · RAG\nAnythingLLM에서 함께 관리합니다.' if key=='chat' else
                 '명령 · 파일 변경 · 승인\nOpen Interpreter로 작업합니다.')
         ttk.Label(card,text=title,style=kind+'.Card.TLabel',font=('Segoe UI',19,'bold')).pack(anchor='w',pady=(12,10))
-        ttk.Label(card,text=detail,style=kind+'.CardMuted.TLabel',wraplength=330,justify='left').pack(anchor='w',pady=(0,22))
+        ttk.Label(card,text=detail,style=kind+'.CardMuted.TLabel',wraplength=240,justify='left').pack(anchor='w',pady=(0,22))
         ttk.Button(card,text=kind+' 열기',style=kind+'.TButton',command=lambda k=key:w.navigate(k)).pack(anchor='w')
-    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18);card.pack(fill='x',pady=(0,18))
+    # Narrow windows use one column so neither launch button is truncated.
+    last_columns=[None]
+    def reflow_cards(event):
+        columns=1 if event.width < 570 else 2
+        if columns == last_columns[0]:
+            return
+        last_columns[0]=columns
+        for index,card in enumerate(task_cards):
+            card.grid_configure(row=index if columns==1 else 0,
+                                column=0 if columns==1 else index,
+                                padx=(0,0) if columns==1 else ((0,6) if index==0 else (6,0)),
+                                pady=(0,7) if columns==1 else (0,0))
+        tasks.columnconfigure(0, weight=1)
+        tasks.columnconfigure(1, weight=0 if columns==1 else 1)
+    tasks.bind('<Configure>',reflow_cards,add='+')
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=12);card.pack(fill='x',pady=(0,9))
     ttk.Label(card,text='모델 · 설치 관리',style='Manage.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
     ttk.Label(card,text='모델 용량 확인, 설치와 삭제, 실행 환경 복구',style='Manage.CardMuted.TLabel').pack(anchor='w',pady=(6,14))
     actions=ttk.Frame(card,style='Manage.CardBody.TFrame');actions.pack(anchor='w')
@@ -63,66 +80,77 @@ def link_selector(parent,w):
 
 def chat(parent,w):
     w.chat_tabs=ttk.Notebook(parent);w.chat_tabs.pack(fill='both',expand=True)
-    main=ttk.Frame(w.chat_tabs,padding=(4,16))
-    w.chat_links_page=ttk.Frame(w.chat_tabs,padding=(4,16))
+    main=ttk.Frame(w.chat_tabs,padding=(4,7))
+    w.chat_links_page=ttk.Frame(w.chat_tabs,padding=(4,7))
     w.chat_tabs.add(main,text='대화 · Workspace')
     w.chat_tabs.add(w.chat_links_page,text='Agent 연결 (선택)')
     content=ScrollArea(main);w.page_scrolls['chat.main']=content
     main=content.body
-    mode_row(main,w)
-    w.chat_search = tk.BooleanVar(master=w.root, value=False)
-    ttk.Checkbutton(main, text='웹 검색 엔진도 함께 실행 (SearXNG · 추가 RAM 사용)',
-                    variable=w.chat_search).pack(anchor='w', pady=(0, 8))
-    r=row(main)
-    button(r,'Chat 시작',w.start_chat,kind='Chat')
-    w.chat_open_button=button(r,'대화 화면 열기',w.open_chat)
+
+    # Keep the three main actions and their status visible before any options.
+    actions=row(main)
+    button(actions,'Chat 시작',w.start_chat,kind='Chat')
+    w.chat_open_button=button(actions,'대화 화면 열기',w.open_chat)
     w.chat_open_button.configure(state='disabled')
-    button(r,'세션 종료',w.stop_sessions)
-    # Right under the buttons it belongs to, and filled in before anything has
-    # been pressed: the only signal used to be the open button losing its
-    # greyed-out look, which is not something anyone is watching for.
+    button(actions,'세션 종료',w.stop_sessions)
     w.chat_status=status_line(main,w.chat_state)
-    card=ttk.Frame(main,style='Chat.Card.TFrame',padding=18);card.pack(fill='x',pady=(8,8))
-    ttk.Label(card,text='프로젝트는 Chat 안에서',style='Chat.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
-    ttk.Label(card,text='Workspace를 만들고, 문서와 대화를 AnythingLLM에서 관리합니다.',
-              style='Chat.CardMuted.TLabel',wraplength=740).pack(anchor='w',pady=(6,12))
-    ttk.Button(card,text='프로젝트 만들기 / 관리',style='Chat.TButton',command=w.manage_chat_projects).pack(anchor='w')
-    note(main,'웹 검색을 선택하지 않으면 SearXNG는 시작하지 않습니다.\n'
-         'AnythingLLM 자체 문서 검색/RAG는 웹 검색 옵션과 별개입니다.\n'
-         '옵션 변경은 다음 Chat 시작에 적용됩니다.')
-    note(main,'프로젝트 연결은 필수가 아닙니다. AnythingLLM의 대화와 문서 데이터는 복제하지 않습니다.\n'         'AnythingLLM은 브라우저로 열리며, 테마는 그 화면의 설정을 따릅니다.')
-    w.chat_text=text_box(main,height=10)
+
+    # Secondary controls preserve their Tk variables while folded.
+    advanced=Disclosure(main,'연결 · 웹 검색 옵션')
+    mode_row(advanced.body,w)
+    w.chat_search=tk.BooleanVar(master=w.root,value=False)
+    ttk.Checkbutton(advanced.body,
+                    text='웹 검색 함께 실행 (SearXNG · 추가 RAM 사용)',
+                    variable=w.chat_search).pack(anchor='w',pady=(0,6))
+    note(advanced.body,'웹 검색과 AnythingLLM의 문서 RAG는 서로 다른 기능입니다. '
+         '연결 옵션은 다음 Chat 시작부터 적용됩니다.')
+
+    card=ttk.Frame(main,style='Chat.Card.TFrame',padding=12)
+    card.pack(fill='x',pady=(4,6))
+    ttk.Label(card,text='대화 · 문서 관리',style='Chat.Card.TLabel',
+              font=('Segoe UI',11,'bold')).pack(anchor='w')
+    ttk.Label(card,text='Workspace와 문서는 AnythingLLM에서 관리합니다.',
+              style='Chat.CardMuted.TLabel',wraplength=560).pack(anchor='w',pady=(4,6))
+    ttk.Button(card,text='Workspace 열기',style='Chat.TButton',
+               command=w.manage_chat_projects).pack(anchor='w')
+    w.chat_text=text_box(main,height=8)
     set_text(w.chat_text,'Chat 준비 상태 확인 중...\n\n'
              'Chat 시작 시 Network → Ollama → AnythingLLM → 선택 모델 연결을 순서대로 검증합니다.')
     content.bind_content()
     projects(w.chat_links_page,w)
 
-
 def agent(parent,w):
-    link=link_selector(parent,w)
     main=parent
-    if 'chat' in w.spec.pages:
-        button(link,'Chat에서 연결 관리',w.show_project_links)
-    else:
-        # Standalone Interpreter retains optional saved linkage without a
-        # separate Projects navigation item or another persistent registry.
+    if 'chat' not in w.spec.pages:
+        # Standalone Agent still exposes the optional Chat linkage editor.
         w.agent_tabs=ttk.Notebook(parent);w.agent_tabs.pack(fill='both',expand=True)
-        main=ttk.Frame(w.agent_tabs,padding=(4,12))
-        w.agent_links_page=ttk.Frame(w.agent_tabs,padding=(4,12))
+        main=ttk.Frame(w.agent_tabs,padding=(4,8))
+        w.agent_links_page=ttk.Frame(w.agent_tabs,padding=(4,8))
         w.agent_tabs.add(main,text='Agent 실행')
         w.agent_tabs.add(w.agent_links_page,text='Chat 연결 (선택)')
-        projects(w.agent_links_page,w)
-    r=mode_row(main,w)
-    button(r,'Agent 시작',w.start_agent,kind='Agent')
-    button(r,'세션 종료',w.stop_sessions)
-    w.agent_search = tk.BooleanVar(master=w.root, value=False)
-    ttk.Checkbutton(main, text='웹 검색 엔진도 함께 실행 (SearXNG · 추가 RAM 사용)',
-                    variable=w.agent_search).pack(anchor='w', pady=(0, 8))
-    w.agent_status=status_line(main,w.agent_state)
-    note(main,'기존 프로필 / 모델 / Host·Sandbox / 폴더 선택과 승인 절차를 유지합니다.\n'
-         '연결 폴더는 선택 창의 기본값이며, 자동 접근 허용이 아닙니다.')
-    w.hosts['agent']=PanelHost(main)
 
+    actions=row(main)
+    button(actions,'Agent 시작',w.start_agent,kind='Agent')
+    button(actions,'세션 종료',w.stop_sessions)
+    w.agent_status=status_line(main,w.agent_state)
+
+    advanced=Disclosure(main,'연결 · 웹 검색 옵션')
+    link=link_selector(advanced.body,w)
+    if 'chat' in w.spec.pages:
+        button(link,'Chat에서 연결 관리',w.show_project_links)
+    mode_row(advanced.body,w)
+    w.agent_search=tk.BooleanVar(master=w.root,value=False)
+    ttk.Checkbutton(advanced.body,
+                    text='웹 검색 함께 실행 (SearXNG · 추가 RAM 사용)',
+                    variable=w.agent_search).pack(anchor='w',pady=(0,5))
+    note(advanced.body,'실행 프로필·모델·권한·폴더는 Agent 시작 시 따로 확인합니다. '
+         'Chat 연결은 선택 사항입니다.')
+
+    if 'chat' not in w.spec.pages:
+        # Keep the Agent's own selector as the primary project_box. The
+        # optional linkage editor creates another synchronized combobox.
+        projects(w.agent_links_page,w)
+    w.hosts['agent']=PanelHost(main)
 
 def projects(parent,w):
     scroller=ScrollArea(parent);w.page_scrolls['links']=scroller
@@ -164,16 +192,20 @@ def models(parent,w):
 
 
 def network(parent,w):
-    note(parent,'Direct = 인터넷 직접 연결\nWARP / Tor = 관리형 프록시 준비 실패 시 실행 중단\n'
-         'Block = 공용 웹 egress 차단, 검색 비활성, Host Block 거부\n\n'
-         '이 버전은 동일 프로젝트의 한 창이 관리형 실행을 소유합니다. 다른 창은 조회할 수 있으며, '
-         '소유 창의 세션을 종료한 뒤 변경할 수 있습니다.')
-    r=row(parent);button(r,'상태 확인',lambda:w.refresh_health(fresh=True))
-    button(r,'정책 설정',lambda:w.navigate('settings'))
-    button(r,'세션 종료 / 잠금 해제',w.stop_sessions)
-    w.network_text=text_box(parent)
+    actions=row(parent)
+    button(actions,'상태 확인',lambda:w.refresh_health(fresh=True))
+    button(actions,'정책 설정',lambda:w.navigate('settings'))
+    button(actions,'세션 종료',w.stop_sessions)
+    details=Disclosure(parent,'네트워크 정책 설명')
+    note(details.body,
+         'Direct = 직접 연결 · WARP / Tor = 관리형 프록시 · '
+         'Block = 관리형 웹 연결 차단. 검색 비활성 및 Host Block 거부. '
+         '프록시 준비가 실패하면 해당 세션을 시작하지 않습니다.')
+    note(details.body,
+         '관리형 세션의 실행 소유권은 한 창만 갖습니다. 다른 창에서는 상태를 조회하고 '
+         '소유 창의 세션을 끝낸 뒤 설정을 변경할 수 있습니다.')
+    w.network_text=text_box(parent,height=7)
     set_text(w.network_text,'No managed session started in this window.')
-
 
 def system(parent,w):
     r=row(parent);button(r,'상태 새로고침',lambda:w.refresh_health(fresh=True),True)
@@ -183,53 +215,67 @@ def system(parent,w):
 
 
 def settings(parent,w):
-    ttk.Label(parent,text='화면 테마',style='Section.TLabel').pack(anchor='w',pady=(0,8))
-    r=row(parent)
+    ttk.Label(parent,text='화면 테마',style='Section.TLabel').pack(anchor='w',pady=(0,6))
+    appearance=row(parent)
     w.theme_buttons=[]
-    for value,label in (('dark','다크'),('light','라이트')):
-        choice=ttk.Radiobutton(r,text=label,variable=w.theme_choice,value=value,command=w.save_theme)
-        choice.pack(side='left',padx=(0,20));w.theme_buttons.append(choice)
-    note(parent,'선택 즉시 적용하고 네 앱의 공통 설정으로 저장합니다. 대화와 작업은 중단하지 않습니다.\n'
-         'AnythingLLM 브라우저 화면과 운영체제 대화상자는 각자의 테마 설정을 따릅니다.')
-    ttk.Separator(parent).pack(fill='x',pady=(8,20))
-    ttk.Label(parent,text='네트워크 정책',style='Section.TLabel').pack(anchor='w',pady=(0,8))
+    for value,label in (('light','밝은 회색 (기본)'),('dark','어두운 테마')):
+        choice=ttk.Radiobutton(appearance,text=label,variable=w.theme_choice,
+                               value=value,command=w.save_theme)
+        choice.pack(side='left',padx=(0,18))
+        w.theme_buttons.append(choice)
+    note(parent,'화면 테마만 즉시 바뀌며 대화·작업 상태는 유지됩니다.')
+
+    ttk.Separator(parent).pack(fill='x',pady=(8,12))
+    ttk.Label(parent,text='네트워크 정책',style='Section.TLabel').pack(anchor='w',pady=(0,6))
     w.settings_scope=tk.StringVar(master=w.root,value='global')
     w.settings_mode=tk.StringVar(master=w.root,value='warp')
-    r=row(parent)
-    scope_box=ttk.Combobox(r,textvariable=w.settings_scope,values=('global','studio','chat','interpreter','setup'),state='readonly',width=18)
-    scope_box.pack(side='left',padx=(0,12))
-    scope_box.bind('<<ComboboxSelected>>',lambda event:w.load_settings())
-    ttk.Combobox(r,textvariable=w.settings_mode,values=('warp','tor','direct','block'),state='readonly',width=18).pack(side='left',padx=(0,12))
-    button(r,'저장',w.save_settings,True)
-    note(parent,'변경은 다음 세션부터 적용됩니다. 실행 중인 서비스의 네트워크를 즉시 바꾸지 않습니다.\n'
-         '새 설정이 없으면 기존 런처의 네트워크 설정을 기본값으로 사용합니다.')
+    line=row(parent)
+    ttk.Label(line,text='실행 모드').pack(side='left',padx=(0,8))
+    ttk.Combobox(line,textvariable=w.settings_mode,
+                 values=('warp','tor','direct','block'),
+                 state='readonly',width=15).pack(side='left',padx=(0,10))
+    button(line,'저장',w.save_settings,True)
 
+    advanced=Disclosure(parent,'앱별 적용 범위')
+    ttk.Label(advanced.body,text='기본값(global) 또는 특정 앱에만 적용할 수 있습니다.',
+              style='Muted.TLabel').pack(anchor='w',pady=(0,5))
+    scope_box=ttk.Combobox(advanced.body,textvariable=w.settings_scope,
+                           values=('global','studio','chat','interpreter','setup'),
+                           state='readonly',width=19)
+    scope_box.pack(anchor='w')
+    scope_box.bind('<<ComboboxSelected>>',lambda event:w.load_settings())
+    note(parent,'네트워크 변경은 다음 세션 시작부터 적용됩니다. '
+         '실행 중인 서비스 연결은 자동으로 바꾸지 않습니다.')
 
 def setup(parent,w):
-    w.setup_status = tk.StringVar(
-        master=w.root,
-        value='대기 · 설치 옵션을 고른 뒤 같은 창에서 실행합니다.',
-    )
-    w.setup_sandbox = tk.BooleanVar(master=w.root, value=True)
-    w.setup_build = tk.BooleanVar(master=w.root, value=True)
-    w.setup_search = tk.BooleanVar(master=w.root, value=True)
+    w.setup_status=tk.StringVar(
+        master=w.root, value='준비됨 · 설치 / 복구를 실행할 수 있습니다.')
+    w.setup_sandbox=tk.BooleanVar(master=w.root,value=True)
+    w.setup_build=tk.BooleanVar(master=w.root,value=True)
+    w.setup_search=tk.BooleanVar(master=w.root,value=True)
 
-    status_line(parent, w.setup_status)
-
-    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
-    card.pack(fill='x',pady=(8,14))
-    ttk.Label(card,text='설치 / 복구 구성',style='Manage.Card.TLabel',
+    status_line(parent,w.setup_status)
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=14)
+    card.pack(fill='x',pady=(5,9))
+    ttk.Label(card,text='기본 설치 · 복구',style='Manage.Card.TLabel',
               font=('Segoe UI',12,'bold')).pack(anchor='w')
-    ttk.Label(
-        card,
-        text='Ollama · AnythingLLM · Open Interpreter · WARP는 기본 공용 런타임으로 준비합니다. '
-             '아래 선택은 부가 Docker/Search 구성입니다.',
-        style='Manage.CardMuted.TLabel',wraplength=720,justify='left',
-    ).pack(anchor='w',pady=(6,12))
+    ttk.Label(card,
+              text='Ollama · AnythingLLM · Open Interpreter · WARP와 선택된 부가 환경을 준비합니다.',
+              style='Manage.CardMuted.TLabel',wraplength=620,
+              justify='left').pack(anchor='w',pady=(5,8))
 
-    options=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    # The primary action and cancel always precede the optional settings.
+    controls=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    controls.pack(fill='x',pady=(4,4))
+    w.setup_start_button=button(
+        controls,'설치 / 복구 실행',w.repair,accent=True)
+    w.setup_cancel_button=button(
+        controls,'실행 중단',w.cancel_setup,kind='Danger')
+    w.setup_cancel_button.configure(state='disabled')
+
+    disclosure=Disclosure(card,'설치 구성 옵션')
+    options=ttk.Frame(disclosure.body,style='Manage.CardBody.TFrame')
     options.pack(fill='x')
-
     def sync_build_choice():
         enabled=w.setup_sandbox.get()
         if not enabled:
@@ -239,55 +285,44 @@ def setup(parent,w):
     ttk.Checkbutton(
         options,text='Sandbox 실행 환경 준비',
         variable=w.setup_sandbox,command=sync_build_choice,
-        style='Card.TCheckbutton',
-    ).pack(anchor='w',pady=3)
+        style='Card.TCheckbutton').pack(anchor='w',pady=3)
     w.setup_build_check=ttk.Checkbutton(
         options,text='Sandbox Docker 이미지 빌드',
-        variable=w.setup_build,style='Card.TCheckbutton',
-    )
+        variable=w.setup_build,style='Card.TCheckbutton')
     w.setup_build_check.pack(anchor='w',padx=(24,0),pady=3)
     ttk.Checkbutton(
         options,text='웹 검색 준비 (SearXNG + Tor)',
-        variable=w.setup_search,style='Card.TCheckbutton',
-    ).pack(anchor='w',pady=3)
-
-    controls=ttk.Frame(card,style='Manage.CardBody.TFrame')
-    controls.pack(fill='x',pady=(14,0))
-    w.setup_start_button=button(
-        controls,'설치 / 복구 실행',w.repair,accent=True,kind='Manage')
-    w.setup_cancel_button=button(
-        controls,'실행 중단',w.cancel_setup,kind='Danger')
-    w.setup_cancel_button.configure(state='disabled')
-    button(controls,'기본 선택',w.reset_setup_options)
-
-    note(parent,'별도 설치 콘솔이나 선택창을 열지 않습니다. 진행 로그는 이 창 아래 Activity에 '
-         '실시간으로 표시됩니다. 모델은 Models 화면에서 같은 방식으로 선택/다운로드합니다.')
-
-    accounts_card(parent,w)
+        variable=w.setup_search,style='Card.TCheckbutton').pack(anchor='w',pady=3)
+    button(row(disclosure.body),'기본 선택',w.reset_setup_options)
+    note(disclosure.body,'설치를 시작할 때만 아래 Activity 기록이 자동으로 열립니다. '
+         '모델 설치·삭제는 Models 화면에서 별도로 확인합니다.')
 
     if 'models' in w.spec.pages:
-        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
-        card.pack(fill='x',pady=(4,14))
-        ttk.Label(card,text='모델 설치와 삭제',style='Manage.Card.TLabel',
-                  font=('Segoe UI',12,'bold')).pack(anchor='w')
-        ttk.Label(card,text='모델 선택 · 설치 · 삭제 · 다운로드 진행률은 Models 한 화면에서 처리합니다.',
-                  style='Manage.CardMuted.TLabel',wraplength=700).pack(anchor='w',pady=(6,12))
-        ttk.Button(card,text='Models 열기',style='Manage.TButton',
+        models_card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=12)
+        models_card.pack(fill='x',pady=(0,8))
+        ttk.Label(models_card,text='모델 선택과 다운로드',style='Manage.Card.TLabel',
+                  font=('Segoe UI',11,'bold')).pack(anchor='w',pady=(0,5))
+        ttk.Button(models_card,text='Models 열기',style='Manage.TButton',
                    command=lambda:w.navigate('models')).pack(anchor='w')
 
-    ttk.Label(parent,text='유지보수',style='Section.TLabel').pack(anchor='w',pady=(8,8))
-    r=row(parent)
-    for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),
-                     ('searxng_action','Search 관리')]:
-        button(r,text,lambda k=key:w.maintenance(k))
-    # Not the retained terminal action: it waited on a [확인] click and held
-    # every later change behind it.
-    button(r,'Ollama 확인',w.ensure_ollama)
-    button(r,'설정 화면',lambda:w.navigate('settings'))
-    note(parent,'유지보수 메뉴와 체크 선택도 이 Setup 페이지 안에 표시됩니다. '
-         '실행 결과는 동일한 로그 영역에 기록됩니다.')
-    w.hosts['setup']=PanelHost(parent)
+    # Account mutations and low-level Docker maintenance stay available,
+    # but do not compete with the normal install action.
+    advanced=Disclosure(parent,'계정 관리 · 유지보수')
+    accounts_card(advanced.body,w)
+    ttk.Label(advanced.body,text='고급 유지보수',
+              style='Section.TLabel').pack(anchor='w',pady=(6,6))
+    first=row(advanced.body)
+    for key,label in (
+        ('docker_image','Docker 빌드'),
+        ('docker_clean','Docker 정리'),
+        ('searxng_action','Search 관리'),
+    ):
+        button(first,label,lambda k=key:w.maintenance(k))
+    second=row(advanced.body)
+    button(second,'Ollama 확인',w.ensure_ollama)
+    button(second,'설정 화면',lambda:w.navigate('settings'))
 
+    w.hosts['setup']=PanelHost(parent)
 
 def accounts_card(parent,w):
     """This PC's Windows accounts and their LocalAI roles, for administrators."""
@@ -302,7 +337,7 @@ def accounts_card(parent,w):
     wrapper.pack(fill='x')
     columns=('name','role','access','records')
     w.accounts_tree=ttk.Treeview(wrapper,columns=columns,show='headings',height=5,selectmode='browse')
-    for key,title,width in zip(columns,('Windows 계정','역할','LocalAI 사용','기록'),(220,140,150,120)):
+    for key,title,width in zip(columns,('Windows 계정','역할','LocalAI 사용','기록'),(175,110,110,90)):
         w.accounts_tree.heading(key,text=title)
         w.accounts_tree.column(key,width=width,minwidth=60)
     w.accounts_tree.pack(fill='x')
@@ -313,10 +348,14 @@ def accounts_card(parent,w):
     w.account_buttons={
         'allow':button(actions,'사용 허용',lambda:w.account_action('allow',True)),
         'deny':button(actions,'사용 해제',lambda:w.account_action('allow',False)),
-        'admin':button(actions,'관리자 지정',lambda:w.account_action('admin',True)),
-        'unadmin':button(actions,'관리자 해제',lambda:w.account_action('admin',False)),
-        'delete':button(actions,'기록 삭제',lambda:w.account_action('delete'),kind='Danger'),
     }
+    dangerous=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    dangerous.pack(fill='x',pady=(2,6))
+    w.account_buttons.update({
+        'admin':button(dangerous,'관리자 지정',lambda:w.account_action('admin',True)),
+        'unadmin':button(dangerous,'관리자 해제',lambda:w.account_action('admin',False)),
+        'delete':button(dangerous,'기록 삭제',lambda:w.account_action('delete'),kind='Danger'),
+    })
     access=ttk.Frame(card,style='Manage.CardBody.TFrame')
     access.pack(fill='x',pady=(10,0))
     w.accounts_access=tk.StringVar(master=w.root,value='everyone')
@@ -338,7 +377,7 @@ BUILDERS={'home':home,'chat':chat,'agent':agent,'tools':tools,'models':models,
 
 
 def build(parent,key,w):
-    page=ttk.Frame(parent,padding=(26,24))
+    page=ttk.Frame(parent,padding=(15,11))
     heading(page,LABELS[key],DESCRIPTIONS[key],kind={'chat':'Chat','agent':'Agent','models':'Manage','setup':'Manage'}.get(key))
     if key in ('home','settings','setup','network','system'):
         scroller=ScrollArea(page);w.page_scrolls[key]=scroller

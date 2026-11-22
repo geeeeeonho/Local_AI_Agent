@@ -165,7 +165,29 @@ class ModelService:
         budget = catalog.MEMORY_BUDGET_GB if budget_gb is None else float(budget_gb)
         present = catalog.canonicalize_installed(
             self.installed_tags() if installed is None else installed)
+        # Installation planning uses physical GPU capacity (not momentary free
+        # VRAM, which can already contain a model). Keep the original budget
+        # behaviour for machines without supported discrete VRAM probing.
+        gpu = None
+        analysis = None
+        if budget_gb is None:
+            from core.gpu_memory import detect_gpu_memory
+            gpu = detect_gpu_memory()
+            if gpu is not None:
+                budget = min(budget, max(0.0, gpu.total_gib - gpu.reserve_gib))
+                from integrations.llmfit.client import analyze
+                analysis = analyze(context=4096,
+                                   gpu_capacity_gib=budget, timeout=12)
         recommended = catalog.recommended_for(budget)
+        if analysis and analysis.get('available'):
+            from services.models.advisor import fit_for
+            table = catalog.by_tag()
+            for tag in tuple(recommended):
+                estimate = fit_for(tag, table[tag].memory_gb, analysis)
+                if (estimate['source'] == 'llmfit'
+                        and (estimate['mode'] in ('offload', 'cpu')
+                             or estimate['fit'] == 'too_tight')):
+                    recommended.discard(tag)
         models = []
         for entry in catalog.all_entries():
             level = catalog.level_of(entry.tag)
@@ -205,8 +227,50 @@ class ModelService:
             # Remote tags occupy no disk, so the store never sees them; report
             # them separately rather than letting them look like local models.
             'cloud_installed': sorted(tag for tag in present if is_cloud_tag(tag)),
-            'plan': {key: list(tags) for key, tags in catalog.plan_by_level(budget).items()},
+            'plan': {key: [tag for tag in tags if tag in recommended]
+                     for key, tags in catalog.plan_by_level(budget).items()},
             'levels': [(key, catalog.level_label(key)) for key in catalog.LEVEL_KEYS],
+        }
+
+    def gpu_advisor_snapshot(self):
+        """Explicit Models-page GPU usage + read-only fit recommendations.
+
+        No Ollama start, download, device allocation or continuous sampling.
+        A loaded model has already consumed free VRAM; the UI avoids adding
+        its memory a second time.
+        """
+        from core.gpu_memory import detect_gpu_memory
+        from integrations.llmfit.client import analyze
+        from launcher.models import model_catalog as catalog
+        from services.models.advisor import fit_for
+        gpu = detect_gpu_memory()
+        if gpu is None:
+            return {'gpu': None, 'estimates': {}, 'loaded_tags': [],
+                    'loaded_known': False, 'llmfit_available': False,
+                    'reason': 'NVIDIA GPU 메모리 정보를 확인할 수 없습니다.'}
+        capacity = max(0.0, gpu.total_gib - gpu.reserve_gib)
+        result = analyze(context=4096, gpu_capacity_gib=capacity, timeout=12)
+        estimates = {
+            entry.tag: fit_for(entry.tag, entry.memory_gb, result)
+            for entry in catalog.all_entries()
+        }
+        loaded_tags = []
+        loaded_known = False
+        try:
+            # This is a *read* on the existing loopback Ollama router.
+            # Never boot Ollama to update the progress bars.
+            loaded = self.client.loaded_models()
+            loaded_tags = [str(item.get('name') or item.get('model') or '')
+                           for item in loaded]
+            loaded_known = True
+        except (AttributeError, OSError, RuntimeError, ValueError, TimeoutError):
+            pass
+        return {
+            'gpu': {'total_gib': gpu.total_gib, 'free_gib': gpu.free_gib,
+                    'reserve_gib': gpu.reserve_gib, 'budget_gib': gpu.budget_gib},
+            'estimates': estimates, 'loaded_tags': loaded_tags,
+            'loaded_known': loaded_known, 'llmfit_available': result['available'],
+            'reason': result.get('reason', ''),
         }
 
     def current_stack(self, *, free_gb=None, installed=None):
@@ -224,13 +288,25 @@ class ModelService:
         # It reports estimates only; existing user-selected models are kept.
         from core.gpu_memory import detect_gpu_memory
         gpu = detect_gpu_memory()
+        gpu_choice_budget = None
+        if gpu is not None:
+            try:
+                # Existing loaded models already occupy reported free VRAM.
+                # Reuse the old RAM-first policy while a model is loaded or
+                # when the Ollama state cannot be read reliably.
+                if not self.client.loaded_models():
+                    gpu_choice_budget = gpu.budget_gib
+            except (AttributeError, OSError, RuntimeError, ValueError, TimeoutError):
+                pass
         rows = []
         for role in roles.ROLES:
             try:
                 # The store we already read is the answer; asking Ollama again
                 # would be five HTTP calls for one screen, and would report a
                 # different choice whenever the server happens to be stopped.
-                chosen = roles.resolve_ladder(role.name, free, installed=present)
+                chosen = roles.resolve_ladder(
+                    role.name, free, installed=present,
+                    gpu_budget_gb=gpu_choice_budget)
             except Exception:
                 chosen = None
             ladder = []

@@ -792,3 +792,52 @@ def test_router_only_models_are_read_only_in_right_panel(ui):
     w.show_installed_summary(summary)
     assert 'foreign/uncurated:8b' not in w.choice_vars
     assert w.uncatalogued_external_body.winfo_children()
+
+
+# ── GPU advisor (selection is inspection, never deletion) ────────────────
+def test_gpu_inspector_keeps_install_checkboxes_untouched(ui):
+    w, _, _ = ui
+    open_models(w)
+    before = {tag: var.get() for tag, var in w.choice_vars.items()}
+    tag = next(iter(before))
+    w.inspect_model(tag)
+    assert w._gpu_inspected_model == tag
+    assert {name: var.get() for name, var in w.choice_vars.items()} == before
+    assert all(key in w.gpu_bars for key in ('used', 'model', 'projected'))
+
+
+def test_gpu_bars_use_measured_usage_and_a_single_chosen_model(ui):
+    w, _, _ = ui
+    open_models(w)
+    pump(w, lambda: not w.runner.busy('models.gpu.advisor'))
+    tag = next(iter(w.choice_vars))
+    w.inspect_model(tag)
+    w.show_gpu_advisor({
+        'gpu': {'total_gib': 16.0, 'free_gib': 11.0},
+        'estimates': {tag: {
+            'need_gib': 8.0, 'mode': 'gpu', 'source': 'llmfit',
+        }},
+        'loaded_tags': [], 'loaded_known': True, 'llmfit_available': True,
+    })
+    assert float(w.gpu_bars['used'][0]['value']) == pytest.approx(31.25)
+    assert float(w.gpu_bars['model'][0]['value']) == pytest.approx(50.0)
+    assert float(w.gpu_bars['projected'][0]['value']) == pytest.approx(81.25)
+    assert '13.0GiB' in w.gpu_bars['projected'][1].get()
+    assert '81%' in w.gpu_bars['projected'][1].get()
+
+
+def test_gpu_inspector_does_not_double_count_loaded_model(ui):
+    w, _, _ = ui
+    open_models(w)
+    pump(w, lambda: not w.runner.busy('models.gpu.advisor'))
+    tag = next(iter(w.choice_vars))
+    w.inspect_model(tag)
+    w.show_gpu_advisor({
+        'gpu': {'total_gib': 16.0, 'free_gib': 2.0},
+        'estimates': {tag: {'need_gib': 8.0, 'mode': 'gpu',
+                            'source': 'llmfit'}},
+        'loaded_tags': [tag], 'loaded_known': True, 'llmfit_available': True,
+    })
+    assert float(w.gpu_bars['used'][0]['value']) == float(
+        w.gpu_bars['projected'][0]['value'])
+    assert '중복 합산하지 않습니다' in w.gpu_fit_note.get()

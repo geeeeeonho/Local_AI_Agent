@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Callable
 from tkinter import ttk
 from . import translation_view, calendar_view, reminder_view
-from .widgets import wrap_to_parent
+from .widgets import ScrollArea, wrap_to_parent
 
 
 @dataclass(frozen=True)
@@ -42,11 +42,13 @@ def build(parent, w):
     # 페이지 제목 아래 설명 줄: 도구를 연 동안에는 숨겨 작은 창에서 본문 높이를 확보한다.
     labels = [child for child in parent.winfo_children() if isinstance(child, ttk.Label)]
     w.tools_description = labels[1] if len(labels) > 1 else None
-    hub = ttk.Frame(parent); hub.pack(fill='both', expand=True)
-    w.tool_hub, w.tool_area = hub, ttk.Frame(parent)
+    hub_scroll = ScrollArea(parent)
+    hub = hub_scroll.body
+    w.tool_hub, w.tool_area = hub_scroll.frame, ttk.Frame(parent)
+    w.page_scrolls['tools.hub'] = hub_scroll
     ttk.Label(hub, text='사용할 도구를 선택하세요.', style='Section.TLabel').pack(anchor='w', pady=(0, 10))
     for tool in TOOLS:
-        card = ttk.Frame(hub, style='Manage.Card.TFrame', padding=16); card.pack(fill='x', pady=(0, 10))
+        card = ttk.Frame(hub, style='Manage.Card.TFrame', padding=11); card.pack(fill='x', pady=(0, 6))
         ttk.Label(card, text=tool.title, style='Manage.Card.TLabel',
                   font=('Segoe UI', 12, 'bold')).pack(anchor='w')
         text = ttk.Label(card, text=tool.description, style='Manage.CardMuted.TLabel',
@@ -55,6 +57,7 @@ def build(parent, w):
         ttk.Button(card, text='열기', style='Accent.TButton',
                    command=lambda key=tool.key: w.open_tool(key)).pack(anchor='w')
 
+    hub_scroll.bind_content()
     top = ttk.Frame(w.tool_area); top.pack(fill='x', pady=(0, 6))
     ttk.Button(top, text='← 도구 목록', command=w.show_tool_hub).pack(side='left')
     w.tool_title = ttk.Label(top, text='', style='Section.TLabel')

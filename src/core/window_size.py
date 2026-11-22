@@ -21,7 +21,7 @@ layout rule nobody checks.
 from __future__ import annotations
 
 #: What the window opens at when the screen has room for it.
-PREFERRED_SIZE = (1280, 860)
+PREFERRED_SIZE = (1100, 720)
 #: Below which it will not go, matching the shell's own minsize.
 MINIMUM_SIZE = (880, 560)
 #: Room the desktop keeps for itself: a title bar above, a taskbar below.
