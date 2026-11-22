@@ -186,7 +186,7 @@ class ThemeController:
         style.configure('Sidebar.TLabel', background=p.sidebar, foreground=p.muted)
         style.configure('Brand.TLabel', background=p.sidebar, foreground=p.fg, font=('Segoe UI', 18, 'bold'))
         style.configure('Muted.TLabel', foreground=p.muted)
-        style.configure('Title.TLabel', font=('Segoe UI', 24, 'bold'))
+        style.configure('Title.TLabel', font=('Segoe UI', 19, 'bold'))
         style.configure('Section.TLabel', font=('Segoe UI', 12, 'bold'))
         style.configure('Card.TFrame', background=p.surface)
         style.configure('Card.TLabel', background=p.surface)
@@ -208,7 +208,7 @@ class ThemeController:
                         padding=(10, 6), borderwidth=0, focuscolor=p.manage)
         style.map('Manage.AccordionSmall.TButton',
                   background=[('active', p.hover), ('focus', p.hover)])
-        style.configure('Nav.TButton', anchor='w', background=p.sidebar, padding=(16, 10),
+        style.configure('Nav.TButton', anchor='w', background=p.sidebar, padding=(12, 6),
                         focuscolor=p.chat)
         style.map('Nav.TButton', background=[('focus', p.hover), ('active', p.hover)])
         style.configure('Selected.Nav.TButton', background=p.selected)
@@ -227,8 +227,8 @@ class ThemeController:
                       background=[('disabled', p.surface), ('active', soft if primary else p.hover)],
                       foreground=[('disabled', p.muted), ('active', color)])
             style.configure(kind + '.Nav.TButton', background=soft, foreground=color,
-                            font=('Segoe UI', 13 if primary else 10, 'bold'),
-                            padding=(18, 17 if primary else 11))
+                            font=('Segoe UI', 12 if primary else 10, 'bold'),
+                            padding=(12, 9 if primary else 6))
             style.map(kind + '.Nav.TButton', background=[('disabled', soft), ('active', p.hover)],
                       foreground=[('disabled', p.muted)])
             # Selection stays a quiet surface change, not a large bright block.
@@ -241,7 +241,7 @@ class ThemeController:
             style.configure(kind + '.CardBody.TFrame', background=soft, borderwidth=0, relief='flat')
             style.configure(kind + '.Card.TLabel', background=soft, foreground=p.fg)
             style.configure(kind + '.CardMuted.TLabel', background=soft, foreground=p.muted)
-            style.configure(kind + '.Title.TLabel', foreground=p.fg, font=('Segoe UI', 24, 'bold'))
+            style.configure(kind + '.Title.TLabel', foreground=p.fg, font=('Segoe UI', 19, 'bold'))
         # Kept for common save/refresh actions, distinct from destructive actions.
         style.configure('Accent.TButton', background=p.chat, foreground=p.solid_ink)
         style.map('Accent.TButton', background=[('disabled', p.surface), ('active', p.chat_soft)],
@@ -295,7 +295,7 @@ class ThemeController:
         style.configure('Failed.Status.TLabel', foreground=p.danger,
                         font=('Segoe UI', 10, 'bold'))
         style.configure('TNotebook', background=p.bg, borderwidth=0)
-        style.configure('TNotebook.Tab', background=p.surface, foreground=p.muted, padding=(17, 10))
+        style.configure('TNotebook.Tab', background=p.surface, foreground=p.muted, padding=(12, 7))
         style.map('TNotebook.Tab', background=[('selected', p.chat_soft), ('active', p.hover)],
                   foreground=[('selected', p.chat), ('active', p.fg)])
         style.configure('Treeview', fieldbackground=p.surface, background=p.surface,
