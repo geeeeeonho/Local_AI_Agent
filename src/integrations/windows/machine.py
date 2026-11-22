@@ -55,15 +55,40 @@ def run_script(script: str, *, timeout=120):
                    timeout=timeout)
 
 
-def run_as_admin(script: str, *, log=None, timeout=900) -> bool:
-    """Run ``script`` with administrator rights: directly if already elevated,
-    otherwise through one UAC prompt. True when it ran and exited 0."""
+def run_as_admin(script: str, *, log=None, timeout=900, report_path=None) -> bool:
+    """Elevate once and report actual script failure, not misleading UAC denial.
+
+    A diagnostic file is emitted by the elevated script itself only on
+    nonzero exit. This path must be random and guarded by the caller; no
+    file from an arbitrary path is executed or trusted as an instruction.
+    """
     say = log or (lambda message: None)
+
+    def report_failure(code, stderr=''):
+        say('관리자 권한 작업은 시작됐지만 실패했습니다 (종료 코드 %d).' % code)
+        details = ''
+        if report_path is not None:
+            try:
+                details = Path(report_path).read_text(encoding='utf-8-sig')[:1600].strip()
+            except OSError:
+                pass
+        if not details and stderr:
+            details = str(stderr).strip()[-1600:]
+        if details:
+            say('실패 단계: ' + details)
+        elif report_path is not None:
+            say('상세 원인 기록을 읽지 못했습니다. 확인 위치: ' + str(report_path))
+
     if os.environ.get(privacy.NO_ELEVATION_VARIABLE, '').strip() in ('1', 'true', 'yes'):
         say('관리자 작업을 건너뜁니다 (%s=1).' % privacy.NO_ELEVATION_VARIABLE)
         return False
     if acl.is_elevated():
-        return acl.succeeded(run_script(script, timeout=timeout))
+        result = run_script(script, timeout=timeout)
+        if acl.succeeded(result):
+            return True
+        report_failure(result.returncode if result is not None else 1,
+                       (result.stderr or '') if result is not None else '')
+        return False
     say('Windows 관리자 승인이 필요합니다. 확인 창(UAC)에서 [예]를 누르세요.')
     code, error = acl.run_elevated(
         powershell(),
@@ -72,12 +97,14 @@ def run_as_admin(script: str, *, log=None, timeout=900) -> bool:
         timeout=timeout)
     if code is None:
         if error == acl.ERROR_CANCELLED:
-            say('관리자 승인이 취소되었습니다.')
+            say('Windows 관리자 승인이 취소되었습니다.')
         elif error is not None:
-            say('관리자 권한으로 실행하지 못했습니다: ' + acl.describe_error(error))
+            say('관리자 프로세스를 시작하지 못했습니다: ' + acl.describe_error(error))
+        else:
+            say('관리자 프로세스를 시작하거나 결과를 확인하지 못했습니다.')
         return False
     if code != 0:
-        say('관리자 작업이 실패했습니다 (종료 코드 %d).' % code)
+        report_failure(code)
     return code == 0
 
 
@@ -99,7 +126,10 @@ def account_name() -> Optional[str]:
 
 
 def group_sid(name: str) -> Optional[str]:
-    script = ("try { (New-Object System.Security.Principal.NTAccount(%s))"
+    # Always qualify local groups by this machine's name. A bare name can
+    # resolve to a different domain principal or fail on localized systems.
+    script = ("$localGroup = $env:COMPUTERNAME + '\\' + %s; "
+              "try { ([System.Security.Principal.NTAccount]::new($localGroup))"
               ".Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }"
               % quote(name))
     result = run_script(script, timeout=30)
@@ -115,7 +145,7 @@ function Members($name) {
     $g = [ADSI]("WinNT://$env:COMPUTERNAME/$name,group")
     foreach ($m in @($g.Invoke('Members'))) {
       $raw = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
-      $out += (New-Object System.Security.Principal.SecurityIdentifier($raw, 0)).Value
+      $out += ([System.Security.Principal.SecurityIdentifier]::new([byte[]]$raw, 0)).Value
     }
   } catch { }
   return ,$out
@@ -210,19 +240,41 @@ def _group_lines() -> List[str]:
         lines.append(
             "if (-not [ADSI]::Exists('WinNT://' + $env:COMPUTERNAME + '/%s,group')) "
             "{ try { $made = $computer.Create('group', %s); $made.SetInfo() } "
-            "catch { $failed = 1 } }" % (group, quote(group)))
+            "catch { $failed = 1; "
+            "if ($null -ne $localaiIssues) { "
+            "[void]$localaiIssues.Add('create group %s: ' + $_.Exception.Message) } } }"
+            % (group, quote(group), group))
     return lines
 
 
 def _member_line(group: str, sid: str, present: bool) -> str:
-    """Add or remove a member by SID (``WinNT://<SID>``), then check it took."""
-    verb, want = ('Add', '$true') if present else ('Remove', '$false')
-    return ("try { $g = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/%s,group'); "
-            "$m = 'WinNT://%s'; "
-            "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { [void]$g.psbase.Invoke('%s', $m) }; "
-            "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { $failed = 1 } } catch { $failed = 1 }"
-            % (group, sid, want, verb, want))
+    """Add/remove a SID and verify by enumerating the actual member SIDs.
 
+    Microsoft explicitly documents that WinNT IADsGroup.IsMember does NOT
+    support a SID ADsPath even though IADsGroup.Add/Remove support it. The
+    old implementation therefore marked a successful install as exit-code 1.
+    """
+    verb, want = ('Add', '$true') if present else ('Remove', '$false')
+    return (
+        # TestGroupSid reads objectSid of each COM member, the same
+        # language-independent route used by list_accounts().
+        "function Test-LocalAISidMember($groupObj, $targetSid) { "
+        "foreach ($entry in @($groupObj.psbase.Invoke('Members'))) { "
+        "try { $raw = $entry.GetType().InvokeMember('objectSid', 'GetProperty', $null, $entry, $null); "
+        "$found = ([System.Security.Principal.SecurityIdentifier]::new([byte[]]$raw, 0)).Value; "
+        "if ($found -ieq $targetSid) { return $true } } catch { } "
+        "} return $false }; "
+        "try { $g = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/%s,group'); "
+        "$target = '%s'; $m = 'WinNT://' + $target; "
+        "if ((Test-LocalAISidMember $g $target) -ne %s) { "
+        "[void]$g.psbase.Invoke('%s', $m) }; "
+        "if ((Test-LocalAISidMember $g $target) -ne %s) { "
+        "$failed = 1; if ($null -ne $localaiIssues) { "
+        "[void]$localaiIssues.Add('member %s: SID not present after update') } "
+        "} } catch { $failed = 1; if ($null -ne $localaiIssues) { "
+        "[void]$localaiIssues.Add('member %s: ' + $_.Exception.Message) } }"
+        % (group, sid, want, verb, want, group, group)
+    )
 
 def _shortcut_lines(app_dir: Path) -> List[str]:
     target = Path(app_dir) / 'RUN.bat'
@@ -238,7 +290,7 @@ def _shortcut_lines(app_dir: Path) -> List[str]:
 
 
 def first_install_script(user_sid: str, root: Path, app_dir: Path,
-                         *, shortcuts=True) -> Optional[str]:
+                         *, shortcuts=True, report_path=None) -> Optional[str]:
     """Groups, this account as administrator, the shared root locked, shortcuts.
 
     The root keeps SYSTEM and Administrators, gives this account and
@@ -249,10 +301,13 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
     """
     if not machine.is_sid(user_sid):
         return None
-    lines = ['$failed = 0'] + _group_lines() + [
+    lines = ['$failed = 0',
+             '$localaiIssues = New-Object System.Collections.Generic.List[string]'] + _group_lines() + [
         _member_line(machine.ADMINS_GROUP, user_sid, True),
-        "$admins = $null; try { $admins = (New-Object System.Security.Principal.NTAccount(%s))"
-        ".Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $failed = 1 }"
+        "$admins = $null; try { $localGroup = $env:COMPUTERNAME + '\\' + %s; "
+        "$admins = ([System.Security.Principal.NTAccount]::new($localGroup))"
+        ".Translate([System.Security.Principal.SecurityIdentifier]).Value } "
+        "catch { $failed = 1; [void]$localaiIssues.Add('admin group SID: ' + $_.Exception.Message) }"
         % quote(machine.ADMINS_GROUP),
     ]
     if lockable_root(root):
@@ -267,6 +322,26 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
             group_variable='$admins')
     if shortcuts:
         lines += _shortcut_lines(app_dir)
+    if report_path is not None:
+        # The random report path is created exclusively by elevated PowerShell.
+        # It lives under the protected program root and is read by the
+        # unelevated UI if the script exits non-zero.
+        from pathlib import Path
+        report = Path(report_path)
+        if report.parent != Path(root) or not report.name.startswith('.localai-admin-'):
+            raise ValueError("Unsafe administrator diagnostics path")
+        lines.extend([
+            'if ($failed -ne 0) {',
+            "  try {",
+            "    $reportText = @($localaiIssues | Select-Object -First 8) -join [Environment]::NewLine",
+            "    if (-not $reportText) { $reportText = 'Unspecified Windows administrator step failed' }",
+            "    $payload = [System.Text.Encoding]::UTF8.GetBytes($reportText)",
+            "    $file = [System.IO.File]::Open(" + quote(report) +
+            ", [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)",
+            "    try { $file.Write($payload, 0, $payload.Length) } finally { $file.Dispose() }",
+            "  } catch { }",
+            '}',
+        ])
     lines.append('exit $failed')
     return '\n'.join(lines)
 
@@ -280,8 +355,10 @@ def lock_root_lines(root: Path, *, admin_sids: Iterable[str], principal: str,
     if group_variable:
         lines.append("if (%s) { $grants += @('/grant:r', ('*' + %s + ':(OI)(CI)F')) }"
                      % (group_variable, group_variable))
-    lines.append("& icacls.exe %s /inheritance:r @grants /Q | Out-Null; "
-                 "if ($LASTEXITCODE -ne 0) { $failed = 1 }" % quote(root))
+    lines.append("$localaiAclOutput = & icacls.exe %s /inheritance:r @grants /Q 2>&1; "
+                 "if ($LASTEXITCODE -ne 0) { $failed = 1; if ($null -ne $localaiIssues) { "
+                 "[void]$localaiIssues.Add('root ACL: ' + "
+                 "(($localaiAclOutput | Out-String).Trim())) } }" % quote(root))
     return lines
 
 
