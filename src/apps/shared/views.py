@@ -189,16 +189,20 @@ def models(parent,w):
 
 
 def network(parent,w):
-    note(parent,'Direct = 인터넷 직접 연결\nWARP / Tor = 관리형 프록시 준비 실패 시 실행 중단\n'
-         'Block = 공용 웹 egress 차단, 검색 비활성, Host Block 거부\n\n'
-         '이 버전은 동일 프로젝트의 한 창이 관리형 실행을 소유합니다. 다른 창은 조회할 수 있으며, '
-         '소유 창의 세션을 종료한 뒤 변경할 수 있습니다.')
-    r=row(parent);button(r,'상태 확인',lambda:w.refresh_health(fresh=True))
-    button(r,'정책 설정',lambda:w.navigate('settings'))
-    button(r,'세션 종료 / 잠금 해제',w.stop_sessions)
-    w.network_text=text_box(parent)
+    actions=row(parent)
+    button(actions,'상태 확인',lambda:w.refresh_health(fresh=True))
+    button(actions,'정책 설정',lambda:w.navigate('settings'))
+    button(actions,'세션 종료',w.stop_sessions)
+    details=Disclosure(parent,'네트워크 정책 설명')
+    note(details.body,
+         'Direct = 직접 연결 · WARP / Tor = 관리형 프록시 · '
+         'Block = 관리형 웹 연결 차단. 검색 비활성 및 Host Block 거부. '
+         '프록시 준비가 실패하면 해당 세션을 시작하지 않습니다.')
+    note(details.body,
+         '관리형 세션의 실행 소유권은 한 창만 갖습니다. 다른 창에서는 상태를 조회하고 '
+         '소유 창의 세션을 끝낸 뒤 설정을 변경할 수 있습니다.')
+    w.network_text=text_box(parent,height=7)
     set_text(w.network_text,'No managed session started in this window.')
-
 
 def system(parent,w):
     r=row(parent);button(r,'상태 새로고침',lambda:w.refresh_health(fresh=True),True)
@@ -208,27 +212,37 @@ def system(parent,w):
 
 
 def settings(parent,w):
-    ttk.Label(parent,text='화면 테마',style='Section.TLabel').pack(anchor='w',pady=(0,8))
-    r=row(parent)
+    ttk.Label(parent,text='화면 테마',style='Section.TLabel').pack(anchor='w',pady=(0,6))
+    appearance=row(parent)
     w.theme_buttons=[]
     for value,label in (('light','밝은 회색 (기본)'),('dark','어두운 테마')):
-        choice=ttk.Radiobutton(r,text=label,variable=w.theme_choice,value=value,command=w.save_theme)
-        choice.pack(side='left',padx=(0,20));w.theme_buttons.append(choice)
-    note(parent,'선택 즉시 적용하고 네 앱의 공통 설정으로 저장합니다. 대화와 작업은 중단하지 않습니다.\n'
-         'AnythingLLM 브라우저 화면과 운영체제 대화상자는 각자의 테마 설정을 따릅니다.')
-    ttk.Separator(parent).pack(fill='x',pady=(8,20))
-    ttk.Label(parent,text='네트워크 정책',style='Section.TLabel').pack(anchor='w',pady=(0,8))
+        choice=ttk.Radiobutton(appearance,text=label,variable=w.theme_choice,
+                               value=value,command=w.save_theme)
+        choice.pack(side='left',padx=(0,18))
+        w.theme_buttons.append(choice)
+    note(parent,'화면 테마만 즉시 바뀌며 대화·작업 상태는 유지됩니다.')
+
+    ttk.Separator(parent).pack(fill='x',pady=(8,12))
+    ttk.Label(parent,text='네트워크 정책',style='Section.TLabel').pack(anchor='w',pady=(0,6))
     w.settings_scope=tk.StringVar(master=w.root,value='global')
     w.settings_mode=tk.StringVar(master=w.root,value='warp')
-    r=row(parent)
-    scope_box=ttk.Combobox(r,textvariable=w.settings_scope,values=('global','studio','chat','interpreter','setup'),state='readonly',width=18)
-    scope_box.pack(side='left',padx=(0,12))
-    scope_box.bind('<<ComboboxSelected>>',lambda event:w.load_settings())
-    ttk.Combobox(r,textvariable=w.settings_mode,values=('warp','tor','direct','block'),state='readonly',width=18).pack(side='left',padx=(0,12))
-    button(r,'저장',w.save_settings,True)
-    note(parent,'변경은 다음 세션부터 적용됩니다. 실행 중인 서비스의 네트워크를 즉시 바꾸지 않습니다.\n'
-         '새 설정이 없으면 기존 런처의 네트워크 설정을 기본값으로 사용합니다.')
+    line=row(parent)
+    ttk.Label(line,text='실행 모드').pack(side='left',padx=(0,8))
+    ttk.Combobox(line,textvariable=w.settings_mode,
+                 values=('warp','tor','direct','block'),
+                 state='readonly',width=15).pack(side='left',padx=(0,10))
+    button(line,'저장',w.save_settings,True)
 
+    advanced=Disclosure(parent,'앱별 적용 범위')
+    ttk.Label(advanced.body,text='기본값(global) 또는 특정 앱에만 적용할 수 있습니다.',
+              style='Muted.TLabel').pack(anchor='w',pady=(0,5))
+    scope_box=ttk.Combobox(advanced.body,textvariable=w.settings_scope,
+                           values=('global','studio','chat','interpreter','setup'),
+                           state='readonly',width=19)
+    scope_box.pack(anchor='w')
+    scope_box.bind('<<ComboboxSelected>>',lambda event:w.load_settings())
+    note(parent,'네트워크 변경은 다음 세션 시작부터 적용됩니다. '
+         '실행 중인 서비스 연결은 자동으로 바꾸지 않습니다.')
 
 def setup(parent,w):
     w.setup_status=tk.StringVar(
