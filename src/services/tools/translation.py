@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from core.tools.translation import (Document, Piece, prepare, protect, read_source,
+from core.tools.translation import (SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
                                     render, restore, speaker_prefix, split_masked)
 from integrations.ollama.client import OllamaClient, local_model_name
 from .translation_memory import (Checkpoint, TranslationMemory, default_protector, initial_memory,
@@ -169,6 +169,11 @@ def _validate(unit_text, answer, memory, tokens):
     for key in expected_tokens:
         if answer.count(key) != 1:
             raise ValueError('Translation changed a protected token')
+    # 보호 토큰 밖의 구조 기호(괄호·강조·코드 표시)가 사라지거나 늘면 서식·변수가 깨진 것이다.
+    bare_in, bare_out = _TOKEN.sub(' ',unit_text), _TOKEN.sub(' ',answer)
+    for mark in STRUCTURE_MARKS:
+        if bare_in.count(mark) != bare_out.count(mark):
+            raise ValueError('Translation changed formatting marks: '+mark)
     for token in re.findall(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__',answer):
         if token not in expected_tokens and token not in unit_text:
             raise ValueError('Translation introduced an unexpected token')
@@ -424,6 +429,44 @@ class _CountedClient:
             abort()
 
 
+MAX_FOLDER_FILES = 2000
+
+
+@dataclass(frozen=True)
+class FolderResult:
+    """폴더 번역 결과. 경로는 원본 폴더 기준 상대 경로(문자열)."""
+    output: Path
+    translated: tuple = ()      # ((상대 경로, Result), ...)
+    skipped: tuple = ()         # ((상대 경로, 이유), ...)  이미 번역됨·이미 번역 언어
+    failed: tuple = ()          # ((상대 경로, 오류), ...)
+    copied: int = 0             # 번역 대상이 아니어서 그대로 복사한 파일 수
+    count: int = 0              # 번역한 구간 수 합계
+
+
+def folder_output(folder, target):
+    """폴더 단위 이름: 'docs' → 'docs.ko'. 안의 파일 이름은 원본 그대로 둔다."""
+    folder = Path(folder)
+    return folder.with_name(folder.name + '.' + CODES[target])
+
+
+def scan_folder(folder, exclude=None):
+    """번역할 파일과 그 밖의 파일을 정해진 순서로 모은다. 숨김 항목·바로가기(심볼릭 링크)는 건너뛴다."""
+    folder = Path(folder)
+    excluded = Path(exclude).resolve() if exclude else None
+    files, others = [], []
+    for root, dirs, names in os.walk(folder):
+        here = Path(root)
+        dirs[:] = sorted(name for name in dirs if not name.startswith('.')
+                         and not (here / name).is_symlink()
+                         and (excluded is None or (here / name).resolve() != excluded))
+        for name in sorted(names):
+            path = here / name
+            if name.startswith('.') or path.is_symlink() or name.startswith('.localai-translation-'):
+                continue
+            (files if path.suffix.lower() in SUPPORTED else others).append(path)
+    return files, others
+
+
 class TranslationService:
     def __init__(self,inference,client_factory=None,*,checkpoint_dir=None,protector='auto',
                  check_language=True):
@@ -599,3 +642,109 @@ class TranslationService:
         finally:
             self._active=None
             checkpoint.close(success=success)
+    def inspect_folder(self,folder,kind='auto',stage=False):
+        """폴더 분석: [(상대 경로, 감지 유형 또는 오류, 번역 구간 수)], 그대로 복사할 파일 수."""
+        folder=Path(folder)
+        files,others=scan_folder(folder)
+        if len(files)>MAX_FOLDER_FILES:
+            raise ValueError('Too many files in the folder (%d maximum)'%MAX_FOLDER_FILES)
+        rows=[]
+        for path in files:
+            rel=str(path.relative_to(folder))
+            try:
+                doc=self.inspect(path,kind,stage)
+                rows.append((rel,doc.detected,len(_units(doc)[0]) if doc.segments else 0))
+            except ValueError as exc:
+                rows.append((rel,'error: '+str(exc),0))
+        return rows,len(others)
+
+    def translate_folder(self,folder,*,output_dir=None,copy_others=True,
+                         progress:Callable[[int,int],None]|None=None,
+                         on_file:Callable[[int,int,str],None]|None=None,
+                         cancelled:Callable[[],bool]|None=None,**options) -> FolderResult:
+        """폴더 안의 지원 파일을 모두 번역해 '폴더이름.언어코드' 폴더에 같은 구조·같은 파일 이름으로 만든다.
+
+        - 결과 폴더에 이미 있는 파일은 건너뛴다(중단 후 다시 실행하면 남은 파일만 번역).
+        - 파일 하나가 실패해도 나머지는 계속한다. Ollama 연결 끊김처럼 모든 파일에 해당하는
+          오류는 즉시 멈춘다.
+        - copy_others=True면 번역 대상이 아닌 파일(그림 등)도 그대로 복사해 폴더를 완성한다.
+        """
+        folder=Path(folder).resolve()
+        if not folder.is_dir():
+            raise FileNotFoundError('Source folder does not exist')
+        target=options.get('target','한국어')
+        if target not in LANGUAGES:
+            raise ValueError('Unsupported translation options')
+        output=Path(output_dir).resolve() if output_dir else folder_output(folder,target).resolve()
+        if output==folder or output in folder.parents:
+            raise ValueError('Output folder cannot be the source folder or one of its parents')
+        files,others=scan_folder(folder,exclude=output)
+        if not files:
+            raise ValueError('No translatable files (TXT/JSON/MD/SRT/VTT) in the folder')
+        if len(files)>MAX_FOLDER_FILES:
+            raise ValueError('Too many files in the folder (%d maximum)'%MAX_FOLDER_FILES)
+        kind,stage=options.get('kind','auto'),options.get('stage',False)
+        plan,total=[],0
+        for path in files:
+            try:
+                doc=self.inspect(path,kind,stage)
+                size=len(_units(doc)[0]) if doc.segments else 0
+                plan.append((path,size,None));total+=size
+            except ValueError as exc:
+                plan.append((path,0,str(exc)))
+        total=max(total,1)
+        output.mkdir(parents=True,exist_ok=True)
+        translated,skipped,failed=[],[],[]
+        done=0
+        def report(value):
+            if progress:
+                progress(min(value,total),total)
+        report(0)
+        for index,(path,size,error) in enumerate(plan,1):
+            if cancelled and cancelled():
+                raise InterruptedError('Translation cancelled; finished files are kept')
+            rel=path.relative_to(folder);dest=output/rel
+            if on_file:
+                on_file(index,len(plan),str(rel))
+            if error:
+                failed.append((str(rel),error));continue
+            if dest.exists():
+                skipped.append((str(rel),'already translated'));done+=size;report(done);continue
+            if size==0:
+                skipped.append((str(rel),'no translatable text'))
+                if copy_others:
+                    dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,dest)
+                continue
+            dest.parent.mkdir(parents=True,exist_ok=True)
+            base=done
+            try:
+                result=self.translate_file(path,output_path=dest,cancelled=cancelled,
+                                           progress=lambda n,_t,base=base:report(base+n),**options)
+                translated.append((str(rel),result))
+            except InterruptedError:
+                raise
+            except FileExistsError:
+                skipped.append((str(rel),'already translated'))
+            except ValueError as exc:
+                if 'same' in str(exc).lower():          # 이미 번역 언어로 된 파일
+                    skipped.append((str(rel),'already in the target language'))
+                    if copy_others and not dest.exists():
+                        shutil.copy2(path,dest)
+                else:
+                    failed.append((str(rel),str(exc)))
+            except RuntimeError as exc:
+                if 'changed while translating' in str(exc):
+                    failed.append((str(rel),str(exc)))
+                else:
+                    raise                                 # 모델 없음·Ollama 오류: 모든 파일이 실패하므로 멈춘다
+            done=base+size;report(done)
+        copied=0
+        if copy_others:
+            for path in others:
+                dest=output/path.relative_to(folder)
+                if dest.exists():
+                    continue
+                dest.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copy2(path,dest);copied+=1
+        return FolderResult(output,tuple(translated),tuple(skipped),tuple(failed),copied,
+                            sum(result.count for _,result in translated))

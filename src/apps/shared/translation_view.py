@@ -5,7 +5,9 @@
 """
 import tkinter as tk
 from tkinter import ttk
-from services.tools.languages import SOURCE_LABELS, TARGET_LABELS
+from services.tools.languages import SOURCE_LABELS, TARGET_LABELS, LANGUAGES as _ALL
+
+CODES={item.label:item.code for item in _ALL if item.target}
 from .widgets import note, text_box, set_text, status_line, ScrollArea, wrap_to_parent
 
 KINDS={'자동 감지':'auto','일반 문서':'general','소설':'novel','대본 / 대사':'script',
@@ -73,15 +75,17 @@ def build(parent,w,toolbar=None):
         frame=ttk.Frame(owner);frame.pack(fill='x',pady=3)
         ttk.Label(frame,text=label,width=11).pack(side='left')
         return frame
-    row=line(panel,'원본 파일')
+    row=line(panel,'원본')
     ttk.Entry(row,textvariable=w.translation_path).pack(side='left',fill='x',expand=True)
-    ttk.Button(row,text='선택',command=w.choose_translation_file).pack(side='left',padx=(5,0))
+    ttk.Button(row,text='파일',command=w.choose_translation_file).pack(side='left',padx=(5,0))
+    ttk.Button(row,text='폴더',command=w.choose_translation_folder).pack(side='left',padx=(5,0))
     ttk.Button(row,text='분석',command=w.analyze_translation_file).pack(side='left',padx=(5,0))
-    row=line(panel,'출력 파일')
+    row=line(panel,'결과')
     ttk.Entry(row,textvariable=w.translation_output).pack(side='left',fill='x',expand=True)
     ttk.Button(row,text='위치',command=w.choose_translation_output).pack(side='left',padx=(5,0))
-    note(panel,'TXT·JSON·MD·SRT·VTT, 최대 32MiB. 비워 두면 원본 옆에 "이름.ko.txt"처럼 새 파일을 만들며 '
-         '이미 있는 파일은 덮어쓰지 않습니다.')
+    note(panel,'파일: TXT·JSON·MD·SRT·VTT, 최대 32MiB. 결과를 비워 두면 원본 옆에 "이름.ko.txt"를 만듭니다.\n'
+         '폴더: 하위 폴더까지 모두 번역해 "폴더이름.ko" 폴더에 같은 구조·같은 파일 이름으로 만듭니다. '
+         '그림 등 다른 파일은 그대로 복사하고, 다시 실행하면 남은 파일만 번역합니다. 기존 파일은 덮어쓰지 않습니다.')
 
     options=ttk.LabelFrame(body,text='번역 설정',padding=12);options.pack(fill='x',pady=(0,10))
     row=line(options,'로컬 모델')

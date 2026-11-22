@@ -33,6 +33,12 @@ LIST_ITEM = re.compile(r'^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\S')
 STAGE = re.compile(r'^\s*\[([^\]\r\n]+)\]\s*$')
 PROTECT = re.compile(
     r'`[^`\r\n]+`|'
+    # HTML 주석, Markdown 각주·참조 정의 라벨, 수식
+    r'<!--.*?-->|\[\^[^\]\r\n]+\]|^\[[^\]\r\n]+\]:|'
+    r'(?<![\w$])\$(?=[^\s$\d])[^$\r\n]*?[^\s$]\$(?![\w$])|'
+    # i18n 변수: Ruby %{x}, vue-i18n @:key, i18next $t(key), [[x]], Laravel :name, react-i18next <0>
+    r'%\{[\w.]+\}|@:[\w.]+|\$t\([^)\r\n]*\)|\[\[[^\[\]\r\n]+\]\]|'
+    r'(?<![\w:/@.]):[A-Za-z_]\w*(?!:)|</?\d+\s*/?>|'
     # Markdown 링크/이미지 대상: [글자](대상 "제목") 과 참조형 [글자][id]
     r'(?<=\])\((?:[^()\s]|\([^()\s]*\))+(?:\s+"[^"\r\n]*")?\)|(?<=\])\[[^\[\]\r\n]{1,60}\]|'
     r'https?://[^\s<>\])]+|'
@@ -43,7 +49,15 @@ PROTECT = re.compile(
     r'<\/?[A-Za-z][^<>\r\n]*>|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|'
     r'&(?:[A-Za-z][\w]+|#(?:\d+|x[\da-fA-F]+));|'
     r'(?:[A-Za-z]:\\|\.\.?/)[\w.\\/\-]+', re.UNICODE)
+# ICU MessageFormat({n, plural, one {...} other {...}}): 뼈대(머리·선택자·닫는 괄호·#)만 보호하고
+# 안쪽 문장은 번역한다. 선택자(one/other/male…)를 번역하면 메시지가 깨진다.
+ICU_HEADER = re.compile(r'\{\s*\w+\s*,\s*(?:plural|select|selectordinal)\s*,')
+ICU_PROTECT = re.compile(
+    r'\{\s*\w+\s*,\s*(?:plural|select|selectordinal)\s*,(?:\s*offset:\d+)?|'
+    r'(?:=\d+|[A-Za-z_]\w*)\s*\{(?=[^{}]*\})|\}|#|' + PROTECT.pattern, re.UNICODE)
 PROTECTED_TOKEN = re.compile(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__')
+# 번역 전후 개수가 같아야 하는 구조 기호(괄호·꺾쇠·강조·코드·수식 표시)
+STRUCTURE_MARKS = ('{', '}', '[', ']', '<', '>', '**', '~~', '`')  # $는 '$5→5달러'처럼 정상 변환이 있어 제외
 SAFE_JSON_KEYS = frozenset({
     'id', 'uuid', 'guid', 'key', 'api_key', 'url', 'uri', 'href', 'link', 'path', 'filename', 'file',
     'command', 'cmd', 'code', 'source', 'src', 'script', 'hash', 'checksum', 'version',
@@ -72,7 +86,7 @@ _CODE_LINE = re.compile(
     r'|from\s+[\w.]+\s+import\s+\S|import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+)*\s*;?\s*$'
     r'|import\s+.+\s+from\s+[\'"]|(?:const|let|var)\s+[\w$]+\s*=|function\s*[\w$]*\s*\('
     r'|return\b[^\r\n]*;\s*$|return\s*$|(?:public|private|protected|static)\b[^\r\n]*[;{]\s*$'
-    r'|(?:>>>|\$|PS [A-Za-z]:\\[^>\r\n]*>)\s'
+    r'|(?:>>>|\$|PS [A-Za-z]:\\[^>\r\n]*>)\s|(?:\./|~/)\S'
     r'|[A-Za-z_][\w.]*\([^\r\n]*\)\s*;?\s*$|[{}\[\]()<>;,]+\s*$)')
 _CONTROL = re.compile(r'\s*(if|elif|while|for|with|try|except|else|catch|switch|finally|do)\b([^\r\n]*?)([:{])\s*$')
 _SHELL = re.compile(r'\s*(?:pip3?|uv|npm|npx|yarn|pnpm|git|docker|curl|wget|python3?|node|sudo|'
@@ -92,7 +106,13 @@ def looks_like_code(line: str) -> bool:
         if not rest or end == '{' or re.search(r'[()=<>!\[\].]|\bin\b|\bas\b', rest) or \
                 rest in ('True', 'False', '1'):
             return True
+    # JSON/설정 조각의 "키": 값 줄
+    if re.match(r'\s*"[^"\r\n]+"\s*:\s*(?:"|-?\d|true\b|false\b|null\b|\{|\[)', line):
+        return True
     shell = _SHELL.match(line)
+    if shell and re.search(r'&&|\|\||(?:^|\s)\|(?:\s|$)|(?:^|\s)(?:\.{1,2}|~)/|(?:^|\s)--?[A-Za-z]|\$\w',
+                           shell.group(1)):
+        return True                      # 셸 연산자·경로·옵션이 있으면 문장 길이와 무관하게 명령
     if shell:
         rest = shell.group(1).rstrip()
         if not rest.endswith(('.', '!', '?')) and (rest.startswith('-') or len(rest.split()) <= 4) \
@@ -206,7 +226,7 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
     # 코드 판별은 코드가 섞일 수 있는 문서에만 쓴다. 자막·대본·소설의 대사를 코드로 오인하지 않는다.
     code_filter = kind in ('general', 'code', 'structured') and not subtitle_file
     dialogue = kind in ('script', 'subtitle') or subtitle_file
-    last_blank, in_list = True, False
+    last_blank, in_list, in_comment = True, False, False
 
     def add(segment):
         if segment:
@@ -264,6 +284,17 @@ def _plain(source: str, suffix: str, stage: bool, kind: str) -> list[Segment]:
             if not stripped:
                 continue
         if markdown:
+            # 여러 줄에 걸친 HTML 주석은 통째로 건너뛴다(한 줄 주석은 보호 토큰으로 처리).
+            if in_comment:
+                if '-->' in line:
+                    in_comment = False
+                continue
+            if '<!--' in line and '-->' not in line[line.index('<!--'):]:
+                in_comment = True
+                if not line[:line.index('<!--')].strip():
+                    continue
+                line = line[:line.index('<!--')].rstrip()
+                stripped = line.strip()
             indented = line.startswith(('    ', '\t'))
             if LIST_ITEM.match(line):
                 in_list = True
@@ -387,7 +418,8 @@ def protect(text: str):
         token = f'__LOCALAI_KEEP_{nonce}_{len(mapping):04d}__'
         mapping[token] = match.group()
         return token
-    return PROTECT.sub(replace, text), mapping
+    pattern = ICU_PROTECT if ICU_HEADER.search(text) else PROTECT
+    return pattern.sub(replace, text), mapping
 
 
 def restore(text: str, mapping: dict):

@@ -35,8 +35,20 @@ class TranslationController:
             self.translation_output.set('')
             self.analyze_translation_file()
 
+    def choose_translation_folder(self):
+        value=filedialog.askdirectory(parent=self.root,title='번역할 폴더',mustexist=True)
+        if value:
+            self.translation_path.set(value)
+            self.translation_output.set('')
+            self.analyze_translation_file()
+
     def choose_translation_output(self):
         original=Path(self.translation_path.get())
+        if original.is_dir():
+            value=filedialog.askdirectory(parent=self.root,title='결과 폴더 (비워 두면 "폴더이름.언어코드")',
+                                          initialdir=str(original.parent))
+            if value: self.translation_output.set(value)
+            return
         value=filedialog.asksaveasfilename(parent=self.root,title='별도 결과 파일',
             initialdir=str(original.parent) if original.parent.is_dir() else '',
             initialfile=original.stem+'.translated'+original.suffix)
@@ -46,6 +58,25 @@ class TranslationController:
         path=self.translation_path.get().strip()
         if not path:
             self.translation_say('Waiting','파일을 먼저 선택하세요.');return
+        if Path(path).is_dir():
+            self.translation_say('Working','폴더 안의 파일 분석 중...')
+            def folder_done(found):
+                rows,others=found
+                units=sum(count for _,_,count in rows)
+                errors=[rel for rel,kind,_ in rows if kind.startswith('error')]
+                self.translation_say('Ready' if rows else 'Failed',
+                    ('폴더: 번역할 파일 %d개 · 번역 대상 %d구간 · 그대로 복사 %d개%s · 결과는 "%s.%s" 폴더'
+                     % (len(rows),units,others,(' · 읽을 수 없는 파일 %d개'%len(errors)) if errors else '',
+                        Path(path).name,self.translation_code()))
+                    if rows else '이 폴더에는 번역할 TXT·JSON·MD·SRT·VTT 파일이 없습니다.')
+                set_text(self.translation_source_text,'\n'.join(
+                    '%-48s %-12s %6d구간'%(rel,kind[:40],count) for rel,kind,count in rows)
+                    or '(번역할 파일 없음)')
+                self.translation_tabs.select(0)
+            self.run_task('tools.inspect',lambda:self.services.translator.inspect_folder(path),folder_done,
+                mutate=False,announce=False,
+                error=lambda e:self.translation_say('Failed','폴더 분석 실패: '+friendly_error(e)))
+            return
         self.translation_say('Working','파일 유형 분석 중...')
         def done(doc):
             self.translation_say('Ready','감지된 유형: %s · 번역 대상 %d구간 · 2단계: 모델과 언어를 고르고 [번역 시작]' %
@@ -55,6 +86,10 @@ class TranslationController:
         self.run_task('tools.inspect',lambda:self.services.translator.inspect(path),done,
             mutate=False,announce=False,
             error=lambda e:self.translation_say('Failed','파일 분석 실패: '+friendly_error(e)))
+
+    def translation_code(self):
+        from .translation_view import CODES
+        return CODES.get(self.translation_language.get(),'')
 
     def refresh_translation_models(self):
         self.translation_say('Working','로컬 모델 확인 중...')
@@ -102,6 +137,8 @@ class TranslationController:
         self.translation_open_button.configure(state='disabled')
         self.set_translation_progress(0,0,'준비 중')
         clock={}
+        folder_mode=Path(path).is_dir()
+        current={'file':''}
         def progress(n,total):
             # 작업 스레드에서 호출된다. 화면 갱신은 이벤트로 Tk 스레드에 넘긴다.
             now=time.monotonic()
@@ -113,17 +150,27 @@ class TranslationController:
                 eta='약 %s 남음'%_duration((now-clock['start'])/done_here*(total-n))
             self.services.events.emit('runtime.progress',{'service':'translator',
                 'done':n,'total':total,'eta':eta,
-                'message':'번역 중: %d/%d 구간%s'%(n,total,' · '+eta if eta else '')})
+                'message':'%s번역 중: %d/%d 구간%s'%(current['file'] if folder_mode else '',n,total,
+                                                     ' · '+eta if eta else '')})
+        def on_file(index,count,name):
+            current['file']='파일 %d/%d · %s · '%(index,count,name)
         def work():
-            return self.services.translator.translate_file(
-                **options,progress=progress,
-                cancelled=lambda:self._translation_cancel.is_set() or self.runner.cancel.is_set())
+            stop=lambda:self._translation_cancel.is_set() or self.runner.cancel.is_set()
+            if folder_mode:
+                folder_options=dict(options)
+                folder_options.pop('path');output_dir=folder_options.pop('output_path')
+                return self.services.translator.translate_folder(
+                    path,output_dir=output_dir,progress=progress,on_file=on_file,cancelled=stop,
+                    **folder_options)
+            return self.services.translator.translate_file(**options,progress=progress,cancelled=stop)
         def unlock():
             if not self.translation_progress.get()>=100:
                 self.translation_progress_label.configure(text='중지됨')
             self.translation_start_button.configure(state='normal')
             self.translation_cancel_button.configure(state='disabled')
         def done(result):
+            if folder_mode:
+                return folder_finished(result)
             self.set_translation_progress(result.count,result.count,'')
             unlock()
             kept=result.kept_lines
@@ -148,6 +195,36 @@ class TranslationController:
                      ('\n\n검토 필요(원문 단어 일부 남음) 줄\n'+', '.join(map(str,review)) if review else '')+
                      '\n\n문서 메모리는 해당 번역 작업에만 사용됩니다. 작업 완료 후 재개 기록은 삭제됩니다.')
             self.translation_tabs.select(1)
+        def folder_finished(result):
+            files=len(result.translated)+len(result.skipped)+len(result.failed)
+            self.set_translation_progress(files,max(files,1),'파일 %d개'%files)
+            unlock()
+            review=sum(len(r.review_lines) for _,r in result.translated)
+            kept=sum(len(r.kept_lines) for _,r in result.translated)
+            state='Failed' if result.failed and not result.translated else 'Ready'
+            self.translation_say(state,'폴더 번역 완료: 번역 %d개 · 건너뜀 %d개 · 실패 %d개 · 복사 %d개%s%s · %s' % (
+                len(result.translated),len(result.skipped),len(result.failed),result.copied,
+                (' · 검토 필요 %d줄'%review) if review else '',(' · 원문 유지 %d줄'%kept) if kept else '',
+                result.output),log=True,level='error' if state=='Failed' else 'info')
+            self._translation_last_output=result.output
+            self.translation_open_button.configure(state='normal')
+            self.root.bell()
+            self.translation_output.set('')
+            reasons={'already translated':'이미 번역됨','already in the target language':'이미 번역 언어',
+                     'no translatable text':'번역할 문장 없음(복사)'}
+            lines=['번역한 파일']
+            lines+=['  %s  (%d구간%s%s)'%(rel,r.count,(' · 검토 %s줄'%','.join(map(str,r.review_lines[:6])))
+                     if r.review_lines else '',(' · 원문 유지 %s줄'%','.join(map(str,r.kept_lines[:6])))
+                     if r.kept_lines else '') for rel,r in result.translated] or ['  (없음)']
+            if result.skipped:
+                lines+=['','건너뛴 파일']+['  %s  (%s)'%(rel,reasons.get(why,why)) for rel,why in result.skipped]
+            if result.failed:
+                lines+=['','실패한 파일 (나머지는 계속 번역함)']+['  %s  — %s'%(rel,friendly_error(err))
+                                                       for rel,err in result.failed]
+            set_text(self.translation_memory_text,'\n'.join(lines))
+            first=result.translated[0][1].text if result.translated else ''
+            set_text(self.translation_result_text,first[:12000] or '번역한 파일이 없습니다.')
+            self.translation_tabs.select(2)
         def failed(exc):
             unlock()
             if isinstance(exc,InterruptedError):
@@ -191,6 +268,9 @@ _FRIENDLY=(
     ('decode','파일 인코딩을 알 수 없습니다. UTF-8로 저장한 뒤 다시 시도하세요.'),
     ('unsupported file extension','지원하지 않는 형식입니다. TXT·JSON·MD·SRT·VTT만 됩니다.'),
     ('unclosed markdown','닫히지 않은 코드 블록(```)이 있어 번역 범위를 정할 수 없습니다.'),
+    ('no translatable files','이 폴더에는 번역할 TXT·JSON·MD·SRT·VTT 파일이 없습니다.'),
+    ('too many files','폴더의 파일이 너무 많습니다(최대 2000개). 나누어 번역하세요.'),
+    ('output folder cannot be','결과 폴더는 원본 폴더나 그 상위 폴더일 수 없습니다.'),
     ('no translatable content','번역할 문장을 찾지 못했습니다. 콘텐츠 유형을 바꿔 보세요.'),
     ('glossary','고정 용어집의 번역을 모델이 끝까지 따르지 않았습니다. 용어를 확인하거나 [실패한 구간은 원문 유지]를 켜세요.'),
     ('failed validation','모델 응답이 검증을 통과하지 못했습니다. [실패한 구간은 원문 유지]를 켜거나 더 큰 모델을 쓰세요.'),
