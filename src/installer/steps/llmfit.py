@@ -61,7 +61,7 @@ def install(paths, *, log=None):
         if len(executable_bytes) > MAX_EXE:
             raise ValueError("LLMfit 실행 파일 최대 크기 초과")
         exe.parent.mkdir(parents=True, exist_ok=True)
-        temporary = exe.with_suffix(".exe.new")
+        temporary = exe.with_name("llmfit.new.exe")
         try:
             temporary.write_bytes(executable_bytes)
             if not _version_ok(temporary):
