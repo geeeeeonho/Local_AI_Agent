@@ -83,10 +83,27 @@ def bootstrap(monkeypatch):
     return fake
 
 
-def test_install_flags_reach_the_installer_with_dashed_names(bootstrap):
+def test_install_flags_open_setup_in_same_window(monkeypatch, bootstrap, tmp_path):
+    state=_services(monkeypatch,tmp_path)
+    called=[]
+    from types import SimpleNamespace
+    class Window:
+        def __init__(self, app, services):
+            called.append(('app',app))
+            self.root=SimpleNamespace(after=lambda delay,fn: called.append(('scheduled',delay)))
+        def apply_setup_cli_options(self, **kwargs):
+            called.append(('options',kwargs))
+        def repair(self):
+            called.append(('repair',))
+        def run(self):
+            called.append(('run',))
+    _window_module(monkeypatch,Window)
     assert main('setup', ['--install', '--skip-model', '--lang', 'en']) == 0
-    assert bootstrap.calls == [
-        ('installer', ['--install', '--skip-model', '--lang', 'en'])]
+    assert ('app','setup') in called
+    assert ('options',{'skip_sandbox':False,'skip_build':False,'skip_search':False}) in called
+    assert any(item[0]=='scheduled' for item in called)
+    assert state['closed']==1
+    assert not any(item[0]=='installer' for item in bootstrap.calls)
 
 
 def test_tui_reaches_the_terminal_launcher_from_any_app(bootstrap):
@@ -115,6 +132,10 @@ def _services(monkeypatch, tmp_path):
 
         def close(self):
             state['closed'] += 1
+
+        def finalize(self):
+            state['closed'] += 1
+            return True
 
     monkeypatch.setattr(desktop_services, 'create_services', Services)
     return state
@@ -178,3 +199,47 @@ def test_a_normal_run_initializes_language_and_closes_once(monkeypatch, bootstra
     assert opened == ['interpreter']
     assert ('language', str(tmp_path), 'ko') in bootstrap.calls
     assert state['closed'] == 1
+
+
+
+def test_studio_normal_entry_registers_first_admin_automatically(monkeypatch, bootstrap, tmp_path):
+    from installer.steps import machine as machine_step
+    from types import SimpleNamespace
+    from project_paths import RUNTIME_ROOT
+    state=_services(monkeypatch,tmp_path)
+    calls=[]
+    monkeypatch.setattr(machine_step, 'bootstrap_first_run',
+                        lambda *paths: calls.append(('bootstrap',paths)) or True)
+    class Window:
+        def __init__(self, app, services):
+            calls.append(('window',app))
+        def run(self):
+            pass
+    _window_module(monkeypatch,Window)
+    assert main('studio',[])==0
+    assert calls[0][0]=='bootstrap'
+    assert calls[0][1][0]==RUNTIME_ROOT
+    assert calls[1]==('window','studio')
+    assert state['closed']==1
+
+
+def test_manage_entry_also_bootstraps_but_install_runs_own_security_flow(monkeypatch, bootstrap, tmp_path):
+    from installer.steps import machine as machine_step
+    from types import SimpleNamespace
+    state=_services(monkeypatch,tmp_path)
+    calls=[]
+    monkeypatch.setattr(machine_step, 'bootstrap_first_run',
+                        lambda *paths: calls.append('boot') or True)
+    class Window:
+        def __init__(self,app,services):
+            self.root=SimpleNamespace(after=lambda ms,fn:None)
+        def apply_setup_cli_options(self,**kw):
+            pass
+        def run(self):
+            pass
+    _window_module(monkeypatch,Window)
+    assert main('studio',['--manage'])==0
+    assert calls==['boot']
+    assert main('studio',['--install'])==0
+    assert calls==['boot'], 'explicit Setup already handles first-install UAC'
+    assert state['closed']==2
