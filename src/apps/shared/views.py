@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 from .widgets import (heading, note, text_box, PanelHost, ScrollArea, set_text,
-                      status_line)
+                      status_line, Disclosure)
 from .specs import LABELS, DESCRIPTIONS
 from . import models_view, tools_view
 
@@ -63,66 +63,74 @@ def link_selector(parent,w):
 
 def chat(parent,w):
     w.chat_tabs=ttk.Notebook(parent);w.chat_tabs.pack(fill='both',expand=True)
-    main=ttk.Frame(w.chat_tabs,padding=(4,16))
-    w.chat_links_page=ttk.Frame(w.chat_tabs,padding=(4,16))
+    main=ttk.Frame(w.chat_tabs,padding=(4,7))
+    w.chat_links_page=ttk.Frame(w.chat_tabs,padding=(4,7))
     w.chat_tabs.add(main,text='대화 · Workspace')
     w.chat_tabs.add(w.chat_links_page,text='Agent 연결 (선택)')
     content=ScrollArea(main);w.page_scrolls['chat.main']=content
     main=content.body
-    mode_row(main,w)
-    w.chat_search = tk.BooleanVar(master=w.root, value=False)
-    ttk.Checkbutton(main, text='웹 검색 엔진도 함께 실행 (SearXNG · 추가 RAM 사용)',
-                    variable=w.chat_search).pack(anchor='w', pady=(0, 8))
-    r=row(main)
-    button(r,'Chat 시작',w.start_chat,kind='Chat')
-    w.chat_open_button=button(r,'대화 화면 열기',w.open_chat)
+
+    # Keep the three main actions and their status visible before any options.
+    actions=row(main)
+    button(actions,'Chat 시작',w.start_chat,kind='Chat')
+    w.chat_open_button=button(actions,'대화 화면 열기',w.open_chat)
     w.chat_open_button.configure(state='disabled')
-    button(r,'세션 종료',w.stop_sessions)
-    # Right under the buttons it belongs to, and filled in before anything has
-    # been pressed: the only signal used to be the open button losing its
-    # greyed-out look, which is not something anyone is watching for.
+    button(actions,'세션 종료',w.stop_sessions)
     w.chat_status=status_line(main,w.chat_state)
-    card=ttk.Frame(main,style='Chat.Card.TFrame',padding=18);card.pack(fill='x',pady=(8,8))
-    ttk.Label(card,text='프로젝트는 Chat 안에서',style='Chat.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
-    ttk.Label(card,text='Workspace를 만들고, 문서와 대화를 AnythingLLM에서 관리합니다.',
-              style='Chat.CardMuted.TLabel',wraplength=740).pack(anchor='w',pady=(6,12))
-    ttk.Button(card,text='프로젝트 만들기 / 관리',style='Chat.TButton',command=w.manage_chat_projects).pack(anchor='w')
-    note(main,'웹 검색을 선택하지 않으면 SearXNG는 시작하지 않습니다.\n'
-         'AnythingLLM 자체 문서 검색/RAG는 웹 검색 옵션과 별개입니다.\n'
-         '옵션 변경은 다음 Chat 시작에 적용됩니다.')
-    note(main,'프로젝트 연결은 필수가 아닙니다. AnythingLLM의 대화와 문서 데이터는 복제하지 않습니다.\n'         'AnythingLLM은 브라우저로 열리며, 테마는 그 화면의 설정을 따릅니다.')
-    w.chat_text=text_box(main,height=10)
-    set_text(w.chat_text,'Chat 준비 상태 확인 중...\n\n'
+
+    # Secondary controls preserve their Tk variables while folded.
+    advanced=Disclosure(main,'연결 · 웹 검색 옵션')
+    mode_row(advanced.body,w)
+    w.chat_search=tk.BooleanVar(master=w.root,value=False)
+    ttk.Checkbutton(advanced.body,
+                    text='웹 검색 함께 실행 (SearXNG · 추가 RAM 사용)',
+                    variable=w.chat_search).pack(anchor='w',pady=(0,6))
+    note(advanced.body,'웹 검색과 AnythingLLM의 문서 RAG는 서로 다른 기능입니다. '
+         '연결 옵션은 다음 Chat 시작부터 적용됩니다.')
+
+    card=ttk.Frame(main,style='Chat.Card.TFrame',padding=12)
+    card.pack(fill='x',pady=(4,6))
+    ttk.Label(card,text='대화 · 문서 관리',style='Chat.Card.TLabel',
+              font=('Segoe UI',11,'bold')).pack(anchor='w')
+    ttk.Label(card,text='Workspace와 문서는 AnythingLLM에서 관리합니다.',
+              style='Chat.CardMuted.TLabel',wraplength=560).pack(anchor='w',pady=(4,6))
+    ttk.Button(card,text='Workspace 열기',style='Chat.TButton',
+               command=w.manage_chat_projects).pack(anchor='w')
+    w.chat_text=text_box(main,height=8)
+    set_text(w.chat_text,'Chat 준비 상태 확인 중...\\n\\n'
              'Chat 시작 시 Network → Ollama → AnythingLLM → 선택 모델 연결을 순서대로 검증합니다.')
     content.bind_content()
     projects(w.chat_links_page,w)
 
-
 def agent(parent,w):
-    link=link_selector(parent,w)
     main=parent
-    if 'chat' in w.spec.pages:
-        button(link,'Chat에서 연결 관리',w.show_project_links)
-    else:
-        # Standalone Interpreter retains optional saved linkage without a
-        # separate Projects navigation item or another persistent registry.
+    if 'chat' not in w.spec.pages:
+        # Standalone Agent still exposes the optional Chat linkage editor.
         w.agent_tabs=ttk.Notebook(parent);w.agent_tabs.pack(fill='both',expand=True)
-        main=ttk.Frame(w.agent_tabs,padding=(4,12))
-        w.agent_links_page=ttk.Frame(w.agent_tabs,padding=(4,12))
+        main=ttk.Frame(w.agent_tabs,padding=(4,8))
+        w.agent_links_page=ttk.Frame(w.agent_tabs,padding=(4,8))
         w.agent_tabs.add(main,text='Agent 실행')
         w.agent_tabs.add(w.agent_links_page,text='Chat 연결 (선택)')
         projects(w.agent_links_page,w)
-    r=mode_row(main,w)
-    button(r,'Agent 시작',w.start_agent,kind='Agent')
-    button(r,'세션 종료',w.stop_sessions)
-    w.agent_search = tk.BooleanVar(master=w.root, value=False)
-    ttk.Checkbutton(main, text='웹 검색 엔진도 함께 실행 (SearXNG · 추가 RAM 사용)',
-                    variable=w.agent_search).pack(anchor='w', pady=(0, 8))
-    w.agent_status=status_line(main,w.agent_state)
-    note(main,'기존 프로필 / 모델 / Host·Sandbox / 폴더 선택과 승인 절차를 유지합니다.\n'
-         '연결 폴더는 선택 창의 기본값이며, 자동 접근 허용이 아닙니다.')
-    w.hosts['agent']=PanelHost(main)
 
+    actions=row(main)
+    button(actions,'Agent 시작',w.start_agent,kind='Agent')
+    button(actions,'세션 종료',w.stop_sessions)
+    w.agent_status=status_line(main,w.agent_state)
+
+    advanced=Disclosure(main,'연결 · 웹 검색 옵션')
+    link=link_selector(advanced.body,w)
+    if 'chat' in w.spec.pages:
+        button(link,'Chat에서 연결 관리',w.show_project_links)
+    mode_row(advanced.body,w)
+    w.agent_search=tk.BooleanVar(master=w.root,value=False)
+    ttk.Checkbutton(advanced.body,
+                    text='웹 검색 함께 실행 (SearXNG · 추가 RAM 사용)',
+                    variable=w.agent_search).pack(anchor='w',pady=(0,5))
+    note(advanced.body,'실행 프로필·모델·권한·폴더는 Agent 시작 시 따로 확인합니다. '
+         'Chat 연결은 선택 사항입니다.')
+
+    w.hosts['agent']=PanelHost(main)
 
 def projects(parent,w):
     scroller=ScrollArea(parent);w.page_scrolls['links']=scroller
@@ -338,7 +346,7 @@ BUILDERS={'home':home,'chat':chat,'agent':agent,'tools':tools,'models':models,
 
 
 def build(parent,key,w):
-    page=ttk.Frame(parent,padding=(26,24))
+    page=ttk.Frame(parent,padding=(15,11))
     heading(page,LABELS[key],DESCRIPTIONS[key],kind={'chat':'Chat','agent':'Agent','models':'Manage','setup':'Manage'}.get(key))
     if key in ('home','settings','setup','network','system'):
         scroller=ScrollArea(page);w.page_scrolls[key]=scroller
