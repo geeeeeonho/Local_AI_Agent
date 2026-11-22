@@ -256,8 +256,15 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
         % quote(machine.ADMINS_GROUP),
     ]
     if lockable_root(root):
+        # The legacy /grant:r call alone cannot remove an unknown explicit
+        # Modify grant left on C:\\LocalAI. Replace the entire root DACL and
+        # reset protected descendants in the *same* UAC transaction.
+        from . import program_security
         lines += lock_root_lines(root, admin_sids=(user_sid,), group_variable='$admins',
                                  principal=machine.Policy().principal())
+        lines += program_security.protection_lines(
+            root, (user_sid,), machine.Policy().principal(),
+            group_variable='$admins')
     if shortcuts:
         lines += _shortcut_lines(app_dir)
     lines.append('exit $failed')
