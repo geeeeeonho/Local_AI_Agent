@@ -54,6 +54,7 @@ class DesktopWindow(TranslationController, ToolsController):
         self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
         self._model_records = {};self._projects = {};self.project_boxes = []
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
+        self._gpu_advisor_snapshot = None; self._gpu_inspected_model = None
         self._model_confirm_signature = None
         self._accounts = {}
         self.current_page = None
@@ -818,6 +819,82 @@ class DesktopWindow(TranslationController, ToolsController):
             % (int(result.get('on_disk') or 0),result.get('store') or ''),
             parent=self.root)
 
+    # Read-only GPU advisor; never changes install checkboxes or starts Ollama.
+    def refresh_gpu_advisor(self):
+        if hasattr(self, 'gpu_hardware_line'):
+            self.gpu_hardware_line.set('GPU / LLMfit 분석 중...')
+        self.run_task('models.gpu.advisor',
+                      self.services.models.gpu_advisor_snapshot,
+                      self.show_gpu_advisor, mutate=False, announce=False)
+
+    def show_gpu_advisor(self, snapshot):
+        self._gpu_advisor_snapshot = snapshot
+        self.update_gpu_advisor_view()
+
+    def inspect_model(self, tag):
+        self._gpu_inspected_model = str(tag)
+        self.update_gpu_advisor_view()
+
+    def update_gpu_advisor_view(self):
+        if not hasattr(self, 'gpu_bars'):
+            return
+        from services.models.advisor import fit_for, projection
+        from launcher.models import model_catalog
+        snapshot = self._gpu_advisor_snapshot or {}
+        tag = self._gpu_inspected_model
+        self.gpu_selected_model.set(
+            '모델: ' + model_display_name(tag, limit=30) if tag
+            else '모델 카드를 선택하세요')
+        entry = model_catalog.by_tag().get(tag) if tag else None
+        estimate = snapshot.get('estimates', {}).get(tag)
+        if estimate is None:
+            estimate = fit_for(tag, entry.memory_gb if entry else None)
+        loaded = {str(name).casefold() for name in snapshot.get('loaded_tags', ())}
+        same = bool(snapshot.get('loaded_known') and tag and tag.casefold() in loaded)
+        values = projection(snapshot.get('gpu'), estimate, same_model_loaded=same)
+        if not values['available']:
+            self.gpu_hardware_line.set(values['reason'])
+            for bar, variable in self.gpu_bars.values():
+                bar.configure(value=0)
+                variable.set('알 수 없음')
+            self.gpu_fit_note.set('GPU 정보가 없어 기존 메모리 추정값을 유지합니다.')
+            return
+        total = values['total_gib']
+        self.gpu_hardware_line.set(
+            f"VRAM {total:.1f} GiB · 남음 {values['free_gib']:.1f} GiB"
+            + (' · LLMfit 사용' if snapshot.get('llmfit_available')
+               else ' · 카탈로그 근사'))
+        for key, amount, pct in (
+            ('used', values['used_gib'], values['used_pct']),
+            ('model', values['need_gib'], values['need_pct']),
+            ('projected', values['projected_gib'], values['projected_pct']),
+        ):
+            bar, variable = self.gpu_bars[key]
+            bar.configure(value=0 if pct is None else pct)
+            variable.set(
+                '알 수 없음' if amount is None else
+                f"{amount:.1f} / {total:.1f} GiB ({amount/total*100:.0f}%)"
+                + (' · 100% 초과' if key == 'projected'
+                   and values['overflow_gib'] > 0 else '')
+            )
+        if not tag:
+            note = '모델 카드를 선택하면 해당 모델 하나만 예상합니다.'
+        elif values['need_gib'] is None:
+            note = '이 모델은 메모리 요구량 추정 정보가 없습니다.'
+        elif same:
+            note = 'Ollama에 이미 적재된 모델: GPU 사용량을 중복 합산하지 않습니다.'
+        else:
+            origin = 'LLMfit' if estimate['source'] == 'llmfit' else '카탈로그 근사'
+            mode = estimate.get('mode')
+            run = (' · GPU 실행' if mode == 'gpu' else
+                   ' · CPU 오프로딩 가능' if mode in ('offload','cpu') else '')
+            note = (f"{origin} · 안전 여유 제외 {values['budget_gib']:.1f} GiB"
+                    + (' · GPU 적재 여유 있음' if values['over_capacity'] is False
+                       else ' · GPU 여유 부족') + run)
+            if not snapshot.get('loaded_known'):
+                note += ' · Ollama 적재 상태 미확인'
+        self.gpu_fit_note.set(note + '\n실제 점유량은 컨텍스트와 다른 앱 사용량에 따라 달라집니다.')
+
     # ── model screen: catalog selection ──────────────────────────────────
     def refresh_installed_summary(self):
         """One bounded inventory scan updates the global sidebar and detail panel."""
@@ -862,6 +939,7 @@ class DesktopWindow(TranslationController, ToolsController):
     def open_installed_model(self, tag):
         self.navigate('models')
         self.model_tabs.select(self.model_pages['choose'])
+        self.inspect_model(tag)
         self.log('설치 모델: ' + tag)
 
     def show_uncatalogued_models(self, snapshot):
@@ -936,14 +1014,20 @@ class DesktopWindow(TranslationController, ToolsController):
             self.show_catalog(catalog)
             self.show_stack(stack)
         self.run_task('models.overview',self.services.models.overview,display,mutate=False)
+        self.refresh_gpu_advisor()
 
     def load_catalog(self):
         self.run_task('models.catalog',self.services.models.catalog,self.show_catalog,mutate=False)
         self.refresh_installed_summary()
+        self.refresh_gpu_advisor()
 
     def show_catalog(self,catalog):
         self._catalog=catalog
+        tags={row['tag'] for row in catalog['models']}
+        if self._gpu_inspected_model not in tags:
+            self._gpu_inspected_model=next((tag for tag in catalog['recommended'] if tag in tags),None)
         self.build_catalog_rows(catalog)
+        self.update_gpu_advisor_view()
         self.update_choice_summary()
         self.refresh_installed_summary()
 
@@ -1086,6 +1170,7 @@ class DesktopWindow(TranslationController, ToolsController):
             row.pack(fill='x',pady=2)
             ttk.Label(row,text=model_display_name(tag,limit=23),
                       style='Manage.Card.TLabel',wraplength=162).pack(anchor='w')
+            ttk.Button(row,text='GPU에서 보기',command=lambda t=tag:self.inspect_model(t)).pack(anchor='w')
             var=tk.BooleanVar(master=self.root,
                 value=self._previous_catalog_choices.get(tag,True))
             self.choice_vars[tag]=var
@@ -1141,6 +1226,8 @@ class DesktopWindow(TranslationController, ToolsController):
                              wraplength=175,justify='left')
         name_label.pack(anchor='w',fill='x')
         wrap_to_parent(name_label,inset=18,minimum=120)
+        ttk.Button(card,text='GPU에서 보기',style='Manage.Details.TButton',
+                   command=lambda t=tag:self.inspect_model(t)).pack(anchor='w',pady=(3,2))
         # The checkbox's meaning depends on what is actually on disk.
         # "selected" is a future intent, never proof that the file exists.
         choice_label='이 모델 유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
