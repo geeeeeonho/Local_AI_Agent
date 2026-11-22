@@ -217,6 +217,11 @@ class DesktopBackend:
     def search_stop(self):
         return self._search_runtime is None or self._search_runtime.stop()
 
+    def agent_search_stop(self):
+        """Stop only the immutable SearXNG container ID created by this Agent."""
+        from launcher.agent import runtime_coordinator
+        return runtime_coordinator.stop_owned_search()
+
     def chat_prepare(self, log, cancel=None):
         """Ensure Docker is actually usable before treating image state as fact."""
         docker = self.load('launcher.services.docker').DockerService
