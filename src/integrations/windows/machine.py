@@ -308,10 +308,10 @@ def lock_root_lines(root: Path, *, admin_sids: Iterable[str], principal: str,
     if group_variable:
         lines.append("if (%s) { $grants += @('/grant:r', ('*' + %s + ':(OI)(CI)F')) }"
                      % (group_variable, group_variable))
-    lines.append("& icacls.exe %s /inheritance:r @grants /Q 2>&1 | Out-String | ForEach-Object { "
+    lines.append("$localaiAclOutput = & icacls.exe %s /inheritance:r @grants /Q 2>&1; "
                  "if ($LASTEXITCODE -ne 0) { $failed = 1; if ($null -ne $localaiIssues) { "
-                 "[void]$localaiIssues.Add('root ACL: ' + $_) } } }; "
-                 "if ($LASTEXITCODE -ne 0) { $failed = 1 }" % quote(root))
+                 "[void]$localaiIssues.Add('root ACL: ' + "
+                 "(($localaiAclOutput | Out-String).Trim())) } }" % quote(root))
     return lines
 
 
