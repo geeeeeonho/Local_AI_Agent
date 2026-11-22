@@ -51,12 +51,19 @@ def main(app='studio',argv=None):
     try:
         from services.desktop import create_services
         from .window import DesktopWindow
-        from project_paths import RUNTIME_ROOT
+        from project_paths import RUNTIME_ROOT, APP_DIR, PROJECT_ROOT, ENV_DIR
         # Before anything can start a container: WARP, Tor and the sandbox
         # hand their teardown to these hooks, so a shell without them leaves
         # containers running after the window closes. The runtime root, not
         # the checkout: that is where user_data and the session log live.
         install_exit_hooks(RUNTIME_ROOT)
+        if not installer_flags:
+            # Ordinary RUN.bat / standalone Chat / --manage launch: when this
+            # Windows machine has no LocalAI policy yet, register the first
+            # account automatically. No separate admin-login command; Windows
+            # UAC is still required to secure the shared executable files.
+            from installer.steps.machine import bootstrap_first_run
+            bootstrap_first_run(RUNTIME_ROOT, APP_DIR, PROJECT_ROOT, ENV_DIR)
         services=create_services()
         initialize_language(services.project_root,args.lang)
         window=DesktopWindow(args.app,services)
