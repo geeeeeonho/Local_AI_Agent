@@ -14,7 +14,7 @@ class AgentLauncher:
     def opened(self):
         return self.session is not None
 
-    def open(self, presenter, mode, *, project=None, cancel=None):
+    def open(self, presenter, mode, *, project=None, cancel=None, search=False):
         if self.opened:
             raise RuntimeError('An Agent view is already active. Close it before opening a new one.')
         if cancel is not None and cancel():
@@ -28,7 +28,7 @@ class AgentLauncher:
         # sit through all three.
         try:
             binding = invoke(self.backend.agent_open, presenter, selected.value, project,
-                             cancel=cancel)
+                             cancel=cancel, search=search)
         except Exception:
             # No session was started, so nothing can be writing the stores.
             self._seal()
