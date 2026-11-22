@@ -26,6 +26,22 @@ C:\LocalAI\
       └─ workspace\      개인 — 에이전트 기본 작업 폴더 (평문, 사용자 파일)
 ```
 
+## 오픈소스 및 제3자 라이선스
+
+이 프로젝트는 Ollama, AnythingLLM, Open Interpreter, SearXNG, Tor 프록시,
+Cloudflare WARP Docker 이미지 등 외부 소프트웨어를 설치하거나 실행합니다.
+각 구성요소는 **서로 다른 라이선스 및 이용약관**을 가지며, 이들 라이선스가
+Local_AI_Agent 자체의 라이선스를 지정하는 것은 아닙니다.
+
+- [외부 소프트웨어 목록과 라이선스 고지](licenses/THIRD_PARTY_NOTICES.md)
+- [모델별 라이선스 확인 대상](licenses/MODEL_LICENSE_REVIEW.md)
+- [제3자 라이선스 원문 모음](licenses/)
+
+특히 SearXNG 및 Tor 프록시는 AGPL 계열이며, 기본 WARP Docker 이미지는
+**CC-BY-NC-4.0(비상업적 이용 조건)** 입니다. Docker Desktop 및 Cloudflare WARP
+서비스 이용조건도 별도로 적용됩니다. 개인·포트폴리오 목적의 사용과 외부 재배포는
+구분해서 확인하세요. LLMfit은 **도입 예정**으로, 라이선스만 미리 수록했습니다.
+
 ## 관리자와 계정 관리
 
 - **첫 설치 계정이 LocalAI 관리자**가 됩니다. 처음 [설치 / 복구]를 실행하면 Windows
