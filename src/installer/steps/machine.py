@@ -95,9 +95,15 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
                 + "실패 단계: " + details + "\n"
                 + "Windows 권한 오류라면 파일을 사용하는 다른 LocalAI/Ollama "
                   "프로세스를 종료한 뒤 다시 실행하세요.")
+        admins_group_sid = windows.group_sid(machine.ADMINS_GROUP)
+        users_group_sid = windows.group_sid(machine.USERS_GROUP)
+        if not machine.is_sid(admins_group_sid) or not machine.is_sid(users_group_sid):
+            raise RuntimeError(
+                "Windows 그룹은 생성됐을 수 있지만 LocalAI-Admins / LocalAI-Users "
+                "SID를 확인하지 못했습니다. 임의의 관리자 정책을 기록하지 않습니다.")
         policy = machine.new_policy(
-            sid, admins_group_sid=windows.group_sid(machine.ADMINS_GROUP),
-            users_group_sid=windows.group_sid(machine.USERS_GROUP))
+            sid, admins_group_sid=admins_group_sid,
+            users_group_sid=users_group_sid)
         reasons = program_security.verify(root, policy)
         if reasons:
             raise RuntimeError("프로그램 ACL 검증 실패: " + "; ".join(reasons[:4]))
