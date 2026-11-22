@@ -262,7 +262,7 @@ class ModelService:
             loaded_tags = [str(item.get('name') or item.get('model') or '')
                            for item in loaded]
             loaded_known = True
-        except (OSError, RuntimeError, ValueError, TimeoutError):
+        except (AttributeError, OSError, RuntimeError, ValueError, TimeoutError):
             pass
         return {
             'gpu': {'total_gib': gpu.total_gib, 'free_gib': gpu.free_gib,
