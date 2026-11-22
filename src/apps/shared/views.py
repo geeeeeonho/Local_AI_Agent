@@ -128,7 +128,6 @@ def agent(parent,w):
         w.agent_links_page=ttk.Frame(w.agent_tabs,padding=(4,8))
         w.agent_tabs.add(main,text='Agent 실행')
         w.agent_tabs.add(w.agent_links_page,text='Chat 연결 (선택)')
-        projects(w.agent_links_page,w)
 
     actions=row(main)
     button(actions,'Agent 시작',w.start_agent,kind='Agent')
@@ -147,6 +146,10 @@ def agent(parent,w):
     note(advanced.body,'실행 프로필·모델·권한·폴더는 Agent 시작 시 따로 확인합니다. '
          'Chat 연결은 선택 사항입니다.')
 
+    if 'chat' not in w.spec.pages:
+        # Keep the Agent's own selector as the primary project_box. The
+        # optional linkage editor creates another synchronized combobox.
+        projects(w.agent_links_page,w)
     w.hosts['agent']=PanelHost(main)
 
 def projects(parent,w):
