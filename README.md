@@ -88,6 +88,10 @@ LocalAI는 Ollama를 `C:\LocalAI\ollama`에서 직접 관리하고 시작할 때
 `C:\Ollama`, `C:\LLM_Models`, `llm_environment` 등을 자동 검색·이동·병합하지
 않습니다.
 
+### 메모리·VRAM 절약형 실행
+
+Studio는 기본적으로 필요한 서비스만 시작합니다. Chat과 Agent의 SearXNG 웹 검색은 각 실행 화면에서 체크할 때만 실행하며, Ollama가 직접 관리되는 경우 유휴 모델 유지 시간은 기본 2분입니다. 모델 화면에서는 여유 VRAM과 적재 가능성을 추정 표시합니다. Windows GPU·Docker 실기기 성능 검증 방법과 한계는 [경량 실행 및 자원 정책](docs/RUNTIME_RESOURCE_POLICY.md)에 정리했습니다.
+
 ## 빠른 시작
 
 ### 1. 설치 또는 관리

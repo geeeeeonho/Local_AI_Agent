@@ -14,7 +14,7 @@ class ChatService:
         self.url = None
         self.model = ''
 
-    def start(self, mode, *, model='', search=True, cancel=None):
+    def start(self, mode, *, model='', search=False, cancel=None):
         log = lambda message: self.events.emit(
             'runtime.progress', {'service': 'chat', 'message': str(message)}
         )
@@ -65,7 +65,7 @@ class ChatService:
                 except Exception as exc:
                     log('[4/5] Search unavailable: ' + str(exc))
             else:
-                log('[4/5] Search skipped for Block/local-only mode')
+                log('[4/5] Search not requested (or blocked by the active network policy)')
 
             log('[5/5] Starting AnythingLLM and verifying container -> Ollama -> selected model')
             if self.stores is not None:

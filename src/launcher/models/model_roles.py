@@ -442,7 +442,7 @@ _ASK_SERVER = object()
 
 
 def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
-                   installed=_ASK_SERVER):
+                   installed=_ASK_SERVER, *, gpu_budget_gb: Optional[float] = None):
     """여유 메모리에 맞는 최상위 후보 1차 선택. 사다리 없으면 None.
 
     [LADDER_FALLBACK_v1] 설치된 모델을 우선한다. 없는 모델을 골라 놓고
@@ -471,6 +471,14 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
     usable = free * _SAFETY
     fits = [(m, need) for m, need in lad if need <= usable]
     if installed:
+        # Only an explicit, trustworthy *idle* GPU budget should be passed here.
+        # Prefer a fully GPU-fitting installed candidate in the same role, but
+        # never reject a RAM-fitting model if none fits GPU (CPU offload remains
+        # a valid user choice and compatibility fallback).
+        if gpu_budget_gb is not None:
+            for m, need in fits:
+                if need <= gpu_budget_gb and _installed_match(m, installed):
+                    return m
         for m, _need in fits:
             if _installed_match(m, installed):
                 return m
@@ -479,6 +487,10 @@ def resolve_ladder(role_name: str, free_gb: Optional[float] = None,
         # low-tier downloads. Tell callers to install a fitting model.
         return None
     if fits:
+        if gpu_budget_gb is not None:
+            for model, need in fits:
+                if need <= gpu_budget_gb:
+                    return model
         return fits[0][0]
     # The small-model rung is available for manual installation, not part of
     # the new default set. Never claim an installed but oversized model can

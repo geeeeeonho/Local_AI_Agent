@@ -14,7 +14,7 @@ class AgentLauncher:
     def opened(self):
         return self.session is not None
 
-    def open(self, presenter, mode, *, project=None, cancel=None):
+    def open(self, presenter, mode, *, project=None, cancel=None, search=False):
         if self.opened:
             raise RuntimeError('An Agent view is already active. Close it before opening a new one.')
         if cancel is not None and cancel():
@@ -28,13 +28,15 @@ class AgentLauncher:
         # sit through all three.
         try:
             binding = invoke(self.backend.agent_open, presenter, selected.value, project,
-                             cancel=cancel)
+                             cancel=cancel, search=search)
         except Exception:
             # No session was started, so nothing can be writing the stores.
             self._seal()
+            self._cleanup_unstarted_search()
             raise
         if binding is None or (cancel is not None and cancel()):
             self._seal()
+            self._cleanup_unstarted_search()
             if not network_was_prepared:
                 self.network.reset()
             return None
@@ -44,6 +46,7 @@ class AgentLauncher:
             if closed:
                 self.session = None
                 self._seal()
+                self._cleanup_unstarted_search()
                 if not network_was_prepared:
                     self.network.reset()
             raise RuntimeError('Interpreter startup failed. Check Setup / Repair.')
@@ -59,6 +62,19 @@ class AgentLauncher:
         self._seal()
         self.events.emit('agent.stopped', {})
         return True
+
+    def _cleanup_unstarted_search(self):
+        """The Agent wizard can cancel after optional SearXNG was started."""
+        stop = getattr(self.backend, 'agent_search_stop', None)
+        if callable(stop):
+            try:
+                if not stop():
+                    self.events.emit('runtime.error', {
+                        'service': 'agent.search',
+                        'detail': 'Cancelled Agent search container could not be stopped safely.'})
+            except Exception as exc:
+                self.events.emit('runtime.error', {
+                    'service': 'agent.search', 'detail': str(exc)})
 
     def _seal(self):
         """Seal agent stores once no session runs. Never raises."""

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from types import SimpleNamespace
@@ -46,6 +47,10 @@ class DesktopWindow(TranslationController, ToolsController):
         self._unsubscribe = services.events.subscribe('*', self._enqueue)
         self.closing = False;self.closed = False;self._shutdown_started = False
         self._polling = start_polling;self._ticks = 0
+        # 타이머 횟수가 아니라 실제 경과 시간으로 예약합니다. 유휴 시 타이머를
+        # 느리게 해도 상태 점검 간격이 의도치 않게 늘어나지 않습니다.
+        self._next_health_at = 0.0
+        self._next_theme_at = time.monotonic() + 60.0
         self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
         self._model_records = {};self._projects = {};self.project_boxes = []
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
@@ -448,6 +453,8 @@ class DesktopWindow(TranslationController, ToolsController):
         try:project=self.current_project();mode=self.selected_mode('chat')
         except Exception as exc:self.log(str(exc),level='error');return
         model=project.chat_model if project else ''
+        # Tk variables are read on the UI thread, not inside the worker.
+        with_search=bool(self.chat_search.get()) if hasattr(self, 'chat_search') else False
         self._chat_progress = ['요청 접수 · Network → Ollama → AnythingLLM → model 연결 순으로 확인합니다.']
         # Events are drained on the Tk timer, so they can arrive after the worker
         # has already finished. A flag the worker does not race decides whether
@@ -457,7 +464,7 @@ class DesktopWindow(TranslationController, ToolsController):
         set_text(self.chat_text,'Chat 준비 시작\n\n'+self._chat_progress[0])
         def work():
             try:
-                return self.services.chat.start(mode,model=model,cancel=self.runner.cancel.is_set)
+                return self.services.chat.start(mode,model=model,search=with_search,cancel=self.runner.cancel.is_set)
             except Exception as exc:
                 self.services.events.emit('runtime.progress',{
                     'service':'chat','message':'준비 실패: '+str(exc)})
@@ -556,6 +563,8 @@ class DesktopWindow(TranslationController, ToolsController):
             self.log('An Agent is already active. Stop the session before opening another.');return
         try:p=self.presenter('agent');mode=self.selected_mode('interpreter');project=self.current_project()
         except Exception as exc:self.log(str(exc),level='error');return
+        # Snapshot the requested optional services before starting the worker.
+        with_search=bool(self.agent_search.get()) if hasattr(self, 'agent_search') else False
         self.set_agent_state('Working','준비 중 · 시작 설정을 고른 뒤 Ollama·Docker·네트워크를 준비합니다.')
         def ready(session):
             if session is None:
@@ -578,7 +587,7 @@ class DesktopWindow(TranslationController, ToolsController):
             p._current_log_panel=None;p._current_log_done=None
             self.agent_panel.enable_send()
         self.run_task('agent.start',
-            lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set),
+            lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set,search=with_search),
             ready,error=self._agent_failed)
 
     def _agent_failed(self,exc):
@@ -643,14 +652,23 @@ class DesktopWindow(TranslationController, ToolsController):
         self._stack_rows={}
         self.stack_tree.delete(*self.stack_tree.get_children())
         for role in stack['roles']:
+            fit=role.get('gpu_fit')
+            gpu_marker=(' · GPU 추정 적합' if fit is True else
+                        ' · GPU 부족 추정' if fit is False else '')
             iid=self.stack_tree.insert('','end',values=(
                 role['label'],role['chosen'] or '(사다리 없음)',
-                f"{role['need_gb']:.1f} GB",'있음' if role['on_disk'] else '없음'))
+                f"{role['need_gb']:.1f} GB"+gpu_marker,
+                '있음' if role['on_disk'] else '없음'))
             self._stack_rows[iid]=role
         free=stack['free_gb']
+        gpu=stack.get('gpu')
+        gpu_note=(f" · VRAM 여유 {gpu['free_gib']:.1f} GiB"
+                  f" (안전 여유 제외 {gpu['budget_gib']:.1f} GiB, 추정)"
+                  if isinstance(gpu,dict) else ' · VRAM 정보 확인 불가')
         missing=sum(0 if role['on_disk'] else 1 for role in stack['roles'])
         self.stack_summary.set(
-            ('여유 메모리 확인 불가' if free is None else f'여유 메모리 {free:.1f} GB')
+            ('여유 RAM 확인 불가' if free is None else f'여유 RAM {free:.1f} GiB')
+            + gpu_note
             + f" · 역할 {len(stack['roles'])}개 × 상·중·하 3단계"
             + f" · 메모리 예산 {stack['budget_gb']:.0f} GB · "
             + ('모든 역할의 모델이 디스크에 있습니다.' if not missing
@@ -1589,15 +1607,26 @@ class DesktopWindow(TranslationController, ToolsController):
                 self.log(str(exc)+' Window retained; retry Session stop.')
             self.runner.submit('shutdown',self.services.finalize,done,failed)
         elif not self.closing and self._polling:
-            self._ticks+=1
-            if self._ticks%200==0:self.sync_theme()
-            # Backend health is cached for 30 seconds; probing every 10 seconds
-            # only resubmitted the same check and obscured useful progress logs.
-            if self._ticks==1 or self._ticks%600==0:self.refresh_health()
-            session=self.agent_session
-            if session is not None and self._ticks%2==0:
-                self.runner.submit('agent.poll',session.poll_once,lambda _:None,lambda exc:self.log(str(exc),level='error'),mutate=False)
-        if not self.closed:self._timer=self.root.after(50,self._tick)
+            self._ticks += 1
+            now = time.monotonic()
+            # 테마는 포커스 복귀 시에도 동기화하므로 백그라운드 조회는 낮은 주기로.
+            if now >= self._next_theme_at:
+                self._next_theme_at = now + 60.0
+                self.sync_theme()
+            # 상태 검사는 Docker CLI / PowerShell subprocess를 발생시킵니다.
+            # 유휴 중 60초마다 확인하고 버튼으로는 언제든 즉시 새로고침합니다.
+            if now >= self._next_health_at:
+                self._next_health_at = now + 60.0
+                self.refresh_health()
+            session = self.agent_session
+            if session is not None:
+                # Agent 진행 중에는 100ms 지연을 유지; 중복 제출은 TaskRunner가 억제.
+                self.runner.submit('agent.poll',session.poll_once,lambda _:None,
+                                   lambda exc:self.log(str(exc),level='error'),mutate=False)
+        if not self.closed:
+            # GUI를 닫는 도중에는 지연 없이 작업 종료를 확인합니다.
+            interval = 50 if self.closing else (100 if self.agent_session is not None else 250)
+            self._timer = self.root.after(interval, self._tick)
 
     def run(self):
         self.root.mainloop()

@@ -124,40 +124,48 @@ class DesktopBackend:
         return result
 
     def _probe_health(self):
-        # None is unknown/error, not a falsely reported stopped or ready service.
-        # These probes are independent and several shell out to Docker/PowerShell.
-        # Running them serially made a harmless status refresh look like a stalled
-        # connection on Windows.
-        checks = {
-            'ollama': lambda: self.load('launcher.services.ollama').OllamaService(
-                self.env, model_dir=self.model_dir).is_managed_running(),
-            # Where the running Ollama keeps its models is the thing the status
-            # line could not say, so a server that was serving perfectly well
-            # from its own default directory read as "not recognised".
-            'ollama_store': lambda: self.load('launcher.services.ollama').OllamaService(
-                self.env, model_dir=self.model_dir).describe_store(),
-            'docker': lambda: self.load('launcher.services.docker').DockerService.daemon_alive(),
-            'chat_image': lambda: self.load('launcher.anythingllm_runtime').image_exists(),
-            'chat': lambda: self.load('launcher.anythingllm_runtime').is_ready(),
-            'search': lambda: self.load('launcher.services.docker').DockerService.container_running(
-                self.load('launcher.config').SEARXNG_CONTAINER),
-            # Personal records sharing a folder with the machine's other
-            # accounts is not a smaller problem than a missing install.
-            'records_private': self.describe_records_privacy,
-        }
+        """Lightweight status: never probe containers when Docker is unavailable.
+
+        On an idle desktop, launching multiple docker CLI processes every refresh
+        wastes CPU/RAM and can stall under WSL startup. Check daemon once, then
+        interrogate containers only if it responded. Unknown stays unknown.
+        """
         started = time.monotonic()
 
         def run(check):
             try:
                 value = check()
+                return value if value is None or isinstance(value, str) else bool(value)
             except Exception:
                 return None
-            # One of these answers in words rather than yes/no.
-            return value if isinstance(value, str) else bool(value)
 
-        with ThreadPoolExecutor(max_workers=len(checks), thread_name_prefix='health') as pool:
-            futures = {name: pool.submit(run, check) for name, check in checks.items()}
+        independent = {
+            'ollama': lambda: self.load('launcher.services.ollama').OllamaService(
+                self.env, model_dir=self.model_dir).is_managed_running(),
+            'ollama_store': lambda: self.load('launcher.services.ollama').OllamaService(
+                self.env, model_dir=self.model_dir).describe_store(),
+            'docker': lambda: self.load('launcher.services.docker').DockerService.daemon_alive(),
+            'records_private': self.describe_records_privacy,
+        }
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='health') as pool:
+            futures = {name: pool.submit(run, fn) for name, fn in independent.items()}
             result = {name: future.result() for name, future in futures.items()}
+            if result['docker'] is True:
+                dependent = {
+                    'chat_image': lambda: self.load('launcher.anythingllm_runtime').image_exists(),
+                    'chat': lambda: self.load('launcher.anythingllm_runtime').is_ready(),
+                    'search': lambda: self.load('launcher.services.docker').DockerService.container_running(
+                        self.load('launcher.config').SEARXNG_CONTAINER),
+                }
+                more = {name: pool.submit(run, fn) for name, fn in dependent.items()}
+                result.update({name: future.result() for name, future in more.items()})
+            else:
+                # Docker itself did not answer: image installation is unknowable
+                # without starting it. A false daemon means containers are down.
+                stopped = result['docker'] is False
+                result.update({'chat_image': None,
+                               'chat': False if stopped else None,
+                               'search': False if stopped else None})
         result['probe_seconds'] = round(time.monotonic() - started, 3)
         return result
 
@@ -208,6 +216,11 @@ class DesktopBackend:
 
     def search_stop(self):
         return self._search_runtime is None or self._search_runtime.stop()
+
+    def agent_search_stop(self):
+        """Stop only the immutable SearXNG container ID created by this Agent."""
+        from launcher.agent import runtime_coordinator
+        return runtime_coordinator.stop_owned_search()
 
     def chat_prepare(self, log, cancel=None):
         """Ensure Docker is actually usable before treating image state as fact."""
@@ -274,7 +287,20 @@ class DesktopBackend:
         try:
             roles = self.load('launcher.models.model_roles')
             catalog = self.load('launcher.models.model_catalog')
-            chosen = roles.resolve_ladder('balanced', installed=set(installed))
+            gpu_budget = None
+            try:
+                # Existing loaded models occupy VRAM. Choosing based on a raw
+                # nvidia-smi 'free' sample would incorrectly downgrade them.
+                if not self.inference.client.loaded_models():
+                    from core.gpu_memory import detect_gpu_memory
+                    gpu = detect_gpu_memory()
+                    gpu_budget = gpu.budget_gib if gpu else None
+            except Exception:
+                # Old Ollama, unavailable GPU, or probe timeout: preserve the
+                # exact previous RAM-based selection instead of guessing.
+                pass
+            chosen = roles.resolve_ladder(
+                'balanced', installed=set(installed), gpu_budget_gb=gpu_budget)
             matched = catalog.find_installed(chosen, installed) if chosen else None
             if matched:
                 if log:
@@ -422,7 +448,7 @@ class DesktopBackend:
         except Exception:
             return True
 
-    def agent_open(self, presenter, network, project, cancel=None):
+    def agent_open(self, presenter, network, project, cancel=None, search=False):
         agent_ui = self.load('launcher.actions.agent_chat')
         if not agent_ui._ensure_gui(presenter):
             return None
@@ -441,7 +467,7 @@ class DesktopBackend:
             return None
         coordinator = self.load('launcher.agent.runtime_coordinator')
         if not invoke(coordinator.prepare_runtime, self.env, presenter, mode,
-                      chosen_network, cancel=cancel):
+                      chosen_network, cancel=cancel, search=search):
             return None
         cfg = self.load('launcher.config')
         tag = agent_ui._match_installed_model(str(model_selection.get('tag') or cfg.MODEL_TAG), presenter)
