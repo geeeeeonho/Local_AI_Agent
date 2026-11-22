@@ -68,9 +68,10 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
     if policy is None:
         owner = acl.owner_sid(root)
         if not machine.first_admin_candidate(owner, sid):
-            info("첫 설치 계정에서 관리 권한을 확정해야 합니다. "
-                 "이 계정은 개인 폴더만 준비합니다.")
-            return "user"
+            raise RuntimeError(
+                "아직 LocalAI 관리자 설정이 완료되지 않았습니다. "
+                "공유 폴더를 만든 첫 설치 계정으로 Setup을 실행해 "
+                "Windows 관리자 승인과 ACL 보호를 완료하세요.")
         section("LocalAI 관리자 설정 (처음 설치)")
         info("먼저 Windows 권한을 잠근 뒤 공용 프로그램을 배포합니다.")
         script = windows.first_install_script(sid, root, app_dir)
