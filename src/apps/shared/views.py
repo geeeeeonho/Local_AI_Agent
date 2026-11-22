@@ -41,12 +41,12 @@ def home(parent,w):
         detail=('프로젝트 · Workspace · RAG\nAnythingLLM에서 함께 관리합니다.' if key=='chat' else
                 '명령 · 파일 변경 · 승인\nOpen Interpreter로 작업합니다.')
         ttk.Label(card,text=title,style=kind+'.Card.TLabel',font=('Segoe UI',19,'bold')).pack(anchor='w',pady=(12,10))
-        ttk.Label(card,text=detail,style=kind+'.CardMuted.TLabel',wraplength=330,justify='left').pack(anchor='w',pady=(0,22))
+        ttk.Label(card,text=detail,style=kind+'.CardMuted.TLabel',wraplength=240,justify='left').pack(anchor='w',pady=(0,22))
         ttk.Button(card,text=kind+' 열기',style=kind+'.TButton',command=lambda k=key:w.navigate(k)).pack(anchor='w')
     # Narrow windows use one column so neither launch button is truncated.
     last_columns=[None]
     def reflow_cards(event):
-        columns=1 if event.width < 680 else 2
+        columns=1 if event.width < 570 else 2
         if columns == last_columns[0]:
             return
         last_columns[0]=columns
@@ -114,7 +114,7 @@ def chat(parent,w):
     ttk.Button(card,text='Workspace 열기',style='Chat.TButton',
                command=w.manage_chat_projects).pack(anchor='w')
     w.chat_text=text_box(main,height=8)
-    set_text(w.chat_text,'Chat 준비 상태 확인 중...\\n\\n'
+    set_text(w.chat_text,'Chat 준비 상태 확인 중...\n\n'
              'Chat 시작 시 Network → Ollama → AnythingLLM → 선택 모델 연결을 순서대로 검증합니다.')
     content.bind_content()
     projects(w.chat_links_page,w)
@@ -320,7 +320,7 @@ def accounts_card(parent,w):
     wrapper.pack(fill='x')
     columns=('name','role','access','records')
     w.accounts_tree=ttk.Treeview(wrapper,columns=columns,show='headings',height=5,selectmode='browse')
-    for key,title,width in zip(columns,('Windows 계정','역할','LocalAI 사용','기록'),(220,140,150,120)):
+    for key,title,width in zip(columns,('Windows 계정','역할','LocalAI 사용','기록'),(175,110,110,90)):
         w.accounts_tree.heading(key,text=title)
         w.accounts_tree.column(key,width=width,minwidth=60)
     w.accounts_tree.pack(fill='x')
@@ -331,10 +331,14 @@ def accounts_card(parent,w):
     w.account_buttons={
         'allow':button(actions,'사용 허용',lambda:w.account_action('allow',True)),
         'deny':button(actions,'사용 해제',lambda:w.account_action('allow',False)),
-        'admin':button(actions,'관리자 지정',lambda:w.account_action('admin',True)),
-        'unadmin':button(actions,'관리자 해제',lambda:w.account_action('admin',False)),
-        'delete':button(actions,'기록 삭제',lambda:w.account_action('delete'),kind='Danger'),
     }
+    dangerous=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    dangerous.pack(fill='x',pady=(2,6))
+    w.account_buttons.update({
+        'admin':button(dangerous,'관리자 지정',lambda:w.account_action('admin',True)),
+        'unadmin':button(dangerous,'관리자 해제',lambda:w.account_action('admin',False)),
+        'delete':button(dangerous,'기록 삭제',lambda:w.account_action('delete'),kind='Danger'),
+    })
     access=ttk.Frame(card,style='Manage.CardBody.TFrame')
     access.pack(fill='x',pady=(10,0))
     w.accounts_access=tk.StringVar(master=w.root,value='everyone')
