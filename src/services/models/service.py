@@ -287,13 +287,25 @@ class ModelService:
         # It reports estimates only; existing user-selected models are kept.
         from core.gpu_memory import detect_gpu_memory
         gpu = detect_gpu_memory()
+        gpu_choice_budget = None
+        if gpu is not None:
+            try:
+                # Existing loaded models already occupy reported free VRAM.
+                # Reuse the old RAM-first policy while a model is loaded or
+                # when the Ollama state cannot be read reliably.
+                if not self.client.loaded_models():
+                    gpu_choice_budget = gpu.budget_gib
+            except (AttributeError, OSError, RuntimeError, ValueError, TimeoutError):
+                pass
         rows = []
         for role in roles.ROLES:
             try:
                 # The store we already read is the answer; asking Ollama again
                 # would be five HTTP calls for one screen, and would report a
                 # different choice whenever the server happens to be stopped.
-                chosen = roles.resolve_ladder(role.name, free, installed=present)
+                chosen = roles.resolve_ladder(
+                    role.name, free, installed=present,
+                    gpu_budget_gb=gpu_choice_budget)
             except Exception:
                 chosen = None
             ladder = []
