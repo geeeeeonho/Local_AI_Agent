@@ -892,8 +892,8 @@ class DesktopWindow(TranslationController, ToolsController):
             bar.configure(value=0 if pct is None else pct)
             variable.set(
                 '알 수 없음' if amount is None else
-                f"{amount:.1f} / {total:.1f} GiB ({amount/total*100:.0f}%)"
-                + (' · 100% 초과' if key == 'projected'
+                f"{amount:.1f}GiB · {amount/total*100:.0f}%"
+                + (' ↑' if key == 'projected'
                    and values['overflow_gib'] > 0 else '')
             )
         if not tag:
