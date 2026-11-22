@@ -219,6 +219,8 @@ class DesktopWindow(TranslationController):
         if event.topic=='runtime.progress' and data.get('service')=='translator':
             if hasattr(self,'translation_status'):
                 self.translation_status.set(str(data.get('message') or '번역 중...'))
+                if isinstance(data.get('total'),int):
+                    self.set_translation_progress(data.get('done') or 0,data['total'],data.get('eta') or '')
             return
         if event.topic.startswith('agent.') and self.agent_session is not None:
             if data.get('session')!=self.agent_session.id:return

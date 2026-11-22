@@ -52,6 +52,79 @@ BATCH_SCHEMA = {'type':'object','properties':{'translations':{'type':'array','it
                 'required':['translations']}
 SINGLE_SCHEMA = {'type':'object','properties':{'translation':{'type':'string'}},'required':['translation']}
 TRANSPORT_RETRIES = 2
+
+# 언어쌍별 지침. 모델이 자주 틀리는 "유형"을 알려 줄 뿐, 특정 문장의 정답을 넣지 않는다.
+GUIDES = {
+    ('Japanese','Korean'): (
+        'Japanese→Korean rules: '
+        '(1) Person/place names: write the Japanese pronunciation in Hangul (高橋→다카하시, 渡辺→와타나베); '
+        'never use the Korean reading of the kanji and never guess a different name. '
+        '(2) Kanji words: decide the meaning from context first. If the Korean Sino reading is a homonym '
+        'of a different word or reads unnaturally, use the Korean word with the intended meaning '
+        '(勉強→공부, not 면강). '
+        '(3) Idioms and set phrases (body-part idioms, 〜が早い, 〜を抜く, etc.): translate the meaning, '
+        'not the literal words (腹が立つ→화가 나다). '
+        '(4) Keep evidentiality: らしい/そうだ(hearsay)/って→"~래/~라고 하더라/~다고 한다"; '
+        'ようだ/みたい/だろう→"~것 같다/~겠지". Choose by context; do not flatten hearsay into a guess. '
+        '(5) Keep politeness level and speech style of each speaker.'),
+    ('Chinese','Korean'): (
+        'Chinese→Korean rules: names use the Korean reading only for historical/Korean-convention names, '
+        'otherwise the standard Chinese pronunciation in Hangul; translate chengyu and idioms by meaning.'),
+    ('Korean','Japanese'): (
+        'Korean→Japanese rules: write Korean names in katakana by Korean pronunciation; '
+        'translate idioms by meaning; keep politeness level.'),
+}
+CLASSICAL_JA = ('The text includes Classical Japanese (古文/文語). Interpret words with their classical '
+                'meanings and grammar (e.g. あはれ is deep emotion, けり/けむ/らむ are auxiliaries); '
+                'translate into natural modern target language.')
+_CLASSICAL_MARK = re.compile(r'[ゐゑ]|けり|けむ|らむ|なむ|べし|ざりき|たまふ|はべり|をかし|いと[^\s]')
+
+
+def source_profile(doc):
+    """문서 표본으로 원문 언어와 고전 일본어 여부를 추정한다."""
+    sample=' '.join(segment.text for segment in doc.segments[:400])[:60000]
+    kana=sum(1 for c in sample if '\u3040'<=c<='\u30ff')
+    hangul=sum(1 for c in sample if '\uac00'<=c<='\ud7a3')
+    han=sum(1 for c in sample if '\u4e00'<=c<='\u9fff')
+    latin=sum(1 for c in sample if c.isascii() and c.isalpha())
+    if kana and kana>=max(hangul,1)*0.5 and kana*4>=han*0.3:
+        language='Japanese'
+    elif hangul>max(kana,han,latin*0.2):
+        language='Korean'
+    elif han>max(kana,hangul,latin*0.2):
+        language='Chinese'
+    else:
+        language=''
+    classical=language=='Japanese' and len(_CLASSICAL_MARK.findall(sample))>=2
+    return language,classical
+
+
+def build_guide(doc,target):
+    language,classical=source_profile(doc)
+    parts=[]
+    if language:
+        parts.append('Source language: '+language+'.')
+    guide=GUIDES.get((language,LANGUAGES[target]))
+    if guide:
+        parts.append(guide)
+    if classical:
+        parts.append(CLASSICAL_JA)
+    return ' '.join(parts)
+
+
+def parse_glossary(text):
+    """사용자 용어집: 한 줄에 '원문 = 번역' (또는 '원문 → 번역', 탭). '#'으로 시작하면 주석."""
+    terms={}
+    for line in (text or '').splitlines():
+        line=line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts=re.split(r'\s*(?:=|→|->|\t)\s*',line,maxsplit=1)
+        if len(parts)==2 and parts[0] and parts[1]:
+            terms[parts[0][:80]]=parts[1][:80]
+    if len(terms)>500:
+        raise ValueError('User glossary is limited to 500 entries')
+    return terms
 LABEL = re.compile(r'^\s*(?:translation|translated text|output|answer|번역(?:문|본| 결과)?|訳文|翻訳|翻译|译文|traducci[oó]n)\s*[:：]\s*', re.I)
 
 
@@ -125,6 +198,10 @@ def _validate(unit_text, answer, memory, tokens):
             continue
         if re.search(r'(?<!\w)'+re.escape(source)+r'(?!\w)',unit_text) and target not in answer:
             raise ValueError('Fixed terminology mismatch: '+source)
+    # 사용자 용어집은 반드시 지킨다. 한중일 원문은 단어 경계가 없으므로 포함 여부로 본다.
+    for source,target in memory.enforced.items():
+        if source in unit_text and target not in answer:
+            raise ValueError('User glossary term not used: '+source+' → '+target)
     return answer
 
 
@@ -145,16 +222,18 @@ def _section(doc, unit):
     return headings[-1][:120] if headings else ''
 
 
-def _budget(prompt_chars, source_chars):
+def _budget(prompt_chars, source_chars, think=False):
     """프롬프트+예상 출력 길이로 문맥 창(num_ctx)과 출력 상한(num_predict)을 정한다.
 
     Ollama 기본 문맥(2K~4K 토큰)에서는 긴 배치의 앞부분(지시문)이 잘려 나간다. 문자 2개를
     토큰 1개로 보수적으로 잡는다(영문은 더 적고, 한중일은 비슷).
     """
     predict = min(8192, max(512, int(source_chars * 1.6) + 256))
+    if think:
+        predict += 6144   # 정밀 모드: 추론 토큰도 출력 상한에 포함된다
     need = prompt_chars // 2 + predict + 256
     ctx = 4096
-    while ctx < need and ctx < 16384:
+    while ctx < need and ctx < (32768 if think else 16384):
         ctx *= 2
     return ctx, predict
 
@@ -168,6 +247,8 @@ def _ask(client,model,items,memory,target,style,kind,recent,doc,*,strict=False):
               'Do not add explanations, markdown fences, or new lines. '
               'Use each item speaker/section only as context; do not add it to the translation. '
               + STYLES[style] + '. Content type: ' + CONTEXT[kind] + '. '
+              + (memory.guide + ' ' if memory.guide else '')
+              + ('Glossary terms in document_memory are mandatory. ' if memory.enforced else '')
               + ('Strict JSON output required. ' if strict else ''))
     unit_details=[{'id':i,'text':unit.text, 'speaker':_speaker(doc,unit),
                    'section':_section(doc,unit)} for i,unit in items]
@@ -176,9 +257,10 @@ def _ask(client,model,items,memory,target,style,kind,recent,doc,*,strict=False):
             'recent_translations':recent, 'items':unit_details}
     user=json.dumps(data,ensure_ascii=False)
     source_chars=sum(len(unit.text) for _,unit in items)
-    ctx,predict=_budget(len(system)+len(user),source_chars)
+    think=getattr(memory,'think',False)
+    ctx,predict=_budget(len(system)+len(user),source_chars,think)
     response=client.chat(model,[{'role':'system','content':system},{'role':'user','content':user}],
-                         temperature=.15,format=BATCH_SCHEMA,think=False,num_ctx=ctx,num_predict=predict)
+                         temperature=.15,format=BATCH_SCHEMA,think=think,num_ctx=ctx,num_predict=predict)
     if len(response)>max(16000,source_chars*8+3000):
         raise ValueError('Translation response exceeds safe size')
     values=json_object(response).get('translations')
@@ -251,14 +333,16 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
     idx,unit=items[0]
     system=('Translate to '+LANGUAGES[target]+'. Return only JSON {"translation": "..."}. '
             'Preserve every __LOCALAI_KEEP_ token exactly. No explanations. '
+            +(memory.guide+' ' if memory.guide else '')+
             'Use this document terminology and style: '+memory.prompt(unit.text+' '+_speaker(doc,unit)))
-    ctx,predict=_budget(len(system)+len(unit.text)+40,len(unit.text))
+    think=getattr(memory,'think',False)
+    ctx,predict=_budget(len(system)+len(unit.text)+40,len(unit.text),think)
     for attempt in range(TRANSPORT_RETRIES+1):
         stop_if_cancelled()
         try:
             answer=client.chat(model,[{'role':'system','content':system},
                                       {'role':'user','content':'TRANSLATE_SINGLE:\n'+unit.text}],
-                               temperature=.1,format=SINGLE_SCHEMA,think=False,
+                               temperature=.1,format=SINGLE_SCHEMA,think=think,
                                num_ctx=ctx,num_predict=predict)
             break
         except OSError:
@@ -377,7 +461,8 @@ class TranslationService:
     def translate_file(self,path,*,model,target='한국어',kind='auto',style='natural',stage=False,
                        output_path=None,progress:Callable[[int,int],None]|None=None,
                        cancelled:Callable[[],bool]|None=None, resume=True,
-                       keep_failed=False) -> Result:
+                       keep_failed=False, glossary=None, precise=False) -> Result:
+        user_terms=parse_glossary(glossary) if isinstance(glossary,str) else dict(glossary or {})
         self._abort.clear()
         user_cancelled=cancelled
         cancelled=lambda:self._abort.is_set() or bool(user_cancelled and user_cancelled())
@@ -407,7 +492,8 @@ class TranslationService:
             raise RuntimeError('Selected model is not available locally')
         client=_CountedClient(self.client_factory(endpoint),cancelled)
         self._active=client
-        key=job_key(path,output,source,model,target,doc.selected,style,stage)
+        key=job_key(path,output,source,model,target,doc.selected,style,stage,
+                    extra=sorted(user_terms.items()) or None)
         prune(self.checkpoint_dir)
         if not resume:
             (self.checkpoint_dir/(key+'.sqlite3')).unlink(missing_ok=True)
@@ -425,6 +511,11 @@ class TranslationService:
             if memory is None:
                 memory=initial_memory(client,model,doc,target,style,cancelled=cancelled)
                 checkpoint.save_memory(memory)
+            # 사용자 용어가 모델이 만든 용어보다 우선한다(저장하지 않고 실행마다 적용).
+            memory.terms.update(user_terms)
+            memory.enforced=dict(user_terms)
+            memory.guide=build_guide(doc,target)
+            memory.think=bool(precise)
             complete=checkpoint.completed()
             failures=checkpoint.failed()
             resumed=len(complete)

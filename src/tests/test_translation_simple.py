@@ -11,8 +11,8 @@ from pathlib import Path
 
 from core.tools.translation import prepare, read_source
 from integrations.ollama.client import OllamaClient
-from services.tools.translation import TranslationService
-from services.tools.translation_memory import Checkpoint
+from services.tools.translation import TranslationService, parse_glossary, source_profile
+from services.tools.translation_memory import Checkpoint, repeated_entities
 
 
 def texts(source, suffix):
@@ -106,6 +106,44 @@ class ModelReplyTests(unittest.TestCase):
                     raise TimeoutError('slow')
                 return super().chat(name, messages, temperature)
         self.assertEqual(translate('Hello world.\n', Slow()).text, '안녕 world.\n')
+
+
+class JapaneseTests(unittest.TestCase):
+    def test_japanese_names_become_glossary_candidates(self):
+        doc = prepare('佐伯が来た。\n佐伯は笑った。\n田中さんも。\n', '.txt')
+        self.assertTrue({'佐伯', '田中'} <= set(repeated_entities(doc)))
+
+    def test_source_language_and_classical_text(self):
+        self.assertEqual(source_profile(prepare('今日は雨が降っている。\n', '.txt')), ('Japanese', False))
+        self.assertEqual(source_profile(prepare('いとをかし。\n昔、男ありけり。\n', '.txt'))[1], True)
+
+    def test_prompt_carries_japanese_guide(self):
+        seen = []
+        class Spy(Model):
+            def chat(self, name, messages, temperature=.2):
+                seen.append(messages[0]['content'])
+                return super().chat(name, messages, temperature)
+        translate('佐伯が戻ってきた。\n', Spy())
+        self.assertTrue(any('Japanese→Korean' in system for system in seen))
+
+    def test_glossary_text_format(self):
+        self.assertEqual(parse_glossary('# 주석\n佐伯 = 사에키\n記述 → 서술\n'),
+                         {'佐伯': '사에키', '記述': '서술'})
+
+    def test_user_glossary_is_enforced(self):
+        wrong = Model(lambda items: json.dumps({'translations': [x.replace('佐伯', '사케') for x in items]}))
+        with self.assertRaisesRegex(ValueError, 'glossary'):
+            translate('佐伯が戻ってきた。\n', wrong, glossary='佐伯 = 사에키')
+        right = Model(lambda items: json.dumps({'translations': [x.replace('佐伯', '사에키') for x in items]}))
+        self.assertIn('사에키', translate('佐伯が戻ってきた。\n', right, glossary='佐伯 = 사에키').text)
+
+
+class ProgressTests(unittest.TestCase):
+    def test_progress_reaches_total(self):
+        seen = []
+        translate(''.join('Hello %d.\n' % i for i in range(25)), Model(),
+                  progress=lambda done, total: seen.append((done, total)))
+        self.assertEqual(seen[-1], (25, 25))
 
 
 class ClientTests(unittest.TestCase):
