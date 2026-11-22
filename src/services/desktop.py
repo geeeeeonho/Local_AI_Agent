@@ -13,6 +13,8 @@ from services.search.service import SearchService
 from services.chat.service import ChatService
 from services.agent.launcher import AgentLauncher
 from services.tools.translation import TranslationService
+from services.tools.calendar import CalendarService
+from services.tools.reminder_worker import ReminderManager
 from services.system.desktop import SetupService, SystemService
 from services.records import SessionStores
 
@@ -122,6 +124,8 @@ class DesktopServices:
         self.agent = AgentLauncher(backend, self.network, self.events, stores=self.records)
         self.translator = TranslationService(
             self.inference, checkpoint_dir=self.data / 'tools' / 'translation')
+        self.calendar = CalendarService(self.data / 'tools' / 'calendar' / 'items.json')
+        self.reminders = ReminderManager()
         self.system = SystemService(backend)
         self.setup = SetupService(
             backend, self.models, self.network, self.settings,
