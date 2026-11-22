@@ -27,8 +27,13 @@ def fit_for(tag, fallback_gib, analysis=None):
         }
     # In offload modes memory_required_gb is a combined memory estimate,
     # not a per-GPU VRAM measurement. Do not label it as GPU consumption.
+    # llmfit can choose a quantization different from the installed Ollama
+    # artifact. Do not allow an optimistic llmfit estimate to undercut the
+    # catalogue's resident-memory safety estimate.
+    gpu_need = (max(row["memory_gb"], fallback or 0.0)
+                if row["mode"] == "gpu" else None)
     return {
-        "need_gib": row["memory_gb"] if row["mode"] == "gpu" else None,
+        "need_gib": gpu_need,
         "total_memory_gib": row["memory_gb"],
         "mode": row["mode"],
         "fit": row["fit"], "source": "llmfit",
