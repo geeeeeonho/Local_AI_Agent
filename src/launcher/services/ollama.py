@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 import project_paths
-from core import ollama_paths
+from core import ollama_paths, vault
 from project_paths import MODEL_STORAGE_DIR
 from .. import config
 
@@ -68,13 +68,11 @@ class OllamaService:
         # recording a pid there let a second signed-in user read the first
         # user's pid as their own and stop a server they had not started.
         state = Path(state_dir) if state_dir is not None else project_paths.LOGS_DIR
-        # This account's own fallback for the server log. The broker serves
-        # every account, so on Windows its output goes to the shared,
-        # write-only log instead (project_paths.ollama_log_dir()).
+        # A shared Ollama daemon serves more than one account. Its raw stdout
+        # cannot be assigned to one user, so never persist it on this machine.
+        # Per-account lifecycle diagnostics remain in encrypted lifelog records.
         self.private_log = state / "ollama_run.log"
-        self.log_file = self.private_log
-        if state_dir is None and _shared_log():
-            self.log_file = project_paths.ollama_log_dir() / "server.log"
+        self.log_file = self.private_log  # 호환 진단 경로; 실제 원시 로그 기록은 하지 않음
         self.runtime_state_file = state / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
@@ -171,9 +169,9 @@ class OllamaService:
 
     def _state_pid(self) -> Optional[int]:
         try:
-            data = json.loads(self.runtime_state_file.read_text(encoding="utf-8"))
+            data = json.loads(vault.read_text(self.runtime_state_file))
             return int(data["pid"])
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, vault.VaultError):
             return None
 
     def _launched_by_us(self, pid: Optional[int]) -> bool:
@@ -491,14 +489,14 @@ class OllamaService:
 
     def _state_matches(self, pid: int) -> bool:
         try:
-            data = json.loads(self.runtime_state_file.read_text(encoding="utf-8"))
+            data = json.loads(vault.read_text(self.runtime_state_file))
             return (
                 int(data.get("pid", -1)) == int(pid)
                 and _same_path(Path(data["executable"]), self.exe)
                 and _same_path(Path(data["model_storage"]), self.model_dir)
                 and int(data.get("port", -1)) == int(config.OLLAMA_PORT)
             )
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, vault.VaultError):
             return False
 
     def _write_runtime_state(self, pid: int) -> None:
@@ -524,9 +522,9 @@ class OllamaService:
             "port": int(config.OLLAMA_PORT),
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
-        temp = self.runtime_state_file.with_suffix(".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temp.replace(self.runtime_state_file)
+        from core import vault
+        vault.write_text_atomic(self.runtime_state_file,
+                                json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
     def _remove_runtime_state(self) -> None:
         try:
@@ -784,52 +782,11 @@ class OllamaService:
 
     # ── 시작 ──
     def _open_log(self):
-        """Open the server log for append without letting it stop the start.
+        """공용 Ollama 서버의 원시 출력은 디스크에 저장하지 않습니다.
 
-        ``ollama_run.log`` can be refused while its folder is fine: an elevated
-        run created it, or an older server still holds it. The start used to
-        die there with ``[Errno 13] Permission denied``, so a model install
-        failed over a log file. In order: move the refused file aside (deleting
-        or renaming a child needs only the folder's permission, not the
-        file's), write a fresh file beside it, use this account's TEMP, and as
-        a last resort start without a log. ``self.log_file`` always names the
-        file actually in use, so error messages point at the right one.
+        여러 사용자 요청의 메타데이터가 섞일 수 있어 개인 폴더로 옮기는
+        것도 격리가 아닙니다. 계정별 실행 진단은 암호화된 lifelog에만 기록합니다.
         """
-        try:
-            self.log_file.parent.mkdir(parents=True, exist_ok=True)
-            return open(self.log_file, "ab")
-        except OSError as exc:
-            refused = exc
-        original = self.log_file
-        if original == self.private_log:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            aside = original.with_name("%s.blocked-%s%s" % (original.stem, stamp, original.suffix))
-            try:
-                os.replace(original, aside)
-                stream = open(original, "ab")
-                self._warn("쓸 수 없던 Ollama 로그를 옆으로 옮기고 새로 만들었습니다: %s" % aside)
-                return stream
-            except OSError:
-                pass
-        import tempfile
-        candidates = [] if original == self.private_log else [self.private_log]
-        candidates += [
-            self.private_log.with_name("%s-%d%s" % (self.private_log.stem, os.getpid(),
-                                                     self.private_log.suffix)),
-            Path(tempfile.gettempdir()) / ("LocalAI-" + self.private_log.name),
-        ]
-        for candidate in candidates:
-            try:
-                candidate.parent.mkdir(parents=True, exist_ok=True)
-                stream = open(candidate, "ab")
-            except OSError:
-                continue
-            self.log_file = candidate
-            self._warn("Ollama 로그 %s 에 쓸 수 없어 %s 에 기록합니다 (%s). "
-                       "[설치 / 복구]를 실행하면 로그 폴더 권한을 바로잡습니다."
-                       % (original, candidate, refused))
-            return stream
-        self._warn("Ollama 로그 파일을 열 수 없어 로그 없이 시작합니다: %s" % refused)
         return None
 
     def _launch(self) -> int:
@@ -948,7 +905,7 @@ class OllamaService:
                 return True
             time.sleep(1)
 
-        self._err(f"Ollama 시작 실패 — 로그: {self.log_file}")
+        self._err("Ollama 시작 실패 — 공유 중계기 원시 로그는 개인정보 보호를 위해 저장하지 않습니다.")
         return False
 
     # ── 로그 헬퍼 ──
