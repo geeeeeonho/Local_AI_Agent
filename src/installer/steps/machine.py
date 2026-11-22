@@ -38,7 +38,10 @@ def current_role(root: Path) -> str:
     sid = acl.current_user_sid()
     policy = machine.load(Path(root) / machine.POLICY_FILENAME)
     if policy is None:
-        return "admin" if machine.first_admin_candidate(acl.owner_sid(Path(root)), sid) else "user"
+        # A folder's owner is only a *candidate* for first Setup, not a
+        # verified program administrator. Until UAC + ACL protection succeeds
+        # no caller may assume it is safe to mutate shared code.
+        return "user"
     if policy.is_admin(sid, windows.token_group_sids()) or acl.is_elevated():
         return "admin"
     return "user"
