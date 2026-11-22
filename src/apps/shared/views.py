@@ -211,7 +211,7 @@ def settings(parent,w):
     ttk.Label(parent,text='화면 테마',style='Section.TLabel').pack(anchor='w',pady=(0,8))
     r=row(parent)
     w.theme_buttons=[]
-    for value,label in (('dark','다크'),('light','라이트')):
+    for value,label in (('light','밝은 회색 (기본)'),('dark','어두운 테마')):
         choice=ttk.Radiobutton(r,text=label,variable=w.theme_choice,value=value,command=w.save_theme)
         choice.pack(side='left',padx=(0,20));w.theme_buttons.append(choice)
     note(parent,'선택 즉시 적용하고 네 앱의 공통 설정으로 저장합니다. 대화와 작업은 중단하지 않습니다.\n'
@@ -231,30 +231,34 @@ def settings(parent,w):
 
 
 def setup(parent,w):
-    w.setup_status = tk.StringVar(
-        master=w.root,
-        value='대기 · 설치 옵션을 고른 뒤 같은 창에서 실행합니다.',
-    )
-    w.setup_sandbox = tk.BooleanVar(master=w.root, value=True)
-    w.setup_build = tk.BooleanVar(master=w.root, value=True)
-    w.setup_search = tk.BooleanVar(master=w.root, value=True)
+    w.setup_status=tk.StringVar(
+        master=w.root, value='준비됨 · 설치 / 복구를 실행할 수 있습니다.')
+    w.setup_sandbox=tk.BooleanVar(master=w.root,value=True)
+    w.setup_build=tk.BooleanVar(master=w.root,value=True)
+    w.setup_search=tk.BooleanVar(master=w.root,value=True)
 
-    status_line(parent, w.setup_status)
-
-    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
-    card.pack(fill='x',pady=(8,14))
-    ttk.Label(card,text='설치 / 복구 구성',style='Manage.Card.TLabel',
+    status_line(parent,w.setup_status)
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=14)
+    card.pack(fill='x',pady=(5,9))
+    ttk.Label(card,text='기본 설치 · 복구',style='Manage.Card.TLabel',
               font=('Segoe UI',12,'bold')).pack(anchor='w')
-    ttk.Label(
-        card,
-        text='Ollama · AnythingLLM · Open Interpreter · WARP는 기본 공용 런타임으로 준비합니다. '
-             '아래 선택은 부가 Docker/Search 구성입니다.',
-        style='Manage.CardMuted.TLabel',wraplength=720,justify='left',
-    ).pack(anchor='w',pady=(6,12))
+    ttk.Label(card,
+              text='Ollama · AnythingLLM · Open Interpreter · WARP와 선택된 부가 환경을 준비합니다.',
+              style='Manage.CardMuted.TLabel',wraplength=620,
+              justify='left').pack(anchor='w',pady=(5,8))
 
-    options=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    # The primary action and cancel always precede the optional settings.
+    controls=ttk.Frame(card,style='Manage.CardBody.TFrame')
+    controls.pack(fill='x',pady=(4,4))
+    w.setup_start_button=button(
+        controls,'설치 / 복구 실행',w.repair,accent=True)
+    w.setup_cancel_button=button(
+        controls,'실행 중단',w.cancel_setup,kind='Danger')
+    w.setup_cancel_button.configure(state='disabled')
+
+    disclosure=Disclosure(card,'설치 구성 옵션')
+    options=ttk.Frame(disclosure.body,style='Manage.CardBody.TFrame')
     options.pack(fill='x')
-
     def sync_build_choice():
         enabled=w.setup_sandbox.get()
         if not enabled:
@@ -264,55 +268,44 @@ def setup(parent,w):
     ttk.Checkbutton(
         options,text='Sandbox 실행 환경 준비',
         variable=w.setup_sandbox,command=sync_build_choice,
-        style='Card.TCheckbutton',
-    ).pack(anchor='w',pady=3)
+        style='Card.TCheckbutton').pack(anchor='w',pady=3)
     w.setup_build_check=ttk.Checkbutton(
         options,text='Sandbox Docker 이미지 빌드',
-        variable=w.setup_build,style='Card.TCheckbutton',
-    )
+        variable=w.setup_build,style='Card.TCheckbutton')
     w.setup_build_check.pack(anchor='w',padx=(24,0),pady=3)
     ttk.Checkbutton(
         options,text='웹 검색 준비 (SearXNG + Tor)',
-        variable=w.setup_search,style='Card.TCheckbutton',
-    ).pack(anchor='w',pady=3)
-
-    controls=ttk.Frame(card,style='Manage.CardBody.TFrame')
-    controls.pack(fill='x',pady=(14,0))
-    w.setup_start_button=button(
-        controls,'설치 / 복구 실행',w.repair,accent=True,kind='Manage')
-    w.setup_cancel_button=button(
-        controls,'실행 중단',w.cancel_setup,kind='Danger')
-    w.setup_cancel_button.configure(state='disabled')
-    button(controls,'기본 선택',w.reset_setup_options)
-
-    note(parent,'별도 설치 콘솔이나 선택창을 열지 않습니다. 진행 로그는 이 창 아래 Activity에 '
-         '실시간으로 표시됩니다. 모델은 Models 화면에서 같은 방식으로 선택/다운로드합니다.')
-
-    accounts_card(parent,w)
+        variable=w.setup_search,style='Card.TCheckbutton').pack(anchor='w',pady=3)
+    button(row(disclosure.body),'기본 선택',w.reset_setup_options)
+    note(disclosure.body,'설치를 시작할 때만 아래 Activity 기록이 자동으로 열립니다. '
+         '모델 설치·삭제는 Models 화면에서 별도로 확인합니다.')
 
     if 'models' in w.spec.pages:
-        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18)
-        card.pack(fill='x',pady=(4,14))
-        ttk.Label(card,text='모델 설치와 삭제',style='Manage.Card.TLabel',
-                  font=('Segoe UI',12,'bold')).pack(anchor='w')
-        ttk.Label(card,text='모델 선택 · 설치 · 삭제 · 다운로드 진행률은 Models 한 화면에서 처리합니다.',
-                  style='Manage.CardMuted.TLabel',wraplength=700).pack(anchor='w',pady=(6,12))
-        ttk.Button(card,text='Models 열기',style='Manage.TButton',
+        models_card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=12)
+        models_card.pack(fill='x',pady=(0,8))
+        ttk.Label(models_card,text='모델 선택과 다운로드',style='Manage.Card.TLabel',
+                  font=('Segoe UI',11,'bold')).pack(anchor='w',pady=(0,5))
+        ttk.Button(models_card,text='Models 열기',style='Manage.TButton',
                    command=lambda:w.navigate('models')).pack(anchor='w')
 
-    ttk.Label(parent,text='유지보수',style='Section.TLabel').pack(anchor='w',pady=(8,8))
-    r=row(parent)
-    for key,text in [('docker_image','Docker 빌드'),('docker_clean','Docker 정리'),
-                     ('searxng_action','Search 관리')]:
-        button(r,text,lambda k=key:w.maintenance(k))
-    # Not the retained terminal action: it waited on a [확인] click and held
-    # every later change behind it.
-    button(r,'Ollama 확인',w.ensure_ollama)
-    button(r,'설정 화면',lambda:w.navigate('settings'))
-    note(parent,'유지보수 메뉴와 체크 선택도 이 Setup 페이지 안에 표시됩니다. '
-         '실행 결과는 동일한 로그 영역에 기록됩니다.')
-    w.hosts['setup']=PanelHost(parent)
+    # Account mutations and low-level Docker maintenance stay available,
+    # but do not compete with the normal install action.
+    advanced=Disclosure(parent,'계정 관리 · 유지보수')
+    accounts_card(advanced.body,w)
+    ttk.Label(advanced.body,text='고급 유지보수',
+              style='Section.TLabel').pack(anchor='w',pady=(6,6))
+    first=row(advanced.body)
+    for key,label in (
+        ('docker_image','Docker 빌드'),
+        ('docker_clean','Docker 정리'),
+        ('searxng_action','Search 관리'),
+    ):
+        button(first,label,lambda k=key:w.maintenance(k))
+    second=row(advanced.body)
+    button(second,'Ollama 확인',w.ensure_ollama)
+    button(second,'설정 화면',lambda:w.navigate('settings'))
 
+    w.hosts['setup']=PanelHost(parent)
 
 def accounts_card(parent,w):
     """This PC's Windows accounts and their LocalAI roles, for administrators."""
