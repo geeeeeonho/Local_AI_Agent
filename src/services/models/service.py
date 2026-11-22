@@ -220,6 +220,10 @@ class ModelService:
         present = catalog.canonicalize_installed(
             self.installed_tags() if installed is None else installed)
         free = roles.detect_free_memory_gb() if free_gb is None else float(free_gb)
+        # GPU probing is an explicit Models-page operation, not an idle poll.
+        # It reports estimates only; existing user-selected models are kept.
+        from core.gpu_memory import detect_gpu_memory
+        gpu = detect_gpu_memory()
         rows = []
         for role in roles.ROLES:
             try:
@@ -252,9 +256,15 @@ class ModelService:
                 'chosen': chosen or '', 'need_gb': need,
                 'top_need_gb': float(role.need_gb),
                 'on_disk': bool(chosen) and catalog.is_installed(chosen, present),
+                'gpu_fit': (need <= gpu.budget_gib) if chosen and gpu else None,
                 'ladder': ladder,
             })
-        return {'free_gb': free, 'budget_gb': catalog.MEMORY_BUDGET_GB, 'roles': rows}
+        return {
+            'free_gb': free, 'budget_gb': catalog.MEMORY_BUDGET_GB, 'roles': rows,
+            'gpu': ({'total_gib': gpu.total_gib, 'free_gib': gpu.free_gib,
+                     'reserve_gib': gpu.reserve_gib, 'budget_gib': gpu.budget_gib}
+                    if gpu else None),
+        }
 
     def storage(self):
         """Where models land, and whether there is room for more there.
