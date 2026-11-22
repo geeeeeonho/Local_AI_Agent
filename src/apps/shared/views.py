@@ -70,6 +70,9 @@ def chat(parent,w):
     content=ScrollArea(main);w.page_scrolls['chat.main']=content
     main=content.body
     mode_row(main,w)
+    w.chat_search = tk.BooleanVar(master=w.root, value=False)
+    ttk.Checkbutton(main, text='웹 검색 엔진도 함께 실행 (SearXNG · 추가 RAM 사용)',
+                    variable=w.chat_search).pack(anchor='w', pady=(0, 8))
     r=row(main)
     button(r,'Chat 시작',w.start_chat,kind='Chat')
     w.chat_open_button=button(r,'대화 화면 열기',w.open_chat)
@@ -84,8 +87,10 @@ def chat(parent,w):
     ttk.Label(card,text='Workspace를 만들고, 문서와 대화를 AnythingLLM에서 관리합니다.',
               style='Chat.CardMuted.TLabel',wraplength=740).pack(anchor='w',pady=(6,12))
     ttk.Button(card,text='프로젝트 만들기 / 관리',style='Chat.TButton',command=w.manage_chat_projects).pack(anchor='w')
-    note(main,'프로젝트 연결은 필수가 아닙니다. AnythingLLM의 대화와 문서 데이터는 복제하지 않습니다.\n'
-         'AnythingLLM은 브라우저로 열리며, 테마는 그 화면의 설정을 따릅니다.')
+    note(main,'웹 검색을 선택하지 않으면 SearXNG는 시작하지 않습니다.\n'
+         'AnythingLLM 자체 문서 검색/RAG는 웹 검색 옵션과 별개입니다.\n'
+         '옵션 변경은 다음 Chat 시작에 적용됩니다.')
+    note(main,'프로젝트 연결은 필수가 아닙니다. AnythingLLM의 대화와 문서 데이터는 복제하지 않습니다.\n'         'AnythingLLM은 브라우저로 열리며, 테마는 그 화면의 설정을 따릅니다.')
     w.chat_text=text_box(main,height=10)
     set_text(w.chat_text,'Chat 준비 상태 확인 중...\n\n'
              'Chat 시작 시 Network → Ollama → AnythingLLM → 선택 모델 연결을 순서대로 검증합니다.')
@@ -110,6 +115,9 @@ def agent(parent,w):
     r=mode_row(main,w)
     button(r,'Agent 시작',w.start_agent,kind='Agent')
     button(r,'세션 종료',w.stop_sessions)
+    w.agent_search = tk.BooleanVar(master=w.root, value=False)
+    ttk.Checkbutton(main, text='웹 검색 엔진도 함께 실행 (SearXNG · 추가 RAM 사용)',
+                    variable=w.agent_search).pack(anchor='w', pady=(0, 8))
     w.agent_status=status_line(main,w.agent_state)
     note(main,'기존 프로필 / 모델 / Host·Sandbox / 폴더 선택과 승인 절차를 유지합니다.\n'
          '연결 폴더는 선택 창의 기본값이며, 자동 접근 허용이 아닙니다.')
