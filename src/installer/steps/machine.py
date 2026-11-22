@@ -67,6 +67,7 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
 
     if not windows.lockable_root(root):
         raise RuntimeError("공용 프로그램 경로에 안전한 ACL을 적용할 수 없습니다: " + str(root))
+    program_security.reject_reparse_root(root)
 
     if policy is None:
         owner = acl.owner_sid(root)
