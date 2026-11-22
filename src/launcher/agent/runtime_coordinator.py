@@ -73,6 +73,7 @@ def prepare_runtime(
     mode: str,
     selected: network_policy.NetworkMode,
     cancel=None,
+    search: bool = False,
 ) -> bool:
     """Prepare required services for one canonical execution/network mode.
 
@@ -127,7 +128,7 @@ def prepare_runtime(
             )
             return False
 
-    if selected is not network_policy.NetworkMode.BLOCK and docker_ready:
+    if search and selected is not network_policy.NetworkMode.BLOCK and docker_ready:
         try:
             from launcher import searxng_runtime
 
@@ -143,7 +144,7 @@ def prepare_runtime(
                     )
         except Exception as exc:
             presenter.warn("SearXNG 준비 생략: " + str(exc))
-    elif selected is not network_policy.NetworkMode.BLOCK:
+    elif search and selected is not network_policy.NetworkMode.BLOCK:
         presenter.warn("Docker가 실행 중이 아니어서 SearXNG 검색은 비활성 상태입니다.")
 
     return True
