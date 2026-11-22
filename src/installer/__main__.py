@@ -77,18 +77,19 @@ def _run_install(args) -> int:
         import time
         time.sleep(5)
 
-    ollama.prepare_install(ENV, MODEL_STORAGE_DIR)
-
-    # Only LocalAI administrators change the shared folders' permissions;
-    # anyone else's Setup would just fail those steps and say so loudly.
-    paths = utils.create_environment(
-        ENV, manage_shared=machine_step.current_role(ROOT) != "user")
-    # The first installing account becomes the LocalAI administrator (one
-    # UAC prompt); administrators keep C:\LocalAI\app current, everyone
-    # else's Setup prepares only their own folder.
+    # Secure the shared executable boundary before any shared download or
+    # runtime installation. UAC refusal must stop deployment, not fall through.
+    ROOT.mkdir(parents=True, exist_ok=True)
     role = machine_step.ensure(ROOT, APP_DIR, HERE)
     if role == "user":
-        utils.info("공용 구성요소가 이미 설치되어 있으면 그대로 사용합니다.")
+        # An ordinary account may prepare only its private state. Do not
+        # download, update or launch any shared installer under its token.
+        utils.create_environment(ENV, manage_shared=False)
+        utils.info("일반 사용자 설정 완료: 공용 프로그램은 변경하지 않았습니다.")
+        return 0
+
+    ollama.prepare_install(ENV, MODEL_STORAGE_DIR)
+    paths = utils.create_environment(ENV, manage_shared=True)
     components = []
     failed_components = []
     skipped_components = []
@@ -185,6 +186,16 @@ def _run_install(args) -> int:
     except Exception as exc:
         failed_components.append("warp")
         utils.warn("WARP 설치 중 오류: " + repr(exc))
+
+    # Re-audit after the third-party installers: they may add explicit file
+    # grants despite the shared root having a read/execute-only policy.
+    if role == "admin":
+        from core import machine
+        from integrations.windows import program_security
+        policy = machine.load(ROOT / machine.POLICY_FILENAME)
+        if policy is None:
+            raise RuntimeError("LocalAI 관리자 정책을 읽지 못해 설치를 완료할 수 없습니다.")
+        program_security.ensure(ROOT, policy, log=utils.info)
 
     status = "partial" if failed_components else "installed"
     utils.write_install_manifest(
