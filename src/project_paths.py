@@ -186,13 +186,12 @@ OLLAMA_INSTALL_DIR = _override("LLM_OLLAMA_DIR", runtime_dir() / runtime_root.OL
 
 
 def ollama_log_dir() -> Path:
-    """Shared and write-only: the broker's output, whichever account started it.
+    """Account-only diagnostics directory (never shared broker stdout/stderr).
 
-    The broker serves every account, so its log describes everyone's requests;
-    keeping it in the starting account's private folder showed that account
-    other people's activity. Accounts may append here but not read.
+    A single Ollama server serves multiple signed-in users, so its raw output
+    cannot safely be attributed to an individual account. It is not persisted.
     """
-    return OLLAMA_INSTALL_DIR / runtime_root.LOGS
+    return logs_dir() / 'ollama'
 
 
 def _register_record_key() -> None:
