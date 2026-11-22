@@ -248,17 +248,33 @@ def _group_lines() -> List[str]:
 
 
 def _member_line(group: str, sid: str, present: bool) -> str:
-    """Add or remove a member by SID (``WinNT://<SID>``), then check it took."""
-    verb, want = ('Add', '$true') if present else ('Remove', '$false')
-    return ("try { $g = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/%s,group'); "
-            "$m = 'WinNT://%s'; "
-            "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { [void]$g.psbase.Invoke('%s', $m) }; "
-            "if ($g.psbase.Invoke('IsMember', $m) -ne %s) { $failed = 1; "
-            "if ($null -ne $localaiIssues) { [void]$localaiIssues.Add('member %s: membership not verified') } "
-            "} } catch { $failed = 1; if ($null -ne $localaiIssues) { "
-            "[void]$localaiIssues.Add('member %s: ' + $_.Exception.Message) } }"
-            % (group, sid, want, verb, want, group, group))
+    """Add/remove a SID and verify by enumerating the actual member SIDs.
 
+    Microsoft explicitly documents that WinNT IADsGroup.IsMember does NOT
+    support a SID ADsPath even though IADsGroup.Add/Remove support it. The
+    old implementation therefore marked a successful install as exit-code 1.
+    """
+    verb, want = ('Add', '$true') if present else ('Remove', '$false')
+    return (
+        # TestGroupSid reads objectSid of each COM member, the same
+        # language-independent route used by list_accounts().
+        "function Test-LocalAISidMember($groupObj, $targetSid) { "
+        "foreach ($entry in @($groupObj.psbase.Invoke('Members'))) { "
+        "try { $raw = $entry.GetType().InvokeMember('objectSid', 'GetProperty', $null, $entry, $null); "
+        "$found = (New-Object System.Security.Principal.SecurityIdentifier($raw, 0)).Value; "
+        "if ($found -ieq $targetSid) { return $true } } catch { } "
+        "} return $false }; "
+        "try { $g = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/%s,group'); "
+        "$target = '%s'; $m = 'WinNT://' + $target; "
+        "if ((Test-LocalAISidMember $g $target) -ne %s) { "
+        "[void]$g.psbase.Invoke('%s', $m) }; "
+        "if ((Test-LocalAISidMember $g $target) -ne %s) { "
+        "$failed = 1; if ($null -ne $localaiIssues) { "
+        "[void]$localaiIssues.Add('member %s: SID not present after update') } "
+        "} } catch { $failed = 1; if ($null -ne $localaiIssues) { "
+        "[void]$localaiIssues.Add('member %s: ' + $_.Exception.Message) } }"
+        % (group, sid, want, verb, want, group, group)
+    )
 
 def _shortcut_lines(app_dir: Path) -> List[str]:
     target = Path(app_dir) / 'RUN.bat'
