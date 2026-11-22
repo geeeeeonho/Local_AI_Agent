@@ -880,7 +880,10 @@ class DesktopWindow(TranslationController, ToolsController):
         if not tag:
             note = '모델 카드를 선택하면 해당 모델 하나만 예상합니다.'
         elif values['need_gib'] is None:
-            note = '이 모델은 메모리 요구량 추정 정보가 없습니다.'
+            if estimate.get('mode') in ('offload', 'cpu'):
+                note = 'LLMfit: CPU/RAM 오프로딩 예상 · 전용 GPU 점유량은 별도 추정 불가'
+            else:
+                note = '이 모델은 GPU 메모리 요구량 추정 정보가 없습니다.'
         elif same:
             note = 'Ollama에 이미 적재된 모델: GPU 사용량을 중복 합산하지 않습니다.'
         else:
