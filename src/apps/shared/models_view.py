@@ -389,13 +389,18 @@ def _scroll_frame(parent, w):
     w.page_scrolls['models.choose'] = scroller
     w.choice_body = scroller.body
 
-    side = ttk.Frame(outer, padding=(7, 4), width=240)
+    side = ttk.Frame(outer, padding=(4, 2), width=240)
     side.grid(row=0, column=1, sticky='nsew')
     side.grid_propagate(False)
-    _gpu_panel(side, w)
+    # The GPU inspector is independently scrollable on very short/high-DPI
+    # windows. Its third bar and the extra-model button are never cut off.
+    gpu_scroll=ScrollArea(side)
+    w.page_scrolls['models.gpu']=gpu_scroll
+    side_body=gpu_scroll.body
+    _gpu_panel(side_body, w)
 
     w.uncatalogued_expanded=False
-    w.uncatalogued_panel = ScrollArea(side)
+    w.uncatalogued_panel = ScrollArea(side_body)
     w.uncatalogued_body = w.uncatalogued_panel.body
     w.uncatalogued_managed_body = ttk.Frame(w.uncatalogued_body)
     w.uncatalogued_managed_body.pack(fill='x')
@@ -412,9 +417,10 @@ def _scroll_frame(parent, w):
             w.uncatalogued_panel.frame.pack_forget()
         more.configure(text='기타 설치 모델 ▾' if w.uncatalogued_expanded
                        else '기타 설치 모델 ▸')
-    more=ttk.Button(side,text='기타 설치 모델 ▸',
+    more=ttk.Button(side_body,text='기타 설치 모델 ▸',
                     style='Manage.Details.TButton',command=toggle_more)
     more.pack(fill='x',anchor='w')
+    gpu_scroll.bind_content()
     # On a narrow window return some width to the actual model catalogue.
     def size_side(event):
         wanted=205 if event.width<700 else 240
