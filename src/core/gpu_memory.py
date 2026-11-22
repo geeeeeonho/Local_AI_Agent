@@ -7,6 +7,7 @@ the capacity available *after unloading* it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 import shutil
@@ -41,7 +42,8 @@ def parse_nvidia_smi(output: str) -> Optional[GpuMemory]:
             total, free = (float(value) for value in fields)
         except ValueError:
             continue
-        if not (0 < total and 0 <= free <= total):
+        if not (math.isfinite(total) and math.isfinite(free)
+                and 0 < total and 0 <= free <= total):
             continue
         valid.append(GpuMemory(total / 1024.0, free / 1024.0))
     return max(valid, key=lambda item: item.free_gib) if valid else None
