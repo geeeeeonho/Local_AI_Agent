@@ -61,6 +61,7 @@ class DesktopWindow(TranslationController, ToolsController):
         self.agent_panel = None;self.agent_session = None
         self._chat_progress = [];self._chat_starting = False
         self._setup_cancel = threading.Event()
+        self._activity_setup_temporary = False
         self.chat_state = tk.StringVar(master=self.root,
             value='준비 안 됨 · [Chat 시작]을 누르면 Network → Ollama → AnythingLLM 순으로 확인합니다.')
         self.agent_state = tk.StringVar(master=self.root,
@@ -155,7 +156,7 @@ class DesktopWindow(TranslationController, ToolsController):
                               selectbackground='selected',selectforeground='fg')
         self.activity.tag_configure('alert',foreground=self.theme.palette.danger)
         try:self._activity_visible=self.services.settings.activity_visible()
-        except (OSError,ValueError):self._activity_visible=True
+        except (OSError,ValueError):self._activity_visible=False
         self._apply_activity_visibility()
         self.page_area=ttk.Frame(content);self.page_area.pack(fill='both',expand=True)
         self._apply_activity_visibility()
@@ -224,6 +225,8 @@ class DesktopWindow(TranslationController, ToolsController):
             self.activity.configure(height=wanted)
 
     def toggle_activity(self):
+        # An explicit choice wins over any temporary Setup log expansion.
+        self._activity_setup_temporary=False
         self._activity_visible=not self._activity_visible
         self._apply_activity_visibility()
         self.runner.submit('activity.save',
@@ -235,6 +238,10 @@ class DesktopWindow(TranslationController, ToolsController):
             self.show_project_links()
             return
         if key not in self.pages: return
+        if key!='setup' and self._activity_setup_temporary:
+            self._activity_setup_temporary=False
+            self._activity_visible=False
+            self._apply_activity_visibility()
         if key in ('network','system','settings'):
             self._set_advanced_navigation(True)
         self.pages[key].tkraise();self.current_page=key
@@ -261,7 +268,7 @@ class DesktopWindow(TranslationController, ToolsController):
     def log(self,text,*,level='info'):
         # A failure used to look exactly like progress on the same muted line.
         text=str(text)
-        self.message.set(text[:220])
+        self.message.set(text[:90] + ('…' if len(text)>90 else ''))
         self.message_label.configure(style='Alert.TLabel' if level=='error' else 'Muted.TLabel')
         self.activity.configure(state='normal')
         start=self.activity.index('end-1c')
@@ -1663,7 +1670,8 @@ class DesktopWindow(TranslationController, ToolsController):
 
         # Setup work is exactly the moment users need the activity stream. Open
         # it for this session without changing their saved fold preference.
-        if not getattr(self,'_activity_visible',True):
+        if not getattr(self,'_activity_visible',False):
+            self._activity_setup_temporary=True
             self._activity_visible=True
             self._apply_activity_visibility()
 
