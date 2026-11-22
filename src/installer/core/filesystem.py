@@ -320,6 +320,7 @@ def protect_existing_records(account: Path) -> int:
     its own DPAPI key can do it. Returns how many files were converted.
     """
     from core import vault
+    vault.require_private_record_encryption(account / USER_DATA_DIRNAME)
     if not vault.enabled():
         return 0
     converted = 0
