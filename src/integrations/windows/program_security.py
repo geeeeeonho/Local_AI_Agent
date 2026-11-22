@@ -103,6 +103,15 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
         " /T /C /Q /L 2>&1 | Out-Null",
         "    if ($LASTEXITCODE -ne 0) { throw 'Unable to set owner: ' + $folder }",
         "  }",
+        # The machine-wide role policy must not retain a writable old ACL.
+        "  $policyFile = Join-Path $localaiRoot 'machine.json'",
+        "  if (Test-Path -LiteralPath $policyFile -PathType Leaf) {",
+        "    & icacls.exe $policyFile /reset /Q /L 2>&1 | Out-Null",
+        "    if ($LASTEXITCODE -ne 0) { throw 'Unable to reset policy ACL' }",
+        "    & icacls.exe $policyFile /setowner " + _quote("*" + _ADMINISTRATORS) +
+        " /Q /L 2>&1 | Out-Null",
+        "    if ($LASTEXITCODE -ne 0) { throw 'Unable to set policy owner' }",
+        "  }",
         "  $runtimeLock = Join-Path $localaiRoot 'environment\\desktop-runtime.lock'",
         "  if (Test-Path -LiteralPath $runtimeLock -PathType Leaf) {",
         "    & icacls.exe $runtimeLock /grant:r " +
@@ -175,7 +184,8 @@ def verify(root, policy: machine.Policy):
     # A few particularly important executable entry points as well as the
     # directory policies. The elevated repair reports a failure if ANY of the
     # recursive reset/owner steps failed, not just these representative checks.
-    targets.extend((root / "app" / "RUN.bat",
+    targets.extend((root / machine.POLICY_FILENAME,
+                    root / "app" / "RUN.bat",
                     root / "app" / "src",
                     root / "ollama" / "ollama.exe"))
     reasons = []
