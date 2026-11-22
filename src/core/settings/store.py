@@ -35,18 +35,18 @@ class SettingsStore:
         appearance = data.get('appearance', {})
         if not isinstance(appearance, dict):
             raise ValueError('appearance settings must be an object')
-        value = appearance.get('theme', 'dark')
+        value = appearance.get('theme', 'light')
         if not isinstance(value, str) or value not in ('dark', 'light'):
             raise ValueError('unsupported theme preference')
         return value
 
     def activity_visible(self) -> bool:
-        """Is the shared activity log expanded? Defaults to yes."""
+        """Is the shared activity log expanded? Defaults to no for a calm workspace."""
         data = schema_one(self.store.read())
         appearance = data.get('appearance', {})
         if not isinstance(appearance, dict):
             raise ValueError('appearance settings must be an object')
-        value = appearance.get('activity_log', True)
+        value = appearance.get('activity_log', False)
         if not isinstance(value, bool):
             raise ValueError('activity_log must be true or false')
         return value
