@@ -783,52 +783,11 @@ class OllamaService:
 
     # ── 시작 ──
     def _open_log(self):
-        """Open the server log for append without letting it stop the start.
+        """공용 Ollama 서버의 원시 출력은 디스크에 저장하지 않습니다.
 
-        ``ollama_run.log`` can be refused while its folder is fine: an elevated
-        run created it, or an older server still holds it. The start used to
-        die there with ``[Errno 13] Permission denied``, so a model install
-        failed over a log file. In order: move the refused file aside (deleting
-        or renaming a child needs only the folder's permission, not the
-        file's), write a fresh file beside it, use this account's TEMP, and as
-        a last resort start without a log. ``self.log_file`` always names the
-        file actually in use, so error messages point at the right one.
+        여러 사용자 요청의 메타데이터가 섞일 수 있어 개인 폴더로 옮기는
+        것도 격리가 아닙니다. 계정별 실행 진단은 암호화된 lifelog에만 기록합니다.
         """
-        try:
-            self.log_file.parent.mkdir(parents=True, exist_ok=True)
-            return open(self.log_file, "ab")
-        except OSError as exc:
-            refused = exc
-        original = self.log_file
-        if original == self.private_log:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            aside = original.with_name("%s.blocked-%s%s" % (original.stem, stamp, original.suffix))
-            try:
-                os.replace(original, aside)
-                stream = open(original, "ab")
-                self._warn("쓸 수 없던 Ollama 로그를 옆으로 옮기고 새로 만들었습니다: %s" % aside)
-                return stream
-            except OSError:
-                pass
-        import tempfile
-        candidates = [] if original == self.private_log else [self.private_log]
-        candidates += [
-            self.private_log.with_name("%s-%d%s" % (self.private_log.stem, os.getpid(),
-                                                     self.private_log.suffix)),
-            Path(tempfile.gettempdir()) / ("LocalAI-" + self.private_log.name),
-        ]
-        for candidate in candidates:
-            try:
-                candidate.parent.mkdir(parents=True, exist_ok=True)
-                stream = open(candidate, "ab")
-            except OSError:
-                continue
-            self.log_file = candidate
-            self._warn("Ollama 로그 %s 에 쓸 수 없어 %s 에 기록합니다 (%s). "
-                       "[설치 / 복구]를 실행하면 로그 폴더 권한을 바로잡습니다."
-                       % (original, candidate, refused))
-            return stream
-        self._warn("Ollama 로그 파일을 열 수 없어 로그 없이 시작합니다: %s" % refused)
         return None
 
     def _launch(self) -> int:
@@ -947,7 +906,7 @@ class OllamaService:
                 return True
             time.sleep(1)
 
-        self._err(f"Ollama 시작 실패 — 로그: {self.log_file}")
+        self._err("Ollama 시작 실패 — 공유 중계기 원시 로그는 개인정보 보호를 위해 저장하지 않습니다.")
         return False
 
     # ── 로그 헬퍼 ──
