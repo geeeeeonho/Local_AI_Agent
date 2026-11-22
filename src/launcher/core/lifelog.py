@@ -11,16 +11,13 @@ from __future__ import annotations
 
 def _llm_session_log_dir():
     """Return the current Windows account's private log directory."""
-    from pathlib import Path
-    try:
-        import project_paths
-        d = project_paths.logs_dir()
-    except Exception:
-        d = Path.cwd() / "logs"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    import project_paths
+    # 프로젝트 폴더나 현재 작업 디렉터리에 로그를 남기지 않습니다.
+    # 개인 디렉터리가 준비되지 않았다면 저장을 실패시키되 외부에 노출하지 않습니다.
+    d = project_paths.logs_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    from core import vault
+    vault.require_private_record_encryption(d)
     return d
 
 import atexit
@@ -142,9 +139,7 @@ def get_log_dir() -> Path:
     with _lock:
         if _log_dir is not None:
             return _log_dir
-        fallback = Path.cwd() / "logs"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+        return _llm_session_log_dir()
 
 
 def _open_main_log() -> Optional[TextIO]:
