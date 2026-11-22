@@ -99,3 +99,31 @@ def test_llmfit_cannot_undercut_conservative_known_ollama_memory():
     }}}
     estimate = fit_for("model:q8", 11.0, analyzed)
     assert estimate["need_gib"] == 11.0
+
+
+def test_concurrent_gpu_and_catalog_requests_use_one_llmfit_process(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    client.clear_cache()
+    monkeypatch.setattr(client, "executable", lambda: __import__("pathlib").Path("llmfit"))
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        started.set()
+        assert release.wait(3.0)
+        return Mock(returncode=0, stdout=json.dumps({"models": [{
+            "name": "Gemma", "ollama_name": "gemma4:12b",
+            "memory_required_gb": 10.2, "run_mode": "GPU", "fit_level": "good"
+        }]}))
+
+    monkeypatch.setattr(client.subprocess, "run", run)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        a = executor.submit(client.analyze, context=4096, gpu_capacity_gib=14.0)
+        assert started.wait(3.0)
+        b = executor.submit(client.analyze, context=4096, gpu_capacity_gib=14.0)
+        release.set()
+        assert a.result(timeout=5)["available"]
+        assert b.result(timeout=5)["available"]
+    assert len(calls) == 1
