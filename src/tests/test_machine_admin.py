@@ -70,7 +70,8 @@ APP = PureWindowsPath(r'C:\LocalAI\app')
 def test_first_install_creates_groups_adds_me_by_sid_and_locks_the_root():
     script = windows.first_install_script(ME, ROOT, APP)
     assert script.count(".Create('group'") == 2
-    assert "'WinNT://%s'" % ME in script, 'membership by SID, not a localized name'
+    assert "$target = '%s'" % ME in script, 'membership by SID, not a localized name'
+    assert "Test-LocalAISidMember" in script, 'SID membership verified by enumeration'
     assert "/inheritance:r" in script and "'*S-1-5-32-545:(OI)(CI)RX'" in script
     assert "'*%s:(OI)(CI)F'" % ME in script
     assert '(OI)(CI)M' not in script, 'no account other than admins may change the program'
