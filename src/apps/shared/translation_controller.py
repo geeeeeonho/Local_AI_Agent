@@ -3,8 +3,12 @@ import time
 from pathlib import Path
 from threading import Event
 from tkinter import filedialog
-from .translation_view import KINDS, STYLES
+from .translation_view import KINDS, STYLES, LANGUAGES as TARGETS
+from services.tools.languages import SOURCE_LABELS as SOURCES
 from .widgets import set_text, set_status
+
+KIND_NAMES={value:label for label,value in KINDS.items()}
+
 
 class TranslationController:
     def translation_say(self,state,text,*,log=False,level='info'):
@@ -14,9 +18,75 @@ class TranslationController:
         if log:
             self.log('[번역] '+text,level=level)
 
+    # 화면 값 ↔ 저장된 기본값
+    def _translation_fields(self):
+        return {'target':self.translation_language,'model':self.translation_model,
+                'source':self.translation_source_language,'kind':self.translation_kind,
+                'style':self.translation_style,'shared':self.translation_shared,
+                'resume':self.translation_resume,'keep_failed':self.translation_keep_failed,
+                'precise':self.translation_precise,'stage':self.translation_stage}
+
     def translation_opened(self):
-        if not self.translation_model.get() and not self.runner.busy('tools.models'):
+        """처음 열 때 지난번 선택(언어·모델·고급 설정)을 불러오고 모델 목록을 채운다."""
+        if getattr(self,'_translation_prefs_loaded',False):
+            return
+        self._translation_prefs_loaded=True
+        self._translation_last_model=''
+        def apply(prefs):
+            fields=self._translation_fields()
+            allowed={'target':TARGETS,'source':SOURCES,'kind':tuple(KINDS),'style':tuple(STYLES)}
+            for key,value in prefs.items():
+                if key in fields and (key not in allowed or value in allowed[key]):
+                    fields[key].set(value)
+            self._translation_last_model=prefs.get('model','')
+            self.toggle_translation_advanced(prefs.get('advanced',False),save=False)
             self.refresh_translation_models()
+        self.run_task('tools.prefs',self.services.settings.translation_preferences,apply,
+                      mutate=False,announce=False,error=lambda _e:self.refresh_translation_models())
+
+    def save_translation_preferences(self):
+        values={key:variable.get() for key,variable in self._translation_fields().items()}
+        values['advanced']=bool(getattr(self,'_translation_advanced_open',False))
+        self.runner.submit('tools.prefs.save',
+            lambda:self.services.settings.set_translation_preferences(values),
+            lambda _:None,lambda exc:self.log('번역 기본값 저장 실패: '+str(exc),level='error'),mutate=False)
+
+    def toggle_translation_advanced(self,show=None,*,save=True):
+        visible=bool(getattr(self,'_translation_advanced_open',False))
+        show=not visible if show is None else bool(show)
+        self._translation_advanced_open=show
+        if show and not visible:
+            self.translation_advanced.pack(fill='x',before=self.translation_tabs_widget)
+        elif not show and visible:
+            self.translation_advanced.pack_forget()
+        self.translation_advanced_button.configure(text='고급 설정 ▾' if show else '고급 설정 ▸')
+        scroller=self.page_scrolls.get('tools.translate')
+        if scroller is not None:
+            scroller.bind_content()
+        if save:
+            self.save_translation_preferences()
+
+    def update_translation_destination(self):
+        """결과가 어디에 생기는지 미리 보여 주고, 시작 가능 여부에 맞춰 버튼을 켜고 끈다."""
+        raw=self.translation_path.get().strip()
+        custom=self.translation_output.get().strip()
+        code=self.translation_code()
+        if not raw:
+            text='결과는 원본 옆에 자동으로 만듭니다. (파일 → 이름.%s.txt, 폴더 → 폴더이름.%s)'%(code,code)
+        else:
+            path=Path(raw)
+            if custom:
+                text='→ 결과: '+custom+'  (고급 설정에서 지정)'
+            elif path.is_dir():
+                text='→ 결과: 원본 옆 "%s.%s" 폴더 (같은 구조·같은 파일 이름, 다른 파일은 복사)'%(path.name,code)
+            elif path.suffix:
+                text='→ 결과: 원본 옆 "%s.%s%s" (이미 있으면 번호를 붙여 새로 만듭니다)'%(path.stem,code,path.suffix)
+            else:
+                text='파일이나 폴더 경로를 확인하세요.'
+        self.translation_destination.configure(text=text)
+        if not self.runner.busy('tools.translate'):
+            ready=bool(raw and self.translation_model.get().strip())
+            self.translation_start_button.configure(state='normal' if ready else 'disabled')
 
     def open_translation_folder(self):
         target=getattr(self,'_translation_last_output',None)
@@ -65,9 +135,8 @@ class TranslationController:
                 units=sum(count for _,_,count in rows)
                 errors=[rel for rel,kind,_ in rows if kind.startswith('error')]
                 self.translation_say('Ready' if rows else 'Failed',
-                    ('폴더: 번역할 파일 %d개 · 번역 대상 %d구간 · 그대로 복사 %d개%s · 결과는 "%s.%s" 폴더'
-                     % (len(rows),units,others,(' · 읽을 수 없는 파일 %d개'%len(errors)) if errors else '',
-                        Path(path).name,self.translation_code()))
+                    ('준비됨 · 번역할 파일 %d개(%d구간) · 그대로 복사 %d개%s · [번역 시작]을 누르세요'
+                     % (len(rows),units,others,(' · 읽을 수 없는 파일 %d개'%len(errors)) if errors else ''))
                     if rows else '이 폴더에는 번역할 TXT·JSON·MD·SRT·VTT 파일이 없습니다.')
                 set_text(self.translation_source_text,'\n'.join(
                     '%-48s %-12s %6d구간'%(rel,kind[:40],count) for rel,kind,count in rows)
@@ -79,8 +148,8 @@ class TranslationController:
             return
         self.translation_say('Working','파일 유형 분석 중...')
         def done(doc):
-            self.translation_say('Ready','감지된 유형: %s · 번역 대상 %d구간 · 2단계: 모델과 언어를 고르고 [번역 시작]' %
-                                 (doc.detected,len(doc.segments)))
+            self.translation_say('Ready','준비됨 · %s · %d구간 · [번역 시작]을 누르세요' %
+                                 (KIND_NAMES.get(doc.detected,doc.detected),len(doc.segments)))
             set_text(self.translation_source_text,doc.source[:12000])
             self.translation_tabs.select(0)
         self.run_task('tools.inspect',lambda:self.services.translator.inspect(path),done,
@@ -97,13 +166,13 @@ class TranslationController:
         def done(names):
             self.translation_model_box.configure(values=names)
             if self.translation_model.get() not in names:
-                self.translation_model.set(names[0] if names else '')
+                # 지난번 모델 → 번역에 무난한 모델 순으로 자동 선택(직접 고를 필요 없게)
+                self.translation_model.set(self.services.translator.recommend_model(
+                    names,getattr(self,'_translation_last_model','')))
             if not names:
                 self.translation_say('Failed','로컬 모델이 없습니다. Models 화면에서 설치하세요.')
             elif not self.translation_path.get().strip():
-                self.translation_say('Waiting','모델 %d개 사용 가능 · 1단계: 번역할 파일을 선택하세요.'%len(names))
-            else:
-                self.translation_say('Waiting','모델 %d개 사용 가능'%len(names))
+                self.translation_say('Waiting','번역할 파일이나 폴더를 선택하세요.')
         self.run_task('tools.models',fetch,done,mutate=False,announce=False,
                       error=lambda e:self.translation_say('Failed','모델 조회 실패: '+str(e)))
 
@@ -130,6 +199,7 @@ class TranslationController:
                  'source_language':self.translation_source_language.get(),
                  'glossary':self.translation_glossary_text.get('1.0','end'),
                  'output_path':self.translation_output.get().strip() or None}
+        self.save_translation_preferences()
         self._translation_cancel=Event()
         self.translation_start_button.configure(state='disabled')
         self.translation_cancel_button.configure(state='normal')
@@ -167,8 +237,8 @@ class TranslationController:
         def unlock():
             if not self.translation_progress.get()>=100:
                 self.translation_progress_label.configure(text='중지됨')
-            self.translation_start_button.configure(state='normal')
             self.translation_cancel_button.configure(state='disabled')
+            self.root.after_idle(self.update_translation_destination)   # 시작 버튼 상태 복원
         def done(result):
             if folder_mode:
                 return folder_finished(result)
@@ -245,6 +315,8 @@ class TranslationController:
             unlock()
 
     def set_translation_progress(self,done,total,note=''):
+        if not self.translation_progress_row.winfo_manager():
+            self.translation_progress_row.pack(fill='x')
         percent=100.0*done/total if total else 0.0
         self.translation_progress.set(percent)
         text='%d%% · %d/%d'%(percent,done,total) if total else ''
@@ -271,7 +343,7 @@ _FRIENDLY=(
     ('cannot overwrite the original','원본 파일에는 덮어쓸 수 없습니다. 다른 출력 파일을 고르세요.'),
     ('output directory does not exist','출력 폴더가 없습니다.'),
     ('too large','파일이 너무 큽니다(최대 32MiB). 나누어 번역하세요.'),
-    ('too many','번역 구간이 너무 많습니다. 파일을 나누어 번역하세요.'),
+    ('too many translation','번역 구간이 너무 많습니다. 파일을 나누어 번역하세요.'),
     ('encoding','파일 인코딩을 알 수 없습니다. 메모장 등에서 UTF-8로 저장한 뒤 다시 시도하세요.'),
     ('decode','파일 인코딩을 알 수 없습니다. UTF-8로 저장한 뒤 다시 시도하세요.'),
     ('unsupported file extension','지원하지 않는 형식입니다. TXT·JSON·MD·SRT·VTT만 됩니다.'),

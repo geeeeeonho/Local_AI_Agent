@@ -9,14 +9,16 @@ import tempfile
 import threading
 import time
 import shutil
-from dataclasses import dataclass, field
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
 from core.tools.translation import (SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
                                     render, restore, speaker_prefix, split_masked)
 from integrations.ollama.client import OllamaClient, local_model_name
-from .translation_memory import (Checkpoint, TranslationMemory, default_protector, initial_memory,
+from collections import Counter
+from .translation_memory import (Checkpoint, TranslationMemory, default_protector, initial_memory, name_counts,
                                  job_key, json_object, prune, strip_reasoning, update_rolling)
 
 from .languages import (LANGUAGES as LANGUAGE_TABLE, ReviewError, check_output, detect_language,
@@ -456,9 +458,50 @@ def folder_output(folder, target):
     return folder.with_name(folder.name + '.' + CODES[target])
 
 
+def default_output(path, target):
+    """원본 옆 기본 결과 경로. 파일은 'a.ko.txt', 이미 있으면 'a.ko (2).txt'처럼 번호를 붙인다
+    (아직 저장 전인 이어하기 작업은 같은 경로로 다시 이어진다)."""
+    path = Path(path)
+    code = CODES[target]
+    if path.is_dir():
+        return folder_output(path, target)
+    first = path.with_name(path.stem + '.' + code + path.suffix)
+    candidate, number = first, 2
+    while candidate.exists() and number < 1000:
+        candidate = path.with_name('%s.%s (%d)%s' % (path.stem, code, number, path.suffix))
+        number += 1
+    return candidate
+
+
+# 번역에 무난한 모델 이름 단서(앞쪽일수록 우선). 코딩·임베딩·이미지 전용 모델은 뒤로 미룬다.
+_PREFERRED = ('gemma-4', 'gemma4', 'qwen3.6', 'qwen3.5', 'qwen3', 'gemma3', 'gemma', 'qwen2.5', 'llama3', 'mistral')
+_AVOID = ('embed', 'coder', 'code', '-vl', 'vision', 'ocr', 'whisper', 'bge', 'nomic', 'minilm')
+
+
+def recommend_model(names, last=''):
+    """설치된 모델 중 번역에 쓸 기본값: 지난번에 쓴 모델 → 이름 단서 순 → 큰 모델 순."""
+    names = [str(name) for name in names]
+    if last in names:
+        return last
+    def size(name):
+        found = re.search(r'(\d+(?:\.\d+)?)b\b', name.lower())
+        return float(found.group(1)) if found else 0.0
+    def rank(name):
+        low = name.lower()
+        avoid = any(word in low for word in _AVOID)
+        prefer = next((i for i, word in enumerate(_PREFERRED) if word in low), len(_PREFERRED))
+        return (avoid, prefer, -size(name), low)
+    return min(names, key=rank) if names else ''
+
+
 def natural_key(path):
     """chapter2 < chapter10 처럼 사람이 읽는 순서(폴더 맥락 공유 시 이 순서로 이야기가 이어진다)."""
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', str(path))]
+
+
+@dataclass(frozen=True)
+class _Sample:
+    text: str
 
 
 @dataclass(frozen=True)
@@ -502,6 +545,10 @@ class TranslationService:
         self.protector=default_protector() if protector=='auto' else protector
         self._active=None
         self._abort=threading.Event()
+        self._measured=OrderedDict()
+        self._ready_cache=None
+
+    recommend_model=staticmethod(recommend_model)
 
     @staticmethod
     def local_models():
@@ -531,6 +578,46 @@ class TranslationService:
         if client is not None:
             client.abort()
 
+    def _measure(self,path,kind='auto',stage=False):
+        """(감지 유형, 번역 구간 수). 같은 파일(크기·수정 시각 동일)은 다시 분석하지 않는다.
+        분석 결과 문서는 들고 있지 않고 숫자만 기억한다(폴더 분석→번역 시작 사이 중복 작업 제거)."""
+        return self._profile(path,kind,stage)[:2]
+
+    def _profile(self,path,kind='auto',stage=False):
+        """한 번 읽을 때 (감지 유형, 구간 수, 표본 최대 30개, 반복 고유명사 상위 200개)를 함께 기억한다.
+        폴더 메모리를 만들 때 파일을 다시 읽지 않는다. 기억하는 양은 파일당 수 KB다."""
+        path=Path(path)
+        info=path.stat()
+        key=(str(path.resolve()),info.st_size,info.st_mtime_ns,kind,stage)
+        if key in self._measured:
+            self._measured.move_to_end(key)
+            return self._measured[key]
+        doc=self.inspect(path,kind,stage)
+        step=max(1,len(doc.segments)//30)
+        samples=tuple(segment.text[:240] for segment in doc.segments[::step][:30])
+        entities=tuple(name_counts(doc,limit=200))
+        value=(doc.detected,len(_units(doc)[0]) if doc.segments else 0,samples,entities,doc.selected)
+        del doc
+        self._measured[key]=value
+        while len(self._measured)>4096:
+            self._measured.popitem(last=False)
+        return value
+
+    def _ready(self,model):
+        """Ollama 준비·모델 확인. 폴더 번역 중 파일마다 반복하지 않도록 60초 동안 결과를 재사용한다."""
+        now=time.monotonic()
+        cached=self._ready_cache
+        if cached and now-cached[0]<60 and model.lower() in cached[2]:
+            return cached[1]
+        endpoint=self.inference.ensure_ready()
+        available=self.inference.local_models()
+        names={str(x).lower() for x in (available or ())}
+        if available is None or model.lower() not in names:
+            self._ready_cache=None
+            raise RuntimeError('Selected model is not available locally')
+        self._ready_cache=(now,endpoint,names)
+        return endpoint
+
     @staticmethod
     def inspect(path,kind='auto',stage=False):
         source,_=read_source(Path(path))
@@ -555,7 +642,7 @@ class TranslationService:
             language(source_language)       # 알 수 없는 언어면 여기서 오류
         source,encoding=read_source(path)
         doc=prepare(source,path.suffix,kind=kind,stage=stage)
-        output=Path(output_path) if output_path else path.with_name(path.stem+'.'+CODES[target]+path.suffix)
+        output=Path(output_path) if output_path else default_output(path,target)
         if output.resolve()==path.resolve():
             raise ValueError('Cannot overwrite the original file')
         if output.exists():
@@ -569,10 +656,7 @@ class TranslationService:
         units,prefixes,maps=_units(doc)
         if not units:
             raise ValueError('No translation units were found')
-        endpoint=self.inference.ensure_ready()
-        available=self.inference.local_models()
-        if available is None or model.lower() not in {str(x).lower() for x in available}:
-            raise RuntimeError('Selected model is not available locally')
+        endpoint=self._ready(model)
         client=_CountedClient(self.client_factory(endpoint),cancelled)
         self._active=client
         source_name=resolve_source(doc,source_language)
@@ -692,8 +776,8 @@ class TranslationService:
         for path in files:
             rel=str(path.relative_to(folder))
             try:
-                doc=self.inspect(path,kind,stage)
-                rows.append((rel,doc.detected,len(_units(doc)[0]) if doc.segments else 0))
+                detected,count=self._measure(path,kind,stage)
+                rows.append((rel,detected,count))
             except ValueError as exc:
                 rows.append((rel,'error: '+str(exc),0))
         return rows,len(others)
@@ -703,7 +787,7 @@ class TranslationService:
         import hashlib
         model=local_model_name(options['model'])
         listing=[(str(path.relative_to(folder)),path.stat().st_size,path.stat().st_mtime_ns)
-                 for path,_size,_doc,error in plan if not error]
+                 for path,_size,error in plan if not error]
         material=json.dumps({'folder':str(folder),'output':str(output),'model':model,
                              'target':options.get('target','한국어'),'style':options.get('style','natural'),
                              'files':listing},ensure_ascii=False,sort_keys=True)
@@ -714,21 +798,32 @@ class TranslationService:
         except Exception:
             memory=None
         if memory is None:
-            endpoint=self.inference.ensure_ready()
-            available=self.inference.local_models()
-            if available is None or model.lower() not in {str(x).lower() for x in available}:
-                point.close()
-                raise RuntimeError('Selected model is not available locally')
-            docs=[doc for _path,_size,doc,error in plan if not error and doc is not None]
-            kinds=[doc.selected for doc in docs]
-            combined=_Combined(
-                # 고유명사 추출용 원문은 파일당 2MB, 합계 32MB까지만 본다.
-                source='\n'.join(doc.source[:2_000_000] for doc in docs)[:32_000_000],
-                segments=tuple(segment for doc in docs for segment in doc.segments),
-                selected=max(set(kinds),key=kinds.count) if kinds else 'general')
+            try:
+                endpoint=self._ready(model)
+            except RuntimeError:
+                point.close();raise
+            # 파일을 하나씩 읽어 표본(파일당 최대 30구간)과 고유명사용 앞부분(파일당 200KB, 합계 8MB)만
+            # 남기고 문서는 바로 버린다. 파일이 많고 커도 메모리가 늘지 않는다.
+            samples,kinds,counts=[],[],Counter()
+            for path,_size,error in plan:
+                if error or not _size:
+                    continue
+                if cancelled and cancelled():
+                    point.close();raise InterruptedError('Translation cancelled')
+                _d,_n,file_samples,file_names,selected=self._profile(
+                    path,options.get('kind','auto'),options.get('stage',False))
+                kinds.append(selected)
+                samples.extend(_Sample(text) for text in file_samples)
+                counts.update(dict(file_names))
+            entities=[name for name,count in sorted(counts.items(),key=lambda x:(-x[1],x[0]))
+                      if count>=2][:56]
+            # 용어 검증(_fixed_map)은 '원문에 있는 말인지' 확인하므로 표본과 고유명사를 원문 대신 준다.
+            combined=_Combined(source='\n'.join([sample.text for sample in samples]+entities),
+                               segments=tuple(samples),
+                               selected=max(set(kinds),key=kinds.count) if kinds else 'general')
             client=_CountedClient(self.client_factory(endpoint),cancelled)
             memory=initial_memory(client,model,combined,options.get('target','한국어'),
-                                  options.get('style','natural'),cancelled=cancelled)
+                                  options.get('style','natural'),cancelled=cancelled,entities=entities)
             point.save_memory(memory)
         return key,point,memory
 
@@ -764,19 +859,17 @@ class TranslationService:
         plan,total=[],0
         for path in files:
             try:
-                doc=self.inspect(path,kind,stage)
-                size=len(_units(doc)[0]) if doc.segments else 0
-                plan.append((path,size,doc if shared_context else None,None));total+=size
+                _detected,size=self._measure(path,kind,stage)
+                plan.append((path,size,None));total+=size
             except ValueError as exc:
-                plan.append((path,0,None,str(exc)))
+                plan.append((path,0,str(exc)))
         total=max(total,1)
         output.mkdir(parents=True,exist_ok=True)
         translated,skipped,failed=[],[],[]
         point=None;folder_memory=None;carry={'rolling':'','tail':()}
-        if shared_context and any(size for _path,size,_doc,error in plan if not error):
+        if shared_context and any(size for _path,size,error in plan if not error):
             _key,point,folder_memory=self._folder_memory(folder,output,plan,options,cancelled)
             carry['rolling']=folder_memory.rolling
-        plan=[(path,size,error) for path,size,_doc,error in plan]   # 원문 메모리 해제
         def remember(rel,result):
             carry['rolling'],carry['tail']=result.rolling,tuple(result.tail)
             if point is not None:
@@ -831,8 +924,9 @@ class TranslationService:
                             'key':point.path.stem}
                 result=self.translate_file(path,output_path=dest,cancelled=cancelled,shared=shared,
                                            progress=lambda n,_t,base=base:report(base+n),**options)
-                translated.append((str(rel),result))
                 remember(str(rel),result)
+                # 결과 파일은 이미 저장됐다. 수천 개 파일의 전문을 메모리에 들고 있지 않도록 미리보기만 남긴다.
+                translated.append((str(rel),replace(result,text=result.text[:12000])))
             except InterruptedError:
                 raise
             except FileExistsError:

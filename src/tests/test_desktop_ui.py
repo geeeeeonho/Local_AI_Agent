@@ -609,6 +609,21 @@ def test_tools_page_lists_tools_and_opens_translation(ui):
     assert w.tool_hub.winfo_ismapped() and not w.tool_area.winfo_ismapped()
     w.open_tool('translate');pump(w)
     assert w.tool_area.winfo_ismapped() and w.translation_start_button.winfo_ismapped()
-    assert w.translation_progress_bar.winfo_ismapped() and w.translation_status_label.winfo_ismapped()
+    assert w.translation_status_label.winfo_ismapped()
+    # 진행 막대는 번역을 시작해야 나타나고, 고급 설정은 접혀 있다.
+    assert not w.translation_progress_bar.winfo_ismapped() and not w.translation_advanced.winfo_ismapped()
     w.show_tool_hub();pump(w)
     assert w.tool_hub.winfo_ismapped()
+
+
+def test_translation_needs_only_a_path_and_writes_next_to_it(ui, tmp_path):
+    # 간단하게: 모델은 자동 선택, 경로만 고르면 시작 버튼이 켜지고 결과 위치가 원본 옆으로 표시된다.
+    w,_,_=ui
+    w.services.translator.local_models=lambda:['qwen2.5-coder:7b','gemma4:12b']
+    w.navigate('tools');w.open_tool('translate')
+    pump(w,lambda:w.translation_model.get()=='gemma4:12b')
+    assert str(w.translation_start_button['state'])=='disabled'
+    folder=tmp_path/'novel';folder.mkdir()
+    w.translation_path.set(str(folder));pump(w)
+    assert str(w.translation_start_button['state'])=='normal'
+    assert '"novel.ko"' in w.translation_destination.cget('text')

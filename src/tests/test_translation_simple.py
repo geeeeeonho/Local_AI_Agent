@@ -338,3 +338,31 @@ class FolderContextTests(unittest.TestCase):
 
     def test_individual_mode_plans_each_file(self):
         self.assertEqual(self.run_folder(False).count('plan'), 3)
+
+
+class FolderFlowTests(unittest.TestCase):
+    def test_analyze_then_translate_uses_the_cache(self):
+        # 화면 흐름 그대로: 폴더 분석 → 번역 시작(분석 결과 재사용)
+        model = Model(lambda items: json.dumps({'translations': ['번역 문장' for _ in items]}))
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / 'docs'
+            src.mkdir()
+            (src / 'a.txt').write_text('Hello world.\n', encoding='utf-8')
+            service = TranslationService(Inference(), lambda _: model, checkpoint_dir=Path(tmp) / 'cp', protector=None)
+            rows, _ = service.inspect_folder(src)
+            result = service.translate_folder(src, model='m:1')
+            self.assertEqual((rows[0][2], len(result.translated), result.failed), (1, 1, ()))
+
+    def test_default_output_gets_a_number_when_taken(self):
+        from services.tools.translation import default_output
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'a.txt'
+            path.write_text('x')
+            (Path(tmp) / 'a.ko.txt').write_text('old')
+            self.assertEqual(default_output(path, '한국어').name, 'a.ko (2).txt')
+
+    def test_model_recommendation(self):
+        from services.tools.translation import recommend_model
+        names = ['qwen2.5-coder:7b', 'gemma4:12b', 'nomic-embed-text']
+        self.assertEqual(recommend_model(names), 'gemma4:12b')
+        self.assertEqual(recommend_model(names, last='qwen2.5-coder:7b'), 'qwen2.5-coder:7b')
