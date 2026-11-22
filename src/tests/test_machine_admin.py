@@ -177,7 +177,7 @@ def test_the_first_installer_becomes_administrator_with_one_prompt(setup):
 def test_declining_the_prompt_aborts_without_deploying_or_recording_admin(setup, monkeypatch):
     step, root, calls = setup
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: False)
-    with pytest.raises(RuntimeError, match='관리자 승인'):
+    with pytest.raises(RuntimeError, match='관리자 자동 등록'):
         step.ensure(root, root / 'app', Path('/checkout'))
     assert not (root / machine.POLICY_FILENAME).exists()
     assert all(call[0] != 'deploy' for call in calls)
@@ -355,3 +355,76 @@ def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
     assert not windows.lockable_root(system)
     assert not windows.lockable_root(tmp_path / 'Users'), 'holds every profile'
     assert not windows.lockable_root(tmp_path), 'would include the Windows folder'
+
+
+# ── first-run automatic registration and readable UAC errors ────────────
+def test_first_run_bootstraps_admin_without_separate_install_flag(monkeypatch, tmp_path):
+    from installer.steps import machine as step
+    from installer.core import filesystem
+    root=tmp_path / 'LocalAI'
+    calls=[]
+    monkeypatch.setattr(acl, 'on_windows', lambda: True)
+    monkeypatch.setattr(step, 'ensure',
+                        lambda *args: calls.append(('ensure', args)) or 'admin')
+    monkeypatch.setattr(filesystem, 'create_environment',
+                        lambda *args, **kw: calls.append(('env', args, kw)))
+    assert step.bootstrap_first_run(root, root / 'app',
+                                    tmp_path / 'checkout', root / 'environment') is True
+    assert calls[0][0] == 'ensure'
+    assert calls[1][0] == 'env'
+    assert calls[1][2]['manage_shared'] is True
+
+
+def test_existing_policy_never_attempts_first_run_claim(monkeypatch, tmp_path):
+    from installer.steps import machine as step
+    root=tmp_path / 'LocalAI'
+    root.mkdir()
+    (root / machine.POLICY_FILENAME).write_text(machine.new_policy(ME).to_json(),
+                                                encoding='utf-8')
+    monkeypatch.setattr(acl, 'on_windows', lambda: True)
+    monkeypatch.setattr(step, 'ensure', lambda *a: pytest.fail('unexpected admin claim'))
+    assert step.bootstrap_first_run(root, root / 'app', tmp_path,
+                                    root / 'environment') is False
+
+
+def test_corrupted_policy_is_not_treated_as_first_run(monkeypatch, tmp_path):
+    from installer.steps import machine as step
+    root=tmp_path / 'LocalAI'
+    root.mkdir()
+    (root / machine.POLICY_FILENAME).write_text('{broken json',encoding='utf-8')
+    monkeypatch.setattr(acl, 'on_windows', lambda: True)
+    with pytest.raises(RuntimeError, match='정책 복구'):
+        step.bootstrap_first_run(root, root / 'app', tmp_path, root / 'environment')
+
+
+def test_elevated_script_failure_reports_real_stage_not_uac_cancel(monkeypatch, tmp_path):
+    monkeypatch.delenv('LOCAL_AI_NO_ELEVATION', raising=False)
+    monkeypatch.setattr(acl, 'is_elevated', lambda: False)
+    monkeypatch.setattr(acl, 'run_elevated', lambda *a, **kw: (1, None))
+    report=tmp_path / '.localai-admin-123.txt'
+    report.write_text('program ACL: Unable to reset ACLs: C:\\LocalAI\\app',
+                      encoding='utf-8')
+    events=[]
+    assert windows.run_as_admin('x',log=events.append,report_path=report) is False
+    assert any('실패 단계:' in e and 'program ACL' in e for e in events)
+    assert not any('승인이 취소' in e for e in events)
+
+
+def test_first_install_report_is_written_only_on_failure_and_cannot_overwrite(tmp_path):
+    report=tmp_path / '.localai-admin-123.txt'
+    script=windows.first_install_script(ME,tmp_path,tmp_path / 'app',
+                                        report_path=report)
+    assert '[System.IO.FileMode]::CreateNew' in script
+    assert '$localaiIssues' in script
+    assert 'create group LocalAI-Admins' in script
+    assert 'root ACL' in script
+    assert 'if ($failed -ne 0)' in script
+
+
+def test_program_security_does_not_write_error_from_its_own_catch():
+    from integrations.windows import program_security
+    script=program_security.protection_script(Path('C:/LocalAI'),machine.new_policy(ME))
+    assert 'Write-Error $_' not in script
+    assert 'Write-Warning $detail' in script
+    assert script.index('icacls.exe $folder /setowner') < script.index(
+        'icacls.exe $folder /reset')
