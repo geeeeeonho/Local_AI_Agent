@@ -59,6 +59,9 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
             _quote(root / name) for name in _PROTECTED) + ")",
         "$ErrorActionPreference = 'Stop'",
         "try {",
+        "  $rootNode = Get-Item -LiteralPath $localaiRoot -Force",
+        "  if (-not $rootNode.PSIsContainer -or ($rootNode.Attributes -band "
+        "[System.IO.FileAttributes]::ReparsePoint)) { throw 'LocalAI root is a link' }",
         "  $dacl = Get-Acl -LiteralPath $localaiRoot",
         "  $dacl.SetAccessRuleProtection($true, $false)",
         "  $identityType = [System.Security.Principal.SecurityIdentifier]",
@@ -121,6 +124,19 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
         "} catch { Write-Error $_; $failed = 1 }",
     ]
     return lines
+
+
+def reject_reparse_root(root):
+    """A junction/symlink cannot be made the target of recursive ACL repair."""
+    path = Path(root)
+    try:
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            raise RuntimeError("공용 설치 루트가 연결/정션 경로입니다: " + str(root))
+        # A parent junction also redirects the recursion outside LocalAI.
+        if path.exists() and path.resolve() != path.absolute():
+            raise RuntimeError("공용 설치 경로의 상위 폴더가 연결 경로입니다: " + str(root))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("공용 설치 경로의 실제 위치를 확인할 수 없습니다.") from exc
 
 
 def protection_script(root, policy: machine.Policy):
@@ -223,6 +239,7 @@ def ensure(root, policy: machine.Policy, *, log=None, force=False):
     from .machine import lockable_root
     if not lockable_root(root):
         raise RuntimeError("보안 정책을 적용할 수 없는 공용 설치 경로입니다: " + str(root))
+    reject_reparse_root(root)
     reasons = verify(root, policy)
     if not reasons and not force:
         return True
