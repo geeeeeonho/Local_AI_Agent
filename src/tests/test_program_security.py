@@ -112,3 +112,20 @@ def test_successful_repair_must_be_verified_again(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="검증할 수 없습니다"):
         security.ensure(root, POLICY)
     assert calls == ["check", "uac", "check"]
+
+
+def test_force_repair_runs_even_if_sampled_acls_are_safe(tmp_path, monkeypatch):
+    from integrations.windows import machine as windows
+    root = tmp_path / "LocalAI"
+    root.mkdir()
+    monkeypatch.setattr(acl, "on_windows", lambda: True)
+    monkeypatch.setattr(windows, "lockable_root", lambda path: True)
+    monkeypatch.setattr(security, "verify", lambda root, policy: [])
+    seen = []
+    monkeypatch.setattr(windows, "run_as_admin", lambda script, **kw:
+                        seen.append(script) or True)
+    assert security.ensure(root, POLICY) is True
+    assert not seen
+    assert security.ensure(root, POLICY, force=True) is True
+    assert len(seen) == 1
+    assert "icacls.exe $folder /reset" in seen[0]
