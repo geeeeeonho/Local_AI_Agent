@@ -85,10 +85,16 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
         script = windows.first_install_script(sid, root, app_dir, report_path=report)
         if not script or not windows.run_as_admin(
                 script, log=info, report_path=report):
+            try:
+                details = report.read_text(encoding="utf-8-sig")[:1400].strip()
+            except OSError:
+                details = "UAC 취소 또는 권한 작업 실패(상세 기록 없음)"
             raise RuntimeError(
-                "LocalAI 초기 관리자 설정 실패: UAC 승인 또는 Windows 그룹/ACL "
-                "적용 오류입니다. 위 상세 실패 단계 로그를 확인하세요. "
-                "보호되지 않은 프로그램 설치는 진행하지 않습니다.")
+                "LocalAI 최초 관리자 자동 등록에 실패했습니다. "
+                "프로그램 파일 보호를 건너뛰지 않습니다.\n"
+                + "실패 단계: " + details + "\n"
+                + "Windows 권한 오류라면 파일을 사용하는 다른 LocalAI/Ollama "
+                  "프로세스를 종료한 뒤 다시 실행하세요.")
         policy = machine.new_policy(
             sid, admins_group_sid=windows.group_sid(machine.ADMINS_GROUP),
             users_group_sid=windows.group_sid(machine.USERS_GROUP))
