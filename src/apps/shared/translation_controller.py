@@ -284,9 +284,9 @@ class TranslationController:
                        ' …' if len(kept)>8 else '')) if kept else ''
             review=result.review_lines
             review_note=(' · 검토 필요 %d줄'%len(review)) if review else ''
-            self.translation_say('Ready','번역 완료: %d구간 · 재개 %d구간%s%s · %s' %
-                                 (result.count,result.resumed_units,kept_note,review_note,result.output),
-                                 log=True)
+            self.translation_say('Ready','번역 완료: %d구간 · 재개 %d구간%s%s%s · %s' %
+                                 (result.count,result.resumed_units,kept_note,review_note,
+                                  audit_note(result),result.output),log=True)
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
             self.root.bell()
@@ -299,6 +299,7 @@ class TranslationController:
                      '\n\n고정 용어집\n'+(glossary or '(추출된 항목 없음)')+
                      ('\n\n원문 유지(검증 실패) 줄\n'+', '.join(map(str,kept)) if kept else '')+
                      ('\n\n검토 필요(원문 단어 일부 남음) 줄\n'+', '.join(map(str,review)) if review else '')+
+                     audit_text(result)+
                      '\n\n문서 메모리는 해당 번역 작업에만 사용됩니다. 작업 완료 후 재개 기록은 삭제됩니다.')
             self.translation_tabs.select(1)
         def folder_finished(result):
@@ -308,9 +309,12 @@ class TranslationController:
             review=sum(len(r.review_lines) for _,r in result.translated)
             kept=sum(len(r.kept_lines) for _,r in result.translated)
             state='Failed' if result.failed and not result.translated else 'Ready'
-            self.translation_say(state,'폴더 번역 완료: 번역 %d개 · 건너뜀 %d개 · 실패 %d개 · 복사 %d개%s%s · %s' % (
+            fixed=sum(r.audit_fixed for _,r in result.translated)
+            left=sum(len(r.audit) for _,r in result.translated)
+            self.translation_say(state,'폴더 번역 완료: 번역 %d개 · 건너뜀 %d개 · 실패 %d개 · 복사 %d개%s%s%s · %s' % (
                 len(result.translated),len(result.skipped),len(result.failed),result.copied,
                 (' · 검토 필요 %d줄'%review) if review else '',(' · 원문 유지 %d줄'%kept) if kept else '',
+                (' · 검수 자동 수정 %d · 확인 필요 %d줄'%(fixed,left)) if fixed or left else ' · 원문 대조 검수 통과',
                 result.output),log=True,level='error' if state=='Failed' else 'info')
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
@@ -319,7 +323,8 @@ class TranslationController:
             reasons={'already translated':'이미 번역됨','already in the target language':'이미 번역 언어',
                      'no translatable text':'번역할 문장 없음(복사)'}
             lines=['번역한 파일']
-            lines+=['  %s  (%d구간%s%s)'%(rel,r.count,(' · 검토 %s줄'%','.join(map(str,r.review_lines[:6])))
+            lines+=['  %s  (%d구간%s%s%s)'%(rel,r.count,(' · 검수 확인 필요 '+', '.join('%d줄'%n for n,_ in r.audit[:6]))
+                     if r.audit else '',(' · 검토 %s줄'%','.join(map(str,r.review_lines[:6])))
                      if r.review_lines else '',(' · 원문 유지 %s줄'%','.join(map(str,r.kept_lines[:6])))
                      if r.kept_lines else '') for rel,r in result.translated] or ['  (없음)']
             if result.skipped:
@@ -402,3 +407,26 @@ def friendly_error(exc):
         if key in lower:
             return message+' ('+text[:160]+')'
     return text
+
+
+# 최종 원문 대조 검수 결과를 한국어로 보여 준다.
+_AUDIT_REASONS=(('untranslated','번역 안 됨(원문과 같음)'),('too short','원문보다 지나치게 짧음(잘림 의심)'),
+                ('too long','원문보다 지나치게 긺(덧붙임 의심)'),('inconsistent','인명·용어 표기 불일치'),
+                ('left in','원문 문자 남음'),('another language','다른 언어 단어 섞임'),
+                ('left untranslated','원문 단어 남음'),('Number','숫자 바뀜'),('similar','번역 안 됨(원문과 거의 같음)'))
+
+
+def audit_reason(text):
+    return next((label for key,label in _AUDIT_REASONS if key.lower() in text.lower()),text)
+
+
+def audit_note(result):
+    if not result.audit_fixed and not result.audit:
+        return ' · 원문 대조 검수 통과'
+    return ' · 검수 자동 수정 %d · 확인 필요 %d줄'%(result.audit_fixed,len(result.audit))
+
+
+def audit_text(result):
+    head='\n\n원문 대조 검수: 같은 문장 재사용 %d · 반려 후 다시 번역해 고침 %d · 확인 필요 %d줄'%(
+        result.reused,result.audit_fixed,len(result.audit))
+    return head+''.join('\n  %d줄: %s'%(line,audit_reason(reason)) for line,reason in result.audit[:40])

@@ -73,9 +73,11 @@ ICU_PROTECT = re.compile(
 PROTECTED_TOKEN = re.compile(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__')
 # 원문이 한중일 언어일 때: 라틴 문자가 든 토큰(필드명·식별자·장비명·버전·단위)은 모두 원형 유지.
 # 예) frame_id  HX-ASTRAL-GNSS/TS-07  R3.2  TAI+00:00  σ_phase  μGal  m/s²  0x04  Nereid-C4  TRACKING
+# 그리스 문자(α β Δ σ μ …)와 마이크로 기호(µ)는 수식·단위 기호로 함께 다룬다.
+_SYMBOL = 'A-Za-z0-9_\u0370-\u03ff\u00b5'
 CJK_LATIN = re.compile(
-    r'(?<![A-Za-z0-9_μΔσβ])(?=[A-Za-z0-9_.+/:^²³μΔσβ-]*[A-Za-zμΔσβ])'
-    r'[A-Za-z0-9_μΔσβ]+(?:[.+/:^-][A-Za-z0-9_μΔσβ²³]+)*[²³]?')
+    r'(?<![' + _SYMBOL + r'])(?=[' + _SYMBOL + r'.+/:^²³-]*[A-Za-z\u0370-\u03ff\u00b5])'
+    r'[' + _SYMBOL + r']+(?:[.+/:^-][' + _SYMBOL + r'²³]+)*[²³]?')
 SYSTEM_TAG = re.compile(r'\[[A-Z][A-Z0-9_]*(?:[ -][A-Z0-9][A-Z0-9_]*)*(?:\s*[:=][^\]\r\n]*)?\]')
 IDENTIFIER = re.compile(r'[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{1,6}-\d+[A-Z0-9-]*')
 
@@ -103,6 +105,7 @@ SAFE_JSON_KEYS = frozenset({
 # RPG Maker MV/MZ 이벤트 명령: 화면에 보이는 문장만 번역한다. 그 밖의 명령(스크립트 355/655,
 # 플러그인 356/357, 주석 108/408, 그림·소리 파일 이름 등)의 parameters는 절대 건드리지 않는다.
 # 값: 번역할 parameters 위치(None = 모든 문자열)
+LABEL_KEYS = ('name', 'title', 'displayName', 'questName', 'itemName')
 RPG_TEXT_COMMANDS = {401: None, 405: None, 102: (0,), 402: (1,), 101: (4,), 320: (1,), 324: (1,), 325: (1,)}
 # 'user_id' 'imageUrl' 'file-path' 처럼 식별자 성격의 접미사가 붙은 키
 SAFE_JSON_KEY_SUFFIX = re.compile(
@@ -180,6 +183,9 @@ class Segment:
     end: int
     text: str
     json_string: bool = False
+    # 모델에 함께 보낼 문맥(구조에서 얻은 것): JSON 대사의 화자, 아이템·퀘스트 등 소속 항목 이름
+    speaker: str = ''
+    section: str = ''
 
 
 @dataclass(frozen=True)
@@ -404,6 +410,8 @@ def _json_skip(key: str, value: str) -> bool:
 class _JSON:
     def __init__(self, source):
         self.source, self.decoder, self.result = source, json.JSONDecoder(), []
+        self.labels = []          # 객체마다 이름표(name/title/displayName) — 안쪽 문장의 소속 문맥
+        self.speaker = ''         # RPG Maker: 직전 101(대화 시작)의 화자
 
     def space(self, pos):
         while pos < len(self.source) and self.source[pos].isspace():
@@ -414,8 +422,10 @@ class _JSON:
         pos = self.space(pos)
         source = self.source
         if source[pos] == '{':
+            start = pos
             pos = self.space(pos + 1)
             code, parameters = None, None
+            self.labels.append('')
             while source[pos] != '}':
                 name, pos = self.decoder.raw_decode(source, pos)
                 pos = self.space(pos)
@@ -427,13 +437,25 @@ class _JSON:
                     if name == 'code':
                         literal, _end = self.decoder.raw_decode(source, self.space(pos + 1))
                         code = literal if isinstance(literal, int) and not isinstance(literal, bool) else None
+                    value_start = self.space(pos + 1)
                     pos = self.value(pos + 1, str(name))
+                    if name in LABEL_KEYS and source[value_start] == '"':
+                        label = json.loads(source[value_start:pos])
+                        if isinstance(label, str) and label.strip():
+                            self.labels[-1] = label.strip()[:80]
                 pos = self.space(pos)
                 if source[pos] != ',':
                     break
                 pos = self.space(pos + 1)
+            self.labels.pop()
             if parameters is not None and code is not None:
                 self.filter_command(code, parameters)
+                if code == 101:            # 대화 시작: 이후 401 대사의 화자(MZ 이름 칸, 없으면 첫 값)
+                    values = json.loads(source[start:pos + 1]).get('parameters') or []
+                    names = [v for v in (values[4:5] + values[:1]) if isinstance(v, str) and v.strip()]
+                    self.speaker = names[0].strip()[:40] if names else ''
+                elif code == 0:                # 이벤트 명령 목록 끝: 화자 초기화
+                    self.speaker = ""
             return pos + 1
         if source[pos] == '[':
             pos = self.space(pos + 1)
@@ -446,7 +468,9 @@ class _JSON:
             return pos + 1
         literal, end = self.decoder.raw_decode(source, pos)
         if isinstance(literal, str) and not _json_skip(key, literal):
-            self.result.append(Segment(pos, end, literal, True))
+            section = next((label for label in reversed(self.labels) if label and label != literal), '')
+            self.result.append(Segment(pos, end, literal, True, self.speaker if key == 'parameters' else '',
+                                       section))
             if len(self.result) > MAX_SEGMENTS:
                 raise ValueError('Document contains too many JSON string values')
         return end

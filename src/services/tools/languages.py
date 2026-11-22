@@ -272,6 +272,9 @@ def check_output(source_text, answer, source_name, target_name, allowed=''):
         if script == 'latin' or script in target.scripts:
             continue
         for run in pattern.findall(plain):
+            # 원문에 그대로 있는 그리스 문자는 수식·단위 기호(α, Δg, σ)라 잔류가 아니다.
+            if script == 'greek' and run in source_text:
+                continue
             if run.lower() not in allowed_lower:
                 raise ReviewError('%s text left in %s output: %s' % (script, target_name, run[:20]))
 

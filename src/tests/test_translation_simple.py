@@ -5,6 +5,7 @@
 """
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -427,7 +428,8 @@ class OutputSafetyTests(unittest.TestCase):
                 rows = [{'id': r['id'], 'text': r['text'].replace('佐伯', '사에키').replace('が来た', '가 왔다')}
                         for r in data['items']]
                 return json.dumps({'translations': rows, 'new_terms': {'佐伯': '사에키'}}, ensure_ascii=False)
-        translate(''.join('佐伯が来た%s。\n' % ('。' * (i % 3)) for i in range(45)), Learner())
+        # 같은 문장은 한 번만 번역하므로 서로 다른 45줄로 여러 번의 요청이 일어나게 한다.
+        translate(''.join('佐伯が来た%d。\n' % i for i in range(45)), Learner())
         self.assertEqual(seen[-1], {'佐伯': '사에키'})
 
 
@@ -459,3 +461,75 @@ class IdentifierTests(unittest.TestCase):
         from core.tools.translation import protect, PROTECTED_TOKEN
         masked = PROTECTED_TOKEN.sub('▢', protect('status=PENDING_REVIEW，编号 MK-04。')[0])
         self.assertEqual(masked, '▢，编号 ▢。')       # 전각 쉼표 뒤 중국어는 번역 대상으로 남는다
+
+
+class FinalReviewTests(unittest.TestCase):
+    """같은 문장 재사용 · 마지막 원문 대조 검수(반려→수정→보고) · 구조 문맥 — 간단하게."""
+
+    def test_same_sentence_is_translated_once(self):
+        sent = []
+        class Counter_(Model):
+            def chat(self, name, messages, temperature=.2):
+                if messages[-1]['content'].startswith('{'):
+                    sent.extend(item['text'] for item in json.loads(messages[-1]['content']).get('items', []))
+                return super().chat(name, messages, temperature)
+        result = translate('Hello Kim.\nHello Kim.\nHello Lee.\n', Counter_())
+        self.assertEqual(sorted(sent), ['Hello Kim.', 'Hello Lee.'])
+        self.assertEqual((result.text, result.reused), ('안녕 Kim.\n안녕 Kim.\n안녕 Lee.\n', 1))
+
+    def lines(self, n):
+        return ''.join('こんにちは、今日は駅で友達と%d時に会う約束をしています。\n' % i for i in range(n))
+
+    def test_truncated_line_is_rejected_and_retranslated_with_the_reason(self):
+        notes = []
+        class Truncates(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                rows = []
+                for item in data['items']:
+                    full = '안녕하세요 오늘은 역에서 친구와 %s시에 만나기로 했어요.' % re.sub(r'\D', '', item['text'])
+                    if 'previous_problem' in item:
+                        notes.append(item['previous_problem'])
+                    elif item['text'].startswith('こんにちは、今日は駅で友達と3時'):
+                        full = '안녕 3'                    # 줄 단위 검증은 통과하지만 원문 대비 너무 짧다
+                    rows.append({'id': item['id'], 'text': full})
+                return json.dumps({'translations': rows}, ensure_ascii=False)
+        result = translate(self.lines(12), Truncates())
+        self.assertEqual(result.audit_fixed, 1)
+        self.assertIn('too short', notes[0])
+        self.assertNotIn('안녕 3\n', result.text)
+
+    def test_problem_that_cannot_be_fixed_is_reported(self):
+        class Stubborn(Model):
+            def chat(self, name, messages, temperature=.2):
+                data = json.loads(messages[-1]['content'])
+                if 'items' not in data:
+                    return '{}'
+                return json.dumps({'translations': [
+                    {'id': i['id'], 'text': '안녕 3' if i['text'].startswith('こんにちは、今日は駅で友達と3時') else
+                     '안녕하세요 오늘은 역에서 친구와 %s시에 만나기로 했어요.' % re.sub(r'\D', '', i['text'])}
+                    for i in data['items']]}, ensure_ascii=False)
+        result = translate(self.lines(12), Stubborn())
+        self.assertEqual([line for line, _ in result.audit], [4])
+
+    def test_rpg_dialogue_gets_speaker_and_item_text_gets_its_name(self):
+        from services.tools.translation import _units, _speaker, _section
+        doc = prepare(json.dumps({'list': [{'code': 101, 'parameters': ['', 0, 0, 2, 'アオイ']},
+                                           {'code': 401, 'parameters': ['ようこそ。']}],
+                                  'items': [{'name': '潮霧草', 'description': '海岸の薬草。'}]},
+                                 ensure_ascii=False), '.json')
+        units = {u.text: u for u in _units(doc)[0]}
+        self.assertEqual(_speaker(doc, units['ようこそ。']), 'アオイ')
+        self.assertEqual(_section(doc, units['海岸の薬草。']), '潮霧草')
+
+    def test_block_header_is_the_section_for_extracted_text(self):
+        from services.tools.translation import _units, _section
+        doc = prepare('# 説明\n===== [BTL_001] 廃機関区 =====\n戦闘開始！\n', '.txt')
+        unit = [u for u in _units(doc)[0] if u.text == '戦闘開始！'][0]
+        self.assertIn('廃機関区', _section(doc, unit))
+
+    def test_greek_symbols_in_the_source_are_not_leftovers(self):
+        from services.tools.languages import check_output
+        check_output('采用α分支，σ为0.004。', 'α 분기를 쓰고 σ는 0.004이다.', 'Simplified Chinese', 'Korean')
