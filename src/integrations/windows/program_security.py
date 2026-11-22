@@ -100,11 +100,13 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
         "    $node = Get-Item -LiteralPath $folder -Force",
         "    if (-not $node.PSIsContainer -or ($node.Attributes -band "
         "[System.IO.FileAttributes]::ReparsePoint)) { throw 'Protected path is a link: ' + $folder }",
-        "    & icacls.exe $folder /reset /T /C /Q /L 2>&1 | Out-Null",
-        "    if ($LASTEXITCODE -ne 0) { throw 'Unable to reset ACLs: ' + $folder }",
+        # Existing child files can belong to an old user and deny admin DACL
+        # updates. Take ownership before resetting permissions, not after.
         "    & icacls.exe $folder /setowner " + _quote("*" + _ADMINISTRATORS) +
         " /T /C /Q /L 2>&1 | Out-Null",
         "    if ($LASTEXITCODE -ne 0) { throw 'Unable to set owner: ' + $folder }",
+        "    & icacls.exe $folder /reset /T /C /Q /L 2>&1 | Out-Null",
+        "    if ($LASTEXITCODE -ne 0) { throw 'Unable to reset ACLs: ' + $folder }",
         "  }",
         # The machine-wide role policy must not retain a writable old ACL.
         "  $policyFile = Join-Path $localaiRoot 'machine.json'",
@@ -121,7 +123,14 @@ def protection_lines(root, admin_sids, principal, *, group_variable=None):
         _quote("*" + principal + ":(R,W)") + " /Q 2>&1 | Out-Null",
         "    if ($LASTEXITCODE -ne 0) { throw 'Unable to restore runtime lock access' }",
         "  }",
-        "} catch { Write-Error $_; $failed = 1 }",
+        # Write-Error under ErrorActionPreference=Stop is itself terminating:
+        # it used to skip the caller's diagnostic report and produce only exit 1.
+        "  } catch {",
+        "    $failed = 1",
+        "    $detail = 'program ACL: ' + $_.Exception.Message",
+        "    if ($null -ne $localaiIssues) { [void]$localaiIssues.Add($detail) }",
+        "    Write-Warning $detail",
+        "  }",
     ]
     return lines
 
