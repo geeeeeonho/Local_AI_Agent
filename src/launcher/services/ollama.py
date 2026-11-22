@@ -555,8 +555,11 @@ class OllamaService:
         # Debug output includes prompts, and the broker's log is shared by
         # every account on the machine. Never inherit it into that log.
         e.pop("OLLAMA_DEBUG", None)
+        # One loaded model at a time keeps large LLMs from competing for VRAM.
         e.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
-        e.setdefault("OLLAMA_KEEP_ALIVE", "5m")
+        # Shorter idle retention gives VRAM back sooner on workstations.
+        # Respect an explicit OLLAMA_KEEP_ALIVE in the user's environment.
+        e.setdefault("OLLAMA_KEEP_ALIVE", "2m")
         return e
 
     # ── 설치 전 정리 ──
