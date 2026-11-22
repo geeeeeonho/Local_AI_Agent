@@ -1051,6 +1051,9 @@ Studio 사이드바의 **Tools**는 부가 기능 목록입니다. 목록에서 
   - 설정 값: `status=PENDING_REVIEW`, `archive_session=MK-04`
 - **번역 허용 예외:** 고정 용어집에 직접 넣은 식별자는 번역합니다. 계획 단계에서 정한 용어집의 식별자는 문장 속 고유명사로만 쓰였을 때 번역합니다(예: `the LUMEN_PROJECT team`). `status=…`, `状態: …`, `[…]`, JSON 값 전체처럼 시스템 값 자리에 한 번이라도 쓰였으면 계속 보호합니다.
 - **화자 이름표:** `ハロルド：` 같은 대사 앞 이름이 번역 언어가 쓰지 않는 문자일 때 이름을 따로 번역합니다(문서당 요청 1회, 같은 이름은 항상 같은 번역). 이름이 원문 글자로 남지 않습니다.
+- **추출 텍스트의 키와 인자:** `[BTL_001.enemy]`, `[MENU_001.help]` 같은 줄머리 키, `[祭りの手掛かり_01]=ON` 같은 스위치 키, `%1`·`%2`(RPG Maker 인자), `%0.3f`(printf), `%%TOKEN%%`, `\\N[n]`처럼 역슬래시가 겹친 코드를 보호합니다. 식별자 바로 뒤에 한중일 글자가 붙어도(`CELOG-001を`) 보호합니다.
+- **한중일 원문 문서의 라틴 토큰:** 원문이 일본어·중국어·한국어인 문서에서는 라틴 문자가 든 토큰(필드명 `frame_id`, 장비·버전 `Nereid-C4`, `HX-TLM/2.6`, `R3.2`, 상태값 `HOLDOVER`, 단위 `μGal`, `m/s²`, `0x04`)을 모두 원형 그대로 둡니다.
+- **`json` 코드 블록:** TXT·MD 안의 ```` ```json ```` 코드 블록은 JSON 규칙을 따릅니다. 키, 불리언, 숫자, 식별자 값은 그대로 두고 설명 문장 값만 번역합니다.
 - **RPG Maker MV/MZ JSON:** 화면에 보이는 문장만 번역하고, 게임 동작에 쓰이는 값은 건드리지 않습니다.
   - 번역: 대사(401·405), 선택지(102·402), 화자 이름(101), 이름 변경(320·324·325)
   - 그대로 둠: 스크립트(355·655), 플러그인 명령(356·357), 주석(108·408), 그림·소리 파일 이름, `note` 메타데이터
@@ -1146,7 +1149,7 @@ Studio 사이드바의 **Tools**는 부가 기능 목록입니다. 목록에서 
 JSON은 식별자 성격의 키(`status`, `color`, `userId`, `image_url` 등)와 열거형처럼 보이는 값(`active`, `dark-mode`, `en_US`, `#fff`, 날짜, 버전)을 번역하지 않습니다. 따라서 소문자 한 단어 값(예: `"save"`)은 번역되지 않을 수 있습니다.
 `Note:`, `Warning:`, `Step 1:` 같은 라벨은 화자로 보지 않으며, 일본어·중국어 대본의 전각 콜론(`：`)은 화자로 인식합니다. 번역 모델의 표현 품질·인물 말투 일관성도 100% 보장할 수 없습니다. 특히 복잡한 코드/마크업, 자막 길이 제한, 미묘한 문학적 표현은 결과를 검토하세요.
 UTF-8(BOM 포함), UTF-16(BOM 포함), CP949 입력을 처리합니다. CP949 입력의 결과는 더 넓은 문자 표현이 가능한 UTF-8로 저장합니다. 한국어로 보이지 않는 레거시 인코딩(Shift-JIS 등)은 깨진 글자를 번역하지 않도록 거부하므로 UTF-8로 저장한 뒤 다시 시도하세요.
-모의 모델 회귀 테스트는 `src/tests/test_translation_report_regression.py`(테스트 보고서 사례: 일본어 대사 TXT, RPG Maker JSON, UI JSON, 중국어 장문을 중단 후 재개까지 포함해 검증), `src/tests/test_translation_simple.py`, `src/tests/test_translation_long_memory.py`, `src/tests/test_translation_tools.py`에 있습니다. 실제 Windows Tk 및 Ollama 통합 검증은 별도로 필요합니다.
+모의 모델 회귀 테스트는 `src/tests/test_translation_dataset.py`(번역 테스트 데이터셋 14개 파일을 폴더 단위로 중단 후 재개까지 번역해 무결성·이름 일관성 검증), `src/tests/test_translation_report_regression.py`(테스트 보고서 사례: 일본어 대사 TXT, RPG Maker JSON, UI JSON, 중국어 장문을 중단 후 재개까지 포함해 검증), `src/tests/test_translation_simple.py`, `src/tests/test_translation_long_memory.py`, `src/tests/test_translation_tools.py`에 있습니다. 실제 Windows Tk 및 Ollama 통합 검증은 별도로 필요합니다.
 
 **테스트 작성 원칙: 가급적 아주 간단하게.** 테스트 하나에 동작 하나, 몇 줄짜리 입력, 가짜 모델만 사용합니다(네트워크·실제 Ollama 없음). 복잡한 시나리오는 테스트를 키우기보다 여러 개로 쪼갭니다. 새 번역 테스트는 `test_translation_simple.py`의 형식을 따르세요.
 

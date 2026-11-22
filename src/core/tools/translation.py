@@ -33,13 +33,20 @@ LIST_ITEM = re.compile(r'^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\S')
 STAGE = re.compile(r'^\s*\[([^\]\r\n]+)\]\s*$')
 PROTECT = re.compile(
     # 게임·메시지 제어 코드: RPG Maker \N[2] \V[23] \C[4] \I[64] \FS[24] \.  \|  \!  \>  \<  \^  \{  \$ …
-    r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\]|<[^>\r\n]*>)?|\\[^\sA-Za-z0-9]|'
-    # 시스템 태그와 내부 식별자: [SYSTEM] [SCENE 01] [BGM:battle1] PENDING_REVIEW MAX_HP MK-04
+    # (문서 설명에 쓰인 '\\N[n]'처럼 역슬래시가 겹친 경우도 통째로)
+    r'\\+[A-Za-z]{1,8}(?:\[[^\]\r\n]*\]|<[^>\r\n]*>)?|\\[^\sA-Za-z0-9]|'
+    # 줄머리·스위치 키: [BTL_001.enemy] [MENU_001.help] [祭りの手掛かり_01]=ON
+    r'\[[^\[\]\s]*?(?:_\d+|[A-Za-z0-9]\.[A-Za-z]\w*)[^\[\]\s]*\](?:=[A-Za-z0-9_.-]+)?|'
+    # 시스템 태그와 내부 식별자: [SYSTEM] [SCENE 01] [BGM:battle1] PENDING_REVIEW MAX_HP MK-04 CELOG-001
+    # 경계는 ASCII로 판단한다(파이썬 \w는 한중일 글자도 포함해 'CELOG-001を'를 놓쳤다).
     r'\[[A-Z][A-Z0-9_]*(?:[ -][A-Z0-9][A-Z0-9_]*)*(?:\s*[:=][^\]\r\n]*)?\]|'
-    r'(?<![\w-])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![\w-])|(?<![\w-])[A-Z]{1,6}-\d+[A-Z0-9-]*(?![\w-])|'
+    r'(?<![A-Za-z0-9_-])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![A-Za-z0-9-])|'
+    r'(?<![A-Za-z0-9_-])[A-Z]{1,6}-\d+[A-Z0-9-]*(?![A-Za-z0-9_-])|'
     # 설정·시스템 값: archive_session=MK-04, status=PENDING_REVIEW, mode="fast"
     # 값은 ASCII 식별자 문자까지만(전각 쉼표·한중일 글자가 이어져도 삼키지 않는다)
-    r'(?<![\w.-])[A-Za-z_][A-Za-z0-9_.-]*=(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[A-Za-z0-9_.:/@+%-]+)|'
+    r'(?<![A-Za-z0-9_.-])[A-Za-z_][A-Za-z0-9_.-]*=(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[A-Za-z0-9_.:/@+%-]+)|'
+    # 치환 토큰과 RPG Maker 인자: %%TOKEN%%  %1 %2  printf %0.3f %-5d
+    r'%%[A-Za-z_]\w*%%|(?<![A-Za-z0-9%])%\d+(?![\d$.A-Za-z])|'
     r'`[^`\r\n]+`|'
     # HTML 주석, Markdown 각주·참조 정의 라벨, 수식
     r'<!--.*?-->|\[\^[^\]\r\n]+\]|^\[[^\]\r\n]+\]:|'
@@ -53,7 +60,7 @@ PROTECT = re.compile(
     # 자막 서식 태그 {\an8} {\i1}
     r'\{\\[^{}\r\n]*\}|'
     r'\{\{[^{}\r\n]+\}\}|\$\{[^{}\r\n]+\}|(?<!\{)\{[\w.:-]+\}(?!\})|'
-    r'%\([\w.:-]+\)[sdif]|(?<!%)%(?:\d+\$)?[sdif]|'
+    r'%\([\w.:-]+\)[sdif]|(?<!%)%(?:\d+\$)?[-+ #0]*\d*(?:\.\d+)?[sdifeEgGxXu](?![A-Za-z])|'
     r'<\/?[A-Za-z][^<>\r\n]*>|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|'
     r'&(?:[A-Za-z][\w]+|#(?:\d+|x[\da-fA-F]+));|'
     r'(?:[A-Za-z]:\\|\.\.?/)[\w.\\/\-]+', re.UNICODE)
@@ -64,6 +71,11 @@ ICU_PROTECT = re.compile(
     r'\{\s*\w+\s*,\s*(?:plural|select|selectordinal)\s*,(?:\s*offset:\d+)?|'
     r'(?:=\d+|[A-Za-z_]\w*)\s*\{(?=[^{}]*\})|\}|#|' + PROTECT.pattern, re.UNICODE)
 PROTECTED_TOKEN = re.compile(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__')
+# 원문이 한중일 언어일 때: 라틴 문자가 든 토큰(필드명·식별자·장비명·버전·단위)은 모두 원형 유지.
+# 예) frame_id  HX-ASTRAL-GNSS/TS-07  R3.2  TAI+00:00  σ_phase  μGal  m/s²  0x04  Nereid-C4  TRACKING
+CJK_LATIN = re.compile(
+    r'(?<![A-Za-z0-9_μΔσβ])(?=[A-Za-z0-9_.+/:^²³μΔσβ-]*[A-Za-zμΔσβ])'
+    r'[A-Za-z0-9_μΔσβ]+(?:[.+/:^-][A-Za-z0-9_μΔσβ²³]+)*[²³]?')
 SYSTEM_TAG = re.compile(r'\[[A-Z][A-Z0-9_]*(?:[ -][A-Z0-9][A-Z0-9_]*)*(?:\s*[:=][^\]\r\n]*)?\]')
 IDENTIFIER = re.compile(r'[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{1,6}-\d+[A-Z0-9-]*')
 
@@ -254,6 +266,7 @@ def _plain(source: str, suffix: str, stage: bool, kind: str, labels=None) -> lis
     code_filter = kind in ('general', 'code', 'structured') and not subtitle_file
     dialogue = kind in ('script', 'subtitle') or subtitle_file
     last_blank, in_list, in_comment = True, False, False
+    json_block = None
 
     def add(segment):
         if segment:
@@ -294,8 +307,20 @@ def _plain(source: str, suffix: str, stage: bool, kind: str, labels=None) -> lis
                 marker = fence.group(1)
                 if fenced is None:
                     fenced = marker
+                    # ```json 블록은 JSON 규칙으로: 키·식별자 값은 그대로, 설명 문장 값만 번역한다.
+                    json_block = line_match.end() if line[fence.end():].strip().lower() == 'json' else None
                 elif marker[0] == fenced[0] and len(marker) >= len(fenced):
                     fenced = None
+                    if json_block is not None:
+                        body = source[json_block:line_match.start()]
+                        try:
+                            json.loads(body)
+                            parser = _JSON(source)
+                            parser.value(json_block + len(body) - len(body.lstrip()))
+                            for item in parser.result:
+                                add(item)
+                        except (ValueError, IndexError, RecursionError):
+                            pass           # 올바른 JSON이 아니면 코드로 보고 그대로 둔다
                 continue
             if fenced:
                 continue
@@ -479,7 +504,7 @@ def prepare(source: str, suffix: str, *, kind='auto', stage=False) -> Document:
     return Document(source, suffix, detected, selected, tuple(segments))
 
 
-def protect(text: str, allow=()):
+def protect(text: str, allow=(), cjk=False):
     """보호할 부분을 토큰으로 바꾼다. allow(사용자 고정 용어집의 원문)에 있는 말은 식별자 모양이어도
     번역하라는 뜻이므로 보호하지 않는다."""
     mapping = {}
@@ -495,6 +520,8 @@ def protect(text: str, allow=()):
         mapping[token] = match.group()
         return token
     pattern = ICU_PROTECT if ICU_HEADER.search(text) else PROTECT
+    if cjk:
+        pattern = re.compile(pattern.pattern + '|' + CJK_LATIN.pattern, re.UNICODE)
     return pattern.sub(replace, text), mapping
 
 
@@ -648,7 +675,7 @@ def _strings(value):
             yield from _strings(item)
 
 
-def verify_codes(doc: Document, output: str, allow=()):
+def verify_codes(doc: Document, output: str, allow=(), cjk=False):
     """저장 직전 문서 전체 검사: 원문과 번역문의 제어 코드·태그·변수·식별자 목록이 같아야 한다.
     (구간 검증을 통과했더라도 조립·인코딩 과정의 실수까지 막는 마지막 안전장치)"""
     from collections import Counter
@@ -660,6 +687,8 @@ def verify_codes(doc: Document, output: str, allow=()):
     def codes(text):
         found = Counter(match.group() for match in PROTECT.finditer(text) if match.group() not in allow)
         found.update(match.group() for match in re.finditer(r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\])?', text))
+        if cjk:
+            found.update(match.group() for match in CJK_LATIN.finditer(text) if match.group() not in allow)
         return found
     old, new = codes(before), codes(after)
     if old != new:

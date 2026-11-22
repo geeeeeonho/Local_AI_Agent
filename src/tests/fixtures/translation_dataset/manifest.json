@@ -1,0 +1,97 @@
+{
+  "dataset": "Japanese RPG Maker-style / Chinese terminology dense synthetic translation QA",
+  "generated_on": "2026-11-22",
+  "encoding": "UTF-8, LF, no BOM",
+  "fictional": true,
+  "counts": {
+    "01_일본어_TXT_5개": 5,
+    "02_일본어_JSON_7개": 7,
+    "03_중국어_장문_2개": 2
+  },
+  "files": [
+    {
+      "path": "01_일본어_TXT_5개/BattleVoices_廃機関区_Extracted.txt",
+      "characters": 7034,
+      "bytes": 14856,
+      "sha256": "f8c0328c61f5e411790515ca5d98fbf8ee77ac6ea60d9eb7c844453a6bae2b0d"
+    },
+    {
+      "path": "01_일본어_TXT_5개/Map026_雪梟駅_Extracted.txt",
+      "characters": 4686,
+      "bytes": 12060,
+      "sha256": "f95e7d182698df49dc6e2cf5fe7127924c03554d4e030553a4997e1b9dfe4dfb"
+    },
+    {
+      "path": "01_일본어_TXT_5개/Map031_灯台祭_Extracted.txt",
+      "characters": 5556,
+      "bytes": 13194,
+      "sha256": "48a3b001873212190c664889e5464be9a4619427948808ceaa8f9b5890154660"
+    },
+    {
+      "path": "01_일본어_TXT_5개/QuestJournal_霧港_Extracted.txt",
+      "characters": 6880,
+      "bytes": 13950,
+      "sha256": "c145c668287135a85f5235eb5d523c83ddfe7e15d5c006c9e67a590e0efc639d"
+    },
+    {
+      "path": "01_일본어_TXT_5개/System_Battle_UI_Extracted.txt",
+      "characters": 5100,
+      "bytes": 11264,
+      "sha256": "985f73f6376958a23fa32b80909390115fc03ecf2183c53250441094c1cffdc9"
+    },
+    {
+      "path": "02_일본어_JSON_7개/CommonEvents_旅の記録.json",
+      "characters": 6469,
+      "bytes": 9609,
+      "sha256": "047e95a58975cc8209ae6566eab2d6dc9541e930e5083919508391bed5da51a2"
+    },
+    {
+      "path": "02_일본어_JSON_7개/Items_港の収集品.json",
+      "characters": 5205,
+      "bytes": 8471,
+      "sha256": "424d383e00077a20441d6cf7b530ca93965ab873f1087bb2982393f01197973f"
+    },
+    {
+      "path": "02_일본어_JSON_7개/Map003_潮鳴り港.json",
+      "characters": 4416,
+      "bytes": 6846,
+      "sha256": "f16bd87baae39c447cd404aaaa39ef7fb207efc0bfededbf9c57dc69cece4089"
+    },
+    {
+      "path": "02_일본어_JSON_7개/Map014_霧の旧市街.json",
+      "characters": 4778,
+      "bytes": 7410,
+      "sha256": "3743e3b3d823d0c2310e101717d329537c34e2006ee2dc363b5c34414db81b5f"
+    },
+    {
+      "path": "02_일본어_JSON_7개/Map041_月隠れ図書館.json",
+      "characters": 7793,
+      "bytes": 12137,
+      "sha256": "aa088c0fd8894dacc5f718755df4fabbedeb405fe45e2af71849e7a65bbaf400"
+    },
+    {
+      "path": "02_일본어_JSON_7개/Map052_沈鐘遺跡.json",
+      "characters": 7465,
+      "bytes": 11329,
+      "sha256": "abf33d3009b0e496c3a8c2e95d7f448f92dd6d1179f218c17329ebc27abd045b"
+    },
+    {
+      "path": "02_일본어_JSON_7개/Quests_巡礼手帳.json",
+      "characters": 7222,
+      "bytes": 12952,
+      "sha256": "b002e767069f7852bb1008c9ba16bcf41ea76a73dc46a74f9a0240114f34f269"
+    },
+    {
+      "path": "03_중국어_장문_2개/01_玄衡7_重力导航_完整技术规范_长文.txt",
+      "characters": 10382,
+      "bytes": 25784,
+      "sha256": "508ad707dc768743c0264bf3a430b29870489c0b6c30a807c24a79a59dda8f95"
+    },
+    {
+      "path": "03_중국어_장문_2개/02_启明航线_第四听证室_完整长篇剧本.txt",
+      "characters": 10435,
+      "bytes": 26374,
+      "sha256": "b1e89244993dcb1421e4b060d3e561d351bff6d542273c22ac9e1712954405ca"
+    }
+  ]
+}

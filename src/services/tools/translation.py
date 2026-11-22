@@ -29,6 +29,7 @@ from .languages import (LANGUAGES as LANGUAGE_TABLE, ReviewError, check_output, 
 LANGUAGES = {item.label:item.name for item in LANGUAGE_TABLE if item.target}
 CODES = {item.label:item.code for item in LANGUAGE_TABLE if item.target}
 AUTO_SOURCE = ('auto','자동 감지','')
+CJK_SOURCES = ('Japanese','Simplified Chinese','Traditional Chinese','Korean')
 STYLES = {'faithful':'원문에 충실하게','natural':'자연스럽게, 정보 생략 없이',
           'concise':'자막에 맞게 간결하게'}
 CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투',
@@ -116,12 +117,12 @@ def parse_glossary(text):
 LABEL = re.compile(r'^\s*(?:translation|translated text|output|answer|번역(?:문|본| 결과)?|訳文|翻訳|翻译|译文|traducci[oó]n)\s*[:：]\s*', re.I)
 
 
-def _units(document: Document, allow=()):
+def _units(document: Document, allow=(), cjk=False):
     units = []
     prefixes = []
     maps = []
     for index, segment in enumerate(document.segments):
-        masked, tokens = protect(segment.text, allow)
+        masked, tokens = protect(segment.text, allow, cjk)
         prefix, parts = split_masked(masked)
         if not parts:
             raise ValueError('A translation segment has no usable content')
@@ -794,7 +795,8 @@ class TranslationService:
             raise InterruptedError('Translation cancelled')
         if not doc.segments:
             raise ValueError('No translatable content was found')
-        units,prefixes,maps=_units(doc,frozenset(user_terms))
+        cjk=resolve_source(doc,source_language) in CJK_SOURCES
+        units,prefixes,maps=_units(doc,frozenset(user_terms),cjk)
         if not units:
             raise ValueError('No translation units were found')
         endpoint=self._ready(model)
@@ -852,7 +854,7 @@ class TranslationService:
             allow=frozenset(user_terms)|frozenset(
                 key for key in memory.terms if IDENTIFIER.fullmatch(key) and not system_context(doc.source,key))
             if allow!=frozenset(user_terms):
-                units,prefixes,maps=_units(doc,allow)
+                units,prefixes,maps=_units(doc,allow,cjk)
             complete=checkpoint.completed()
             failures=checkpoint.failed()
             review=set(json.loads(checkpoint.get('review') or '[]'))
@@ -914,7 +916,7 @@ class TranslationService:
             if len(memory.terms)!=known_terms:
                 checkpoint.save_memory(memory)
             output_text=_assemble(doc,units,prefixes,maps,complete,names)
-            verify_codes(doc,output_text,allow)
+            verify_codes(doc,output_text,allow,cjk)
             latest=sorted(complete)[-10:]
             if shared:
                 # 다음 파일이 이어받도록 이 파일 끝까지의 줄거리를 갱신한다(파일당 요청 1회).
