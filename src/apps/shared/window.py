@@ -86,52 +86,74 @@ class DesktopWindow(TranslationController, ToolsController):
     def _build(self):
         outer=ttk.Frame(self.root);outer.pack(fill='both',expand=True)
         sidebar=ttk.Frame(outer,style='Sidebar.TFrame',width=198)
-        sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False)
-        ttk.Label(sidebar,text='LOCAL AI',style='Brand.TLabel').pack(anchor='w',padx=15,pady=(13,2))
-        ttk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),style='Sidebar.TLabel').pack(anchor='w',padx=16,pady=(0,9))
+        sidebar.pack(side='left',fill='y')
+        sidebar.pack_propagate(False)
+
+        # Fixed inventory summary below a scrollable navigation column.
+        # The navigation may grow when "더보기" is expanded or Windows DPI
+        # increases; no navigation button should be clipped off-window.
+        if 'models' in self.spec.pages:
+            self.sidebar_models=ttk.Frame(sidebar,style='Sidebar.TFrame',
+                                          padding=(8,4))
+            self.sidebar_models.pack(side='bottom',fill='x')
+            self.sidebar_models_expanded=False
+            heading=ttk.Frame(self.sidebar_models,style='Sidebar.TFrame')
+            heading.pack(fill='x')
+            ttk.Label(heading,text='설치 모델',style='Sidebar.TLabel',
+                      font=('Segoe UI',9,'bold')).pack(side='left')
+            ttk.Button(heading,text='↻',width=2,
+                       command=self.refresh_installed_summary).pack(side='right')
+            self.sidebar_models_toggle=ttk.Button(
+                heading,text='목록 ▸',command=self.toggle_sidebar_models)
+            self.sidebar_models_toggle.pack(side='right')
+            self.sidebar_model_count=tk.StringVar(master=self.root,value='조회 전')
+            ttk.Label(self.sidebar_models,textvariable=self.sidebar_model_count,
+                      style='Sidebar.TLabel').pack(anchor='w',pady=(3,5))
+            self.sidebar_model_scroll=ScrollArea(self.sidebar_models)
+            self.sidebar_model_scroll.frame.pack_forget()
+            self.sidebar_model_body=self.sidebar_model_scroll.body
+            ttk.Label(self.sidebar_model_body,text='모델 목록을 읽는 중...',
+                      style='Muted.TLabel',wraplength=160).pack(anchor='w')
+
+        ttk.Label(sidebar,text='Local data stays local',style='Sidebar.TLabel',
+                  justify='left',font=('Segoe UI',9)).pack(
+                      side='bottom',anchor='w',padx=9,pady=5)
+        self.nav_scroll=ScrollArea(sidebar)
+        nav_body=self.nav_scroll.body
+        self.nav_scroll.frame.configure(style='Sidebar.TFrame')
+        nav_body.configure(style='Sidebar.TFrame')
+        themed(self.nav_scroll.canvas,background='sidebar')
+
+        ttk.Label(nav_body,text='LOCAL AI',style='Brand.TLabel').pack(
+            anchor='w',padx=15,pady=(10,2))
+        ttk.Label(nav_body,text=self.spec.title.replace('LocalAI ',''),
+                  style='Sidebar.TLabel').pack(
+                      anchor='w',padx=16,pady=(0,7))
         captions={'WORK':'주요 작업','MANAGE':'모델 · 설치','GENERAL':'환경 · 설정'}
         self.advanced_nav_frame=None
         self.advanced_nav_visible=False
         for group,keys in navigation_groups(self.app):
-            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',
-                      font=('Segoe UI',9,'bold')).pack(anchor='w',padx=16,pady=(4,3))
+            ttk.Label(nav_body,text=captions[group],style='Sidebar.TLabel',
+                      font=('Segoe UI',9,'bold')).pack(
+                          anchor='w',padx=16,pady=(3,2))
             for key in keys:
-                if group == 'GENERAL' and key != 'home':
+                if group=='GENERAL' and key!='home':
                     if self.advanced_nav_frame is None:
                         self.advanced_nav_toggle=ttk.Button(
-                            sidebar,text='더보기 ▸',style='Nav.TButton',
+                            nav_body,text='더보기 ▸',style='Nav.TButton',
                             command=self.toggle_advanced_navigation)
-                        self.advanced_nav_toggle.pack(fill='x',padx=9,pady=1)
-                        self.advanced_nav_frame=ttk.Frame(sidebar,style='Sidebar.TFrame')
+                        self.advanced_nav_toggle.pack(fill='x',padx=8,pady=1)
+                        self.advanced_nav_frame=ttk.Frame(
+                            nav_body,style='Sidebar.TFrame')
                     host=self.advanced_nav_frame
                 else:
-                    host=sidebar
-                b=ttk.Button(host,text=LABELS[key],style=nav_style(key),
-                             command=lambda k=key:self.navigate(k))
-                b.pack(fill='x',padx=9,pady=1)
-                self.nav[key]=b
-            ttk.Separator(sidebar).pack(fill='x',padx=13,pady=(6,2))
-        ttk.Label(sidebar,text='Local data stays local',style='Sidebar.TLabel',
-                  justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=12,pady=7)
-        if 'models' in self.spec.pages:
-            self.sidebar_models = ttk.Frame(sidebar, padding=(9, 4))
-            self.sidebar_models.pack(side='bottom', fill='x')
-            self.sidebar_models_expanded = False
-            heading = ttk.Frame(self.sidebar_models)
-            heading.pack(fill='x')
-            ttk.Label(heading,text='설치 모델',style='Sidebar.TLabel',
-                      font=('Segoe UI',9,'bold')).pack(side='left')
-            ttk.Button(heading,text='↻',width=2,command=self.refresh_installed_summary).pack(side='right')
-            self.sidebar_models_toggle=ttk.Button(heading,text='목록 ▸',command=self.toggle_sidebar_models)
-            self.sidebar_models_toggle.pack(side='right')
-            self.sidebar_model_count = tk.StringVar(master=self.root,value='조회 전')
-            ttk.Label(self.sidebar_models,textvariable=self.sidebar_model_count,
-                      style='Muted.TLabel').pack(anchor='w',pady=(3,5))
-            self.sidebar_model_scroll = ScrollArea(self.sidebar_models)
-            self.sidebar_model_scroll.frame.pack_forget()
-            self.sidebar_model_body = self.sidebar_model_scroll.body
-            ttk.Label(self.sidebar_model_body,text='모델 목록을 읽는 중...',
-                      style='Muted.TLabel',wraplength=185).pack(anchor='w')
+                    host=nav_body
+                widget=ttk.Button(host,text=LABELS[key],style=nav_style(key),
+                                  command=lambda k=key:self.navigate(k))
+                widget.pack(fill='x',padx=8,pady=1)
+                self.nav[key]=widget
+            ttk.Separator(nav_body).pack(fill='x',padx=13,pady=(4,2))
+        self.nav_scroll.bind_content()
         ttk.Separator(outer,orient='vertical').pack(side='left',fill='y')
         content=ttk.Frame(outer);content.pack(fill='both',expand=True)
         header=ttk.Frame(content,padding=(15,9));header.pack(fill='x')
@@ -188,12 +210,17 @@ class DesktopWindow(TranslationController, ToolsController):
             return
         self.advanced_nav_visible=bool(shown)
         if shown:
-            # Insert beneath its own disclosure button, before the group divider.
             frame.pack(after=self.advanced_nav_toggle,fill='x')
         else:
             frame.pack_forget()
         self.advanced_nav_toggle.configure(
             text='더보기 ▾' if shown else '더보기 ▸')
+        self.nav_scroll.bind_content()
+        if shown:
+            # Make the newly revealed settings reachable even at 880x560.
+            self.root.after_idle(lambda: self.nav_scroll.canvas.yview_moveto(1.0))
+        else:
+            self.root.after_idle(lambda: self.nav_scroll.canvas.yview_moveto(0.0))
 
     def toggle_advanced_navigation(self):
         self._set_advanced_navigation(not self.advanced_nav_visible)
