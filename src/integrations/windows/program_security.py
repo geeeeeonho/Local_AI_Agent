@@ -201,8 +201,12 @@ def verify(root, policy: machine.Policy):
     return reasons
 
 
-def ensure(root, policy: machine.Policy, *, log=None):
-    """Repair if necessary; abort installation instead of continuing unlocked."""
+def ensure(root, policy: machine.Policy, *, log=None, force=False):
+    """Repair/verify executable trees or abort, never leave setup unlocked.
+
+    force=True resets *every* executable file after a third-party installer,
+    even when directory ACLs and representative files already look safe.
+    """
     from . import machine as windows
     if not acl.on_windows():
         return True
@@ -210,7 +214,7 @@ def ensure(root, policy: machine.Policy, *, log=None):
     if not lockable_root(root):
         raise RuntimeError("보안 정책을 적용할 수 없는 공용 설치 경로입니다: " + str(root))
     reasons = verify(root, policy)
-    if not reasons:
+    if not reasons and not force:
         return True
     if not windows.run_as_admin(protection_script(root, policy), log=log):
         raise RuntimeError("Windows 관리자 승인 또는 프로그램 ACL 복구 실패. "
