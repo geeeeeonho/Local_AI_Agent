@@ -31,6 +31,9 @@ TOOLS = (
 
 def build(parent, w):
     w.tool_frames, w.tool_toolbars, w.current_tool = {}, {}, None
+    # 페이지 제목 아래 설명 줄: 도구를 연 동안에는 숨겨 작은 창에서 본문 높이를 확보한다.
+    labels = [child for child in parent.winfo_children() if isinstance(child, ttk.Label)]
+    w.tools_description = labels[1] if len(labels) > 1 else None
     hub = ttk.Frame(parent); hub.pack(fill='both', expand=True)
     w.tool_hub, w.tool_area = hub, ttk.Frame(parent)
     ttk.Label(hub, text='사용할 도구를 선택하세요.', style='Section.TLabel').pack(anchor='w', pady=(0, 10))
@@ -68,6 +71,9 @@ class ToolsController:
         self.tool_frames[key].pack(fill='both', expand=True)
         self.tool_title.configure(text=tool.title)
         self.tool_hub.pack_forget()
+        if self.tools_description is not None and self.tools_description.winfo_manager():
+            self._tools_description_pack = self.tools_description.pack_info()
+            self.tools_description.pack_forget()
         self.tool_area.pack(fill='both', expand=True)
         self.current_tool = key
         if tool.on_open:
@@ -76,4 +82,8 @@ class ToolsController:
     def show_tool_hub(self):
         self.tool_area.pack_forget()
         self.tool_hub.pack(fill='both', expand=True)
+        info = getattr(self, '_tools_description_pack', None)
+        if self.tools_description is not None and info and not self.tools_description.winfo_manager():
+            info = {key: value for key, value in info.items() if key != 'in'}
+            self.tools_description.pack(before=self.tool_hub, **info)
         self.current_tool = None

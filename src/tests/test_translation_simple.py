@@ -241,3 +241,128 @@ class OtherLanguageTests(unittest.TestCase):
         translate('Bonjour tout le monde, je suis là.\n', Spy(lambda items: json.dumps({'translations': ['Hallo zusammen, ich bin da.']})),
                   target='Deutsch', source_language='Français')
         self.assertTrue(any('Translate from French into German' in system for system in seen))
+
+
+class StructureTests(unittest.TestCase):
+    """줄바꿈·코드·변수 보존 — 한 줄짜리 예로 간단하게."""
+
+    def masked(self, text):
+        from core.tools.translation import protect, PROTECTED_TOKEN
+        return PROTECTED_TOKEN.sub('▢', protect(text)[0])
+
+    def test_i18n_variables_are_hidden_from_the_model(self):
+        for text in ('Hi {name}', 'Hi {{name}}', 'Saved %s in %1$s', 'Hi %(user)s', 'Hi ${user.name}',
+                     'Hi %{count}', 'The :attribute field', 'Click <0>here</0>', '@:common.save now',
+                     'Use [[username]]', 'File {0} of {1}', 'Press <b>Save</b>', 'Tom &amp; Jerry'):
+            self.assertNotRegex(self.masked(text), r'[{}%$:@\[<&]', text)
+
+    def test_icu_keywords_are_hidden_but_messages_are_not(self):
+        masked = self.masked('{n, plural, one {# file} other {# files}}')
+        self.assertNotIn('plural', masked)
+        self.assertNotIn('other', masked)
+        self.assertIn('files', masked)
+
+    def test_markdown_reference_label_and_footnote_are_hidden(self):
+        self.assertEqual(texts('[docs]: https://example.com\nText[^1] here.\n', '.md'),
+                         ['[docs]: https://example.com', 'Text[^1] here.'])
+        self.assertNotIn('docs', self.masked('[docs]: https://example.com'))
+        self.assertNotIn('^1', self.masked('Text[^1] here.'))
+
+    def test_shell_and_json_lines_in_txt_are_not_translated(self):
+        self.assertEqual(texts('Run it.\ncd ~/app && ./run.sh --port 80\n"name": "demo",\n', '.txt'),
+                         ['Run it.'])
+
+    def test_lost_bold_marks_are_caught(self):
+        model = Model(lambda items: json.dumps({'translations': ['설정을 여세요.' for _ in items]}))
+        with self.assertRaises(ValueError):
+            translate('Open **Settings** now.\n', model)
+
+    def test_line_breaks_and_blank_lines_are_kept(self):
+        model = Model(lambda items: json.dumps({'translations': ['번역 %d' % i for i, _ in enumerate(items)]}))
+        out = translate('First line.\r\n\r\n\tSecond line.   \r\n', model).text
+        self.assertEqual(out, '번역 0\r\n\r\n\t번역 1   \r\n')
+
+
+class FolderTests(unittest.TestCase):
+    def test_folder_is_translated_into_a_sibling_folder_with_same_names(self):
+        model = Model(lambda items: json.dumps({'translations': ['번역 문장' for _ in items]}))
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / 'docs'
+            (src / 'sub').mkdir(parents=True)
+            (src / 'a.txt').write_text('Hello world.\n', encoding='utf-8')
+            (src / 'sub' / 'b.md').write_text('# Hello title\n', encoding='utf-8')
+            (src / 'logo.png').write_bytes(b'png')
+            (src / 'bad.json').write_text('{oops', encoding='utf-8')
+            service = TranslationService(Inference(), lambda _: model,
+                                         checkpoint_dir=Path(tmp) / 'cp', protector=None)
+            result = service.translate_folder(src, model='m:1')
+            self.assertEqual(result.output.name, 'docs.ko')
+            self.assertEqual({p.relative_to(result.output).as_posix() for p in result.output.rglob('*') if p.is_file()},
+                             {'a.txt', 'sub/b.md', 'logo.png'})
+            self.assertEqual([rel for rel, _ in result.failed], ['bad.json'])   # 하나 실패해도 계속
+            again = service.translate_folder(src, model='m:1')                   # 다시 실행하면 건너뜀
+            self.assertEqual(len(again.translated), 0)
+
+
+class FolderContextTests(unittest.TestCase):
+    """폴더 전체를 한 작품으로: 메모리 1번 생성, 1→2→10 순서, 앞 파일 줄거리 전달."""
+
+    def run_folder(self, shared):
+        calls = []
+        class Spy:
+            def chat(self, name, messages, temperature=.2):
+                system, prompt = messages[0]['content'], messages[-1]['content']
+                if system.startswith('You prepare'):
+                    calls.append('plan')
+                    return json.dumps({'summary': 's', 'terms': {'佐伯': '사에키'}}, ensure_ascii=False)
+                if system.startswith('Summarize'):
+                    return json.dumps({'summary': 'after ' + json.loads(prompt)['recent_translation'][-1]['source']})
+                data = json.loads(prompt)
+                calls.append((data.get('current_file'), json.loads(data['document_memory'])['story_so_far']))
+                return json.dumps({'translations': ['사에키 문장' for _ in data['items']]}, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'novel'
+            folder.mkdir()
+            for name, word in (('ch10', 'じゅう'), ('ch2', 'に'), ('ch1', 'いち')):
+                (folder / (name + '.txt')).write_text('佐伯が来た' + word + '。\n', encoding='utf-8')
+            TranslationService(Inference(), lambda _: Spy(), checkpoint_dir=Path(tmp) / 'cp',
+                               protector=None).translate_folder(folder, model='m:1', shared_context=shared)
+        return calls
+
+    def test_shared_context_plans_once_and_passes_the_story_on(self):
+        calls = self.run_folder(True)
+        self.assertEqual(calls.count('plan'), 1)
+        batches = [c for c in calls if c != 'plan']
+        self.assertEqual([f for f, _ in batches], ['ch1.txt', 'ch2.txt', 'ch10.txt'])
+        self.assertIn('いち', batches[1][1])     # 2장은 1장 끝까지의 줄거리를 받는다
+
+    def test_individual_mode_plans_each_file(self):
+        self.assertEqual(self.run_folder(False).count('plan'), 3)
+
+
+class FolderFlowTests(unittest.TestCase):
+    def test_analyze_then_translate_uses_the_cache(self):
+        # 화면 흐름 그대로: 폴더 분석 → 번역 시작(분석 결과 재사용)
+        model = Model(lambda items: json.dumps({'translations': ['번역 문장' for _ in items]}))
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / 'docs'
+            src.mkdir()
+            (src / 'a.txt').write_text('Hello world.\n', encoding='utf-8')
+            service = TranslationService(Inference(), lambda _: model, checkpoint_dir=Path(tmp) / 'cp', protector=None)
+            rows, _ = service.inspect_folder(src)
+            result = service.translate_folder(src, model='m:1')
+            self.assertEqual((rows[0][2], len(result.translated), result.failed), (1, 1, ()))
+
+    def test_default_output_gets_a_number_when_taken(self):
+        from services.tools.translation import default_output
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'a.txt'
+            path.write_text('x')
+            (Path(tmp) / 'a.ko.txt').write_text('old')
+            self.assertEqual(default_output(path, '한국어').name, 'a.ko (2).txt')
+
+    def test_model_recommendation(self):
+        from services.tools.translation import recommend_model
+        names = ['qwen2.5-coder:7b', 'gemma4:12b', 'nomic-embed-text']
+        self.assertEqual(recommend_model(names), 'gemma4:12b')
+        self.assertEqual(recommend_model(names, last='qwen2.5-coder:7b'), 'qwen2.5-coder:7b')

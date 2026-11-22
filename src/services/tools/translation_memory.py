@@ -50,7 +50,7 @@ class TranslationMemory:
         }, ensure_ascii=False)
 
     def to_json(self) -> str:
-        data = {key:value for key,value in self.__dict__.items() if key not in ('guide','enforced','think','target','source_language')}
+        data = {key:value for key,value in self.__dict__.items() if key not in ('guide','enforced','think','target','source_language','file_label')}
         return json.dumps(data, ensure_ascii=False)
 
     @classmethod
@@ -140,8 +140,8 @@ _CJK_NAME = re.compile(
     r'|(?:^|[。！？\n「『（\s])([\u4e00-\u9fff]{2,4}|[\u30a1-\u30fa\u30fc]{2,8})(?=[がはもの、])')
 
 
-def repeated_entities(doc, *, limit=56):
-    # 문서 첫머리만 보지 않고 전 구간을 한 번 훑어 반복 명칭을 추출한다.
+def name_counts(doc, *, limit=None):
+    """문서 전체에서 반복 고유명사 후보와 횟수. 경칭이 붙은 이름은 한 번만 나와도 2회로 센다."""
     names = Counter()
     upper, lower = 'A-ZÀ-ÖØ-ÞА-ЯЁ', 'a-zß-öø-ÿа-яё'
     pattern = (r'(?<!\w)(?:[A-Z][A-Z0-9_/-]{2,}|[%s][%s]{2,}(?:\s+[%s][%s]{2,}){0,2})(?!\w)'
@@ -150,23 +150,24 @@ def repeated_entities(doc, *, limit=56):
         name=match.group()
         if name in names or len(names)<4096:
             names[name] += 1
-    honorific = Counter()
     for match in _CJK_NAME.finditer(doc.source):
         name = match.group(1) or match.group(2) or match.group(3)
         if name in names or len(names)<4096:
-            names[name] += 1
-            if match.group(1) or match.group(2):
-                honorific[name] += 1
-    # 경칭이 붙은 이름은 한 번만 나와도 후보로 둔다(인명일 가능성이 높다).
-    names = [(name, count) for name,count in names.items()
-             if (count >= 2 or honorific[name]) and name not in ('The','This','That','And')]
-    names.sort(key=lambda x:(-x[1],x[0]))
-    return [name for name,_ in names[:limit]]
+            names[name] += 2 if (match.group(1) or match.group(2)) else 1
+    for word in ('The','This','That','And'):
+        names.pop(word, None)
+    ranked = sorted(names.items(), key=lambda x:(-x[1],x[0]))
+    return ranked[:limit] if limit else ranked
 
 
-def initial_memory(client, model, doc, target, style, *, cancelled=None):
+def repeated_entities(doc, *, limit=56):
+    # 문서 첫머리만 보지 않고 전 구간을 한 번 훑어 반복 명칭을 추출한다.
+    return [name for name,count in name_counts(doc) if count >= 2][:limit]
+
+
+def initial_memory(client, model, doc, target, style, *, cancelled=None, entities=None):
     samples = sample_document(doc)
-    entities = repeated_entities(doc)
+    entities = repeated_entities(doc) if entities is None else list(entities)
     default = TranslationMemory(summary='Document type: ' + doc.selected + '. ' + samples[:320],
                                 style=style)
     if cancelled and cancelled():
@@ -318,8 +319,17 @@ def prune(root, *, age_days=21, keep=24):
     root=Path(root)
     if not root.is_dir():
         return
-    paths = sorted(root.glob('*.sqlite3'),key=lambda p:p.stat().st_mtime,reverse=True)
+    # 폴더 작업 기록(folder-*)은 개수 제한에서 빼고 오래된 것만 지운다. 진행 중인 폴더 번역이
+    # 파일별 기록에 밀려 지워지지 않게 한다.
+    paths = sorted((path for path in root.glob('*.sqlite3') if not path.name.startswith('folder-')),
+                   key=lambda p:p.stat().st_mtime,reverse=True)
     cutoff=time.time()-age_days*86400
+    for path in root.glob('folder-*.sqlite3'):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
     for idx,path in enumerate(paths):
         try:
             if idx >= keep or path.stat().st_mtime < cutoff:

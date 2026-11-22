@@ -74,3 +74,27 @@ class SettingsStore:
             appearance['theme'] = theme
             return data
         self.store.update(change)
+
+    # 번역 도구에서 지난번에 고른 값(언어·모델·고급 설정). 다음에 열 때 그대로 채워 선택을 줄인다.
+    TRANSLATION_KEYS = {'target': str, 'model': str, 'source': str, 'kind': str, 'style': str,
+                        'shared': bool, 'resume': bool, 'keep_failed': bool, 'precise': bool,
+                        'stage': bool, 'advanced': bool}
+
+    def translation_preferences(self) -> dict:
+        data = schema_one(self.store.read())
+        value = data.get('translation', {})
+        if not isinstance(value, dict):
+            return {}
+        return {key: item for key, item in value.items()
+                if key in self.TRANSLATION_KEYS and isinstance(item, self.TRANSLATION_KEYS[key])
+                and (not isinstance(item, str) or len(item) <= 300)}
+
+    def set_translation_preferences(self, values: dict) -> None:
+        clean = {key: item for key, item in dict(values).items()
+                 if key in self.TRANSLATION_KEYS and isinstance(item, self.TRANSLATION_KEYS[key])
+                 and (not isinstance(item, str) or len(item) <= 300)}
+        def change(data):
+            data = schema_one(data)
+            data['translation'] = clean
+            return data
+        self.store.update(change)

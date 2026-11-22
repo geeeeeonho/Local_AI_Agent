@@ -66,7 +66,10 @@ class TranslationTests(unittest.TestCase):
             self.assertTrue(done.output.exists())
             self.assertIn('Alice: 안녕하세요 {name}!',done.text)
             self.assertIn('Alice: Hello',path.read_text(encoding='utf-8'))
-            with self.assertRaises(FileExistsError): service.translate_file(path,model='test-local:1')
+            again=service.translate_file(path,model='test-local:1')        # 기본 위치가 차 있으면 번호를 붙인다
+            self.assertEqual(again.output.name,'scene.ko (2).txt')
+            with self.assertRaises(FileExistsError):                        # 직접 지정한 경로는 덮어쓰지 않는다
+                service.translate_file(path,model='test-local:1',output_path=done.output)
             with self.assertRaises(ValueError): service.translate_file(path,model='test-local:1',output_path=path)
 
     def test_cancel_before_write(self):

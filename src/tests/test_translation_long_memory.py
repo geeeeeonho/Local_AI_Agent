@@ -273,8 +273,10 @@ class MoreBoundaryTests(unittest.TestCase):
             out.write_text('keep',encoding='utf-8')
             translator=TranslationService(FakeInference(),lambda _:FakeChat(),
                                           checkpoint_dir=root/'state')
+            result=translator.translate_file(path,model='mock-local:latest')
+            self.assertEqual(result.output.name,'a.ko (2).txt')          # 기본 위치가 차 있으면 번호를 붙임
             with self.assertRaises(FileExistsError):
-                translator.translate_file(path,model='mock-local:latest')
+                translator.translate_file(path,model='mock-local:latest',output_path=out)
             self.assertEqual(out.read_text(encoding='utf-8'),'keep')
 
 class AdditionalIntegrityTests(unittest.TestCase):

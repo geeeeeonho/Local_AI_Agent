@@ -216,7 +216,8 @@ class DesktopWindow(TranslationController, ToolsController):
     def _handle_event(self,event):
         data=event.payload
         if event.topic=='runtime.progress' and data.get('service')=='translator':
-            if hasattr(self,'translation_status'):
+            # 작업이 끝난 뒤 늦게 처리된 진행 이벤트가 완료/실패 표시를 덮어쓰지 않게 한다.
+            if hasattr(self,'translation_status') and self.runner.busy('tools.translate'):
                 self.translation_say('Working',str(data.get('message') or '번역 중...'))
                 if isinstance(data.get('total'),int):
                     self.set_translation_progress(data.get('done') or 0,data['total'],data.get('eta') or '')
