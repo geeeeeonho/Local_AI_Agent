@@ -113,7 +113,7 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
             if not _write_policy(policy_path, policy):
                 raise RuntimeError("관리 정책 갱신에 실패했습니다.")
         # Reapply the same protection to pre-existing explicit child grants.
-        program_security.ensure(root, policy, log=info)
+        program_security.ensure(root, policy, log=info, force=True)
         if not app_step.deploy(project_root, app_dir):
             raise RuntimeError("보호된 공용 프로그램 업데이트에 실패했습니다.")
         reasons = program_security.verify(root, policy)
