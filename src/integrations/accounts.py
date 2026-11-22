@@ -119,6 +119,10 @@ class AccountAdmin:
         if windows.lockable_root(self.root) and not acl.succeeded(
                 acl.run(windows.lock_root_command(self.root, policy), timeout=600)):
             raise RuntimeError('공용 폴더 권한을 갱신하지 못했습니다: %s' % self.root)
+        # Removing a LocalAI admin must also remove ownership and explicit
+        # grants they may hold on app/ files, not only the root folder ACL.
+        from integrations.windows import program_security
+        program_security.ensure(self.root, policy, log=log, force=True)
         return ('%s 계정을 LocalAI 관리자%s. 그룹 변경은 그 계정이 다시 로그인하면 적용됩니다.'
                 % (user['name'], '로 지정했습니다' if admin else '에서 해제했습니다'))
 
@@ -152,6 +156,10 @@ class AccountAdmin:
         if failed:
             raise RuntimeError('일부 공용 폴더 권한을 바꾸지 못했습니다: %s'
                                % ', '.join(command[1] for command in failed[:3]))
+        # Reset executable subtree inheritance after changing the read/execute
+        # principal. Never change users/ or models/ with this repair.
+        from integrations.windows import program_security
+        program_security.ensure(self.root, policy, log=log, force=True)
         if mode == machine.ACCESS_MEMBERS:
             return ('이제 LocalAI 관리자와 허용된 계정만 사용할 수 있습니다. '
                     '허용한 계정은 다시 로그인해야 적용됩니다.')

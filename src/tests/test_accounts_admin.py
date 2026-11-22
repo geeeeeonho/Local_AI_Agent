@@ -38,6 +38,9 @@ def machine_root(tmp_path, monkeypatch):
         'administrators': set()})
     monkeypatch.setattr(windows, 'run_as_admin',
                         lambda script, **kw: state['calls'].append(('uac', script)) or True)
+    from integrations.windows import program_security
+    monkeypatch.setattr(program_security, 'ensure', lambda root, policy, **kw:
+                        state['calls'].append(('protect', policy)) or True)
     monkeypatch.setattr(acl, 'run', lambda command, **kw: state['calls'].append(('acl', command))
                         or types.SimpleNamespace(returncode=0, stdout='', stderr=''))
     return root, state
@@ -82,6 +85,8 @@ def test_removing_an_administrator_also_removes_their_explicit_grant(machine_roo
     commands = [call[1] for call in state['calls'] if call[0] == 'acl']
     assert ['icacls', str(root), '/remove:g', '*' + BOB, '/Q'] in commands
     assert not machine.load(root / machine.POLICY_FILENAME).is_admin(BOB)
+    protected = [call[1] for call in state['calls'] if call[0] == 'protect']
+    assert protected and not protected[-1].is_admin(BOB)
 
 
 def test_the_last_administrator_cannot_be_removed(machine_root):
@@ -122,6 +127,8 @@ def test_limiting_access_moves_every_shared_grant_to_the_group(machine_root):
                           ('users', '(RD,X,AD,RA,REA)')):
         assert '*%s:%s' % (USERS, rights) in granted, place
     assert machine.load(root / machine.POLICY_FILENAME).principal() == USERS
+    assert any(call[0] == 'protect' and call[1].principal() == USERS
+               for call in state['calls'])
     # And back.
     state['calls'].clear()
     AccountAdmin(root).set_access(machine.ACCESS_EVERYONE)

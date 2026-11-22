@@ -112,6 +112,29 @@ LocalAI는 Ollama를 `C:\LocalAI\ollama`에서 직접 관리하고 시작할 때
 
 디버그 환경에서 다른 LLMfit 바이너리를 확인해야 할 때만 `LOCAL_AI_LLMFIT_EXE`를 절대 경로로 지정할 수 있습니다. 공식 배포 실행 파일과 라이선스는 각 사용자가 별도로 검증할 수 있습니다.
 
+## 공용 프로그램 파일 보호 (Windows)
+
+LocalAI는 하나의 `C:\\LocalAI\\app` 프로그램을 모든 Windows 계정이 실행하되, 일반 사용자에게는 **읽기·실행 권한만** 부여합니다. `C:\\LocalAI\\environment` 및 `C:\\LocalAI\\ollama`도 같은 정책을 따릅니다. 프로그램을 설치·업데이트할 수 있는 계정은 LocalAI 관리자 및 Windows 관리자뿐입니다.
+
+- 관리자 Setup은 프로그램을 복사하기 **전에** Windows UAC로 공용 루트의 상속 ACL을 차단하고, 남아 있는 **명시적 쓰기·삭제·권한 변경 허용 ACE**를 제거합니다. 보호 대상 하위 폴더는 재귀적으로 ACL과 소유권을 정리하고, 설치 프로그램이 파일을 추가한 뒤에도 다시 검증합니다.
+- **UAC 승인 취소·ACL 적용/검증 실패 시 설치/업데이트를 중단**합니다. 보안 적용 없이 설치에 성공했다고 표시하지 않습니다. 일반 사용자 Setup은 본인 기록/설정만 준비하며 공용 프로그램을 덮어쓰지 않습니다.
+- `C:\\LocalAI\\models`는 기존대로 **공용 모델 설치·삭제 가능** 영역입니다. `C:\\LocalAI\\users\\<계정>`에는 각 계정의 개인 권한이 유지됩니다. `environment\\desktop-runtime.lock` 파일에는 동시 실행 조정을 위한 최소 읽기/쓰기 권한만 예외로 부여합니다.
+- LocalAI 관리자를 해제하거나 계정 사용 범위를 변경할 때도 프로그램 파일 권한을 다시 보호합니다. 단, Windows 자체 관리자 권한을 소유한 사용자는 UAC 승인 후 ACL을 변경할 수 있습니다.
+
+### 현재 PC의 실제 권한 확인
+
+설치/복구 직후 PowerShell에서 다음처럼 확인할 수 있습니다. **실제 파일 ACL이 중요하며, 코드가 바뀌었다고 이미 설치된 폴더 권한이 자동으로 변경되는 것은 아닙니다.**
+
+```powershell
+icacls C:\LocalAI
+icacls C:\LocalAI\app
+icacls C:\LocalAI\environment
+icacls C:\LocalAI\ollama
+icacls C:\LocalAI\models
+```
+
+`app`, `environment`, `ollama`의 일반 사용자 권한은 `(RX)`이어야 하며 `(M)`, `(F)`, `(W)`가 있으면 안전하지 않습니다. 관리자 Setup (`RUN.bat --install`)을 실행해 승인·복구하십시오. **`models`의 일반 사용자 `(M)`은 의도된 동작**입니다. 별도의 원본 Git checkout 폴더는 이 보호 범위에 포함되지 않으므로, 관리자 계정만 수정할 수 있는 신뢰된 원본에서 설치해야 합니다.
+
 ### 작고 편안한 기본 화면 (연회색 테마)
 
 LocalAI Studio와 Chat, Interpreter, Setup 창은 새 사용자 기준 **밝은 회색 테마**로 시작합니다. 기본 창은 1100×720 크기로 열며 최소 880×560까지 줄일 수 있습니다. 기존에 저장한 다크/라이트 개인 설정은 자동으로 덮어쓰지 않습니다. Settings에서 언제든 바꿀 수 있습니다.
