@@ -32,6 +32,7 @@ def test_repair_script_removes_every_old_explicit_ace_and_takes_owner():
     assert "app" in script and "environment" in script and "ollama" in script
     assert "models" not in script and "users" not in script
     assert "desktop-runtime.lock" in script and "(R,W)" in script
+    assert "machine.json" in script and "Unable to reset policy ACL" in script
     assert script.rstrip().endswith("exit $failed")
 
 
@@ -129,3 +130,15 @@ def test_force_repair_runs_even_if_sampled_acls_are_safe(tmp_path, monkeypatch):
     assert security.ensure(root, POLICY, force=True) is True
     assert len(seen) == 1
     assert "icacls.exe $folder /reset" in seen[0]
+
+
+def test_machine_policy_file_is_a_protected_program_control_file(tmp_path, monkeypatch):
+    root = tmp_path / "LocalAI"
+    root.mkdir()
+    (root / "machine.json").write_text(POLICY.to_json())
+    monkeypatch.setattr(acl, "owner_sid", lambda path: "BA")
+    monkeypatch.setattr(acl, "saved_sddl", lambda path:
+                        CHILD_SDDL + "(A;OICI;GW;;;BU)"
+                        if Path(path).name == "machine.json" else ROOT_SDDL)
+    problems = security.verify(root, POLICY)
+    assert any("machine.json" in item for item in problems)
