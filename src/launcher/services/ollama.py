@@ -490,7 +490,8 @@ class OllamaService:
 
     def _state_matches(self, pid: int) -> bool:
         try:
-            data = json.loads(self.runtime_state_file.read_text(encoding="utf-8"))
+            from core import vault
+            data = json.loads(vault.read_text(self.runtime_state_file))
             return (
                 int(data.get("pid", -1)) == int(pid)
                 and _same_path(Path(data["executable"]), self.exe)
