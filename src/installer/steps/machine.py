@@ -78,13 +78,17 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
                 "Windows 관리자 승인과 ACL 보호를 완료하세요.")
         section("LocalAI 관리자 설정 (처음 설치)")
         info("먼저 Windows 권한을 잠근 뒤 공용 프로그램을 배포합니다.")
-        script = windows.first_install_script(sid, root, app_dir)
-        # Never deploy executable files to a writable shared folder while
-        # awaiting a UAC answer. A declined UAC is a failed installation.
-        if not script or not windows.run_as_admin(script, log=info):
+        # A per-attempt random file lets hidden UAC PowerShell report which
+        # group/ACL stage failed, without weakening the security boundary.
+        from uuid import uuid4
+        report = root / ('.localai-admin-' + uuid4().hex + '.txt')
+        script = windows.first_install_script(sid, root, app_dir, report_path=report)
+        if not script or not windows.run_as_admin(
+                script, log=info, report_path=report):
             raise RuntimeError(
-                "Windows 관리자 승인이 취소되었거나 프로그램 보호에 실패했습니다. "
-                "공용 프로그램 설치를 중단합니다.")
+                "LocalAI 초기 관리자 설정 실패: UAC 승인 또는 Windows 그룹/ACL "
+                "적용 오류입니다. 위 상세 실패 단계 로그를 확인하세요. "
+                "보호되지 않은 프로그램 설치는 진행하지 않습니다.")
         policy = machine.new_policy(
             sid, admins_group_sid=windows.group_sid(machine.ADMINS_GROUP),
             users_group_sid=windows.group_sid(machine.USERS_GROUP))
@@ -131,4 +135,36 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
     return "user"
 
 
-__all__ = ["current_role", "ensure"]
+
+def bootstrap_first_run(root, app_dir, project_root, env) -> bool:
+    """First GUI launch automatically registers its initial LocalAI admin.
+
+    Returns False for an existing installed policy. This never grants a Windows
+    administrator token: actual directory ACL changes still require UAC.
+    """
+    from core import machine
+    from integrations.windows import acl
+    if not acl.on_windows():
+        return False
+    root = Path(root)
+    policy_file = root / machine.POLICY_FILENAME
+    if policy_file.exists():
+        # A broken/unreadable policy is not a fresh installation and must
+        # never let another user claim the existing LocalAI installation.
+        if machine.load(policy_file) is None:
+            raise RuntimeError(
+                "LocalAI 관리자 정책 파일을 읽지 못했습니다. 최초 설치가 아니라 "
+                "정책 복구가 필요하므로 자동 관리자 등록을 거부합니다.")
+        return False
+    root.mkdir(parents=True, exist_ok=True)
+    if ensure(root, Path(app_dir), Path(project_root)) != "admin":
+        raise RuntimeError("최초 LocalAI 관리자 등록이 완료되지 않았습니다.")
+
+    # Make the private user folder + shared runtime skeleton before launching
+    # Studio, so a new user may open the main UI without --install.
+    from installer.core.filesystem import create_environment
+    create_environment(Path(env), manage_shared=True)
+    return True
+
+
+__all__ = ["current_role", "ensure", "bootstrap_first_run"]
