@@ -302,3 +302,39 @@ class FolderTests(unittest.TestCase):
             self.assertEqual([rel for rel, _ in result.failed], ['bad.json'])   # 하나 실패해도 계속
             again = service.translate_folder(src, model='m:1')                   # 다시 실행하면 건너뜀
             self.assertEqual(len(again.translated), 0)
+
+
+class FolderContextTests(unittest.TestCase):
+    """폴더 전체를 한 작품으로: 메모리 1번 생성, 1→2→10 순서, 앞 파일 줄거리 전달."""
+
+    def run_folder(self, shared):
+        calls = []
+        class Spy:
+            def chat(self, name, messages, temperature=.2):
+                system, prompt = messages[0]['content'], messages[-1]['content']
+                if system.startswith('You prepare'):
+                    calls.append('plan')
+                    return json.dumps({'summary': 's', 'terms': {'佐伯': '사에키'}}, ensure_ascii=False)
+                if system.startswith('Summarize'):
+                    return json.dumps({'summary': 'after ' + json.loads(prompt)['recent_translation'][-1]['source']})
+                data = json.loads(prompt)
+                calls.append((data.get('current_file'), json.loads(data['document_memory'])['story_so_far']))
+                return json.dumps({'translations': ['사에키 문장' for _ in data['items']]}, ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'novel'
+            folder.mkdir()
+            for name, word in (('ch10', 'じゅう'), ('ch2', 'に'), ('ch1', 'いち')):
+                (folder / (name + '.txt')).write_text('佐伯が来た' + word + '。\n', encoding='utf-8')
+            TranslationService(Inference(), lambda _: Spy(), checkpoint_dir=Path(tmp) / 'cp',
+                               protector=None).translate_folder(folder, model='m:1', shared_context=shared)
+        return calls
+
+    def test_shared_context_plans_once_and_passes_the_story_on(self):
+        calls = self.run_folder(True)
+        self.assertEqual(calls.count('plan'), 1)
+        batches = [c for c in calls if c != 'plan']
+        self.assertEqual([f for f, _ in batches], ['ch1.txt', 'ch2.txt', 'ch10.txt'])
+        self.assertIn('いち', batches[1][1])     # 2장은 1장 끝까지의 줄거리를 받는다
+
+    def test_individual_mode_plans_each_file(self):
+        self.assertEqual(self.run_folder(False).count('plan'), 3)

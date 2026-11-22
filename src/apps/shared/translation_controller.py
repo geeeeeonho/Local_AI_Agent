@@ -138,6 +138,7 @@ class TranslationController:
         self.set_translation_progress(0,0,'준비 중')
         clock={}
         folder_mode=Path(path).is_dir()
+        shared_context=self.translation_shared.get()
         current={'file':''}
         def progress(n,total):
             # 작업 스레드에서 호출된다. 화면 갱신은 이벤트로 Tk 스레드에 넘긴다.
@@ -161,7 +162,7 @@ class TranslationController:
                 folder_options.pop('path');output_dir=folder_options.pop('output_path')
                 return self.services.translator.translate_folder(
                     path,output_dir=output_dir,progress=progress,on_file=on_file,cancelled=stop,
-                    **folder_options)
+                    shared_context=shared_context,**folder_options)
             return self.services.translator.translate_file(**options,progress=progress,cancelled=stop)
         def unlock():
             if not self.translation_progress.get()>=100:
@@ -221,6 +222,13 @@ class TranslationController:
             if result.failed:
                 lines+=['','실패한 파일 (나머지는 계속 번역함)']+['  %s  — %s'%(rel,friendly_error(err))
                                                        for rel,err in result.failed]
+            memory=result.memory
+            if memory is not None:
+                glossary='\n'.join('  %s → %s'%pair for pair in memory.terms.items()) or '  (추출된 항목 없음)'
+                lines=['폴더 전체 메모리 (모든 파일이 함께 사용)','  요약: '+memory.summary,
+                       '  문체: '+memory.style,'  공유 용어집:',glossary,'']+lines
+            else:
+                lines=['파일마다 따로 번역했습니다(폴더 맥락 공유 꺼짐).','']+lines
             set_text(self.translation_memory_text,'\n'.join(lines))
             first=result.translated[0][1].text if result.translated else ''
             set_text(self.translation_result_text,first[:12000] or '번역한 파일이 없습니다.')

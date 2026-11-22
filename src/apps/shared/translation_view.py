@@ -28,6 +28,7 @@ def _variables(w):
     w.translation_resume=tk.BooleanVar(master=w.root,value=True)
     w.translation_keep_failed=tk.BooleanVar(master=w.root,value=True)
     w.translation_precise=tk.BooleanVar(master=w.root,value=False)
+    w.translation_shared=tk.BooleanVar(master=w.root,value=True)
     w.translation_progress=tk.DoubleVar(master=w.root,value=0)
     w.translation_status=tk.StringVar(master=w.root,value='1단계: 번역할 파일을 선택하세요.')
 
@@ -99,6 +100,9 @@ def build(parent,w,toolbar=None):
         row=line(options,label)
         ttk.Combobox(row,textvariable=variable,values=values,state='readonly').pack(
             side='left',fill='x',expand=True)
+    _check(options,'폴더 전체를 한 작품으로 번역 (폴더 선택 시)',w.translation_shared,
+           '폴더 전체에서 용어·인물·문체를 한 번 정해 모든 파일이 같이 쓰고, 파일 이름 순서(1장→2장→10장)로 '
+           '번역하며 앞 파일까지의 줄거리와 마지막 문장을 다음 파일로 넘깁니다. 끄면 파일마다 따로 번역합니다.')
     _check(options,'중단한 번역 이어하기',w.translation_resume,
            '같은 파일·설정이면 완료한 구간과 문서 메모리를 다시 씁니다.')
     _check(options,'실패한 구간은 원문 유지',w.translation_keep_failed,

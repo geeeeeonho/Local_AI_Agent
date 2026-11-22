@@ -51,6 +51,8 @@ class Result:
     model_calls: int = 0
     kept_lines: tuple[int, ...] = ()   # 검증에 실패해 원문을 유지한 줄 번호(1부터)
     review_lines: tuple[int, ...] = () # 원문 단어가 일부 남아 검토가 필요한 줄 번호
+    rolling: str = ''                  # 이 파일까지의 줄거리 요약(폴더 맥락 공유 시 다음 파일로 넘김)
+    tail: tuple = ()                   # 마지막 번역 몇 구간(다음 파일 첫 배치의 앞 문맥)
 
 # 모델 응답 형식을 Ollama 문법 제약(format)으로 강제한다.
 BATCH_SCHEMA = {'type':'object','properties':{'translations':{'type':'array','items':{'type':'string'}}},
@@ -242,6 +244,10 @@ def _ask(client,model,items,memory,target,style,kind,recent,doc,*,strict=False):
     relevant=' '.join(item['text']+' '+item['speaker'] for item in unit_details)
     data = {'target_language':LANGUAGES[target], 'document_memory':memory.prompt(relevant),
             'recent_translations':recent, 'items':unit_details}
+    if getattr(memory,'file_label',''):
+        # 폴더 전체를 한 작품으로 번역할 때: 지금 파일과, story_so_far가 앞 파일들의 줄거리임을 알린다.
+        data['current_file']=memory.file_label
+        data['note']='document_memory is shared by every file in this folder; story_so_far covers earlier files.'
     user=json.dumps(data,ensure_ascii=False)
     source_chars=sum(len(unit.text) for _,unit in items)
     think=getattr(memory,'think',False)
@@ -441,12 +447,26 @@ class FolderResult:
     failed: tuple = ()          # ((상대 경로, 오류), ...)
     copied: int = 0             # 번역 대상이 아니어서 그대로 복사한 파일 수
     count: int = 0              # 번역한 구간 수 합계
+    memory: object = None       # 폴더 맥락 공유 시 모든 파일이 함께 쓴 폴더 메모리
 
 
 def folder_output(folder, target):
     """폴더 단위 이름: 'docs' → 'docs.ko'. 안의 파일 이름은 원본 그대로 둔다."""
     folder = Path(folder)
     return folder.with_name(folder.name + '.' + CODES[target])
+
+
+def natural_key(path):
+    """chapter2 < chapter10 처럼 사람이 읽는 순서(폴더 맥락 공유 시 이 순서로 이야기가 이어진다)."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', str(path))]
+
+
+@dataclass(frozen=True)
+class _Combined:
+    """폴더 전체를 한 문서처럼 보이게 하는 묶음(폴더 메모리 계획용)."""
+    source: str
+    segments: tuple
+    selected: str
 
 
 def scan_folder(folder, exclude=None):
@@ -464,6 +484,7 @@ def scan_folder(folder, exclude=None):
             if name.startswith('.') or path.is_symlink() or name.startswith('.localai-translation-'):
                 continue
             (files if path.suffix.lower() in SUPPORTED else others).append(path)
+    files.sort(key=lambda path: natural_key(path.relative_to(folder)))
     return files, others
 
 
@@ -519,7 +540,9 @@ class TranslationService:
                        output_path=None,progress:Callable[[int,int],None]|None=None,
                        cancelled:Callable[[],bool]|None=None, resume=True,
                        keep_failed=False, glossary=None, precise=False,
-                       source_language='auto') -> Result:
+                       source_language='auto', shared=None) -> Result:
+        """shared: 폴더 맥락 공유용 {'memory','lead_in','label','key'}. 주면 문서 메모리를 새로 만들지
+        않고 폴더 메모리(용어·인물·문체·앞 파일까지의 줄거리)를 이어받는다."""
         user_terms=parse_glossary(glossary) if isinstance(glossary,str) else dict(glossary or {})
         self._abort.clear()
         user_cancelled=cancelled
@@ -560,6 +583,8 @@ class TranslationService:
             extra['terms']=sorted(user_terms.items())
         if source_language not in AUTO_SOURCE:
             extra['source']=source_name
+        if shared:
+            extra['context']=shared['key']
         # 예전 체크포인트 키와 호환: 용어집만 있으면 예전 형식 그대로
         extra=(extra['terms'] if set(extra)=={'terms'} else extra) or None
         key=job_key(path,output,source,model,target,doc.selected,style,stage,extra=extra)
@@ -577,9 +602,16 @@ class TranslationService:
         success=False
         try:
             memory=checkpoint.memory()
+            if memory is None and shared:
+                base=shared['memory']
+                memory=TranslationMemory(summary=base.summary,style=base.style,terms=dict(base.terms),
+                                         speakers=dict(base.speakers),rolling=base.rolling)
+                checkpoint.save_memory(memory)
             if memory is None:
                 memory=initial_memory(client,model,doc,target,style,cancelled=cancelled)
                 checkpoint.save_memory(memory)
+            memory.file_label=shared['label'] if shared else ''
+            lead_in=list(shared.get('lead_in') or ()) if shared else []
             # 사용자 용어가 모델이 만든 용어보다 우선한다(저장하지 않고 실행마다 적용).
             memory.terms.update(user_terms)
             memory.enforced=dict(user_terms)
@@ -602,6 +634,8 @@ class TranslationService:
                     continue
                 items=[(idx,units[idx]) for idx in pending]
                 recent=_recent(units,complete,pending[0])
+                if lead_in and len(recent)<4:          # 파일 첫머리: 앞 파일 마지막 번역을 문맥으로
+                    recent=lead_in[-(4-len(recent)):]+recent
                 before=len(failures)
                 translated=_translate_batch(client,model,items,memory,target,style,
                                             doc.selected,recent,maps,doc,cancelled=cancelled,
@@ -625,6 +659,11 @@ class TranslationService:
             if cancelled and cancelled():
                 raise InterruptedError('Translation cancelled; progress is saved')
             output_text=_assemble(doc,units,prefixes,maps,complete)
+            latest=sorted(complete)[-10:]
+            if shared:
+                # 다음 파일이 이어받도록 이 파일 끝까지의 줄거리를 갱신한다(파일당 요청 1회).
+                update_rolling(client,model,memory,[(units[i].text,complete[i]) for i in latest],
+                               cancelled=cancelled)
             current_source,_=read_source(path)
             if current_source != source:
                 raise RuntimeError('Source file changed while translating; result was not saved')
@@ -636,9 +675,10 @@ class TranslationService:
                 return tuple(sorted({doc.source.count('\n',0,doc.segments[units[i].segment_index].start)+1
                                      for i in indexes if i<len(units)}))
             kept=lines(failures)
+            tail=tuple({'before':units[i].text[:170],'after':complete[i][:180]} for i in latest[-4:])
             return Result(output,output_text,doc.detected,doc.selected,len(units),
                           memory.summary,memory.style,dict(memory.terms),resumed,client.calls,kept,
-                          lines(review-failures))
+                          lines(review-failures),memory.rolling,tail)
         finally:
             self._active=None
             checkpoint.close(success=success)
@@ -658,7 +698,41 @@ class TranslationService:
                 rows.append((rel,'error: '+str(exc),0))
         return rows,len(others)
 
-    def translate_folder(self,folder,*,output_dir=None,copy_others=True,
+    def _folder_memory(self,folder,output,plan,options,cancelled):
+        """폴더 전체 표본·반복 고유명사로 공유 메모리를 한 번 만든다(중단 후 재실행 시 재사용)."""
+        import hashlib
+        model=local_model_name(options['model'])
+        listing=[(str(path.relative_to(folder)),path.stat().st_size,path.stat().st_mtime_ns)
+                 for path,_size,_doc,error in plan if not error]
+        material=json.dumps({'folder':str(folder),'output':str(output),'model':model,
+                             'target':options.get('target','한국어'),'style':options.get('style','natural'),
+                             'files':listing},ensure_ascii=False,sort_keys=True)
+        key='folder-'+hashlib.sha256(material.encode('utf-8')).hexdigest()
+        point=Checkpoint(self.checkpoint_dir,key,protector=self.protector)
+        try:
+            memory=point.memory()
+        except Exception:
+            memory=None
+        if memory is None:
+            endpoint=self.inference.ensure_ready()
+            available=self.inference.local_models()
+            if available is None or model.lower() not in {str(x).lower() for x in available}:
+                point.close()
+                raise RuntimeError('Selected model is not available locally')
+            docs=[doc for _path,_size,doc,error in plan if not error and doc is not None]
+            kinds=[doc.selected for doc in docs]
+            combined=_Combined(
+                # 고유명사 추출용 원문은 파일당 2MB, 합계 32MB까지만 본다.
+                source='\n'.join(doc.source[:2_000_000] for doc in docs)[:32_000_000],
+                segments=tuple(segment for doc in docs for segment in doc.segments),
+                selected=max(set(kinds),key=kinds.count) if kinds else 'general')
+            client=_CountedClient(self.client_factory(endpoint),cancelled)
+            memory=initial_memory(client,model,combined,options.get('target','한국어'),
+                                  options.get('style','natural'),cancelled=cancelled)
+            point.save_memory(memory)
+        return key,point,memory
+
+    def translate_folder(self,folder,*,output_dir=None,copy_others=True,shared_context=True,
                          progress:Callable[[int,int],None]|None=None,
                          on_file:Callable[[int,int,str],None]|None=None,
                          cancelled:Callable[[],bool]|None=None,**options) -> FolderResult:
@@ -668,6 +742,9 @@ class TranslationService:
         - 파일 하나가 실패해도 나머지는 계속한다. Ollama 연결 끊김처럼 모든 파일에 해당하는
           오류는 즉시 멈춘다.
         - copy_others=True면 번역 대상이 아닌 파일(그림 등)도 그대로 복사해 폴더를 완성한다.
+        - shared_context=True면 폴더 전체를 한 작품으로 본다: 폴더 전체에서 용어·인물·문체 메모리를
+          한 번 만들어 모든 파일이 공유하고, 파일을 이름의 자연 순서(1장→2장→10장)로 번역하며
+          앞 파일까지의 줄거리 요약과 마지막 문장들을 다음 파일로 넘긴다.
         """
         folder=Path(folder).resolve()
         if not folder.is_dir():
@@ -689,12 +766,37 @@ class TranslationService:
             try:
                 doc=self.inspect(path,kind,stage)
                 size=len(_units(doc)[0]) if doc.segments else 0
-                plan.append((path,size,None));total+=size
+                plan.append((path,size,doc if shared_context else None,None));total+=size
             except ValueError as exc:
-                plan.append((path,0,str(exc)))
+                plan.append((path,0,None,str(exc)))
         total=max(total,1)
         output.mkdir(parents=True,exist_ok=True)
         translated,skipped,failed=[],[],[]
+        point=None;folder_memory=None;carry={'rolling':'','tail':()}
+        if shared_context and any(size for _path,size,_doc,error in plan if not error):
+            _key,point,folder_memory=self._folder_memory(folder,output,plan,options,cancelled)
+            carry['rolling']=folder_memory.rolling
+        plan=[(path,size,error) for path,size,_doc,error in plan]   # 원문 메모리 해제
+        def remember(rel,result):
+            carry['rolling'],carry['tail']=result.rolling,tuple(result.tail)
+            if point is not None:
+                point.set('after:'+rel,json.dumps({'rolling':result.rolling,'tail':list(result.tail)},
+                                                  ensure_ascii=False))
+        def recall(rel):
+            value=point.get('after:'+rel) if point is not None else None
+            if value:
+                data=json.loads(value)
+                carry['rolling'],carry['tail']=data.get('rolling',''),tuple(data.get('tail',()))
+        try:
+            return self._translate_plan(folder,output,plan,total,options,copy_others,progress,on_file,
+                                        cancelled,translated,skipped,failed,others,point,folder_memory,
+                                        carry,remember,recall)
+        finally:
+            if point is not None:
+                point.close(success=not failed and len(translated)+len(skipped)==len(plan))
+
+    def _translate_plan(self,folder,output,plan,total,options,copy_others,progress,on_file,cancelled,
+                        translated,skipped,failed,others,point,folder_memory,carry,remember,recall):
         done=0
         def report(value):
             if progress:
@@ -709,6 +811,7 @@ class TranslationService:
             if error:
                 failed.append((str(rel),error));continue
             if dest.exists():
+                recall(str(rel))
                 skipped.append((str(rel),'already translated'));done+=size;report(done);continue
             if size==0:
                 skipped.append((str(rel),'no translatable text'))
@@ -718,9 +821,18 @@ class TranslationService:
             dest.parent.mkdir(parents=True,exist_ok=True)
             base=done
             try:
-                result=self.translate_file(path,output_path=dest,cancelled=cancelled,
+                shared=None
+                if folder_memory is not None:
+                    base_memory=TranslationMemory(summary=folder_memory.summary,style=folder_memory.style,
+                                                  terms=dict(folder_memory.terms),
+                                                  speakers=dict(folder_memory.speakers),
+                                                  rolling=carry['rolling'])
+                    shared={'memory':base_memory,'lead_in':carry['tail'],'label':str(rel),
+                            'key':point.path.stem}
+                result=self.translate_file(path,output_path=dest,cancelled=cancelled,shared=shared,
                                            progress=lambda n,_t,base=base:report(base+n),**options)
                 translated.append((str(rel),result))
+                remember(str(rel),result)
             except InterruptedError:
                 raise
             except FileExistsError:
@@ -747,4 +859,4 @@ class TranslationService:
                 dest.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(path,dest);copied+=1
         return FolderResult(output,tuple(translated),tuple(skipped),tuple(failed),copied,
-                            sum(result.count for _,result in translated))
+                            sum(result.count for _,result in translated),folder_memory)
