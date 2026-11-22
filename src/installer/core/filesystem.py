@@ -182,7 +182,17 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
         "user_data":             account / USER_DATA_DIRNAME,
         "session_logs":          account / LOGS_DIRNAME,
     }
+    # Standard-user Setup provisions private account state only, never
+    # missing directories under the administrator-owned runtime.
+    shared_names = {
+        "env", "ollama", "models", "chat", "agent", "sandbox",
+        "open_interpreter", "open_interpreter_bin", "searxng", "scripts",
+    }
     for name, p in paths.items():
+        if not manage_shared and name in shared_names:
+            if not p.is_dir():
+                warn("공용 구성요소가 없습니다 (관리자 Setup 필요): %s" % p)
+            continue
         try:
             p.mkdir(parents=True, exist_ok=True)
         except PermissionError as exc:
@@ -225,7 +235,7 @@ def create_environment(env: Path, model_dir: Optional[Path] = None,
 
     runtime_lock = env / RUNTIME_LOCK_NAME
     try:
-        if not runtime_lock.exists():
+        if not runtime_lock.exists() and manage_shared:
             runtime_lock.write_bytes(b"\0")
         if manage_shared and not ensure_shared_runtime_lock_access(runtime_lock):
             warn("공용 런타임 잠금 파일 권한 설정 실패: %s" % runtime_lock)
