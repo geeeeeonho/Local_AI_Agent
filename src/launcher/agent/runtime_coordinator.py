@@ -34,12 +34,25 @@ def stop_owned_search() -> bool:
     try:
         result = DockerService.run(
             ["inspect", "--format", "{{.Id}}", owned], timeout=10)
-        if result is None:
+        if result is None or result.returncode != 0:
+            # Distinguish an already removed container from a temporary Docker
+            # CLI failure. Never clear the ownership token while a daemon is
+            # responsive and the real state cannot be verified.
+            detail = str(getattr(result, "stderr", "") or "").lower()
+            missing = ("no such object" in detail or "no such container" in detail)
+            if missing:
+                _AGENT_SEARCH_CONTAINER_ID = None
+                return True
+            try:
+                daemon_alive = DockerService.daemon_alive()
+            except Exception:
+                daemon_alive = None
+            if daemon_alive is False:
+                # A stopped daemon cannot be serving our container, and
+                # keeping the ownership token would prevent Studio shutdown.
+                _AGENT_SEARCH_CONTAINER_ID = None
+                return True
             return False
-        if result.returncode != 0:
-            # Already removed, or daemon stopped: nothing to terminate.
-            _AGENT_SEARCH_CONTAINER_ID = None
-            return True
         if (result.stdout or "").strip() != owned:
             return False
         if not DockerService.stop_container(owned, timeout=3):
