@@ -25,8 +25,12 @@ def fit_for(tag, fallback_gib, analysis=None):
             "source": "catalogue" if fallback is not None else "unknown",
             "tps": None, "quant": "", "context": None,
         }
+    # In offload modes memory_required_gb is a combined memory estimate,
+    # not a per-GPU VRAM measurement. Do not label it as GPU consumption.
     return {
-        "need_gib": row["memory_gb"], "mode": row["mode"],
+        "need_gib": row["memory_gb"] if row["mode"] == "gpu" else None,
+        "total_memory_gib": row["memory_gb"],
+        "mode": row["mode"],
         "fit": row["fit"], "source": "llmfit",
         "tps": row.get("tps"), "quant": row.get("quant", ""),
         "context": row.get("context"),
