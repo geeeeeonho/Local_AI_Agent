@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 import project_paths
-from core import ollama_paths
+from core import ollama_paths, vault
 from project_paths import MODEL_STORAGE_DIR
 from .. import config
 
@@ -169,10 +169,9 @@ class OllamaService:
 
     def _state_pid(self) -> Optional[int]:
         try:
-            from core import vault
             data = json.loads(vault.read_text(self.runtime_state_file))
             return int(data["pid"])
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, vault.VaultError):
             return None
 
     def _launched_by_us(self, pid: Optional[int]) -> bool:
@@ -490,7 +489,6 @@ class OllamaService:
 
     def _state_matches(self, pid: int) -> bool:
         try:
-            from core import vault
             data = json.loads(vault.read_text(self.runtime_state_file))
             return (
                 int(data.get("pid", -1)) == int(pid)
@@ -498,7 +496,7 @@ class OllamaService:
                 and _same_path(Path(data["model_storage"]), self.model_dir)
                 and int(data.get("port", -1)) == int(config.OLLAMA_PORT)
             )
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError, vault.VaultError):
             return False
 
     def _write_runtime_state(self, pid: int) -> None:
