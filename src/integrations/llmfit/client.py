@@ -67,6 +67,7 @@ def _models(data):
         if memory is None or memory <= 0:
             continue
         mode = str(raw.get("run_mode") or "").strip().casefold()
+        mode = mode.replace(" ", "").replace("-", "")
         mode = "gpu" if mode == "gpu" else "offload" if any(
             key in mode for key in ("cpu+gpu", "gpu+cpu", "offload", "moe")
         ) else "cpu" if mode == "cpu" else "unknown"
