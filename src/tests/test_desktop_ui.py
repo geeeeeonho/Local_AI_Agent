@@ -339,16 +339,21 @@ def test_the_activity_log_folds_away_and_comes_back(ui):
     w.root.update();w.root.wm_geometry('880x560')
     pump(w,lambda:w.root.winfo_height()<=560)
     w.navigate('models');pump(w)
-    opened=w.page_area.winfo_height()
-    w.toggle_activity();pump(w)
+    assert not w._activity_visible
     folded=w.page_area.winfo_height()
+    w.toggle_activity();pump(w)
+    opened=w.page_area.winfo_height()
     assert folded>opened,'folding the log has to give its space to the page'
     w.toggle_activity();pump(w)
-    assert w.page_area.winfo_height()==opened,'and unfolding has to give it back'
+    assert w.page_area.winfo_height()==folded,'and folding it again restores the workspace'
 
 
 def test_the_folded_choice_is_remembered(ui):
     w,svc,backend=ui
+    assert svc.settings.activity_visible() is False
+    w.toggle_activity()
+    pump(w,lambda:not w.runner.busy())
+    assert svc.settings.activity_visible() is True
     w.toggle_activity()
     pump(w,lambda:not w.runner.busy())
     assert svc.settings.activity_visible() is False
