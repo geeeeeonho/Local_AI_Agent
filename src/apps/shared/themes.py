@@ -50,13 +50,13 @@ PALETTES = {
         danger='#efa19b', info='#a4b7ce', warning='#d4b98a', success='#9cc6b0',
         solid_ink='#161c25'),
     'light': Palette(
-        name='light', bg='#f5f7fa', surface='#ffffff', sidebar='#eef1f5',
-        input='#ffffff', fg='#263344', muted='#5a687a', border='#c8d1dd',
-        hover='#e5ebf2', selected='#dce5ef',
-        chat='#49617d', chat_soft='#edf1f6',
-        agent='#49617d', agent_soft='#edf1f6',
-        manage='#596776', manage_soft='#f0f2f5',
-        danger='#a94448', info='#49617d', warning='#895f26', success='#356e55',
+        name='light', bg='#f2f3f5', surface='#fafbfc', sidebar='#e9ecef',
+        input='#ffffff', fg='#25313d', muted='#526071', border='#cad1d8',
+        hover='#e0e6ec', selected='#d8e2ec',
+        chat='#425b73', chat_soft='#ebf0f4',
+        agent='#425b73', agent_soft='#ebf0f4',
+        manage='#4a5867', manage_soft='#f1f3f5',
+        danger='#a33a42', info='#425b73', warning='#815621', success='#246a4a',
         solid_ink='#ffffff'),
 }
 
@@ -79,7 +79,7 @@ _COLOR_OPTIONS = ('background', 'foreground', 'activebackground',
 
 
 class ThemeController:
-    def __init__(self, root, name='dark'):
+    def __init__(self, root, name='light')
         if name not in PALETTES:
             raise ValueError('unknown desktop theme')
         self.root = root
