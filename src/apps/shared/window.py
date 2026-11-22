@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from types import SimpleNamespace
@@ -46,6 +47,10 @@ class DesktopWindow(TranslationController, ToolsController):
         self._unsubscribe = services.events.subscribe('*', self._enqueue)
         self.closing = False;self.closed = False;self._shutdown_started = False
         self._polling = start_polling;self._ticks = 0
+        # 타이머 횟수가 아니라 실제 경과 시간으로 예약합니다. 유휴 시 타이머를
+        # 느리게 해도 상태 점검 간격이 의도치 않게 늘어나지 않습니다.
+        self._next_health_at = 0.0
+        self._next_theme_at = time.monotonic() + 60.0
         self.pages = {};self.page_scrolls = {};self.hosts = {};self.presenters = {};self.nav = {}
         self._model_records = {};self._projects = {};self.project_boxes = []
         self._stack_rows = {};self._catalog = None;self.choice_vars = {}
@@ -1593,15 +1598,26 @@ class DesktopWindow(TranslationController, ToolsController):
                 self.log(str(exc)+' Window retained; retry Session stop.')
             self.runner.submit('shutdown',self.services.finalize,done,failed)
         elif not self.closing and self._polling:
-            self._ticks+=1
-            if self._ticks%200==0:self.sync_theme()
-            # Backend health is cached for 30 seconds; probing every 10 seconds
-            # only resubmitted the same check and obscured useful progress logs.
-            if self._ticks==1 or self._ticks%600==0:self.refresh_health()
-            session=self.agent_session
-            if session is not None and self._ticks%2==0:
-                self.runner.submit('agent.poll',session.poll_once,lambda _:None,lambda exc:self.log(str(exc),level='error'),mutate=False)
-        if not self.closed:self._timer=self.root.after(50,self._tick)
+            self._ticks += 1
+            now = time.monotonic()
+            # 테마는 포커스 복귀 시에도 동기화하므로 백그라운드 조회는 낮은 주기로.
+            if now >= self._next_theme_at:
+                self._next_theme_at = now + 60.0
+                self.sync_theme()
+            # 상태 검사는 Docker CLI / PowerShell subprocess를 발생시킵니다.
+            # 유휴 중 60초마다 확인하고 버튼으로는 언제든 즉시 새로고침합니다.
+            if now >= self._next_health_at:
+                self._next_health_at = now + 60.0
+                self.refresh_health()
+            session = self.agent_session
+            if session is not None:
+                # Agent 진행 중에는 100ms 지연을 유지; 중복 제출은 TaskRunner가 억제.
+                self.runner.submit('agent.poll',session.poll_once,lambda _:None,
+                                   lambda exc:self.log(str(exc),level='error'),mutate=False)
+        if not self.closed:
+            # GUI를 닫는 도중에는 지연 없이 작업 종료를 확인합니다.
+            interval = 50 if self.closing else (100 if self.agent_session is not None else 250)
+            self._timer = self.root.after(interval, self._tick)
 
     def run(self):
         self.root.mainloop()
