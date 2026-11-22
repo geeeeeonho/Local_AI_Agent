@@ -809,6 +809,7 @@ def test_gpu_inspector_keeps_install_checkboxes_untouched(ui):
 def test_gpu_bars_use_measured_usage_and_a_single_chosen_model(ui):
     w, _, _ = ui
     open_models(w)
+    pump(w, lambda: not w.runner.busy('models.gpu.advisor'))
     tag = next(iter(w.choice_vars))
     w.inspect_model(tag)
     w.show_gpu_advisor({
@@ -827,6 +828,7 @@ def test_gpu_bars_use_measured_usage_and_a_single_chosen_model(ui):
 def test_gpu_inspector_does_not_double_count_loaded_model(ui):
     w, _, _ = ui
     open_models(w)
+    pump(w, lambda: not w.runner.busy('models.gpu.advisor'))
     tag = next(iter(w.choice_vars))
     w.inspect_model(tag)
     w.show_gpu_advisor({
