@@ -107,6 +107,8 @@ def test_membership_verification_does_not_use_unsupported_winnt_sid_ismember():
     script = windows.first_install_script(ME, ROOT, APP)
     assert "Invoke('Members')" in script
     assert "InvokeMember('objectSid'" in script
+    assert "SecurityIdentifier]::new([byte[]]$raw, 0)" in script
+    assert "NTAccount]::new($localGroup)" in script
     assert "Test-LocalAISidMember" in script
     assert "psbase.Invoke('IsMember'" not in script
     assert "'WinNT://'" in script
