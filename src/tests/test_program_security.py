@@ -25,6 +25,7 @@ def test_repair_script_removes_every_old_explicit_ace_and_takes_owner():
     assert "SetAccessRuleProtection($true, $false)" in script
     assert "RemoveAccessRuleSpecific($oldRule)" in script
     assert "SetOwner($builtinAdmin)" in script
+    assert "LocalAI root is a link" in script
     assert "Set-Acl -LiteralPath $localaiRoot" in script
     assert script.count("/reset /T") == 1  # one loop, three protected folders
     assert "icacls.exe $folder /setowner" in script
@@ -142,3 +143,15 @@ def test_machine_policy_file_is_a_protected_program_control_file(tmp_path, monke
                         if Path(path).name == "machine.json" else ROOT_SDDL)
     problems = security.verify(root, POLICY)
     assert any("machine.json" in item for item in problems)
+
+
+def test_recursive_acl_repair_refuses_root_symlink(tmp_path):
+    actual = tmp_path / "target"
+    actual.mkdir()
+    link = tmp_path / "LocalAI"
+    try:
+        link.symlink_to(actual, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    with pytest.raises(RuntimeError, match="연결"):
+        security.reject_reparse_root(link)
