@@ -48,14 +48,12 @@ def test_agent_direct_host_skips_search_when_not_requested(monkeypatch, tmp_path
 
     monkeypatch.setattr(coordinator, "_ensure_ollama", lambda *_: True)
     monkeypatch.setattr(coordinator.DockerService, "daemon_alive", lambda: True)
-    # Importing/starting SearXNG should never occur when search is not requested.
-    import builtins
-    native_import = builtins.__import__
-    def forbid_search(name, *args, **kwargs):
-        if name == "launcher" and args and args[0] == ("searxng_runtime",):
-            raise AssertionError("SearXNG was imported for a no-search session")
-        return native_import(name, *args, **kwargs)
-    monkeypatch.setattr(builtins, "__import__", forbid_search)
+    # A no-search session must not call SearXNG even when Docker is running.
+    from launcher import searxng_runtime
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("SearXNG was called for a no-search session")
+    monkeypatch.setattr(searxng_runtime, "is_running", must_not_run)
+    monkeypatch.setattr(searxng_runtime, "start", must_not_run)
     presenter = SimpleNamespace(error=lambda *_: None, warn=lambda *_: None,
                                 info=lambda *_: None)
     assert coordinator.prepare_runtime(
