@@ -60,8 +60,9 @@ class FakeChat:
 
 class LongTranslationTests(unittest.TestCase):
     def service(self,root,model):
+        # 이 파일의 가짜 모델은 실제로 번역하지 않으므로(영어→영어) 언어 검사는 끈다.
         return TranslationService(FakeInference(),lambda _:model,
-                                  checkpoint_dir=root/'checkpoint')
+                                  checkpoint_dir=root/'checkpoint',check_language=False)
 
     def test_150_line_document_batched_and_remembers_terms(self):
         with tempfile.TemporaryDirectory() as name:

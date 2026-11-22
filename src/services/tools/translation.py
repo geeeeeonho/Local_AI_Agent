@@ -19,9 +19,13 @@ from integrations.ollama.client import OllamaClient, local_model_name
 from .translation_memory import (Checkpoint, TranslationMemory, default_protector, initial_memory,
                                  job_key, json_object, prune, strip_reasoning, update_rolling)
 
-LANGUAGES = {'한국어':'Korean','English':'English','日本語':'Japanese',
-             '简体中文':'Simplified Chinese','Español':'Spanish'}
-CODES = {'한국어':'ko','English':'en','日本語':'ja','简体中文':'zh','Español':'es'}
+from .languages import (LANGUAGES as LANGUAGE_TABLE, ReviewError, check_output, detect_language,
+                        language, build_guide as _language_guide)
+
+# 화면 표시 이름 → 프롬프트용 영어 이름 / 출력 파일 접미사 (번역 대상 언어만)
+LANGUAGES = {item.label:item.name for item in LANGUAGE_TABLE if item.target}
+CODES = {item.label:item.code for item in LANGUAGE_TABLE if item.target}
+AUTO_SOURCE = ('auto','자동 감지','')
 STYLES = {'faithful':'원문에 충실하게','natural':'자연스럽게, 정보 생략 없이',
           'concise':'자막에 맞게 간결하게'}
 CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투',
@@ -54,74 +58,31 @@ BATCH_SCHEMA = {'type':'object','properties':{'translations':{'type':'array','it
 SINGLE_SCHEMA = {'type':'object','properties':{'translation':{'type':'string'}},'required':['translation']}
 TRANSPORT_RETRIES = 2
 
-# 언어쌍별 지침. 모델이 자주 틀리는 "유형"을 알려 줄 뿐, 특정 문장의 정답을 넣지 않는다.
-GUIDES = {
-    ('Japanese','Korean'): (
-        'Japanese→Korean rules: '
-        '(1) Person/place names: write the Japanese pronunciation in Hangul (高橋→다카하시, 渡辺→와타나베); '
-        'never use the Korean reading of the kanji and never guess a different name. '
-        '(2) Kanji words: decide the meaning from context first. If the Korean Sino reading is a homonym '
-        'of a different word or reads unnaturally, use the Korean word with the intended meaning '
-        '(勉強→공부, not 면강). '
-        '(3) Idioms and set phrases (body-part idioms, 〜が早い, 〜を抜く, etc.): translate the meaning, '
-        'not the literal words (腹が立つ→화가 나다). '
-        '(4) Keep evidentiality: らしい/そうだ(hearsay)/って→"~래/~라고 하더라/~다고 한다"; '
-        'ようだ/みたい/だろう→"~것 같다/~겠지". Choose by context; do not flatten hearsay into a guess. '
-        '(5) Keep politeness level and speech style of each speaker consistent with the surrounding '
-        'lines: casual Japanese (no です/ます) stays casual Korean 반말; do not switch to 존댓말 unless the '
-        'source line itself is polite. '
-        '(6) Numbers with counters: use natural Korean forms, usually Arabic numerals '
-        '(十五分→15분, 二日後→이틀 후 or 2일 후, 三十人→30명); never misread a counter '
-        '(minutes 分 are not people 분). '
-        '(7) Words with several readings or meanings (一日 ついたち/いちにち, 上手 じょうず/うわて, 人気 '
-        'にんき/ひとけ, 今日 きょう/こんにち) must be resolved from context. '
-        '(8) Katakana loanwords: translate by the meaning in context (マンション→아파트, '
-        'テンション→기분/분위기), not by the most common dictionary sense. '
-        '(9) Collocations: use the natural Korean verb for the object (電話をかける→전화를 걸다). '
-        '(10) Output must not contain any Japanese characters or untranslated English words.'),
-    ('Chinese','Korean'): (
-        'Chinese→Korean rules: names use the Korean reading only for historical/Korean-convention names, '
-        'otherwise the standard Chinese pronunciation in Hangul; translate chengyu and idioms by meaning.'),
-    ('Korean','Japanese'): (
-        'Korean→Japanese rules: write Korean names in katakana by Korean pronunciation; '
-        'translate idioms by meaning; keep politeness level.'),
-}
-CLASSICAL_JA = ('The text includes Classical Japanese (古文/文語). Interpret words with their classical '
-                'meanings and grammar (e.g. あはれ is deep emotion, けり/けむ/らむ are auxiliaries); '
-                'translate into natural modern target language.')
 _CLASSICAL_MARK = re.compile(r'[ゐゑ]|けり|けむ|らむ|なむ|べし|ざりき|たまふ|はべり|をかし|いと[^\s]')
+
+
+def _sample(doc):
+    return ' '.join(segment.text for segment in doc.segments[:400])[:60000]
 
 
 def source_profile(doc):
     """문서 표본으로 원문 언어와 고전 일본어 여부를 추정한다."""
-    sample=' '.join(segment.text for segment in doc.segments[:400])[:60000]
-    kana=sum(1 for c in sample if '\u3040'<=c<='\u30ff')
-    hangul=sum(1 for c in sample if '\uac00'<=c<='\ud7a3')
-    han=sum(1 for c in sample if '\u4e00'<=c<='\u9fff')
-    latin=sum(1 for c in sample if c.isascii() and c.isalpha())
-    if kana and kana>=max(hangul,1)*0.5 and kana*4>=han*0.3:
-        language='Japanese'
-    elif hangul>max(kana,han,latin*0.2):
-        language='Korean'
-    elif han>max(kana,hangul,latin*0.2):
-        language='Chinese'
-    else:
-        language=''
-    classical=language=='Japanese' and len(_CLASSICAL_MARK.findall(sample))>=2
-    return language,classical
+    sample=_sample(doc)
+    name=detect_language(sample)
+    return name, name=='Japanese' and len(_CLASSICAL_MARK.findall(sample))>=2
 
 
-def build_guide(doc,target):
-    language,classical=source_profile(doc)
-    parts=[]
-    if language:
-        parts.append('Source language: '+language+'.')
-    guide=GUIDES.get((language,LANGUAGES[target]))
-    if guide:
-        parts.append(guide)
-    if classical:
-        parts.append(CLASSICAL_JA)
-    return ' '.join(parts)
+def resolve_source(doc, source_language='auto'):
+    """사용자가 고른 원문 언어(또는 자동 감지 결과)의 영어 이름. 모르면 ''."""
+    if source_language in AUTO_SOURCE:
+        return source_profile(doc)[0]
+    return language(source_language).name
+
+
+def build_guide(doc,target,source_language='auto'):
+    name=resolve_source(doc,source_language)
+    classical=name=='Japanese' and source_profile(doc)[1]
+    return _language_guide(name,LANGUAGES[target],classical)
 
 
 def parse_glossary(text):
@@ -187,30 +148,7 @@ def _term_applies(term):
     return len(term) >= 3 and bool(re.fullmatch(r'[A-Z][A-Z0-9_/-]*',term))
 
 
-class LeakError(ValueError):
-    """번역문에 원문 문자(가나·한자)나 원문에 없던 영어 단어가 남은 경우. 재시도 대상이지만,
-    끝까지 남으면 원문 줄 전체를 남기는 것보다 낫기 때문에 '검토 필요'로 표시하고 받아들인다."""
-
-
-_TOKEN = re.compile(r'__LOCALAI_KEEP_[0-9a-f]{8}_\d{4}__')
-_KANA = re.compile(r'[\u3040-\u309f\u30a0-\u30ff]')
-_HAN = re.compile(r'[\u4e00-\u9fff]+')
-
-
-def _leak(unit_text, answer, target, source_language='', allowed=''):
-    plain=_TOKEN.sub(' ',answer)
-    if target in ('Korean','English','Spanish','Simplified Chinese') and _KANA.search(plain):
-        raise LeakError('Japanese kana left untranslated')
-    if target in ('Korean','English','Spanish'):
-        for han in _HAN.findall(plain):
-            if han in unit_text:
-                raise LeakError('Source kanji left untranslated: '+han)
-    # 영어 단어 잔류 검사는 원문이 한중일 문서일 때만 한다(영어 원문은 원래 영어 단어를 담고 있다).
-    if source_language in ('Japanese','Chinese','Korean') and target in ('Korean','Japanese','Simplified Chinese'):
-        source=(_TOKEN.sub(' ',unit_text)+' '+allowed).lower()
-        for word in re.findall(r'[A-Za-z]{3,}',plain):
-            if word.lower() not in source:
-                raise LeakError('English word not in the source: '+word)
+LeakError = ReviewError   # 의심 신호(재시도 후 남으면 '검토 필요'로 받아들임)
 
 
 def _validate(unit_text, answer, memory, tokens):
@@ -243,8 +181,8 @@ def _validate(unit_text, answer, memory, tokens):
     for source,target in memory.enforced.items():
         if source in unit_text and target not in answer:
             raise ValueError('User glossary term not used: '+source+' → '+target)
-    _leak(unit_text,answer,getattr(memory,'target',''),getattr(memory,'source_language',''),
-          ' '.join(memory.terms.values()))
+    check_output(unit_text,answer,getattr(memory,'source_language',''),getattr(memory,'target',''),
+                 ' '.join(memory.terms.values()))
     return answer
 
 
@@ -487,8 +425,12 @@ class _CountedClient:
 
 
 class TranslationService:
-    def __init__(self,inference,client_factory=None,*,checkpoint_dir=None,protector='auto'):
+    def __init__(self,inference,client_factory=None,*,checkpoint_dir=None,protector='auto',
+                 check_language=True):
         self.inference=inference
+        # False면 언어 검사(원문 문자 잔류·미번역·숫자)를 끈다. 실제로 번역하지 않는 가짜 모델로
+        # 배치·재개만 시험할 때 쓰며, 앱에서는 항상 켠다.
+        self.check_language=check_language
         # 스트리밍이므로 timeout은 토큰 사이 최대 대기(첫 토큰 전 모델 적재 포함)다.
         self.client_factory=client_factory or (lambda endpoint:OllamaClient(endpoint,timeout=600))
         self.checkpoint_dir=(Path(checkpoint_dir) if checkpoint_dir is not None else
@@ -533,7 +475,8 @@ class TranslationService:
     def translate_file(self,path,*,model,target='한국어',kind='auto',style='natural',stage=False,
                        output_path=None,progress:Callable[[int,int],None]|None=None,
                        cancelled:Callable[[],bool]|None=None, resume=True,
-                       keep_failed=False, glossary=None, precise=False) -> Result:
+                       keep_failed=False, glossary=None, precise=False,
+                       source_language='auto') -> Result:
         user_terms=parse_glossary(glossary) if isinstance(glossary,str) else dict(glossary or {})
         self._abort.clear()
         user_cancelled=cancelled
@@ -542,6 +485,8 @@ class TranslationService:
         model=local_model_name(model)
         if target not in LANGUAGES or style not in STYLES:
             raise ValueError('Unsupported translation options')
+        if source_language not in AUTO_SOURCE:
+            language(source_language)       # 알 수 없는 언어면 여기서 오류
         source,encoding=read_source(path)
         doc=prepare(source,path.suffix,kind=kind,stage=stage)
         output=Path(output_path) if output_path else path.with_name(path.stem+'.'+CODES[target]+path.suffix)
@@ -564,8 +509,17 @@ class TranslationService:
             raise RuntimeError('Selected model is not available locally')
         client=_CountedClient(self.client_factory(endpoint),cancelled)
         self._active=client
-        key=job_key(path,output,source,model,target,doc.selected,style,stage,
-                    extra=sorted(user_terms.items()) or None)
+        source_name=resolve_source(doc,source_language)
+        if source_name==LANGUAGES[target]:
+            raise ValueError('Source and target language are the same: '+source_name)
+        extra={}
+        if user_terms:
+            extra['terms']=sorted(user_terms.items())
+        if source_language not in AUTO_SOURCE:
+            extra['source']=source_name
+        # 예전 체크포인트 키와 호환: 용어집만 있으면 예전 형식 그대로
+        extra=(extra['terms'] if set(extra)=={'terms'} else extra) or None
+        key=job_key(path,output,source,model,target,doc.selected,style,stage,extra=extra)
         prune(self.checkpoint_dir)
         if not resume:
             (self.checkpoint_dir/(key+'.sqlite3')).unlink(missing_ok=True)
@@ -586,10 +540,11 @@ class TranslationService:
             # 사용자 용어가 모델이 만든 용어보다 우선한다(저장하지 않고 실행마다 적용).
             memory.terms.update(user_terms)
             memory.enforced=dict(user_terms)
-            memory.guide=build_guide(doc,target)
+            memory.guide=_language_guide(source_name,LANGUAGES[target],
+                                         source_name=='Japanese' and source_profile(doc)[1])
             memory.think=bool(precise)
-            memory.target=LANGUAGES[target]
-            memory.source_language=source_profile(doc)[0]
+            memory.target=LANGUAGES[target] if self.check_language else ''
+            memory.source_language=source_name
             complete=checkpoint.completed()
             failures=checkpoint.failed()
             review=set(json.loads(checkpoint.get('review') or '[]'))

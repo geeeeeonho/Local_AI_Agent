@@ -92,6 +92,7 @@ class TranslationController:
                  'resume':self.translation_resume.get(),
                  'keep_failed':self.translation_keep_failed.get(),
                  'precise':self.translation_precise.get(),
+                 'source_language':self.translation_source_language.get(),
                  'glossary':self.translation_glossary_text.get('1.0','end'),
                  'output_path':self.translation_output.get().strip() or None}
         self._translation_cancel=Event()
@@ -176,6 +177,8 @@ def _duration(seconds):
 
 # 서비스의 영어 오류를 사용자가 할 일 중심의 한국어로 바꾼다(원문은 괄호에 남겨 신고 시 참고).
 _FRIENDLY=(
+    ('source and target language are the same','원문과 번역 언어가 같습니다. [원문 언어]나 [번역 언어]를 바꾸세요.'),
+    ('unsupported language','지원하지 않는 언어입니다.'),
     ('not available locally','선택한 모델이 이 PC에 없습니다. [새로고침] 후 다시 고르세요.'),
     ('already exists','같은 이름의 결과 파일이 이미 있습니다. 출력 파일 위치나 이름을 바꾸세요.'),
     ('another process has created','같은 이름의 결과 파일이 방금 생겼습니다. 출력 파일 이름을 바꾸세요.'),

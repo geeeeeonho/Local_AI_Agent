@@ -186,3 +186,58 @@ class CheckpointTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class OtherLanguageTests(unittest.TestCase):
+    """언어쌍이 바뀌어도 같은 종류의 실수를 잡는지 — 한 줄짜리 예로 간단하게."""
+
+    def caught(self, source, answer, src, tgt):
+        from services.tools.languages import check_output, ReviewError
+        try:
+            check_output(source, answer, src, tgt)
+            return False
+        except ReviewError:
+            return True
+
+    def test_source_language_detection(self):
+        from services.tools.languages import detect_language
+        samples = {'Russian': 'Я не знаю, где мой телефон.', 'Thai': 'ฉันไม่รู้ว่าโทรศัพท์อยู่ที่ไหน',
+                   'French': 'Je ne sais pas où est mon téléphone.', 'German': 'Ich weiß nicht, wo mein Telefon ist.',
+                   'Vietnamese': 'Tôi không biết điện thoại của tôi ở đâu.', 'Korean': '전화기가 어디 있는지 몰라.'}
+        for name, text in samples.items():
+            self.assertEqual(detect_language(text), name)
+
+    def test_untranslated_line_between_latin_languages(self):
+        text = 'Please close the door before you leave.'
+        self.assertTrue(self.caught(text, text, 'English', 'Spanish'))
+
+    def test_partial_clause_left_in_source_language(self):
+        self.assertTrue(self.caught('Der Zug fährt um 19:30 ab.', 'Le train part à 19h30 der Zug.', 'German', 'French'))
+
+    def test_cyrillic_left_in_korean(self):
+        self.assertTrue(self.caught('Где мой телефон?', '내 телефон 어디 있어?', 'Russian', 'Korean'))
+
+    def test_simplified_character_in_traditional_output(self):
+        self.assertTrue(self.caught('这很好。', '这很好。', 'Simplified Chinese', 'Traditional Chinese'))
+
+    def test_changed_number(self):
+        self.assertTrue(self.caught('The train leaves at 19:30.', 'Der Zug fährt um 18:30 ab.', 'English', 'German'))
+
+    def test_correct_translations_pass(self):
+        self.assertFalse(self.caught('The hotel has a small bar.', 'Das Hotel hat eine kleine Bar.', 'English', 'German'))
+        self.assertFalse(self.caught('Set max_tokens in config.yaml.', 'config.yaml에서 max_tokens를 설정하세요.',
+                                     'English', 'Korean'))
+
+    def test_same_source_and_target_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'same'):
+            translate('こんにちは。\n', Model(), target='日本語')
+
+    def test_prompt_names_the_language_pair(self):
+        seen = []
+        class Spy(Model):
+            def chat(self, name, messages, temperature=.2):
+                seen.append(messages[0]['content'])
+                return super().chat(name, messages, temperature)
+        translate('Bonjour tout le monde, je suis là.\n', Spy(lambda items: json.dumps({'translations': ['Hallo zusammen, ich bin da.']})),
+                  target='Deutsch', source_language='Français')
+        self.assertTrue(any('Translate from French into German' in system for system in seen))

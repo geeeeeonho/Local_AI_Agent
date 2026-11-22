@@ -5,12 +5,13 @@
 """
 import tkinter as tk
 from tkinter import ttk
+from services.tools.languages import SOURCE_LABELS, TARGET_LABELS
 from .widgets import note, text_box, set_text, status_line, ScrollArea, wrap_to_parent
 
 KINDS={'자동 감지':'auto','일반 문서':'general','소설':'novel','대본 / 대사':'script',
        '자막':'subtitle','코드 포함 문서':'code','구조화 데이터':'structured'}
 STYLES={'원문 충실':'faithful','자연스러운 번역':'natural','자막용 간결 번역':'concise'}
-LANGUAGES=('한국어','English','日本語','简体中文','Español')
+LANGUAGES=TARGET_LABELS
 
 
 def _variables(w):
@@ -20,6 +21,7 @@ def _variables(w):
     w.translation_kind=tk.StringVar(master=w.root,value='자동 감지')
     w.translation_style=tk.StringVar(master=w.root,value='자연스러운 번역')
     w.translation_language=tk.StringVar(master=w.root,value='한국어')
+    w.translation_source_language=tk.StringVar(master=w.root,value='자동 감지')
     w.translation_stage=tk.BooleanVar(master=w.root,value=False)
     w.translation_resume=tk.BooleanVar(master=w.root,value=True)
     w.translation_keep_failed=tk.BooleanVar(master=w.root,value=True)
@@ -86,7 +88,8 @@ def build(parent,w,toolbar=None):
     w.translation_model_box=ttk.Combobox(row,textvariable=w.translation_model,values=(),state='readonly')
     w.translation_model_box.pack(side='left',fill='x',expand=True)
     ttk.Button(row,text='새로고침',command=w.refresh_translation_models).pack(side='left',padx=(5,0))
-    for label,variable,values in (('번역 언어',w.translation_language,LANGUAGES),
+    for label,variable,values in (('원문 언어',w.translation_source_language,SOURCE_LABELS),
+                                  ('번역 언어',w.translation_language,LANGUAGES),
                                   ('콘텐츠 유형',w.translation_kind,tuple(KINDS)),
                                   ('번역 목적',w.translation_style,tuple(STYLES))):
         row=line(options,label)
