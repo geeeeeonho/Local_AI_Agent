@@ -7,13 +7,16 @@ Sandbox sessions before the controller starts a runtime.
 """
 from __future__ import annotations
 
-_BG = "#1e1e1e"
-_CARD = "#252526"
-_DIM = "#9d9d9d"
-_ACC = "#0e639c"
-_ACC_HI = "#1177bb"
-_WARN = "#d7ba7d"
-_LINE = "#3c3c3c"
+# Neutral fallback for legacy launch contexts without a shared theme controller.
+_BG = "#f2f3f5"
+_CARD = "#fafbfc"
+_DIM = "#526071"
+_ACC = "#425b73"
+_ACC_HI = "#354b61"
+_WARN = "#815621"
+_LINE = "#cad1d8"
+_FG = "#25313d"
+_INK = "#ffffff"
 
 EXEC_KEYS = ("5", "2", "3", "4")
 
@@ -76,6 +79,7 @@ def agent_setup(env=None, presenter=None, active_network=None):
     try:
         import tkinter as tk
         from tkinter import messagebox, ttk
+        from apps.shared.widgets import ScrollArea
         import threading
     except Exception:
         return False
@@ -92,14 +96,27 @@ def agent_setup(env=None, presenter=None, active_network=None):
         active = "warp"
 
     def build_setup(parent):
+        # Follow the selected Studio palette instead of opening a permanently
+        # dark Agent wizard over a light workspace.
+        palette = getattr(getattr(parent.winfo_toplevel(),
+                                  "_localai_theme", None), "palette", None)
+        _BG = palette.bg if palette else globals()["_BG"]
+        _CARD = palette.surface if palette else globals()["_CARD"]
+        _DIM = palette.muted if palette else globals()["_DIM"]
+        _ACC = palette.chat if palette else globals()["_ACC"]
+        _ACC_HI = _ACC
+        _WARN = palette.warning if palette else globals()["_WARN"]
+        _LINE = palette.border if palette else globals()["_LINE"]
+        _FG = palette.fg if palette else globals()["_FG"]
+        _INK = palette.solid_ink if palette else globals()["_INK"]
         base = tk.Frame(parent, bg=_BG)
         try:
             tk.Label(
                 base,
                 text="에이전트 시작 설정",
                 bg=_BG,
-                fg="#ffffff",
-                font=("Segoe UI", 15, "bold"),
+                fg=_FG,
+                font=("Segoe UI", 14, "bold"),
                 anchor="w",
             ).pack(fill="x", padx=18, pady=(16, 2))
             tk.Label(
@@ -111,13 +128,20 @@ def agent_setup(env=None, presenter=None, active_network=None):
                 anchor="w",
             ).pack(fill="x", padx=18, pady=(0, 8))
 
+            # A fixed footer takes priority over the scrollable configuration.
+            # ScrollArea normally packs itself; defer packing until after
+            # Start/Cancel have claimed their guaranteed height.
+            scroller = ScrollArea(base)
+            scroller.frame.pack_forget()
+            config_body = scroller.body
+
             role_var = tk.StringVar(value=(roles[0].key if roles else "5"))
             mode_var = tk.StringVar(value="sandbox")
             net_var = tk.StringVar(value=active)
 
             def _section(title, desc):
-                card = tk.Frame(base, bg=_CARD)
-                card.pack(fill="x", padx=18, pady=(6, 2))
+                card = tk.Frame(config_body, bg=_CARD)
+                card.pack(fill="x", padx=10, pady=(3, 2))
                 tk.Label(
                     card,
                     text=title,
@@ -139,32 +163,34 @@ def agent_setup(env=None, presenter=None, active_network=None):
 
             def _radio(par, var, value, title, sub, danger=False):
                 row = tk.Frame(par, bg=_CARD)
-                row.pack(fill="x", padx=12, pady=1)
+                row.pack(fill="x", padx=12, pady=(2, 1))
                 tk.Radiobutton(
                     row,
                     variable=var,
                     value=value,
                     bg=_CARD,
                     activebackground=_CARD,
-                    selectcolor=_ACC,
+                    selectcolor=_CARD,
                     highlightthickness=0,
                     bd=0,
-                    fg="#dddddd",
-                    activeforeground="#ffffff",
+                    fg=_FG,
+                    activeforeground=_FG,
                     text=" " + title,
                     font=("Segoe UI", 9, "bold"),
                     anchor="w",
                     justify="left",
-                ).pack(side="left")
+                ).pack(anchor="w")
                 if sub:
                     tk.Label(
                         row,
-                        text="  " + sub,
+                        text=sub,
                         bg=_CARD,
                         fg=(_WARN if danger else _DIM),
                         font=("Segoe UI", 8),
                         anchor="w",
-                    ).pack(side="left")
+                        justify="left",
+                        wraplength=460,
+                    ).pack(anchor="w", padx=(24, 0))
 
             sec = _section("모델 역할", "세션 중 /model 로 변경 가능")
             for index, role in enumerate(roles):
@@ -176,12 +202,12 @@ def agent_setup(env=None, presenter=None, active_network=None):
                     getattr(role, "label", role.key) + star,
                     getattr(role, "description", ""),
                 )
-            tk.Label(sec, text="", bg=_CARD).pack(pady=(0, 4))
+            tk.Label(sec, text="", bg=_CARD).pack(pady=(0, 1))
 
             sec2 = _section("실행 모드", None)
             _radio(sec2, mode_var, "sandbox", "샌드박스 (권장·안전)", "격리된 컨테이너에서 실행")
             _radio(sec2, mode_var, "host", "호스트 직접 (위험)", "PC 에 직접 영향 — 주의", danger=True)
-            tk.Label(sec2, text="", bg=_CARD).pack(pady=(0, 4))
+            tk.Label(sec2, text="", bg=_CARD).pack(pady=(0, 1))
 
             sec3 = _section(
                 "인터넷",
@@ -215,7 +241,7 @@ def agent_setup(env=None, presenter=None, active_network=None):
                 _net_label("block", "차단"),
                 "샌드박스의 관리형 웹 접근 차단. Host는 아직 강제 경계가 없어 선택 불가",
             )
-            tk.Label(sec3, text="", bg=_CARD).pack(pady=(0, 4))
+            tk.Label(sec3, text="", bg=_CARD).pack(pady=(0, 1))
 
             def _show_progress():
                 for widget in base.winfo_children():
@@ -227,7 +253,7 @@ def agent_setup(env=None, presenter=None, active_network=None):
                     base,
                     text="에이전트 준비 중...",
                     bg=_BG,
-                    fg="#ffffff",
+                    fg=_FG,
                     font=("Segoe UI", 14, "bold"),
                 ).pack(pady=(70, 10))
                 tk.Label(
@@ -295,13 +321,14 @@ def agent_setup(env=None, presenter=None, active_network=None):
                 done.set()
 
             foot = tk.Frame(base, bg=_BG)
-            foot.pack(fill="x", padx=18, pady=(12, 16))
+            foot.pack(side="bottom",fill="x", padx=12, pady=(5, 8))
             tk.Button(
                 foot,
                 text="시작",
                 command=_start,
                 bg=_ACC,
-                fg="#ffffff",
+                fg=_INK,
+                activeforeground=_INK,
                 activebackground=_ACC_HI,
                 relief="flat",
                 font=("Segoe UI", 11, "bold"),
@@ -313,13 +340,42 @@ def agent_setup(env=None, presenter=None, active_network=None):
                 text="취소",
                 command=_cancel,
                 bg=_CARD,
-                fg="#dddddd",
+                fg=_FG,
+                activeforeground=_FG,
                 activebackground=_LINE,
                 relief="flat",
                 font=("Segoe UI", 10),
                 padx=16,
                 pady=7,
             ).pack(side="right")
+
+            # Keep Sandbox and the already-pinned Network mode as safe defaults.
+            # The user can reveal advanced choices without losing their state.
+            advanced = tk.Button(
+                config_body, text="고급 실행·인터넷 설정 ▸",
+                bg=_CARD, fg=_FG, activebackground=_LINE,
+                activeforeground=_FG, relief="flat",
+                font=("Segoe UI", 9), anchor="w",
+                padx=12, pady=5)
+            advanced.pack(after=sec,fill="x",padx=10,pady=(4,4))
+            sec2.pack_forget()
+            sec3.pack_forget()
+            expanded = [False]
+            def toggle_options():
+                expanded[0] = not expanded[0]
+                if expanded[0]:
+                    sec2.pack(after=advanced,fill="x",padx=10,pady=(3,2))
+                    sec3.pack(after=sec2,fill="x",padx=10,pady=(3,2))
+                else:
+                    sec2.pack_forget()
+                    sec3.pack_forget()
+                advanced.configure(
+                    text="고급 실행·인터넷 설정 ▾" if expanded[0]
+                         else "고급 실행·인터넷 설정 ▸")
+                scroller.bind_content()
+            advanced.configure(command=toggle_options)
+            scroller.frame.pack(fill="both",expand=True)
+            scroller.bind_content()
         except Exception:
             result["value"] = False
             done.set()
