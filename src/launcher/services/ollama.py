@@ -72,7 +72,7 @@ class OllamaService:
         # cannot be assigned to one user, so never persist it on this machine.
         # Per-account lifecycle diagnostics remain in encrypted lifelog records.
         self.private_log = state / "ollama_run.log"
-        self.log_file = None
+        self.log_file = self.private_log  # 호환 진단 경로; 실제 원시 로그 기록은 하지 않음
         self.runtime_state_file = state / "ollama_server.json"
         self.model_dir = Path(model_dir) if model_dir is not None else MODEL_STORAGE_DIR
         self._log = logger
