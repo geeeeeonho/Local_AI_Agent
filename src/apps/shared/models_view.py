@@ -330,8 +330,14 @@ def _gpu_panel(side, w):
 
     w.gpu_fit_note=tk.StringVar(master=w.root,
         value='모델의 GPU 적재량은 선택해서 확인합니다.')
-    ttk.Label(frame,textvariable=w.gpu_fit_note,style='Muted.TLabel',
-              wraplength=207,justify='left').pack(anchor='w')
+    note_widget=ttk.Label(frame,textvariable=w.gpu_fit_note,style='Muted.TLabel',
+              wraplength=182,justify='left')
+    note_widget.pack(anchor='w')
+    # Keep wrapped labels within the actual sidebar width, not its desktop size.
+    def resize_labels(event):
+        width=max(155,frame.winfo_width()-14)
+        note_widget.configure(wraplength=width)
+    frame.bind('<Configure>',resize_labels,add='+')
     ttk.Separator(side).pack(fill='x',pady=(5,7))
 
 
@@ -364,11 +370,11 @@ def _disk_toolbar(parent, w):
     frame=ttk.Frame(parent)
     _bar(frame, (
         ('인덱스 갱신',w.refresh_models,'Manage',False),
-        ('모델 고르기',lambda:w.model_tabs.select(w.model_pages['choose']),None,False)))
+        ('모델 고르기',lambda:w.model_tabs.select(w.model_pages['choose']),None,False))).pack(fill='x')
     disclosure=Disclosure(frame,'저장소 · 공용 설정')
     _bar(disclosure.body, (
         ('모든 계정 공용으로 고치기',w.repair_sharing,'Manage',False),
-        ('일반 Ollama 경로 연결',w.connect_external_ollama,'Manage',False)))
+        ('일반 Ollama 경로 연결',w.connect_external_ollama,'Manage',False))).pack(fill='x')
     return frame
 
 
