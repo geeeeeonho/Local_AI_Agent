@@ -166,6 +166,40 @@ class PanelHost:
             self._hide(self.frame)
 
 
+class Disclosure:
+    """Reusable progressive-disclosure panel for secondary controls.
+
+    All child widgets are built once and retained while collapsed; forms keep
+    their values, bindings and validation. A hidden option is still reachable
+    through a keyboard-focusable button.
+    """
+    def __init__(self, parent, title, *, expanded=False):
+        self.title = title
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill='x', pady=(2, 5))
+        self.button = ttk.Button(
+            self.frame, style='Manage.Details.TButton', command=self.toggle)
+        self.button.pack(anchor='w', fill='x')
+        self.body = ttk.Frame(self.frame, padding=(8, 5, 4, 8))
+        self.expanded = not expanded
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded):
+        expanded = bool(expanded)
+        if self.expanded != expanded:
+            if expanded:
+                self.body.pack(fill='x')
+            else:
+                self.body.pack_forget()
+        self.expanded = expanded
+        self.button.configure(
+            text=('▼  ' if expanded else '▶  ') +
+                 self.title + (' 접기' if expanded else ' 펼치기'))
+
+    def toggle(self):
+        self.set_expanded(not self.expanded)
+
+
 class ScrollArea:
     """Keep static forms/actions reachable on small screens and high-DPI text.
 
