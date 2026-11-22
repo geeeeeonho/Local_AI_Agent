@@ -43,7 +43,15 @@ class DesktopServices:
             ) from exc
         if __import__('os').name != 'nt':
             data.mkdir(parents=True, exist_ok=True)
-            for name in ('runtime', 'settings', 'projects'):
+            if privacy.ensure_private(data) is not True:
+            raise RuntimeError('개인 데이터 폴더 보안 검증 실패: %s' % data)
+        # 로그는 user_data 밖에 있지만 반드시 같은 계정의 개인 영역입니다.
+        personal_logs = account / 'logs'
+        personal_logs.mkdir(parents=True, exist_ok=True)
+        if privacy.ensure_private(personal_logs) is not True:
+            raise RuntimeError('개인 로그 폴더 보안 검증 실패: %s' % personal_logs)
+
+        for name in ('runtime', 'settings', 'projects'):
                 (data / name).mkdir(parents=True, exist_ok=True)
             return
 
@@ -61,8 +69,7 @@ class DesktopServices:
             data.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             try:
-                if privacy is None:
-                    raise RuntimeError("Windows ACL helper is unavailable")
+                # 이미 검증한 계정 경로에 대해서만 수리를 시도합니다.
                 privacy.make_private(account)
                 data.mkdir(parents=True, exist_ok=True)
             except Exception as exc:
