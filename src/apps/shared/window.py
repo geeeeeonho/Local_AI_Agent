@@ -448,6 +448,8 @@ class DesktopWindow(TranslationController, ToolsController):
         try:project=self.current_project();mode=self.selected_mode('chat')
         except Exception as exc:self.log(str(exc),level='error');return
         model=project.chat_model if project else ''
+        # Tk variables are read on the UI thread, not inside the worker.
+        with_search=bool(self.chat_search.get()) if hasattr(self, 'chat_search') else False
         self._chat_progress = ['요청 접수 · Network → Ollama → AnythingLLM → model 연결 순으로 확인합니다.']
         # Events are drained on the Tk timer, so they can arrive after the worker
         # has already finished. A flag the worker does not race decides whether
@@ -457,7 +459,7 @@ class DesktopWindow(TranslationController, ToolsController):
         set_text(self.chat_text,'Chat 준비 시작\n\n'+self._chat_progress[0])
         def work():
             try:
-                return self.services.chat.start(mode,model=model,cancel=self.runner.cancel.is_set)
+                return self.services.chat.start(mode,model=model,search=with_search,cancel=self.runner.cancel.is_set)
             except Exception as exc:
                 self.services.events.emit('runtime.progress',{
                     'service':'chat','message':'준비 실패: '+str(exc)})
@@ -556,6 +558,8 @@ class DesktopWindow(TranslationController, ToolsController):
             self.log('An Agent is already active. Stop the session before opening another.');return
         try:p=self.presenter('agent');mode=self.selected_mode('interpreter');project=self.current_project()
         except Exception as exc:self.log(str(exc),level='error');return
+        # Snapshot the requested optional services before starting the worker.
+        with_search=bool(self.agent_search.get()) if hasattr(self, 'agent_search') else False
         self.set_agent_state('Working','준비 중 · 시작 설정을 고른 뒤 Ollama·Docker·네트워크를 준비합니다.')
         def ready(session):
             if session is None:
@@ -578,7 +582,7 @@ class DesktopWindow(TranslationController, ToolsController):
             p._current_log_panel=None;p._current_log_done=None
             self.agent_panel.enable_send()
         self.run_task('agent.start',
-            lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set),
+            lambda:self.services.agent.open(p,mode,project=project,cancel=self.runner.cancel.is_set,search=with_search),
             ready,error=self._agent_failed)
 
     def _agent_failed(self,exc):
