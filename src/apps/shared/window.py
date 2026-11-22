@@ -84,41 +84,45 @@ class DesktopWindow(TranslationController, ToolsController):
 
     def _build(self):
         outer=ttk.Frame(self.root);outer.pack(fill='both',expand=True)
-        sidebar=ttk.Frame(outer,style='Sidebar.TFrame',width=235)
+        sidebar=ttk.Frame(outer,style='Sidebar.TFrame',width=198)
         sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False)
-        ttk.Label(sidebar,text='LOCAL AI',style='Brand.TLabel').pack(anchor='w',padx=22,pady=(25,4))
-        ttk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),style='Sidebar.TLabel').pack(anchor='w',padx=23,pady=(0,22))
+        ttk.Label(sidebar,text='LOCAL AI',style='Brand.TLabel').pack(anchor='w',padx=15,pady=(13,2))
+        ttk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),style='Sidebar.TLabel').pack(anchor='w',padx=16,pady=(0,9))
         captions={'WORK':'\uc8fc\uc694 \uc791\uc5c5','MANAGE':'\ubaa8\ub378 \u00b7 \uc124\uce58 \uad00\ub9ac','GENERAL':'\ud658\uacbd \u00b7 \uc124\uc815'}
         for group,keys in navigation_groups(self.app):
-            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',font=('Segoe UI',9,'bold')).pack(anchor='w',padx=22,pady=(8,8))
+            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',font=('Segoe UI',9,'bold')).pack(anchor='w',padx=16,pady=(4,3))
             for key in keys:
                 b=ttk.Button(sidebar,text=LABELS[key],style=nav_style(key),command=lambda k=key:self.navigate(k))
-                b.pack(fill='x',padx=12,pady=3);self.nav[key]=b
-            ttk.Separator(sidebar).pack(fill='x',padx=20,pady=(14,6))
-        ttk.Label(sidebar,text='Shared services\nLocal data stays local',style='Sidebar.TLabel',
-                  justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=22,pady=18)
+                b.pack(fill='x',padx=9,pady=1);self.nav[key]=b
+            ttk.Separator(sidebar).pack(fill='x',padx=13,pady=(6,2))
+        ttk.Label(sidebar,text='Local data stays local',style='Sidebar.TLabel',
+                  justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=12,pady=7)
         if 'models' in self.spec.pages:
-            self.sidebar_models = ttk.Frame(sidebar, padding=(12, 7))
-            self.sidebar_models.pack(side='bottom', fill='both', expand=True)
+            self.sidebar_models = ttk.Frame(sidebar, padding=(9, 4))
+            self.sidebar_models.pack(side='bottom', fill='x')
+            self.sidebar_models_expanded = False
             heading = ttk.Frame(self.sidebar_models)
             heading.pack(fill='x')
-            ttk.Label(heading,text='설치된 모델',style='Sidebar.TLabel',
+            ttk.Label(heading,text='설치 모델',style='Sidebar.TLabel',
                       font=('Segoe UI',9,'bold')).pack(side='left')
-            ttk.Button(heading,text='↻',width=3,command=self.refresh_installed_summary).pack(side='right')
+            ttk.Button(heading,text='↻',width=2,command=self.refresh_installed_summary).pack(side='right')
+            self.sidebar_models_toggle=ttk.Button(heading,text='목록 ▸',command=self.toggle_sidebar_models)
+            self.sidebar_models_toggle.pack(side='right')
             self.sidebar_model_count = tk.StringVar(master=self.root,value='조회 전')
             ttk.Label(self.sidebar_models,textvariable=self.sidebar_model_count,
                       style='Muted.TLabel').pack(anchor='w',pady=(3,5))
             self.sidebar_model_scroll = ScrollArea(self.sidebar_models)
+            self.sidebar_model_scroll.frame.pack_forget()
             self.sidebar_model_body = self.sidebar_model_scroll.body
             ttk.Label(self.sidebar_model_body,text='모델 목록을 읽는 중...',
                       style='Muted.TLabel',wraplength=185).pack(anchor='w')
         ttk.Separator(outer,orient='vertical').pack(side='left',fill='y')
         content=ttk.Frame(outer);content.pack(fill='both',expand=True)
-        header=ttk.Frame(content,padding=(24,16));header.pack(fill='x')
+        header=ttk.Frame(content,padding=(15,9));header.pack(fill='x')
         ttk.Label(header,text=self.spec.title,style='Section.TLabel').pack(side='left')
         ttk.Label(header,textvariable=self.health,style='Muted.TLabel').pack(side='right')
         ttk.Separator(content).pack(fill='x')
-        footer=ttk.Frame(content,padding=(18,8));footer.pack(side='bottom',fill='x')
+        footer=ttk.Frame(content,padding=(12,5));footer.pack(side='bottom',fill='x')
         # The toggle sits with the status line, not above the log, so the log's
         # own height is never what you have to click through to get it back.
         self.activity_button=ttk.Button(footer,width=12,command=self.toggle_activity)
@@ -155,7 +159,7 @@ class DesktopWindow(TranslationController, ToolsController):
             # area claims the remaining space with expand=True. Re-packed after
             # it, the log came back with nothing left to occupy and stayed
             # invisible - folding it was a one-way door.
-            options={'side':'bottom','fill':'x','padx':24,'pady':(4,0)}
+            options={'side':'bottom','fill':'x','padx':14,'pady':(3,0)}
             if getattr(self,'page_area',None) is not None:options['before']=self.page_area
             self.activity.pack(**options)
         elif self.activity.winfo_ismapped():
