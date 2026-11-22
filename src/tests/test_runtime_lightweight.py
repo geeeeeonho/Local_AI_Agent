@@ -175,3 +175,33 @@ def test_session_close_releases_agent_search_after_sessions(tmp_path):
     backend.agent_search_stop = lambda: recorded.append("cleanup") or True
     assert svc.close()
     assert recorded == ["cleanup"]
+
+
+def test_owned_agent_search_handles_stopped_docker(monkeypatch):
+    from launcher.agent import runtime_coordinator as coordinator
+    coordinator._AGENT_SEARCH_CONTAINER_ID = "a" * 64
+    monkeypatch.setattr(coordinator.DockerService, "run",
+                        lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(coordinator.DockerService, "daemon_alive",
+                        lambda: False)
+    try:
+        assert coordinator.stop_owned_search()
+        assert coordinator._AGENT_SEARCH_CONTAINER_ID is None
+    finally:
+        coordinator._AGENT_SEARCH_CONTAINER_ID = None
+
+
+def test_owned_agent_search_keeps_token_on_transient_inspect_failure(monkeypatch):
+    from launcher.agent import runtime_coordinator as coordinator
+    token = "a" * 64
+    coordinator._AGENT_SEARCH_CONTAINER_ID = token
+    monkeypatch.setattr(coordinator.DockerService, "run",
+                        lambda *_args, **_kwargs:
+                            SimpleNamespace(returncode=1, stderr="access denied"))
+    monkeypatch.setattr(coordinator.DockerService, "daemon_alive",
+                        lambda: True)
+    try:
+        assert coordinator.stop_owned_search() is False
+        assert coordinator._AGENT_SEARCH_CONTAINER_ID == token
+    finally:
+        coordinator._AGENT_SEARCH_CONTAINER_ID = None
