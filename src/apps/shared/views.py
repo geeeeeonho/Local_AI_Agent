@@ -27,12 +27,14 @@ def mode_row(parent,w):
 
 def home(parent,w):
     note(parent,'주요 작업은 Chat과 Agent에서. 준비가 필요할 때만 모델을 관리하세요.')
-    tasks=ttk.Frame(parent);tasks.pack(fill='x',pady=(4,20))
+    tasks=ttk.Frame(parent);tasks.pack(fill='x',pady=(3,10))
     tasks.columnconfigure((0,1),weight=1,uniform='main')
+    task_cards=[]
     for column,key in enumerate(('chat','agent')):
         kind=key.title()
-        card=ttk.Frame(tasks,style=kind+'.Card.TFrame',padding=24)
-        card.grid(row=0,column=column,sticky='nsew',padx=(0,8) if column==0 else (8,0))
+        card=ttk.Frame(tasks,style=kind+'.Card.TFrame',padding=15)
+        card.grid(row=0,column=column,sticky='nsew',padx=(0,6) if column==0 else (6,0))
+        task_cards.append(card)
         ttk.Label(card,text='01 / CHAT' if key=='chat' else '02 / AGENT',
                   style=kind+'.Card.TLabel',font=('Segoe UI',11,'bold')).pack(anchor='w')
         title='대화와 문서' if key=='chat' else '코딩과 자동화'
@@ -41,7 +43,22 @@ def home(parent,w):
         ttk.Label(card,text=title,style=kind+'.Card.TLabel',font=('Segoe UI',19,'bold')).pack(anchor='w',pady=(12,10))
         ttk.Label(card,text=detail,style=kind+'.CardMuted.TLabel',wraplength=330,justify='left').pack(anchor='w',pady=(0,22))
         ttk.Button(card,text=kind+' 열기',style=kind+'.TButton',command=lambda k=key:w.navigate(k)).pack(anchor='w')
-    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=18);card.pack(fill='x',pady=(0,18))
+    # Narrow windows use one column so neither launch button is truncated.
+    last_columns=[None]
+    def reflow_cards(event):
+        columns=1 if event.width < 680 else 2
+        if columns == last_columns[0]:
+            return
+        last_columns[0]=columns
+        for index,card in enumerate(task_cards):
+            card.grid_configure(row=index if columns==1 else 0,
+                                column=0 if columns==1 else index,
+                                padx=(0,0) if columns==1 else ((0,6) if index==0 else (6,0)),
+                                pady=(0,7) if columns==1 else (0,0))
+        tasks.columnconfigure(0, weight=1)
+        tasks.columnconfigure(1, weight=0 if columns==1 else 1)
+    tasks.bind('<Configure>',reflow_cards,add='+')
+    card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=12);card.pack(fill='x',pady=(0,9))
     ttk.Label(card,text='모델 · 설치 관리',style='Manage.Card.TLabel',font=('Segoe UI',12,'bold')).pack(anchor='w')
     ttk.Label(card,text='모델 용량 확인, 설치와 삭제, 실행 환경 복구',style='Manage.CardMuted.TLabel').pack(anchor='w',pady=(6,14))
     actions=ttk.Frame(card,style='Manage.CardBody.TFrame');actions.pack(anchor='w')
