@@ -822,7 +822,8 @@ def test_gpu_bars_use_measured_usage_and_a_single_chosen_model(ui):
     assert float(w.gpu_bars['used'][0]['value']) == pytest.approx(31.25)
     assert float(w.gpu_bars['model'][0]['value']) == pytest.approx(50.0)
     assert float(w.gpu_bars['projected'][0]['value']) == pytest.approx(81.25)
-    assert '13.0 / 16.0' in w.gpu_bars['projected'][1].get()
+    assert '13.0GiB' in w.gpu_bars['projected'][1].get()
+    assert '81%' in w.gpu_bars['projected'][1].get()
 
 
 def test_gpu_inspector_does_not_double_count_loaded_model(ui):
