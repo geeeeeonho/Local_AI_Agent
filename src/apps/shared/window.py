@@ -652,14 +652,23 @@ class DesktopWindow(TranslationController, ToolsController):
         self._stack_rows={}
         self.stack_tree.delete(*self.stack_tree.get_children())
         for role in stack['roles']:
+            fit=role.get('gpu_fit')
+            gpu_marker=(' · GPU 추정 적합' if fit is True else
+                        ' · GPU 부족 추정' if fit is False else '')
             iid=self.stack_tree.insert('','end',values=(
                 role['label'],role['chosen'] or '(사다리 없음)',
-                f"{role['need_gb']:.1f} GB",'있음' if role['on_disk'] else '없음'))
+                f"{role['need_gb']:.1f} GB"+gpu_marker,
+                '있음' if role['on_disk'] else '없음'))
             self._stack_rows[iid]=role
         free=stack['free_gb']
+        gpu=stack.get('gpu')
+        gpu_note=(f" · VRAM 여유 {gpu['free_gib']:.1f} GiB"
+                  f" (안전 여유 제외 {gpu['budget_gib']:.1f} GiB, 추정)"
+                  if isinstance(gpu,dict) else ' · VRAM 정보 확인 불가')
         missing=sum(0 if role['on_disk'] else 1 for role in stack['roles'])
         self.stack_summary.set(
-            ('여유 메모리 확인 불가' if free is None else f'여유 메모리 {free:.1f} GB')
+            ('여유 RAM 확인 불가' if free is None else f'여유 RAM {free:.1f} GiB')
+            + gpu_note
             + f" · 역할 {len(stack['roles'])}개 × 상·중·하 3단계"
             + f" · 메모리 예산 {stack['budget_gb']:.0f} GB · "
             + ('모든 역할의 모델이 디스크에 있습니다.' if not missing
