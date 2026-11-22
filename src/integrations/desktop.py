@@ -422,7 +422,7 @@ class DesktopBackend:
         except Exception:
             return True
 
-    def agent_open(self, presenter, network, project, cancel=None):
+    def agent_open(self, presenter, network, project, cancel=None, search=False):
         agent_ui = self.load('launcher.actions.agent_chat')
         if not agent_ui._ensure_gui(presenter):
             return None
@@ -441,7 +441,7 @@ class DesktopBackend:
             return None
         coordinator = self.load('launcher.agent.runtime_coordinator')
         if not invoke(coordinator.prepare_runtime, self.env, presenter, mode,
-                      chosen_network, cancel=cancel):
+                      chosen_network, cancel=cancel, search=search):
             return None
         cfg = self.load('launcher.config')
         tag = agent_ui._match_installed_model(str(model_selection.get('tag') or cfg.MODEL_TAG), presenter)
