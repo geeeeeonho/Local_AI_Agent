@@ -136,8 +136,7 @@ def analyze(*, context=8192, gpu_capacity_gib=None, refresh=False, timeout=15.0)
             result = {"available": True, "models": models, "reason": ""}
         except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as exc:
             result = {"available": False, "models": {}, "reason": str(exc)[:200]}
-        with _LOCK:
-            _CACHE[key] = (time.monotonic(), result)
+        _CACHE[key] = (time.monotonic(), result)
         return result
 
 
