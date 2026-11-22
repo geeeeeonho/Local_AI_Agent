@@ -88,12 +88,27 @@ class DesktopWindow(TranslationController, ToolsController):
         sidebar.pack(side='left',fill='y');sidebar.pack_propagate(False)
         ttk.Label(sidebar,text='LOCAL AI',style='Brand.TLabel').pack(anchor='w',padx=15,pady=(13,2))
         ttk.Label(sidebar,text=self.spec.title.replace('LocalAI ',''),style='Sidebar.TLabel').pack(anchor='w',padx=16,pady=(0,9))
-        captions={'WORK':'\uc8fc\uc694 \uc791\uc5c5','MANAGE':'\ubaa8\ub378 \u00b7 \uc124\uce58 \uad00\ub9ac','GENERAL':'\ud658\uacbd \u00b7 \uc124\uc815'}
+        captions={'WORK':'주요 작업','MANAGE':'모델 · 설치','GENERAL':'환경 · 설정'}
+        self.advanced_nav_frame=None
+        self.advanced_nav_visible=False
         for group,keys in navigation_groups(self.app):
-            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',font=('Segoe UI',9,'bold')).pack(anchor='w',padx=16,pady=(4,3))
+            ttk.Label(sidebar,text=captions[group],style='Sidebar.TLabel',
+                      font=('Segoe UI',9,'bold')).pack(anchor='w',padx=16,pady=(4,3))
             for key in keys:
-                b=ttk.Button(sidebar,text=LABELS[key],style=nav_style(key),command=lambda k=key:self.navigate(k))
-                b.pack(fill='x',padx=9,pady=1);self.nav[key]=b
+                if group == 'GENERAL' and key != 'home':
+                    if self.advanced_nav_frame is None:
+                        self.advanced_nav_toggle=ttk.Button(
+                            sidebar,text='더보기 ▸',style='Nav.TButton',
+                            command=self.toggle_advanced_navigation)
+                        self.advanced_nav_toggle.pack(fill='x',padx=9,pady=1)
+                        self.advanced_nav_frame=ttk.Frame(sidebar,style='Sidebar.TFrame')
+                    host=self.advanced_nav_frame
+                else:
+                    host=sidebar
+                b=ttk.Button(host,text=LABELS[key],style=nav_style(key),
+                             command=lambda k=key:self.navigate(k))
+                b.pack(fill='x',padx=9,pady=1)
+                self.nav[key]=b
             ttk.Separator(sidebar).pack(fill='x',padx=13,pady=(6,2))
         ttk.Label(sidebar,text='Local data stays local',style='Sidebar.TLabel',
                   justify='left',font=('Segoe UI',9)).pack(side='bottom',anchor='w',padx=12,pady=7)
@@ -166,6 +181,22 @@ class DesktopWindow(TranslationController, ToolsController):
             self.activity.pack_forget()
         self.activity_button.configure(text='기록 접기' if self._activity_visible else '기록 펼치기')
 
+    def _set_advanced_navigation(self, shown):
+        frame=getattr(self,'advanced_nav_frame',None)
+        if frame is None or self.advanced_nav_visible == bool(shown):
+            return
+        self.advanced_nav_visible=bool(shown)
+        if shown:
+            # Insert beneath its own disclosure button, before the group divider.
+            frame.pack(after=self.advanced_nav_toggle,fill='x')
+        else:
+            frame.pack_forget()
+        self.advanced_nav_toggle.configure(
+            text='더보기 ▾' if shown else '더보기 ▸')
+
+    def toggle_advanced_navigation(self):
+        self._set_advanced_navigation(not self.advanced_nav_visible)
+
     def toggle_sidebar_models(self):
         """The inventory summary stays visible, while the long list is optional."""
         if not hasattr(self, 'sidebar_model_scroll'):
@@ -204,6 +235,8 @@ class DesktopWindow(TranslationController, ToolsController):
             self.show_project_links()
             return
         if key not in self.pages: return
+        if key in ('network','system','settings'):
+            self._set_advanced_navigation(True)
         self.pages[key].tkraise();self.current_page=key
         for name,button in self.nav.items():
             button.configure(style=nav_style(name,name==key))
