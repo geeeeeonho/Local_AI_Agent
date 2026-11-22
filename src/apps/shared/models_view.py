@@ -499,7 +499,7 @@ def _choose(parent, w):
     layout = Stack(parent)
     layout.fixed(lambda box: _selection_toolbar(box,w),pad=(0,3))
     layout.fixed(lambda box: _note(box,
-        '체크 = 설치 또는 유지 · GPU에서 보기는 모델 실행 예상량만 확인합니다.'),
+        '체크 = 설치 또는 유지 · GPU 보기는 모델 실행 예상량만 확인합니다.'),
         pad=(0,3))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,
