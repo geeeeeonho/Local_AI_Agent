@@ -166,7 +166,7 @@ def setup(tmp_path, monkeypatch):
 
 def test_the_first_installer_becomes_administrator_with_one_prompt(setup):
     step, root, calls = setup
-    assert step.current_role(root) == 'admin'
+    assert step.current_role(root) == 'user', 'no administrator before UAC+ACL verification'
     assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
     kinds = [call[0] for call in calls]
     assert kinds == ['uac', 'deploy'], 'executable files must not be deployed before UAC'
