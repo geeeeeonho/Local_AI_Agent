@@ -126,7 +126,10 @@ def account_name() -> Optional[str]:
 
 
 def group_sid(name: str) -> Optional[str]:
-    script = ("try { (New-Object System.Security.Principal.NTAccount(%s))"
+    # Always qualify local groups by this machine's name. A bare name can
+    # resolve to a different domain principal or fail on localized systems.
+    script = ("$localGroup = $env:COMPUTERNAME + '\\\\' + %s; "
+              "try { (New-Object System.Security.Principal.NTAccount($localGroup))"
               ".Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }"
               % quote(name))
     result = run_script(script, timeout=30)
@@ -285,7 +288,8 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
     lines = ['$failed = 0',
              '$localaiIssues = New-Object System.Collections.Generic.List[string]'] + _group_lines() + [
         _member_line(machine.ADMINS_GROUP, user_sid, True),
-        "$admins = $null; try { $admins = (New-Object System.Security.Principal.NTAccount(%s))"
+        "$admins = $null; try { $localGroup = $env:COMPUTERNAME + '\\\\' + %s; "
+        "$admins = (New-Object System.Security.Principal.NTAccount($localGroup))"
         ".Translate([System.Security.Principal.SecurityIdentifier]).Value } "
         "catch { $failed = 1; [void]$localaiIssues.Add('admin group SID: ' + $_.Exception.Message) }"
         % quote(machine.ADMINS_GROUP),
