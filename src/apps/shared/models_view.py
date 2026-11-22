@@ -286,18 +286,45 @@ def _summary_row(parent, w):
 
 
 def _tree_frame(parent, columns, headings, widths, height):
-    """The tree plus its scrollbar, as one row for :class:`Stack` to place."""
-    wrapper = ttk.Frame(parent)
-    tree = ttk.Treeview(wrapper, columns=columns, show='headings', height=height)
-    for key, title, width in zip(columns, headings, widths):
-        tree.heading(key, text=title)
-        tree.column(key, width=width, minwidth=60)
-    scroll = ttk.Scrollbar(wrapper, orient='vertical', command=tree.yview)
-    tree.configure(yscrollcommand=scroll.set)
-    scroll.pack(side='right', fill='y')
-    tree.pack(fill='both', expand=True)
-    # Stack places the frame; the caller wants the tree it contains.
-    wrapper.tree = tree
+    """A tree with both-axis navigation and narrow-window column reflow."""
+    wrapper=ttk.Frame(parent)
+    tree=ttk.Treeview(wrapper,columns=columns,show='headings',height=height)
+    for key,title,width in zip(columns,headings,widths):
+        tree.heading(key,text=title)
+        tree.column(key,width=width,minwidth=60,stretch=True)
+    vertical=ttk.Scrollbar(wrapper,orient='vertical',command=tree.yview)
+    horizontal=ttk.Scrollbar(wrapper,orient='horizontal',command=tree.xview)
+    tree.configure(yscrollcommand=vertical.set,xscrollcommand=horizontal.set)
+    vertical.pack(side='right',fill='y')
+    horizontal.pack(side='bottom',fill='x')
+    tree.pack(side='left',fill='both',expand=True)
+
+    def fit_columns(event):
+        # Keep the last column reachable instead of clipping it beyond the
+        # right edge of an 880px window. Scrollbars are still available when
+        # the OS text scale makes even the minimum column widths too wide.
+        available=max(0,event.width-24)
+        if available<240:
+            return
+        natural=sum(widths)
+        if natural<=available:
+            targets=list(widths)
+        else:
+            ratio=available/natural
+            targets=[max(60,int(width*ratio)) for width in widths]
+            excess=sum(targets)-available
+            if excess>0:
+                for index in sorted(range(len(targets)),key=lambda x:targets[x],reverse=True):
+                    take=min(excess,targets[index]-60)
+                    targets[index]-=take
+                    excess-=take
+                    if excess<=0:
+                        break
+        for key,width in zip(columns,targets):
+            if int(tree.column(key,'width'))!=int(width):
+                tree.column(key,width=int(width))
+    wrapper.bind('<Configure>',fit_columns,add='+')
+    wrapper.tree=tree
     return wrapper
 
 
