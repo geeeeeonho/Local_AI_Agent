@@ -790,6 +790,7 @@ class Store:
         None when there is nothing to protect on this machine and nothing
         sealed - a development checkout, or protection switched off.
         """
+        require_private_record_encryption(self.root)
         if not enabled() and not self.sealed():
             return None
         with self._operation():
@@ -808,6 +809,7 @@ class Store:
         return self.seal_if_idle(log=log)
 
     def seal_if_idle(self, *, log=None) -> bool:
+        require_private_record_encryption(self.root)
         if not enabled() or not is_private_path(self.root):
             return False
         with self._operation():
