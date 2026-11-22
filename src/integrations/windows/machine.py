@@ -145,7 +145,7 @@ function Members($name) {
     $g = [ADSI]("WinNT://$env:COMPUTERNAME/$name,group")
     foreach ($m in @($g.Invoke('Members'))) {
       $raw = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
-      $out += (New-Object System.Security.Principal.SecurityIdentifier($raw, 0)).Value
+      $out += ([System.Security.Principal.SecurityIdentifier]::new([byte[]]$raw, 0)).Value
     }
   } catch { }
   return ,$out
@@ -261,7 +261,7 @@ def _member_line(group: str, sid: str, present: bool) -> str:
         "function Test-LocalAISidMember($groupObj, $targetSid) { "
         "foreach ($entry in @($groupObj.psbase.Invoke('Members'))) { "
         "try { $raw = $entry.GetType().InvokeMember('objectSid', 'GetProperty', $null, $entry, $null); "
-        "$found = (New-Object System.Security.Principal.SecurityIdentifier($raw, 0)).Value; "
+        "$found = ([System.Security.Principal.SecurityIdentifier]::new([byte[]]$raw, 0)).Value; "
         "if ($found -ieq $targetSid) { return $true } } catch { } "
         "} return $false }; "
         "try { $g = [ADSI]('WinNT://' + $env:COMPUTERNAME + '/%s,group'); "
