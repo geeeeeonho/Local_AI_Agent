@@ -67,6 +67,14 @@ def _show_file_map(svc, p) -> None:
     p.info("저장소 파일 -> 모델 (" + str(svc.model_dir) + ")")
     # CSV-only export would leave the canonical JSON stale. Do not return early
     # on an empty scan: deleting the last model must clear both old inventories.
+    from integrations import model_access
+    if not model_access.management_access(svc.model_dir)["allowed"]:
+        # The published index lives in the administrator-only store; list it
+        # from a read-only scan instead of attempting a refused write.
+        for line in mf.summary_lines([mf.FileRow(**row) for row in
+                                      mf.build_index(svc.model_dir)["files"]]):
+            p.info("  " + line)
+        return
     out = mf.refresh(svc.model_dir, log=p.info)
     if out is None:
         p.warn("모델 인덱스(JSON/CSV)를 갱신하지 못했습니다. 위 오류와 저장소 권한을 확인하세요.")

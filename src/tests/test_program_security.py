@@ -27,11 +27,14 @@ def test_repair_script_removes_every_old_explicit_ace_and_takes_owner():
     assert "SetOwner($builtinAdmin)" in script
     assert "LocalAI root is a link" in script
     assert "Set-Acl -LiteralPath $localaiRoot" in script
-    assert script.count("/reset /T") == 1  # one loop, three protected folders
+    assert script.count("/reset /T") == 1  # one loop over the protected folders
     assert "icacls.exe $folder /setowner" in script
     assert "ReparsePoint" in script and " /L " in script
-    assert "app" in script and "environment" in script and "ollama" in script
-    assert "models" not in script and "users" not in script
+    for name in ("app", "environment", "ollama", "models"):
+        assert "LocalAI/%s'" % name in script.replace("\\", "/"), name
+    assert "users" not in script, "private account folders keep their own ACLs"
+    assert "$ErrorActionPreference = $localaiPreviousPreference" in script, \
+        "Stop must not leak into the lines after the protection block"
     assert "desktop-runtime.lock" in script and "(R,W)" in script
     assert "machine.json" in script and "Unable to reset policy ACL" in script
     assert script.rstrip().endswith("exit $failed")

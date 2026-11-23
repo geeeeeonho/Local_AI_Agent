@@ -550,6 +550,11 @@ class OllamaService:
         # own boundary only covers requests we originate; this refuses them in
         # the server, with 403, including on the OpenAI-compatible endpoint.
         e["OLLAMA_NO_CLOUD"] = "1"
+        # The shared store is read-only for ordinary accounts, and a broker
+        # started by one of them must still start. Ollama's start-up prune
+        # deletes "unused" blobs/directories - a write that would fail, and a
+        # model change no administrator asked for. Removal stays explicit.
+        e["OLLAMA_NOPRUNE"] = "1"
         # Debug output includes prompts, and the broker's log is shared by
         # every account on the machine. Never inherit it into that log.
         e.pop("OLLAMA_DEBUG", None)

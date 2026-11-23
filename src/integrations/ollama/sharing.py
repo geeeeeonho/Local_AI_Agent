@@ -1,7 +1,7 @@
 """Read and repair the LocalAI machine-shared model store.
 
-``core.models.sharing`` decides whether LocalAI accounts can manage the shared
-library. The LocalAI broker receives its store path explicitly. Publishing
+``core.models.sharing`` decides whether LocalAI accounts can read - and only
+administrators change - the shared library. The LocalAI broker receives its store path explicitly. Publishing
 ``OLLAMA_MODELS`` remains a separate best-effort convenience for standalone
 Ollama CLI/Tray processes.
 """
@@ -14,12 +14,15 @@ from core.models.sharing import Sharing, VARIABLE
 from integrations.windows import acl
 
 __all__ = ['read', 'repair', 'Sharing', 'VARIABLE', 'principal_sid',
-           'ensure_readable', 'ensure_manageable',
+           'ensure_readable', 'ensure_read_only', 'OWNER_RIGHTS_SID',
            'publish_machine_variable', 'publish_user_variable',
            'publish_variable', 'describe']
 
 # The local Users group, by SID so it works on a non-English Windows.
 BUILTIN_USERS_SID = policy.USERS_SID
+#: OWNER RIGHTS: replaces a file owner's implicit READ_CONTROL/WRITE_DAC, so an
+#: account that once pulled a blob cannot re-grant itself write on it.
+OWNER_RIGHTS_SID = 'S-1-3-4'
 # One copy of the console plumbing: the private records folder under the same
 # root asks the opposite question of the same tool.
 _run = acl.run
@@ -31,7 +34,11 @@ def principal_sid() -> str:
     try:
         import project_paths
         from core import machine
+        from integrations.windows import machine as windows
         policy = machine.load(project_paths.machine_policy_path())
+        if policy is not None and acl.on_windows():
+            # A tampered users_group_sid must not redirect "every account".
+            policy = windows.trusted_policy(policy, members=False)
     except Exception:
         policy = None
     return policy.principal() if policy is not None else BUILTIN_USERS_SID
@@ -80,9 +87,8 @@ def read(model_dir=None, *, windows=None) -> Sharing:
 def ensure_readable(model_dir: Path, *, windows=None) -> bool:
     """Grant BUILTIN\\Users inheritable read/execute, keeping existing ACLs.
 
-    This helper is used for shared runtime/Ollama directories. The model store
-    uses ensure_manageable instead because every account may install and remove
-    shared models.
+    Used for the shared runtime/Ollama directories. The model store uses
+    ensure_read_only, which also removes an older Modify grant.
     """
     if not acl.on_windows(windows):
         return True
@@ -91,19 +97,28 @@ def ensure_readable(model_dir: Path, *, windows=None) -> bool:
     return result is not None and result.returncode == 0
 
 
-def ensure_manageable(model_dir: Path, *, windows=None) -> bool:
-    """Grant BUILTIN\\Users inheritable Modify rights on the model store only.
+def ensure_read_only(model_dir: Path, *, windows=None) -> bool:
+    """Ordinary accounts read the model store; only administrators change it.
 
-    Model files, manifests, the shared registry and the mutation lock are
-    machine-wide mutable state. Standard Windows accounts therefore need
-    to create, replace and delete children here. This stays separate from
-    ensure_readable because environment/ollama must remain RX-only.
+    Removes every explicit grant to the "every account" principal (the old
+    ``(OI)(CI)(M)`` grant included), gives it inheritable read/execute, and
+    limits a file owner's implicit rights to read/execute. Administrators keep
+    full control through the root ACL; ownership itself is reset to
+    Administrators by the elevated program-protection repair.
     """
     if not acl.on_windows(windows):
         return True
-    result = _run(['icacls', str(model_dir), '/grant',
-                   '*%s:(OI)(CI)(M)' % principal_sid(), '/T', '/Q'])
-    return result is not None and result.returncode == 0
+    principal = principal_sid()
+    commands = [
+        ['icacls', str(model_dir), '/remove:g', '*' + principal, '/T', '/C', '/Q'],
+        ['icacls', str(model_dir), '/grant', '*%s:(OI)(CI)(RX)' % principal,
+         '/grant', '*%s:(OI)(CI)(RX)' % OWNER_RIGHTS_SID, '/Q'],
+    ]
+    for command in commands:
+        result = _run(command)
+        if result is None or result.returncode != 0:
+            return False
+    return True
 
 
 def publish_machine_variable(model_dir: Path, *, windows=None) -> bool:
@@ -149,10 +164,9 @@ def publish_variable(model_dir: Path, *, windows=None) -> str:
 
 
 def repair(model_dir=None, *, windows=None) -> dict:
-    """Repair LocalAI cross-account model management and report what is left.
+    """Make the store readable by every account and writable only by admins.
 
-    Safe to run at any time and safe to run twice; Modify includes the read
-    access required by the sharing check and the ACL step is idempotent.
+    Safe to run at any time and safe to run twice; the ACL step is idempotent.
     Machine-scope OLLAMA_MODELS is an external-Ollama compatibility setting,
     not a LocalAI sharing requirement.
     Returns the state afterwards so a caller can tell the user whether it
@@ -165,7 +179,7 @@ def repair(model_dir=None, *, windows=None) -> dict:
     before = read(model_dir, windows=windows)
     done, failed = [], []
     for name, action in (
-        ('manageable', lambda: ensure_manageable(model_dir, windows=windows)),
+        ('read_only', lambda: ensure_read_only(model_dir, windows=windows)),
     ):
         (done if action() else failed).append(name)
     after = read(model_dir, windows=windows)
@@ -267,8 +281,9 @@ _MESSAGES = {
         '두어도 됩니다.',
     policy.NOT_READABLE:
         '다른 계정에 읽기 권한이 없습니다.',
-    policy.NOT_MANAGEABLE:
-        '다른 계정에 모델 설치·삭제를 위한 수정 권한이 없습니다. 설치 / 복구에서 권한을 갱신하세요.',
+    policy.USERS_CAN_MODIFY:
+        '관리자가 아닌 계정이 모델 파일을 바꿀 수 있습니다(변조 위험). LocalAI 관리자 계정에서 '
+        '[설치 / 복구] 또는 [모델 저장소 권한 보호]를 실행하세요.',
 }
 
 

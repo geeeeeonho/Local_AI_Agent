@@ -14,7 +14,7 @@ C:\LocalAI\
 ├─ machine.json          공용 — LocalAI 관리자와 사용 범위 (관리자만 수정)
 ├─ environment\          공용 — 관리형 런타임 · 설치 템플릿 · 스크립트
 ├─ ollama\               공용 — LocalAI가 관리하는 Ollama 중계기 (원시 로그 미저장)
-├─ models\               공용 — 모든 Windows 계정이 함께 관리하는 모델 저장소
+├─ models\               공용 — 모든 계정이 사용, 설치·삭제는 LocalAI 관리자만
 │  ├─ MODEL_FILES.csv
 │  └─ .localai\
 │     ├─ registry.json
@@ -49,14 +49,22 @@ Local_AI_Agent 자체의 라이선스를 지정하는 것은 아닙니다.
   계정의 관리자 등록, `C:\LocalAI` 권한 잠금, 공용 바로가기 생성이 한 번에 끝납니다.
   "처음 설치한 계정"은 `C:\LocalAI` 폴더를 만든 계정(소유자)입니다.
 - `C:\LocalAI`는 이제 C:\ 에서 물려받던 `Authenticated Users: 수정` 권한을 끊습니다.
-  관리자만 프로그램과 실행환경을 바꿀 수 있고, 다른 계정은 읽기·실행만 합니다.
-  모델 저장소는 지금처럼 모든 허용 계정이 설치·삭제할 수 있습니다.
+  관리자만 프로그램·실행환경·**모델 저장소**를 바꿀 수 있고, 다른 계정은 읽기·실행만
+  합니다. 모델 설치·삭제(Models 화면, `RUN.bat --manage`의 모델 관리)는 LocalAI
+  관리자 계정에서만 진행하며, 다른 계정은 설치된 모델을 그대로 사용합니다.
+- LocalAI 관리자 여부는 `machine.json`에 적힌 SID만으로 정하지 않습니다. Windows가
+  보고하는 `LocalAI-Admins` 그룹 구성원과 실제 그룹 SID로 확인한 뒤에만 관리자로
+  인정하고, 확인되지 않는 기록은 다음 관리자 Setup에서 정책 파일에서 제외합니다.
 - **Setup → LocalAI 계정 관리**에서 관리자는 이 PC의 계정 목록을 보고, 사용 허용/해제,
   관리자 지정/해제, **기록 삭제**, "허용한 계정만 사용" 전환을 할 수 있습니다. 그룹 변경과
   삭제는 UAC 승인이 필요하고, 그룹 변경은 그 계정이 다시 로그인하면 적용됩니다.
-- 관리자가 아닌 계정의 Setup은 자기 개인 폴더와 Docker 이미지만 준비하고 공용 부분은
-  건드리지 않습니다. 프로그램 갱신은 관리자가 새 체크아웃에서 `RUN.bat --install`을
-  실행하면 `C:\LocalAI\app`에 통째로 교체됩니다.
+- 관리자가 아닌 계정의 Setup은 자기 개인 폴더와 자기 Docker Sandbox 이미지만
+  준비합니다(빌드 파일은 `users\<계정>\user_data\sandbox-build`에 생성). 공용
+  프로그램·실행환경·모델 저장소(`models\.localai` 포함)는 만들거나 쓰지 않으며,
+  관리자 Setup이 먼저 실행되지 않았으면 그 사실을 알리고 중단합니다.
+- 프로그램 갱신은 관리자가 **푸시된 커밋을 체크아웃한 깨끗한 Git 저장소**에서
+  `RUN.bat --install`을 실행하면 `C:\LocalAI\app`에 통째로 교체됩니다
+  (아래 "Git 커밋과 설치본 연결" 참고).
 
 ## 기록 암호화 — 관리자도 읽을 수 없고, 지울 수만 있습니다
 
@@ -125,12 +133,33 @@ Windows에서 새로 받은 LocalAI를 **평소처럼 `RUN.bat`으로 실행하�
 
 ## 공용 프로그램 파일 보호 (Windows)
 
-LocalAI는 하나의 `C:\\LocalAI\\app` 프로그램을 모든 Windows 계정이 실행하되, 일반 사용자에게는 **읽기·실행 권한만** 부여합니다. `C:\\LocalAI\\environment` 및 `C:\\LocalAI\\ollama`도 같은 정책을 따릅니다. 프로그램을 설치·업데이트할 수 있는 계정은 LocalAI 관리자 및 Windows 관리자뿐입니다.
+LocalAI는 하나의 `C:\\LocalAI\\app` 프로그램을 모든 Windows 계정이 실행하되, 일반 사용자에게는 **읽기·실행 권한만** 부여합니다. `C:\\LocalAI\\environment`, `C:\\LocalAI\\ollama`, `C:\\LocalAI\\models`도 같은 정책을 따릅니다. 프로그램을 설치·업데이트하고 모델을 설치·삭제할 수 있는 계정은 LocalAI 관리자 및 Windows 관리자뿐입니다.
 
 - 관리자 Setup은 프로그램을 복사하기 **전에** Windows UAC로 공용 루트의 상속 ACL을 차단하고, 남아 있는 **명시적 쓰기·삭제·권한 변경 허용 ACE**를 제거합니다. 보호 대상 하위 폴더는 재귀적으로 ACL과 소유권을 정리하고, 설치 프로그램이 파일을 추가한 뒤에도 다시 검증합니다.
 - **UAC 승인 취소·ACL 적용/검증 실패 시 설치/업데이트를 중단**합니다. 보안 적용 없이 설치에 성공했다고 표시하지 않습니다. 일반 사용자 Setup은 본인 기록/설정만 준비하며 공용 프로그램을 덮어쓰지 않습니다.
-- `C:\\LocalAI\\models`는 기존대로 **공용 모델 설치·삭제 가능** 영역입니다. `C:\\LocalAI\\users\\<계정>`에는 각 계정의 개인 권한이 유지됩니다. `environment\\desktop-runtime.lock` 파일에는 동시 실행 조정을 위한 최소 읽기/쓰기 권한만 예외로 부여합니다.
+- `C:\\LocalAI\\models`도 보호 대상입니다. 일반 계정이 manifest·blob·`registry.json`을 바꾸면 다른 계정이 실행하는 모델이 바뀌므로, 예전 설치가 남긴 `Users: 수정` 권한과 다른 계정 소유권을 관리자 Setup에서 제거합니다. `C:\\LocalAI\\users\\<계정>`에는 각 계정의 개인 권한이 유지됩니다. `environment\\desktop-runtime.lock` 파일에는 동시 실행 조정을 위한 최소 읽기/쓰기 권한만 예외로 부여합니다.
+- 공용 Ollama 중계기는 시작 시 모델 파일을 정리(prune)하지 않도록 `OLLAMA_NOPRUNE=1`로 실행합니다. 읽기 전용 저장소에서도 일반 계정이 중계기를 시작할 수 있고, 아무도 요청하지 않은 모델 삭제가 일어나지 않습니다.
+- 관리자 Setup은 시작할 때와 외부 설치 프로그램 실행 후에 한 번씩 보호를 다시 적용하므로 UAC 확인 창이 **두 번 이상** 뜰 수 있습니다. LocalAI 관리자가 Windows 관리자가 아니면 그때마다 Windows 관리자 자격 증명이 필요합니다.
 - LocalAI 관리자를 해제하거나 계정 사용 범위를 변경할 때도 프로그램 파일 권한을 다시 보호합니다. 단, Windows 자체 관리자 권한을 소유한 사용자는 UAC 승인 후 ACL을 변경할 수 있습니다.
+
+### Git 커밋과 설치본 연결 (변조·끼워 넣기 방지)
+
+`C:\\LocalAI\\app`은 체크아웃 폴더를 그대로 복사하지 않고 **Git 객체에서 직접** 만듭니다.
+
+- 배포 내용은 체크아웃 `HEAD` 커밋의 blob뿐입니다. 각 blob은 커밋이 가리키는 해시와 다시 대조하므로, 작업 폴더에서 수정된 파일이나 손상·바꿔치기된 Git 객체는 배포되지 않습니다.
+- 커밋되지 않은 수정, **추적되지 않은 추가 파일**(예: 끼워 넣은 `src/sitecustomize.py`)이 배포 범위에 있으면 Setup은 배포를 중단합니다. `.gitignore`로 숨긴 파일과 체크아웃의 `__pycache__`도 복사되지 않습니다.
+- 어떤 원격 브랜치에도 없는(푸시되지 않은) 커밋, 심볼릭 링크·서브모듈, 다른 위치의 객체 저장소(alternates), 저장소 하위 폴더에서 실행한 Setup은 거부합니다. 다른 Windows 계정이 소유한 체크아웃은 Git 자체의 소유권 검사(`safe.directory`)로 거부됩니다.
+- Setup이 실행하는 Git 명령은 체크아웃의 `.git/config`가 지정한 프로그램(`core.fsmonitor`, hooks, 외부 diff 등)을 실행하지 않도록 강제로 끈 상태로 실행합니다.
+- `VERSION.json`에는 커밋·트리 ID, 원격 주소, 파일별 Git blob ID와 SHA-256이 기록됩니다(바이트코드 포함). `RUN.bat`은 Windows `cmd.exe`용으로 CRLF로 기록하며, 기록된 변환 정보로 Git 내용과 다시 대조할 수 있습니다.
+- LocalAI는 **시작할 때마다** 공용 설치본을 이 기록과 대조합니다. 파일이 바뀌었거나 없어졌거나 **추가되었으면** 실행하지 않고 관리자 재배포를 안내합니다. 무결성 기록이 없는 예전 설치본은 안내만 하고 실행합니다. 다른 버전의 Python이 남긴 바이트코드(`__pycache__\*.cpython-XY.pyc`, 현재 Python이 읽지 않는 파일)는 검사에서 제외합니다.
+- 기록 파일까지 다시 계산해 덮어쓴 경우는 시작 검사로는 알 수 없으므로, 신뢰된 체크아웃의 Git 기록과 직접 대조합니다.
+
+```powershell
+cd <체크아웃>\src
+python -m tools.verify_app
+```
+
+`OK ... (Git ls-tree 확인)`이면 설치본의 모든 파일이 체크아웃 `HEAD` 커밋과 같습니다. 이 검사는 아무것도 바꾸지 않습니다.
 
 ### 현재 PC의 실제 권한 확인
 
@@ -144,7 +173,7 @@ icacls C:\LocalAI\ollama
 icacls C:\LocalAI\models
 ```
 
-`app`, `environment`, `ollama`의 일반 사용자 권한은 `(RX)`이어야 하며 `(M)`, `(F)`, `(W)`가 있으면 안전하지 않습니다. 관리자 Setup (`RUN.bat --install`)을 실행해 승인·복구하십시오. **`models`의 일반 사용자 `(M)`은 의도된 동작**입니다. 별도의 원본 Git checkout 폴더는 이 보호 범위에 포함되지 않으므로, 관리자 계정만 수정할 수 있는 신뢰된 원본에서 설치해야 합니다.
+`app`, `environment`, `ollama`, `models`의 일반 사용자 권한은 `(RX)`이어야 하며 `(M)`, `(F)`, `(W)`가 있으면 안전하지 않습니다. 관리자 Setup (`RUN.bat --install`) 또는 관리자 계정의 Models → **모델 저장소 권한 보호**를 실행해 승인·복구하십시오. 원본 Git checkout 폴더 자체의 ACL은 이 보호 범위에 포함되지 않으므로, 관리자 계정만 수정할 수 있는 신뢰된 원본에서 설치해야 합니다. 이 경우에도 위의 Git 연결 검사로 커밋되지 않은 변경과 추가 파일은 배포되지 않습니다.
 
 ### 작고 편안한 기본 화면 (연회색 테마)
 
@@ -233,8 +262,8 @@ Ollama는 LocalAI의 **로컬 모델 중계기**입니다. 모델 API는 Ollama�
 **모델 위치** — `C:\LocalAI\models`. LocalAI가 띄우는 Ollama에는 항상
 `OLLAMA_MODELS`를 이 경로로 넘깁니다. 설치 시에는 가능한 경우 시스템 범위
 `OLLAMA_MODELS`도 기록합니다. `environment`와 `ollama`는 계속
-`BUILTIN\Users` 읽기/실행만 허용하지만, `models`에는 Modify를 허용해
-다른 Windows 계정도 같은 모델을 설치·삭제하고 같은 관리 상태를 사용합니다.
+`BUILTIN\Users` 읽기/실행만 허용하며, `models`도 같습니다. 다른 Windows 계정은
+같은 모델을 그대로 사용하고, 설치·삭제는 LocalAI 관리자 계정에서만 합니다.
 
 **계정 간 공유** — 공용 Ollama가 이미 응답 중이면 어느 Windows 계정이 시작했든
 재사용합니다. 계정별 런타임 상태 파일이 없다는 이유만으로 공용 프로세스를 자기
@@ -343,9 +372,10 @@ WORKSPACE_DIR       -> <ACCOUNT_ROOT>\workspace
 있기 때문입니다. `LOCAL_AI_ACCOUNT`는 개인 기록을 어느 계정 폴더에 둘지
 재정의합니다.
 
-기본 설치에서는 `environment`, `ollama`에 `BUILTIN\Users` 읽기/실행 권한을
-보장하고, `models`에만 Modify 권한을 부여합니다. 따라서 일반 Windows 계정도 공용
-모델을 설치·삭제할 수 있지만 공용 실행 바이너리는 임의로 바꿀 수 없습니다.
+기본 설치에서는 `environment`, `ollama`, `models`에 `BUILTIN\Users` 읽기/실행
+권한만 보장합니다. 따라서 일반 Windows 계정은 공용 모델을 사용할 수 있지만 모델과
+공용 실행 바이너리를 바꿀 수는 없습니다. 모델 파일 소유자가 자기 파일에 쓰기 권한을
+다시 주지 못하도록 `models`에는 `OWNER RIGHTS` 읽기/실행 항목도 둡니다.
 `C:\LocalAI\users` 부모에는 자기 `users\<계정>` 폴더를 만들 수 있는 최소 권한만
 주고, 생성한 계정 폴더는 즉시 상속을 끊어 해당 계정·SYSTEM·Administrators만 접근하게
 합니다. 개인 설정과 잠금 파일은 `users\<계정>\user_data\runtime` 아래에서 현재 계정이
@@ -364,11 +394,21 @@ UAC 확인 창을 한 번 띄워 폴더 소유권을 이 계정 SID로 되돌린
 없을 때는 Ollama 시작을 실패로 처리하지 않고, 기존 파일을 옆으로 옮기거나 다른 로그
 파일에 기록합니다.
 
-공용 실행환경 권한은 의도적으로 **읽기/실행**이고, 모델 저장소만 **Modify**입니다.
-모델 설치·삭제, manifest/blob 변경, `MODEL_FILES.csv`, 공용 registry와 mutation lock은
-모두 `C:\LocalAI\models` 아래에서 한 벌로 관리합니다. 반면 `environment` 아래 공용
-Open Interpreter 바이너리 등을 새로 설치·업데이트할 때는 관리자 또는 처음 공용 환경을
-준비한 계정에서 Setup을 실행해야 합니다.
+공용 실행환경과 모델 저장소 권한은 의도적으로 **읽기/실행**입니다. 모델 설치·삭제,
+manifest/blob 변경, `MODEL_FILES.csv`, 공용 registry와 mutation lock은 모두
+`C:\LocalAI\models` 아래에서 한 벌로 관리하며 LocalAI 관리자만 바꿉니다. Models
+화면과 모델 관리 메뉴는 관리자가 아닌 계정의 변경 요청을 Ollama 시작·다운로드 전에
+거절합니다. `environment` 아래 공용 Open Interpreter 바이너리 등을 새로 설치·업데이트할
+때도 LocalAI 관리자 계정에서 Setup을 실행해야 합니다.
+
+**남은 한계 — 공용 Ollama HTTP API.** Ollama의 `127.0.0.1:11434` API에는 인증이 없고,
+모델 변경은 중계기 프로세스의 Windows 권한으로 실행됩니다. 중계기를 **관리자 계정이
+시작한 동안**에는 같은 PC의 다른 계정이 LocalAI를 거치지 않고 API로 직접
+`/api/pull`·`/api/delete`를 호출할 수 있습니다. 반대로 일반 계정이 시작한
+중계기에서는 ACL 때문에 관리자 계정의 모델 설치도 실패하므로, 그때는 그 계정의
+LocalAI를 종료해 중계기를 내린 뒤 관리자 계정에서 다시 시도하세요. 이 경로까지
+막으려면 중계기를 모델 쓰기 권한이 없는 별도 서비스 계정으로 실행하는 구조 변경이
+필요합니다.
 
 ## Ollama 서비스 소유권
 

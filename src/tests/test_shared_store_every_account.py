@@ -1,4 +1,9 @@
-"""Machine-wide model-store sharing is a path + ACL contract."""
+"""Machine-wide model-store sharing is a path + ACL contract.
+
+Every allowed account reads the shared store; only LocalAI administrators
+change it. A store ordinary accounts can modify is a tampering risk, not
+"better sharing".
+"""
 import types
 from pathlib import Path
 
@@ -15,7 +20,7 @@ def state(**kw):
         path=STORE,
         intended_shared=True,
         readable_by_users=True,
-        manageable_by_users=True,
+        manageable_by_users=False,
         windows=True,
     )
     base.update(kw)
@@ -47,9 +52,9 @@ def test_unreadable_files_block_sharing():
     assert state(readable_by_users=False).blockers == (policy.NOT_READABLE,)
 
 
-def test_read_only_store_is_not_full_model_sharing():
-    found = state(manageable_by_users=False)
-    assert found.blockers == (policy.NOT_MANAGEABLE,)
+def test_a_store_ordinary_accounts_can_modify_is_a_finding():
+    found = state(manageable_by_users=True)
+    assert found.blockers == (policy.USERS_CAN_MODIFY,)
     assert found.every_account is False
     assert found.repairable is True
 
@@ -71,7 +76,7 @@ READ_ONLY = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
 NOT_GRANTED = 'D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)'
 
 
-def install_fake_windows(monkeypatch, store, *, sddl=GRANTED, returncode=0):
+def install_fake_windows(monkeypatch, store, *, sddl=READ_ONLY, returncode=0):
     import sys
     from core import ollama_paths
     from integrations.windows import acl
@@ -90,70 +95,74 @@ def install_fake_windows(monkeypatch, store, *, sddl=GRANTED, returncode=0):
     return ran
 
 
-def test_shared_store_acl_reads_as_shared(monkeypatch, tmp_path):
+def test_read_only_store_acl_reads_as_shared(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
     install_fake_windows(monkeypatch, store)
     found = sharing.read(store, windows=True)
     assert found.readable_by_users is True
-    assert found.manageable_by_users is True
+    assert found.manageable_by_users is False
     assert found.blockers == ()
+    assert found.every_account is True
 
 
-def test_old_rx_only_store_is_detected_as_needing_upgrade(monkeypatch, tmp_path):
+def test_old_modify_grant_is_detected_as_tampering_risk(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
-    install_fake_windows(monkeypatch, store, sddl=READ_ONLY)
+    install_fake_windows(monkeypatch, store, sddl=GRANTED)
     found = sharing.read(store, windows=True)
     assert found.readable_by_users is True
-    assert found.manageable_by_users is False
-    assert found.blockers == (policy.NOT_MANAGEABLE,)
+    assert found.manageable_by_users is True
+    assert found.blockers == (policy.USERS_CAN_MODIFY,)
     assert found.repairable is True
+    assert any('변조' in line for line in sharing.describe(found))
 
 
-def test_repair_grants_modify_without_touching_environment_settings(monkeypatch, tmp_path):
+def test_repair_removes_modify_and_leaves_read_only(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     store = tmp_path / 'models'
     store.mkdir()
     ran = install_fake_windows(monkeypatch, store)
     result = sharing.repair(store, windows=True)
-    grant = next(cmd for cmd in ran if cmd[0] == 'icacls' and '/grant' in cmd)
-    assert '*S-1-5-32-545:(OI)(CI)(M)' in grant
-    assert '/T' in grant
+    icacls = [cmd for cmd in ran if cmd[0] == 'icacls' and '/save' not in cmd]
+    remove = next(cmd for cmd in icacls if '/remove:g' in cmd)
+    assert remove[3] == '*S-1-5-32-545' and '/T' in remove
+    grant = next(cmd for cmd in icacls if '/grant' in cmd)
+    assert '*S-1-5-32-545:(OI)(CI)(RX)' in grant
+    assert '*S-1-3-4:(OI)(CI)(RX)' in grant, "a blob's owner cannot re-grant itself write"
+    assert not any('(M)' in part or ':F' in part or '(F)' in part
+                   for cmd in icacls for part in cmd)
+    assert icacls.index(remove) < icacls.index(grant)
     assert not any(cmd[0] == 'setx' for cmd in ran)
     assert result['failed'] == ()
-
-
-def test_models_pulled_later_inherit_modify(monkeypatch, tmp_path):
-    from integrations.ollama import sharing
-    ran = install_fake_windows(monkeypatch, tmp_path)
-    sharing.ensure_manageable(tmp_path, windows=True)
-    grant = ran[0]
-    assert '(OI)(CI)(M)' in ' '.join(grant)
-    assert not any('(F)' in part for part in grant)
 
 
 def test_failed_repair_never_claims_success(monkeypatch, tmp_path):
     from integrations.ollama import sharing
     install_fake_windows(monkeypatch, tmp_path, returncode=1)
     result = sharing.repair(tmp_path, windows=True)
-    assert result['failed'] == ('manageable',)
+    assert result['failed'] == ('read_only',)
     assert result['every_account'] is not True
 
 
 def test_model_service_reports_only_the_localai_sharing_contract(monkeypatch, tmp_path):
     from services.models.service import ModelService
     from integrations.ollama import sharing
+    from integrations import model_access
     service = ModelService(types.SimpleNamespace(model_dir=tmp_path, client=object()))
     monkeypatch.setattr(sharing, 'read', lambda path, **k: state())
+    monkeypatch.setattr(model_access, 'management_access',
+                        lambda path, **k: {'allowed': False, 'admin': False, 'reason': 'no'})
     report = service.sharing()
     assert report['every_account'] is True
     assert report['readable_by_users'] is True
-    assert report['manageable_by_users'] is True
+    assert report['manageable_by_users'] is False
     assert report['blockers'] == []
     assert report['reasons'] == []
+    assert report['can_manage'] is False and report['manage_reason'] == 'no'
+    assert report['repairable'] is False, 'only an administrator is offered the repair'
 
 
 @pytest.mark.parametrize('sddl,expected', [

@@ -172,6 +172,9 @@ def setup(tmp_path, monkeypatch):
                         or types.SimpleNamespace(returncode=0, stdout='', stderr=''))
     monkeypatch.setattr(windows, 'token_group_sids', lambda: set())
     monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else 'S-1-5-21-111-222-333-1011')
+    # LocalAI-Admins as Windows lists it now (the first-install UAC adds ME).
+    monkeypatch.setattr(windows, 'group_member_sids',
+                        lambda name: {ME} if name == machine.ADMINS_GROUP else set())
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: calls.append(('uac', script)) or True)
     monkeypatch.setattr(step.app_step, 'deploy', lambda source, target: calls.append(('deploy', target)) or True)
     monkeypatch.setattr(program_security, 'verify', lambda root, policy: [])
@@ -263,21 +266,41 @@ def test_not_windows_is_a_development_checkout(tmp_path, monkeypatch):
 
 # ── the program copy ─────────────────────────────────────────────────────
 
+def _git(repo, *args):
+    import subprocess
+    subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                    '-c', 'commit.gpgsign=false', '-C', str(repo), *args],
+                   check=True, capture_output=True)
+
+
+def commit_all(repo, message='c'):
+    """Commit and mark it as present on a remote, as a pushed commit is."""
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', message)
+    _git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+
 def checkout(tmp_path):
     source = tmp_path / 'checkout'
     (source / 'src' / 'core').mkdir(parents=True)
     (source / 'src' / 'core' / 'x.py').write_text('VALUE = 1\n', encoding='utf-8')
     (source / 'src' / 'tests').mkdir()
     (source / 'src' / 'tests' / 'test_x.py').write_text('', encoding='utf-8')
-    (source / 'src' / '__pycache__').mkdir()
-    (source / 'RUN.bat').write_text('@echo off\n', encoding='utf-8')
+    # Bytes, not text: Windows text mode would already add the CRLF under test.
+    (source / 'RUN.bat').write_bytes(b'@echo off\n:A\ngoto A\n')
     (source / 'README.md').write_text('readme', encoding='utf-8')
+    (source / '.gitignore').write_text('__pycache__/\nusers/\n', encoding='utf-8')
+    _git(source, 'init', '-q')
+    _git(source, 'config', 'core.autocrlf', 'false')
+    commit_all(source)
+    (source / 'src' / '__pycache__').mkdir()
     (source / 'users').mkdir()
     return source
 
 
 def test_the_program_is_copied_without_tests_or_state(tmp_path):
     from installer.steps import app
+    from core import program_integrity
     source = checkout(tmp_path)
     target = tmp_path / 'LocalAI' / 'app'
     assert app.deploy(source, target)
@@ -285,7 +308,27 @@ def test_the_program_is_copied_without_tests_or_state(tmp_path):
     assert (target / 'RUN.bat').is_file() and (target / app.VERSION_FILE).is_file()
     assert not (target / 'src' / 'tests').exists()
     assert not (target / 'users').exists(), 'records never travel with the program'
+    assert not (target / '.gitignore').exists()
     assert list((target / 'src' / 'core').glob('__pycache__/*.pyc')), 'precompiled for read-only use'
+    manifest = program_integrity.load(target)
+    assert manifest['schema'] == program_integrity.SCHEMA
+    assert len(manifest['commit']) == 40 and manifest['remote_branches'] == ['origin/main']
+    assert program_integrity.verify(target) == []
+    assert app.verify_deployed(target, source) == [], 'anchored to the checkout commit'
+
+
+def test_batch_files_are_written_with_crlf_and_still_match_git(tmp_path):
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    data = (target / 'RUN.bat').read_bytes()
+    assert data == b'@echo off\r\n:A\r\ngoto A\r\n', 'cmd.exe labels need CRLF'
+    entry = program_integrity.load(target)['files']['RUN.bat']
+    assert entry['eol'] == 'crlf'
+    assert program_integrity.git_blob_id(
+        program_integrity.to_blob('RUN.bat', data, entry['eol'])) == entry['git']
 
 
 def test_an_update_replaces_the_copy_whole(tmp_path):
@@ -294,6 +337,7 @@ def test_an_update_replaces_the_copy_whole(tmp_path):
     target = tmp_path / 'LocalAI' / 'app'
     app.deploy(source, target)
     (source / 'src' / 'core' / 'x.py').write_text('VALUE = 2\n', encoding='utf-8')
+    commit_all(source, 'v2')
     (target / 'stale.txt').write_text('old', encoding='utf-8')
     assert app.deploy(source, target)
     assert 'VALUE = 2' in (target / 'src' / 'core' / 'x.py').read_text(encoding='utf-8')
@@ -321,6 +365,156 @@ def test_a_failed_swap_keeps_the_running_copy(tmp_path, monkeypatch):
     assert not target.with_name('app.new').exists()
 
 
+# ── only what Git vouches for is deployed ────────────────────────────────
+
+def test_uncommitted_edits_are_never_deployed(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / 'core' / 'x.py').write_text('import os; os.system("evil")\n', encoding='utf-8')
+    assert app.deploy(source, target) is False
+    assert not target.exists()
+
+
+def test_an_extra_untracked_program_is_never_deployed(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / 'sitecustomize.py').write_text('print("injected")\n', encoding='utf-8')
+    assert app.deploy(source, target) is False
+    assert not target.exists()
+
+
+def test_a_git_ignored_extra_is_not_copied_either(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / '__pycache__' / 'json.cpython-313.pyc').write_bytes(b'planted')
+    assert app.deploy(source, target)
+    assert not (target / 'src' / '__pycache__' / 'json.cpython-313.pyc').exists()
+
+
+def test_a_commit_no_remote_branch_contains_is_refused(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / 'core' / 'x.py').write_text('VALUE = 3\n', encoding='utf-8')
+    _git(source, 'commit', '-q', '-am', 'local only')
+    with pytest.raises(app.DeploySourceError, match='원격'):
+        app.git_source(source)
+    assert app.deploy(source, target) is False
+
+
+def test_a_symlink_in_the_commit_is_refused(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    try:
+        (source / 'src' / 'link.py').symlink_to(source / 'README.md')
+    except (OSError, NotImplementedError):
+        pytest.skip('this account may not create symlinks')
+    commit_all(source, 'link')
+    with pytest.raises(app.DeploySourceError, match='일반 파일'):
+        app.git_source(source)
+
+
+def test_a_subfolder_of_a_repository_is_not_a_source(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    with pytest.raises(app.DeploySourceError, match='최상위'):
+        app.git_source(source / 'src')
+
+
+def test_a_checkouts_own_git_config_cannot_run_a_program(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    marker = tmp_path / 'ran'
+    hook = tmp_path / 'fsmonitor.sh'
+    hook.write_text('#!/bin/sh\ntouch %s\n' % marker, encoding='utf-8')
+    hook.chmod(0o755)
+    _git(source, 'config', 'core.fsmonitor', str(hook))
+    _git(source, 'config', 'core.hooksPath', str(tmp_path))
+    app.git_source(source)
+    assert not marker.exists(), 'core.fsmonitor must be forced off for Setup'
+
+
+def test_borrowed_object_stores_are_refused(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    (source / '.git' / 'objects' / 'info' / 'alternates').write_text(
+        str(tmp_path / 'elsewhere') + '\n', encoding='utf-8')
+    with pytest.raises(app.DeploySourceError, match='alternates'):
+        app.git_source(source)
+
+
+def test_an_object_whose_content_does_not_match_its_id_is_refused(tmp_path, monkeypatch):
+    from installer.steps import app
+    oid = 'a' * 40
+    monkeypatch.setattr(app, '_git', lambda source, *args, **kw:
+                        ('%s blob 4\n' % oid).encode() + b'evil\n')
+    with pytest.raises(app.DeploySourceError, match='해시'):
+        app._read_blobs(tmp_path, {'src/x.py': oid})
+
+
+# ── the deployed copy stays what the commit says ─────────────────────────
+
+def test_drift_in_the_deployed_copy_is_detected(tmp_path):
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    (target / 'src' / 'core' / 'x.py').write_text('VALUE = "tampered"\n', encoding='utf-8')
+    (target / 'src' / 'sitecustomize.py').write_text('', encoding='utf-8')
+    pyc = next((target / 'src' / 'core' / '__pycache__').glob('*.pyc'))
+    pyc.unlink()
+    problems = program_integrity.verify(target)
+    assert any('변경된 파일: src/core/x.py' in p for p in problems)
+    assert any('추가된 파일: src/sitecustomize.py' in p for p in problems)
+    assert any('없어진 파일' in p and '.pyc' in p for p in problems)
+    with pytest.raises(program_integrity.IntegrityError, match='Git 커밋'):
+        program_integrity.check_running_copy(target)
+    assert app.deploy(target, target) is False, 'Setup run from a drifted copy refuses too'
+
+
+def test_a_rewritten_manifest_does_not_pass_as_the_commit(tmp_path):
+    """Tampering plus a recomputed manifest: drift check passes, Git does not."""
+    import json
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    evil = b'VALUE = "tampered"\n'
+    (target / 'src' / 'core' / 'x.py').write_bytes(evil)
+    manifest = program_integrity.load(target)
+    manifest['files']['src/core/x.py'] = {'git': program_integrity.git_blob_id(evil),
+                                          'sha256': program_integrity.sha256(evil)}
+    (target / app.VERSION_FILE).write_text(json.dumps(manifest), encoding='utf-8')
+    assert program_integrity.verify(target) == []
+    assert any('커밋과 다른 내용: src/core/x.py' in p
+               for p in app.verify_deployed(target, source))
+
+
+def test_development_checkouts_and_legacy_copies_are_not_blocked(tmp_path):
+    from core import program_integrity
+    assert program_integrity.check_running_copy(tmp_path) is None
+    (tmp_path / program_integrity.VERSION_FILE).write_text(
+        '{"revision": "abc1234", "deployed_at": "x"}', encoding='utf-8')
+    assert '무결성 정보' in program_integrity.check_running_copy(tmp_path)
+
+
+def test_the_verify_tool_reports_the_git_anchored_result(tmp_path, capsys):
+    from installer.steps import app
+    from tools import verify_app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    assert verify_app.main(['--app', str(target), '--source', str(source)]) == 0
+    assert 'Git ls-tree' in capsys.readouterr().out
+    (target / 'README.md').write_text('changed', encoding='utf-8')
+    assert verify_app.main(['--app', str(target), '--source', str(source)]) == 1
+
+
 def test_setup_run_from_the_shared_copy_does_not_copy_onto_itself(tmp_path):
     from installer.steps import app
     target = tmp_path / 'app'
@@ -339,6 +533,7 @@ def test_an_ordinary_accounts_setup_leaves_shared_permissions_alone(tmp_path, mo
     monkeypatch.setattr('integrations.ollama.sharing._run', lambda command, **kw: ran.append(command)
                         or types.SimpleNamespace(returncode=0))
     monkeypatch.setattr(filesystem, 'repair_stale_children', lambda account: [])
+    (tmp_path / 'users').mkdir()   # the administrator's Setup made the parent
     filesystem.create_environment(tmp_path / 'env', model_dir=tmp_path / 'models',
                                   account_root=tmp_path / 'users' / 'T', manage_shared=False)
     assert not any('/grant' in command for command in ran), ran
@@ -352,12 +547,88 @@ def test_ordinary_account_setup_does_not_create_missing_shared_runtime_dirs(monk
     monkeypatch.setattr(fs, "ensure_private_account", lambda p: True)
     monkeypatch.setattr(fs, "repair_stale_children", lambda p: [])
     monkeypatch.setattr(fs, "protect_existing_records", lambda p: None)
+    (tmp_path / "users").mkdir()
+    store.mkdir()   # the administrator's store, read-only for this account
     fs.create_environment(env, model_dir=store, account_root=account,
                           manage_shared=False)
     assert account.is_dir()
     assert (account / "workspace").is_dir()
     assert not env.exists(), "no ordinary account can create the shared environment"
     assert not (env / "desktop-runtime.lock").exists()
+    assert not (store / ".localai").exists(), "the shared model control plane is admin-only"
+    assert list(store.iterdir()) == []
+
+
+def test_ordinary_account_setup_needs_the_administrators_users_parent(monkeypatch, tmp_path):
+    from installer.core import filesystem as fs
+    monkeypatch.setattr(fs, "ensure_private_account", lambda p: True)
+    with pytest.raises(RuntimeError, match="관리자"):
+        fs.create_environment(tmp_path / "environment", model_dir=tmp_path / "models",
+                              account_root=tmp_path / "users" / "second",
+                              manage_shared=False)
+    assert not (tmp_path / "users").exists()
+
+
+def test_admins_only_the_file_lists_are_dropped_before_granting_full_control(setup, monkeypatch):
+    step, root, calls = setup
+    from integrations.windows import program_security
+    seen = []
+    monkeypatch.setattr(program_security, 'ensure',
+                        lambda root, policy, **kw: seen.append(policy) or True)
+    tampered = machine.new_policy(ME, admins_group_sid=GROUP).with_admin(OTHER)
+    (root / machine.POLICY_FILENAME).write_text(tampered.to_json(), encoding='utf-8')
+    assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
+    assert seen and OTHER not in seen[0].admin_sids()
+    assert machine.load(root / machine.POLICY_FILENAME).admins == (ME,), 'file cleaned'
+
+
+def test_a_listed_sid_outside_the_group_is_an_ordinary_user(setup, monkeypatch):
+    step, root, calls = setup
+    (root / machine.POLICY_FILENAME).write_text(
+        machine.new_policy(OTHER, admins_group_sid=GROUP).with_admin(ME).to_json(), encoding='utf-8')
+    monkeypatch.setattr(windows, 'group_member_sids', lambda name: {OTHER})
+    assert step.current_role(root) == 'user'
+    assert step.ensure(root, root / 'app', Path('/checkout')) == 'user'
+    assert calls == []
+
+
+def test_a_legacy_install_is_repaired_only_through_uac_for_this_account(setup, monkeypatch):
+    step, root, calls = setup
+    legacy = machine.new_policy(ME).with_admin(OTHER)
+    legacy.notes['groups_pending'] = True
+    (root / machine.POLICY_FILENAME).write_text(legacy.to_json(), encoding='utf-8')
+    assert step.ensure(root, root / 'app', Path('/checkout')) == 'admin'
+    assert [call[0] for call in calls][:1] == ['uac']
+    repaired = machine.load(root / machine.POLICY_FILENAME)
+    assert repaired.admins == (ME,) and repaired.admins_group_sid == GROUP
+    assert 'groups_pending' not in repaired.notes
+
+
+def test_a_legacy_install_whose_uac_is_declined_changes_nothing(setup, monkeypatch):
+    step, root, calls = setup
+    legacy = machine.new_policy(ME)
+    legacy.notes['groups_pending'] = True
+    (root / machine.POLICY_FILENAME).write_text(legacy.to_json(), encoding='utf-8')
+    monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: False)
+    with pytest.raises(RuntimeError, match='승인'):
+        step.ensure(root, root / 'app', Path('/checkout'))
+    assert all(call[0] != 'deploy' for call in calls)
+
+
+def test_reconcile_keeps_only_what_windows_vouches_for():
+    policy = machine.new_policy(ME, admins_group_sid='S-1-5-32-545',
+                                users_group_sid='S-1-5-32-545').with_admin(OTHER)
+    policy.access = machine.ACCESS_MEMBERS
+    trusted = machine.reconcile(policy, admins_group_sid=GROUP, users_group_sid=None,
+                                admin_members={ME.lower()})
+    assert trusted.admins == (ME,)
+    assert trusted.admins_group_sid == GROUP
+    assert trusted.principal() == 'S-1-5-32-545' and trusted.users_group_sid is None
+    unknown = machine.reconcile(policy, admins_group_sid=GROUP, users_group_sid=None,
+                                admin_members=None)
+    assert unknown.admins == (), 'unknown membership keeps nobody'
+    assert machine.reconcile(None, admins_group_sid=None, users_group_sid=None,
+                             admin_members=None) is None
 
 
 def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
@@ -373,6 +644,31 @@ def test_a_drive_root_or_system_folder_is_never_locked(monkeypatch, tmp_path):
     assert not windows.lockable_root(tmp_path), 'would include the Windows folder'
 
 
+def test_group_members_are_read_by_sid_and_unreadable_is_unknown(monkeypatch):
+    out = types.SimpleNamespace(returncode=0, stdout='noise S-1-5-21-0-0-0-9\nmembers=%s,%s\n'
+                                % (ME, OTHER), stderr='')
+    monkeypatch.setattr(windows, 'run_script', lambda script, **kw: out)
+    assert windows.group_member_sids(machine.ADMINS_GROUP) == {ME.upper(), OTHER.upper()}
+    assert windows.group_member_sids('Administrators') is None, 'only the two LocalAI groups'
+    monkeypatch.setattr(windows, 'run_script', lambda script, **kw:
+                        types.SimpleNamespace(returncode=1, stdout='', stderr='x'))
+    assert windows.group_member_sids(machine.ADMINS_GROUP) is None
+
+
+def test_a_drifted_shared_copy_is_not_started(monkeypatch):
+    from apps.shared import entry
+    from core import program_integrity
+    import services.system.bootstrap as bootstrap
+
+    def drifted(root=None):
+        raise program_integrity.IntegrityError('변경된 파일: src/core/x.py')
+
+    monkeypatch.setattr(program_integrity, 'check_running_copy', drifted)
+    monkeypatch.setattr(entry, '_report_startup_error', lambda exc, hint='': None)
+    monkeypatch.setattr(bootstrap, 'install_exit_hooks',
+                        lambda *a, **k: pytest.fail('nothing may start'))
+    assert entry.main('studio', []) == 4
+    assert entry.main('studio', ['--tui']) == 4
 # ── first-run automatic registration and readable UAC errors ────────────
 def test_first_run_bootstraps_admin_without_separate_install_flag(monkeypatch, tmp_path):
     from installer.steps import machine as step
@@ -444,3 +740,17 @@ def test_program_security_does_not_write_error_from_its_own_catch():
     assert 'Write-Warning $detail' in script
     assert script.index('icacls.exe $folder /setowner') < script.index(
         'icacls.exe $folder /reset')
+
+
+def test_bytecode_another_python_wrote_does_not_lock_everyone_out(tmp_path):
+    import sys
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    cache = target / 'src' / 'core' / '__pycache__'
+    (cache / 'x.cpython-39.pyc').write_bytes(b'other interpreter')
+    assert program_integrity.verify(target) == []
+    (cache / ('y.%s.pyc' % sys.implementation.cache_tag)).write_bytes(b'this interpreter')
+    assert any('추가된 파일' in p for p in program_integrity.verify(target))

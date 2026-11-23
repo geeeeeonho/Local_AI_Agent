@@ -294,7 +294,7 @@ def test_publish_shared_model_dir_updates_current_process_immediately(monkeypatc
     assert filesystem.os.environ["OLLAMA_MODELS"] == str(store)
 
 
-def test_shared_model_access_grants_builtin_users_modify(monkeypatch, tmp_path):
+def test_shared_model_access_is_read_only_for_ordinary_accounts(monkeypatch, tmp_path):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     calls = []
@@ -311,9 +311,13 @@ def test_shared_model_access_grants_builtin_users_modify(monkeypatch, tmp_path):
     monkeypatch.setattr("integrations.windows.acl.subprocess.run", fake_run)
     assert ensure_shared_model_access(model_dir, windows=True) is True
     assert calls[0][0] == [
-        "icacls", str(model_dir), "/grant",
-        "*S-1-5-32-545:(OI)(CI)(M)", "/T", "/Q",
+        "icacls", str(model_dir), "/remove:g", "*S-1-5-32-545", "/T", "/C", "/Q",
+    ], "an older Modify grant must be removed first"
+    assert calls[1][0] == [
+        "icacls", str(model_dir), "/grant", "*S-1-5-32-545:(OI)(CI)(RX)",
+        "/grant", "*S-1-3-4:(OI)(CI)(RX)", "/Q",
     ]
+    assert not any("(M)" in " ".join(command) for command, _ in calls)
 
 
 def test_explicit_model_dir_is_not_published_or_reacled(tmp_path, monkeypatch):

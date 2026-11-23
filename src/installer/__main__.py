@@ -48,6 +48,31 @@ def _base_disk_budget() -> int:
     return int(_RUNTIME_GB) + 1
 
 
+def _prepare_account_sandbox(paths, profile, args) -> str:
+    """An ordinary account's own Docker sandbox image, from a private context.
+
+    The shared ``environment\\agent\\sandbox`` folder is administrator-only,
+    so the build context (a Dockerfile generated from this program, nothing
+    else) is written below this account's private ``user_data``. Nothing in
+    ``C:\\LocalAI`` outside ``users\\<account>`` is created or written.
+    Returns ``"sandbox"`` when ready, ``""`` when skipped.
+    """
+    from pathlib import Path
+    if args.skip_sandbox:
+        utils.warn(t("install.sandbox_skip", reason="--skip-sandbox"))
+        return ""
+    context = Path(paths["user_data"]) / "sandbox-build"
+    context.mkdir(parents=True, exist_ok=True)
+    private = dict(paths, sandbox=context)
+    try:
+        sandbox.install(private, profile=profile, build_image=not args.skip_build)
+    except sandbox.DockerNotAvailable as exc:
+        utils.warn(t("install.sandbox_skip", reason=str(exc)))
+        utils.warn(t("install.sandbox_skip_later"))
+        return ""
+    return "sandbox"
+
+
 def _run_install(args) -> int:
     lang_setup.initialize_language(HERE, override=args.lang)
 
@@ -82,10 +107,13 @@ def _run_install(args) -> int:
     ROOT.mkdir(parents=True, exist_ok=True)
     role = machine_step.ensure(ROOT, APP_DIR, HERE)
     if role == "user":
-        # An ordinary account may prepare only its private state. Do not
-        # download, update or launch any shared installer under its token.
-        utils.create_environment(ENV, manage_shared=False)
-        utils.info("일반 사용자 설정 완료: 공용 프로그램은 변경하지 않았습니다.")
+        # An ordinary account may prepare only its private state - its own
+        # folder and its own Docker sandbox image. Never download, update or
+        # launch a shared installer, and never write the shared model store.
+        paths = utils.create_environment(ENV, manage_shared=False)
+        _prepare_account_sandbox(paths, profile, args)
+        utils.info("일반 사용자 설정 완료: 공용 프로그램·모델 저장소는 변경하지 않았습니다. "
+                   "모델 설치·삭제와 검색/WARP 구성요소는 LocalAI 관리자 Setup에서 진행합니다.")
         return 0
 
     ollama.prepare_install(ENV, MODEL_STORAGE_DIR)
@@ -109,15 +137,12 @@ def _run_install(args) -> int:
         utils.info("모델은 설치 완료 후 RUN.bat --manage > Models에서 선택하고 받습니다.")
 
     # Optional, read-only fit analyzer. Never make core installation depend on it.
-    if role != "user":
-        if llmfit_step.install(paths, log=utils.info):
-            components.append("llmfit")
-        else:
-            skipped_components.append("llmfit")
-            utils.warn("LLMfit 준비 실패: 모델 카탈로그 추정값을 사용합니다.")
+    # (Only administrators reach this point; ordinary accounts returned above.)
+    if llmfit_step.install(paths, log=utils.info):
+        components.append("llmfit")
     else:
         skipped_components.append("llmfit")
-        utils.info("LLMfit 공용 설치는 LocalAI 관리자 Setup에서 진행합니다.")
+        utils.warn("LLMfit 준비 실패: 모델 카탈로그 추정값을 사용합니다.")
 
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")
@@ -190,9 +215,9 @@ def _run_install(args) -> int:
     # Re-audit after the third-party installers: they may add explicit file
     # grants despite the shared root having a read/execute-only policy.
     if role == "admin":
-        from core import machine
+        from integrations.windows import machine as windows_machine
         from integrations.windows import program_security
-        policy = machine.load(ROOT / machine.POLICY_FILENAME)
+        policy = windows_machine.load_trusted_policy(ROOT)
         if policy is None:
             raise RuntimeError("LocalAI 관리자 정책을 읽지 못해 설치를 완료할 수 없습니다.")
         program_security.ensure(ROOT, policy, log=utils.info, force=True)

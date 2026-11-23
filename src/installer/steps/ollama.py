@@ -115,6 +115,7 @@ def install_official(target: Optional[Path] = None, model_dir: Optional[Path] = 
             # Give that first process the same local-only broker policy as the
             # server LocalAI would start itself.
             child_env["OLLAMA_NO_CLOUD"] = "1"
+            child_env["OLLAMA_NOPRUNE"] = "1"
             child_env["OLLAMA_HOST"] = f"{config.OLLAMA_HOST}:{config.OLLAMA_PORT}"
             result = subprocess.run(
                 ollama_paths.setup_command(installer, target),

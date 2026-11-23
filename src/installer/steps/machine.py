@@ -42,9 +42,17 @@ def current_role(root: Path) -> str:
         # verified program administrator. Until UAC + ACL protection succeeds
         # no caller may assume it is safe to mutate shared code.
         return "user"
-    if policy.is_admin(sid, windows.token_group_sids()) or acl.is_elevated():
+    # machine.json is a memory, not an authority: only what Windows group
+    # membership confirms may make this account an administrator.
+    trusted = windows.trusted_policy(policy)
+    if trusted.is_admin(sid, windows.token_group_sids()) or acl.is_elevated():
         return "admin"
     return "user"
+
+
+def _unverified_admins(raw, trusted):
+    kept = {sid.upper() for sid in trusted.admins}
+    return [sid for sid in raw.admins if sid.upper() not in kept]
 
 
 def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
@@ -120,20 +128,33 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
         ok("LocalAI 관리자: 이 계정 (%s)" % sid)
         return "admin"
 
-    if policy.is_admin(sid, windows.token_group_sids()) or acl.is_elevated():
-        if policy.notes.get("groups_pending"):
-            # Upgrade old installations, but never claim success until UAC
-            # and the inherited permission repair have both completed.
+    raw = policy
+    policy = windows.trusted_policy(raw)
+    # An install from before the groups existed has nothing Windows can vouch
+    # for; the file may even have been writable. Its listed account may only
+    # repair it through UAC, where a Windows administrator becomes the anchor.
+    legacy = bool(raw.notes.get("groups_pending")) or not policy.admins_group_sid
+    if (policy.is_admin(sid, windows.token_group_sids()) or acl.is_elevated()
+            or (legacy and raw.is_admin(sid))):
+        if legacy:
             script = windows.first_install_script(sid, root, app_dir)
             if not script or not windows.run_as_admin(script, log=info):
                 raise RuntimeError("LocalAI 관리자 그룹 복구를 승인하지 않았습니다.")
-            policy.admins_group_sid = windows.group_sid(machine.ADMINS_GROUP)
-            policy.users_group_sid = windows.group_sid(machine.USERS_GROUP)
-            policy.notes.pop("groups_pending", None)
-            if not _write_policy(policy_path, policy):
-                raise RuntimeError("관리 정책 갱신에 실패했습니다.")
-        # Reapply the same protection to pre-existing explicit child grants.
+            repaired = raw.with_admin(sid)
+            repaired.notes.pop("groups_pending", None)
+            policy = windows.trusted_policy(repaired)
+            if not policy.admins_group_sid or not policy.is_admin(sid):
+                raise RuntimeError("LocalAI-Admins 그룹 구성원 확인에 실패했습니다.")
+        dropped = _unverified_admins(raw, policy)
+        if dropped:
+            warn("Windows 그룹으로 확인되지 않는 관리자 기록을 정책에서 제외합니다: %s"
+                 % ", ".join(dropped[:5]))
+        # Reapply the same protection to pre-existing explicit child grants,
+        # using only Windows-verified administrators as full-control SIDs.
         program_security.ensure(root, policy, log=info, force=True)
+        if (dropped or legacy or policy.to_json() != raw.to_json()) and \
+                not _write_policy(policy_path, policy):
+            raise RuntimeError("관리 정책 갱신에 실패했습니다.")
         if not app_step.deploy(project_root, app_dir):
             raise RuntimeError("보호된 공용 프로그램 업데이트에 실패했습니다.")
         reasons = program_security.verify(root, policy)
@@ -142,7 +163,7 @@ def ensure(root: Path, app_dir: Path, project_root: Path) -> str:
                                "; ".join(reasons[:4]))
         return "admin"
 
-    info("공용 프로그램과 실행환경은 LocalAI 관리자가 관리합니다. "
+    info("공용 프로그램·실행환경·모델 저장소는 LocalAI 관리자가 관리합니다. "
          "이 계정의 개인 폴더와 Docker 이미지만 준비합니다.")
     return "user"
 

@@ -117,12 +117,13 @@ ceilings: Ollama shares blob layers between models, so the real cost is usually
 lower. Files are never deleted directly - unchecking a model hands it to Ollama,
 which knows which layers another model still needs.
 
-*Disk usage* also says whether the shared store is actually manageable by every
-Windows account and offers an idempotent repair. LocalAI's sharing decision is
-path + ACL: the managed store must be the machine-wide model directory and
-BUILTIN\Users must be able to read and modify its children. Modify is required
-because every account may install or remove shared models and update the shared
-registry/index under `models\.localai`. `OLLAMA_MODELS` is only a best-effort
+*Disk usage* also says whether the shared store is set up safely for every
+Windows account and offers an idempotent repair to LocalAI administrators.
+LocalAI's sharing decision is path + ACL: the managed store must be the
+machine-wide model directory, BUILTIN\Users must be able to read it, and must
+**not** be able to modify it. Only a LocalAI administrator installs or removes
+shared models and updates the shared registry/index under `models\.localai`;
+the screen refuses other accounts before starting Ollama or a download. `OLLAMA_MODELS` is only a best-effort
 compatibility setting for standalone Ollama CLI/Tray and does not decide
 LocalAI sharing.
 
@@ -225,8 +226,8 @@ checkout does not move the shared runtime or another account's private records.
 
 LocalAI starts its managed Ollama broker with `C:\LocalAI\models` explicitly.
 The model store, role registry, model inventory and model-mutation lock are
-machine-wide. Standard Windows users receive Modify rights only on `models`;
-`environment` and `ollama` remain read/execute for standard users.
+machine-wide. Standard Windows users receive read/execute only on `models`,
+`environment` and `ollama`; LocalAI administrators change them.
 `users\<account>` remains private to that account, SYSTEM and Administrators.
 
 Setup does not automatically scan, merge or relocate data from earlier layouts.

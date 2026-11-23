@@ -125,7 +125,14 @@ def account_name() -> Optional[str]:
     return name or None
 
 
+#: A local group's SID never changes once the group exists. Only found SIDs
+#: are remembered, so a group created later by UAC is seen on the next ask.
+_GROUP_SIDS: dict = {}
+
+
 def group_sid(name: str) -> Optional[str]:
+    if name in _GROUP_SIDS:
+        return _GROUP_SIDS[name]
     # Always qualify local groups by this machine's name. A bare name can
     # resolve to a different domain principal or fail on localized systems.
     script = ("$localGroup = $env:COMPUTERNAME + '\\' + %s; "
@@ -134,6 +141,8 @@ def group_sid(name: str) -> Optional[str]:
               % quote(name))
     result = run_script(script, timeout=30)
     found = _SID.findall((result.stdout or '') if result is not None else '')
+    if found:
+        _GROUP_SIDS[name] = found[0]
     return found[0] if found else None
 
 
@@ -195,6 +204,55 @@ def list_accounts() -> Optional[dict]:
         'members': sids(data.get('members')),
         'administrators': sids(data.get('administrators')),
     }
+
+
+_MEMBERS_SCRIPT = r'''
+$ErrorActionPreference = 'Stop'
+$g = [ADSI]("WinNT://$env:COMPUTERNAME/GROUP_NAME,group")
+$out = @()
+foreach ($m in @($g.Invoke('Members'))) {
+  $raw = $m.GetType().InvokeMember('objectSid', 'GetProperty', $null, $m, $null)
+  $out += ([System.Security.Principal.SecurityIdentifier]::new([byte[]]$raw, 0)).Value
+}
+'members=' + ($out -join ',')
+'''
+
+
+def group_member_sids(name: str) -> Optional[Set[str]]:
+    """Current members of a local group by SID, or None if not readable.
+
+    ADSI reads the account database, not this logon token, so a member added
+    a moment ago by the first-install UAC script is already listed here.
+    """
+    if name not in (machine.ADMINS_GROUP, machine.USERS_GROUP):
+        return None
+    result = run_script(_MEMBERS_SCRIPT.replace('GROUP_NAME', name), timeout=30)
+    text = (result.stdout or '') if acl.succeeded(result) else ''
+    marker = text.rfind('members=')
+    if marker < 0:
+        return None
+    return {sid.upper() for sid in _SID.findall(text[marker:])}
+
+
+def trusted_policy(policy: Optional[machine.Policy], *,
+                   members: bool = True) -> Optional[machine.Policy]:
+    """``policy`` reduced to what Windows enforces (``core.machine.reconcile``).
+
+    ``members=False`` skips the membership lookup for callers that only need
+    the read/execute principal; the administrator list is then emptied.
+    """
+    if policy is None:
+        return None
+    admins_group = group_sid(machine.ADMINS_GROUP)
+    users_group = group_sid(machine.USERS_GROUP)
+    listed = group_member_sids(machine.ADMINS_GROUP) if (members and admins_group) else None
+    return machine.reconcile(policy, admins_group_sid=admins_group,
+                             users_group_sid=users_group, admin_members=listed)
+
+
+def load_trusted_policy(root, *, members: bool = True) -> Optional[machine.Policy]:
+    return trusted_policy(machine.load(Path(root) / machine.POLICY_FILENAME),
+                          members=members)
 
 
 def records_folder(users_root: Path, name: str) -> Path:
@@ -294,8 +352,8 @@ def first_install_script(user_sid: str, root: Path, app_dir: Path,
     """Groups, this account as administrator, the shared root locked, shortcuts.
 
     The root keeps SYSTEM and Administrators, gives this account and
-    LocalAI-Admins full control and every account read/execute. Folders with
-    their own grants (models, users) keep them; what changes is the
+    LocalAI-Admins full control and every account read/execute. Private
+    account folders (users) keep their own grants; what changes is the
     ``Authenticated Users: Modify`` inherited from C:\\, which let any account
     replace the program everyone else runs.
     """
@@ -388,9 +446,9 @@ def access_commands(root: Path, policy: machine.Policy, previous: str) -> List[L
     """Point every shared grant at ``policy.principal()`` instead of ``previous``.
 
     The same five places Setup grants "every account": the root (read and
-    run the program), the model store (manage models), the runtimes (read
-    and run), the users parent (create one's own folder) and the shared
-    runtime lock (take it). Run by a LocalAI administrator, who holds full
+    run the program), the model store (read models - only administrators
+    change them), the runtimes (read and run), the users parent (create
+    one's own folder) and the shared runtime lock (take it). Run by a LocalAI administrator, who holds full
     control of all of them, so no UAC prompt is needed.
     """
     root = Path(root)
@@ -400,7 +458,7 @@ def access_commands(root: Path, policy: machine.Policy, previous: str) -> List[L
     if changed:
         commands.append(remove_grants_command(root, previous))
     commands.append(lock_root_command(root, policy))
-    for name, rights in (('models', '(OI)(CI)(M)'), ('environment', '(OI)(CI)(RX)'),
+    for name, rights in (('models', '(OI)(CI)(RX)'), ('environment', '(OI)(CI)(RX)'),
                          ('ollama', '(OI)(CI)(RX)')):
         path = root / name
         if changed:
@@ -451,6 +509,7 @@ def delete_records_script(folder: Path, users_root: Path) -> Optional[str]:
 
 __all__ = ['powershell', 'quote', 'encoded', 'run_script', 'run_as_admin',
            'token_group_sids', 'account_name', 'group_sid', 'list_accounts',
-           'records_folder', 'lockable_root', 'first_install_script', 'lock_root_lines',
+           'records_folder', 'group_member_sids', 'trusted_policy',
+           'load_trusted_policy', 'lockable_root', 'first_install_script', 'lock_root_lines',
            'lock_root_command', 'remove_grants_command', 'access_commands',
            'membership_script', 'delete_records_script']

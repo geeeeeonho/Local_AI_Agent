@@ -235,6 +235,8 @@ def test_manage_entry_also_bootstraps_but_install_runs_own_security_flow(monkeyp
             self.root=SimpleNamespace(after=lambda ms,fn:None)
         def apply_setup_cli_options(self,**kw):
             pass
+        def repair(self):
+            pass
         def run(self):
             pass
     _window_module(monkeypatch,Window)

@@ -62,9 +62,22 @@ def _refresh_file_map(svc, p) -> None:
         p.warn("파일-모델 대응표를 쓰지 못했습니다 (저장소 쓰기 권한 확인).")
 
 
+def _may_manage(svc, p) -> bool:
+    """Only a LocalAI administrator changes the shared model store."""
+    from integrations import model_access
+    answer = model_access.management_access(svc.model_dir, refresh=True)
+    if answer["allowed"]:
+        return True
+    p.error(answer["reason"] or model_access.DENIED)
+    p.pause()
+    return False
+
+
 def _download_flow(env, p) -> None:
     cat = _catalog()
     svc = OllamaService(env, logger=p)
+    if not _may_manage(svc, p):
+        return
     if not svc.is_installed():
         p.error("Ollama 가 설치되어 있지 않습니다. RUN.bat --install 을 실행하세요.")
         p.pause()
@@ -144,6 +157,8 @@ def _download_flow(env, p) -> None:
 def _remove_flow(env, p) -> None:
     cat = _catalog()
     svc = OllamaService(env, logger=p)
+    if not _may_manage(svc, p):
+        return
     if not svc.is_installed():
         p.error("Ollama 가 설치되어 있지 않습니다.")
         p.pause()

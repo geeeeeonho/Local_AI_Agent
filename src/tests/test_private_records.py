@@ -347,8 +347,11 @@ def test_the_store_stays_readable_while_the_records_do_not(monkeypatch, tmp_path
     model_grants = [c for c in grants_to_users if str(models) in c]
     users_parent_grants = [c for c in grants_to_users if str(account.parent) in c]
 
-    assert model_grants, 'every account still has to be able to manage the models'
-    assert any('(OI)(CI)(M)' in part for command in model_grants for part in command)
+    assert model_grants, 'every account still has to be able to read the models'
+    assert any('(OI)(CI)(RX)' in part for command in model_grants for part in command)
+    assert not any('(M)' in part or ':F' in part
+                   for command in model_grants for part in command), \
+        'only LocalAI administrators may change the shared models'
 
     assert users_parent_grants, 'a standard account must be able to create users/<itself>'
     assert all('(OI)' not in part and '(CI)' not in part

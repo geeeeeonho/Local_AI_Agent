@@ -400,7 +400,7 @@ def _disk_toolbar(parent, w):
         ('모델 고르기',lambda:w.model_tabs.select(w.model_pages['choose']),None,False))).pack(fill='x')
     disclosure=Disclosure(frame,'저장소 · 공용 설정')
     _bar(disclosure.body, (
-        ('모든 계정 공용으로 고치기',w.repair_sharing,'Manage',False),
+        ('모델 저장소 권한 보호',w.repair_sharing,'Manage',False),
         ('일반 Ollama 경로 연결',w.connect_external_ollama,'Manage',False))).pack(fill='x')
     return frame
 
