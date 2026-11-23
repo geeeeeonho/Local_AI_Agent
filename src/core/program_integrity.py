@@ -120,6 +120,8 @@ def verify(root, manifest: Optional[dict] = None) -> List[str]:
         seen.add(rel)
         entry = expected.get(rel)
         if entry is None:
+            if _foreign_bytecode(rel):
+                continue
             problems.append('추가된 파일: ' + rel)
             continue
         try:
@@ -132,6 +134,22 @@ def verify(root, manifest: Optional[dict] = None) -> List[str]:
     for rel in sorted(set(expected) - seen):
         problems.append('없어진 파일: ' + rel)
     return problems
+
+
+def _foreign_bytecode(rel: str) -> bool:
+    """Bytecode another Python version wrote: never loaded by this interpreter.
+
+    An administrator starting the copy with a different Python leaves
+    ``__pycache__/x.cpython-312.pyc`` behind; that must not lock everyone
+    out. Bytecode for *this* interpreter's tag is never ignored.
+    """
+    import sys
+    parts = rel.split('/')
+    if len(parts) < 2 or parts[-2] != '__pycache__' or not parts[-1].endswith('.pyc'):
+        return False
+    # name.cpython-313.pyc / name.cpython-313.opt-1.pyc -> "cpython-313"
+    pieces = parts[-1].split('.')
+    return len(pieces) >= 3 and pieces[1] != sys.implementation.cache_tag
 
 
 def is_legacy(manifest: Optional[dict]) -> bool:

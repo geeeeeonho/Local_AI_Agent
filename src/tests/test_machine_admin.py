@@ -286,10 +286,12 @@ def checkout(tmp_path):
     (source / 'src' / 'core' / 'x.py').write_text('VALUE = 1\n', encoding='utf-8')
     (source / 'src' / 'tests').mkdir()
     (source / 'src' / 'tests' / 'test_x.py').write_text('', encoding='utf-8')
-    (source / 'RUN.bat').write_text('@echo off\n:A\ngoto A\n', encoding='utf-8')
+    # Bytes, not text: Windows text mode would already add the CRLF under test.
+    (source / 'RUN.bat').write_bytes(b'@echo off\n:A\ngoto A\n')
     (source / 'README.md').write_text('readme', encoding='utf-8')
     (source / '.gitignore').write_text('__pycache__/\nusers/\n', encoding='utf-8')
     _git(source, 'init', '-q')
+    _git(source, 'config', 'core.autocrlf', 'false')
     commit_all(source)
     (source / 'src' / '__pycache__').mkdir()
     (source / 'users').mkdir()
@@ -406,7 +408,10 @@ def test_a_commit_no_remote_branch_contains_is_refused(tmp_path):
 def test_a_symlink_in_the_commit_is_refused(tmp_path):
     from installer.steps import app
     source = checkout(tmp_path)
-    (source / 'src' / 'link.py').symlink_to('/etc/hostname')
+    try:
+        (source / 'src' / 'link.py').symlink_to(source / 'README.md')
+    except (OSError, NotImplementedError):
+        pytest.skip('this account may not create symlinks')
     commit_all(source, 'link')
     with pytest.raises(app.DeploySourceError, match='일반 파일'):
         app.git_source(source)
@@ -735,3 +740,17 @@ def test_program_security_does_not_write_error_from_its_own_catch():
     assert 'Write-Warning $detail' in script
     assert script.index('icacls.exe $folder /setowner') < script.index(
         'icacls.exe $folder /reset')
+
+
+def test_bytecode_another_python_wrote_does_not_lock_everyone_out(tmp_path):
+    import sys
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    cache = target / 'src' / 'core' / '__pycache__'
+    (cache / 'x.cpython-39.pyc').write_bytes(b'other interpreter')
+    assert program_integrity.verify(target) == []
+    (cache / ('y.%s.pyc' % sys.implementation.cache_tag)).write_bytes(b'this interpreter')
+    assert any('추가된 파일' in p for p in program_integrity.verify(target))
