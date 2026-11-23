@@ -290,8 +290,11 @@ def deploy(source: Path, target: Path) -> bool:
         # bytecode has to exist before the first start instead of each account
         # compiling its own in memory. Hash-checked pycs do not depend on the
         # file times Git does not keep.
-        compileall.compile_dir(str(staging / "src"), quiet=1, workers=0,
-                               invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)
+        # In-process (workers=1): worker processes would re-import __main__,
+        # which fails for embedded/stdin callers and is not needed for ~400 files.
+        if not compileall.compile_dir(str(staging / "src"), quiet=1, workers=1,
+                                      invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH):
+            raise OSError("프로그램 바이트코드를 만들지 못했습니다 (문법 오류가 있는 파일)")
         _record_bytecode(staging, files)
         manifest = {
             "schema": integrity.SCHEMA,
@@ -314,7 +317,7 @@ def deploy(source: Path, target: Path) -> bool:
         if target.exists():
             os.replace(target, retired)
         os.replace(staging, target)
-    except OSError as exc:
+    except Exception as exc:  # any failure: the previous copy must stay live
         shutil.rmtree(staging, ignore_errors=True)
         if retired.exists() and not target.exists():
             try:
