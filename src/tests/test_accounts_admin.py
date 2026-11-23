@@ -75,7 +75,9 @@ def test_making_an_administrator_changes_the_group_the_policy_and_the_acl(machin
     root, state = machine_root
     message = AccountAdmin(root).set_admin(BOB, True)
     assert '다시 로그인' in message
-    assert state['calls'][0][0] == 'uac' and ("WinNT://%s" % BOB) in state['calls'][0][1]
+    assert state['calls'][0][0] == 'uac' and ("$target = '%s'" % BOB) in state['calls'][0][1], \
+        'membership by SID, verified by enumerating member SIDs'
+    assert "'WinNT://' + $target" in state['calls'][0][1]
     assert machine.load(root / machine.POLICY_FILENAME).is_admin(BOB)
     acl_calls = [call[1] for call in state['calls'] if call[0] == 'acl']
     lock = acl_calls[-1]

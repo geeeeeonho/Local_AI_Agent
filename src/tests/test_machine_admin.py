@@ -70,7 +70,8 @@ APP = PureWindowsPath(r'C:\LocalAI\app')
 def test_first_install_creates_groups_adds_me_by_sid_and_locks_the_root():
     script = windows.first_install_script(ME, ROOT, APP)
     assert script.count(".Create('group'") == 2
-    assert "'WinNT://%s'" % ME in script, 'membership by SID, not a localized name'
+    assert "$target = '%s'" % ME in script, 'membership by SID, not a localized name'
+    assert "Test-LocalAISidMember" in script, 'SID membership verified by enumeration'
     assert "/inheritance:r" in script and "'*S-1-5-32-545:(OI)(CI)RX'" in script
     assert "'*%s:(OI)(CI)F'" % ME in script
     assert '(OI)(CI)M' not in script, 'no account other than admins may change the program'
@@ -94,9 +95,24 @@ def test_deleting_records_targets_only_a_folder_directly_in_users():
 
 
 def test_membership_changes_take_a_sid_and_a_known_group():
-    assert "Invoke('Remove'" in windows.membership_script(machine.USERS_GROUP, OTHER, False)
+    script = windows.membership_script(machine.USERS_GROUP, OTHER, False)
+    assert "Invoke('Remove'" in script
     assert windows.membership_script('Administrators', OTHER, True) is None
     assert windows.membership_script(machine.ADMINS_GROUP, 'bob', True) is None
+
+
+def test_membership_verification_does_not_use_unsupported_winnt_sid_ismember():
+    # Microsoft: WinNT Add/Remove accept a SID ADsPath, but IsMember on the
+    # same SID path cannot verify membership and produced exit code 1.
+    script = windows.first_install_script(ME, ROOT, APP)
+    assert "Invoke('Members')" in script
+    assert "InvokeMember('objectSid'" in script
+    assert "SecurityIdentifier]::new([byte[]]$raw, 0)" in script
+    assert "NTAccount]::new($localGroup)" in script
+    assert "Test-LocalAISidMember" in script
+    assert "psbase.Invoke('IsMember'" not in script
+    assert "'WinNT://'" in script
+
 
 
 def test_an_admin_script_runs_through_one_uac_prompt(monkeypatch):
@@ -155,7 +171,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(acl, 'run', lambda command, **kw: calls.append(('acl', command[:3]))
                         or types.SimpleNamespace(returncode=0, stdout='', stderr=''))
     monkeypatch.setattr(windows, 'token_group_sids', lambda: set())
-    monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else None)
+    monkeypatch.setattr(windows, 'group_sid', lambda name: GROUP if name == machine.ADMINS_GROUP else 'S-1-5-21-111-222-333-1011')
     # LocalAI-Admins as Windows lists it now (the first-install UAC adds ME).
     monkeypatch.setattr(windows, 'group_member_sids',
                         lambda name: {ME} if name == machine.ADMINS_GROUP else set())
@@ -180,7 +196,7 @@ def test_the_first_installer_becomes_administrator_with_one_prompt(setup):
 def test_declining_the_prompt_aborts_without_deploying_or_recording_admin(setup, monkeypatch):
     step, root, calls = setup
     monkeypatch.setattr(windows, 'run_as_admin', lambda script, **kw: False)
-    with pytest.raises(RuntimeError, match='관리자 승인'):
+    with pytest.raises(RuntimeError, match='관리자 자동 등록'):
         step.ensure(root, root / 'app', Path('/checkout'))
     assert not (root / machine.POLICY_FILENAME).exists()
     assert all(call[0] != 'deploy' for call in calls)
@@ -648,3 +664,74 @@ def test_a_drifted_shared_copy_is_not_started(monkeypatch):
                         lambda *a, **k: pytest.fail('nothing may start'))
     assert entry.main('studio', []) == 4
     assert entry.main('studio', ['--tui']) == 4
+# ── first-run automatic registration and readable UAC errors ────────────
+def test_first_run_bootstraps_admin_without_separate_install_flag(monkeypatch, tmp_path):
+    from installer.steps import machine as step
+    from installer.core import filesystem
+    root=tmp_path / 'LocalAI'
+    calls=[]
+    monkeypatch.setattr(acl, 'on_windows', lambda: True)
+    monkeypatch.setattr(step, 'ensure',
+                        lambda *args: calls.append(('ensure', args)) or 'admin')
+    monkeypatch.setattr(filesystem, 'create_environment',
+                        lambda *args, **kw: calls.append(('env', args, kw)))
+    assert step.bootstrap_first_run(root, root / 'app',
+                                    tmp_path / 'checkout', root / 'environment') is True
+    assert calls[0][0] == 'ensure'
+    assert calls[1][0] == 'env'
+    assert calls[1][2]['manage_shared'] is True
+
+
+def test_existing_policy_never_attempts_first_run_claim(monkeypatch, tmp_path):
+    from installer.steps import machine as step
+    root=tmp_path / 'LocalAI'
+    root.mkdir()
+    (root / machine.POLICY_FILENAME).write_text(machine.new_policy(ME).to_json(),
+                                                encoding='utf-8')
+    monkeypatch.setattr(acl, 'on_windows', lambda: True)
+    monkeypatch.setattr(step, 'ensure', lambda *a: pytest.fail('unexpected admin claim'))
+    assert step.bootstrap_first_run(root, root / 'app', tmp_path,
+                                    root / 'environment') is False
+
+
+def test_corrupted_policy_is_not_treated_as_first_run(monkeypatch, tmp_path):
+    from installer.steps import machine as step
+    root=tmp_path / 'LocalAI'
+    root.mkdir()
+    (root / machine.POLICY_FILENAME).write_text('{broken json',encoding='utf-8')
+    monkeypatch.setattr(acl, 'on_windows', lambda: True)
+    with pytest.raises(RuntimeError, match='정책 복구'):
+        step.bootstrap_first_run(root, root / 'app', tmp_path, root / 'environment')
+
+
+def test_elevated_script_failure_reports_real_stage_not_uac_cancel(monkeypatch, tmp_path):
+    monkeypatch.delenv('LOCAL_AI_NO_ELEVATION', raising=False)
+    monkeypatch.setattr(acl, 'is_elevated', lambda: False)
+    monkeypatch.setattr(acl, 'run_elevated', lambda *a, **kw: (1, None))
+    report=tmp_path / '.localai-admin-123.txt'
+    report.write_text('program ACL: Unable to reset ACLs: C:\\LocalAI\\app',
+                      encoding='utf-8')
+    events=[]
+    assert windows.run_as_admin('x',log=events.append,report_path=report) is False
+    assert any('실패 단계:' in e and 'program ACL' in e for e in events)
+    assert not any('승인이 취소' in e for e in events)
+
+
+def test_first_install_report_is_written_only_on_failure_and_cannot_overwrite(tmp_path):
+    report=tmp_path / '.localai-admin-123.txt'
+    script=windows.first_install_script(ME,tmp_path,tmp_path / 'app',
+                                        report_path=report)
+    assert '[System.IO.FileMode]::CreateNew' in script
+    assert '$localaiIssues' in script
+    assert 'create group LocalAI-Admins' in script
+    assert 'root ACL' in script
+    assert 'if ($failed -ne 0)' in script
+
+
+def test_program_security_does_not_write_error_from_its_own_catch():
+    from integrations.windows import program_security
+    script=program_security.protection_script(Path('C:/LocalAI'),machine.new_policy(ME))
+    assert 'Write-Error $_' not in script
+    assert 'Write-Warning $detail' in script
+    assert script.index('icacls.exe $folder /setowner') < script.index(
+        'icacls.exe $folder /reset')
