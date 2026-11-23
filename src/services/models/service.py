@@ -50,7 +50,7 @@ class ModelService:
             })
             raise RuntimeError(message) from exc
 
-    def _change(self, name, operation):
+    def _change(self, name, operation, cancel=None):
         name = model_name(name) if operation == 'remove' else local_model_name(name)
         # Checked before the lock, the broker or any download: an ordinary
         # account must not even start a change the ACL would refuse midway.
@@ -67,8 +67,10 @@ class ModelService:
                     check()
                 try:
                     if operation == 'install':
+                        extra = {'cancel': cancel} if cancel is not None else {}
                         self.client.pull(name, progress=lambda value:
-                            self.events.emit('runtime.progress', {**value, 'service': 'models', 'model': name}))
+                            self.events.emit('runtime.progress', {**value, 'service': 'models', 'model': name}),
+                            **extra)
                     else:
                         self.client.remove(name)
                 except Exception as exc:
@@ -98,9 +100,9 @@ class ModelService:
             })
             raise RuntimeError(message) from exc
 
-    def install_model(self, name):
+    def install_model(self, name, *, cancel=None):
         """Explicit management download, not an agent/session network operation."""
-        return self._change(name, 'install')
+        return self._change(name, 'install', cancel)
 
     def remove_model(self, name):
         return self._change(name, 'remove')

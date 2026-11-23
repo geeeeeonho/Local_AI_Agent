@@ -83,26 +83,44 @@ LEFTOVER_STATES = ("exited", "created", "dead")
 
 
 def list_our_leftovers(states=LEFTOVER_STATES) -> List[str]:
-    """우리 패턴에 매칭되는, 실행 중이 아닌 컨테이너 이름 목록."""
+    """우리 패턴에 매칭되는, 실행 중이 아닌 컨테이너 이름 목록.
+
+    같은 키의 ``--filter`` 는 OR 로 묶이므로 상태마다 따로 묻지 않고 한 번에
+    묻는다 (종료 때마다 docker CLI 를 세 번 띄우던 것을 한 번으로).
+    """
     out: List[str] = []
+    command = ["docker", "ps", "-a"]
     for state in states:
-        try:
-            r = _run(["docker", "ps", "-a", "--filter", "status=" + str(state),
-                      "--format", "{{.Names}}\t{{.Image}}"], timeout=15)
-            if r.returncode != 0:
-                continue
-            for line in (r.stdout or "").splitlines():
-                parts = line.split("\t")
-                if len(parts) < 2:
-                    continue
-                nm = parts[0].strip()
-                if not nm or nm in out:
-                    continue
-                if _is_owned_container(nm):
-                    out.append(nm)
-        except Exception:
+        command += ["--filter", "status=" + str(state)]
+    command += ["--format", "{{.Names}}\t{{.Image}}"]
+    try:
+        r = _run(command, timeout=15)
+    except Exception:
+        return out
+    if r.returncode != 0:
+        return out
+    for line in (r.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
             continue
+        nm = parts[0].strip()
+        if nm and nm not in out and _is_owned_container(nm):
+            out.append(nm)
     return out
+
+
+def daemon_reachable(timeout: int = 5) -> bool:
+    """Is a Docker engine answering right now? One short CLI call.
+
+    The exit sweep asks this first: with Docker Desktop stopped (or still
+    starting) every sweep command would wait for its own timeout while the
+    window the user just closed stays on screen.
+    """
+    try:
+        r = _run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=timeout)
+    except Exception:
+        return False
+    return r.returncode == 0 and bool((r.stdout or "").strip())
 
 
 def list_our_networks() -> List[str]:
@@ -281,6 +299,11 @@ def register_exit_sweep(state_root) -> bool:
 
         def _do():
             try:
+                if not daemon_reachable():
+                    # Nothing can be swept without an engine; leftovers are
+                    # swept by the next close that finds Docker running.
+                    _ll.log("CLEANUP", "도커 정리 생략: Docker 엔진이 응답하지 않습니다")
+                    return
                 # Read at shutdown so a same-session toggle applies immediately.
                 wants_images = autoclean_enabled(state_root)
                 result = safe_auto_prune() if wants_images else sweep_our_leftovers()
@@ -304,5 +327,5 @@ __all__ = [
     "prune_exited_ours", "prune_our_networks", "prune_dangling_images",
     "prune_build_cache", "prune_unused_images", "prune_volumes",
     "sweep_our_leftovers", "safe_auto_prune",
-    "autoclean_enabled", "set_autoclean", "register_exit_sweep",
+    "autoclean_enabled", "set_autoclean", "register_exit_sweep", "daemon_reachable",
 ]

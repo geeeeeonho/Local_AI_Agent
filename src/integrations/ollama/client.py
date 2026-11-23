@@ -10,6 +10,10 @@ _MAX_JSON = 4 * 1024 * 1024
 _MAX_LINE = 128 * 1024
 
 
+class PullCancelled(RuntimeError):
+    """A model download stopped on request (window closing / cancel)."""
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise RuntimeError('Ollama API redirect refused')
@@ -229,11 +233,17 @@ class OllamaClient:
         except Exception:
             pass
 
-    def pull(self, name: str, progress=None):
+    def pull(self, name: str, progress=None, cancel=None):
+        """Stream one download. ``cancel`` (a threading.Event) stops it between
+        progress lines: closing the connection makes Ollama stop the download
+        and keep the partial blobs, so the next pull resumes instead of waiting
+        for gigabytes to finish before the window may close."""
         request = self._request('/api/pull', {'model': model_name(name), 'stream': True})
         success = False
         with self._open(request, max(self.timeout, 120)) as response:
             while True:
+                if cancel is not None and cancel.is_set():
+                    raise PullCancelled('모델 다운로드를 중단했습니다: ' + model_name(name))
                 raw = response.readline(_MAX_LINE + 1)
                 if not raw:
                     break

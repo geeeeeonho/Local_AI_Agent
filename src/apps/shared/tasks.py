@@ -25,6 +25,11 @@ class TaskRunner:
     def busy(self, key=None):
         return bool(self._tasks) if key is None else key in self._tasks
 
+    def pending(self):
+        """Keys of submitted tasks that have not finished yet, in order."""
+        return [key for key, (future, _done, _error) in self._tasks.items()
+                if not future.done()]
+
     def mutations_ahead(self, key):
         """Unfinished changes submitted before ``key``, which it waits behind.
 

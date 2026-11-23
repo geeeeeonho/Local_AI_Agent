@@ -22,10 +22,15 @@ def docker(monkeypatch):
         calls.append(args)
         result = NS(returncode=0, stdout='', stderr='')
         if args[:2] == ['ps', '-a']:
-            wanted = args[args.index('--filter') + 1].split('=')[1]
+            # Repeated --filter status=... are OR-ed, as the real CLI does.
+            wanted = {args[i + 1].split('=', 1)[1] for i, part in enumerate(args)
+                      if part == '--filter' and args[i + 1].startswith('status=')}
             result.stdout = '\n'.join(
                 '%s\t%s' % (name, image)
-                for name, (status, image) in state['containers'].items() if status == wanted)
+                for name, (status, image) in state['containers'].items() if status in wanted)
+        elif args[0] == 'version':
+            result.stdout = '' if state.get('down') else '27.3.1'
+            result.returncode = 1 if state.get('down') else 0
         elif args[:2] == ['network', 'inspect']:
             result.stdout = str(state['networks'].get(args[-1], 1))
         elif args[:2] == ['network', 'rm']:
@@ -125,6 +130,19 @@ def test_exit_sweep_reads_the_latest_toggle_value(docker, monkeypatch, tmp_path)
     assert callbacks
     callbacks[0]()
     assert pruned == ['images']
+
+
+def test_exit_sweep_does_not_wait_on_a_stopped_engine(docker, monkeypatch, tmp_path):
+    from launcher.core import lifelog
+    callbacks = []
+    monkeypatch.setattr(lifelog, 'register_cleanup', lambda fn, **kw: callbacks.append(fn))
+    docker.state['down'] = True
+    docker.state['containers'] = {'llm_searxng': ('exited', 'searxng/searxng')}
+    assert docker.module.register_exit_sweep(tmp_path)
+    callbacks[0]()
+    assert docker.calls == [['version', '--format', '{{.Server.Version}}']], \
+        'one probe, then nothing: the closed window must not wait on timeouts'
+    assert 'llm_searxng' in docker.state['containers'], 'swept next time Docker runs'
 
 
 def test_every_shell_registers_the_same_exit_sweep(monkeypatch, tmp_path):

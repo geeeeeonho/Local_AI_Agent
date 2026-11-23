@@ -1569,7 +1569,7 @@ class DesktopWindow(TranslationController, ToolsController):
                 if self.runner.cancel.is_set():break
                 say('설치 시작 %d/%d · %s' % (index,len(plan['install']),tag))
                 try:
-                    self.services.setup.install_model(tag);done['install'].append(tag)
+                    self.services.setup.install_model(tag,cancel=self.runner.cancel);done['install'].append(tag)
                     say('설치 완료 %d/%d · %s' % (index,len(plan['install']),tag))
                 except Exception as exc:done['failed'].append(('install',tag,str(exc)))
             return done
@@ -1796,6 +1796,13 @@ class DesktopWindow(TranslationController, ToolsController):
         if self.closed:return
         self.runner.drain()
         if self.closed:return
+        if self.closing and self.runner.busy() and not self._shutdown_started:
+            # Say what closing is waiting for, once per change, instead of a
+            # disabled window that looks frozen.
+            waiting=tuple(self.runner.pending())
+            if waiting!=getattr(self,'_close_waiting',None):
+                self._close_waiting=waiting
+                self.log('종료 대기 중: '+', '.join(waiting)+' (진행 중인 작업이 멈추면 바로 닫힙니다)')
         if self.closing and not self.runner.busy() and not self._shutdown_started:
             self._shutdown_started=True
             def done(ok):
