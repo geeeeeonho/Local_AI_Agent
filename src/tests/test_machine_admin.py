@@ -250,21 +250,39 @@ def test_not_windows_is_a_development_checkout(tmp_path, monkeypatch):
 
 # ── the program copy ─────────────────────────────────────────────────────
 
+def _git(repo, *args):
+    import subprocess
+    subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                    '-c', 'commit.gpgsign=false', '-C', str(repo), *args],
+                   check=True, capture_output=True)
+
+
+def commit_all(repo, message='c'):
+    """Commit and mark it as present on a remote, as a pushed commit is."""
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', message)
+    _git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+
 def checkout(tmp_path):
     source = tmp_path / 'checkout'
     (source / 'src' / 'core').mkdir(parents=True)
     (source / 'src' / 'core' / 'x.py').write_text('VALUE = 1\n', encoding='utf-8')
     (source / 'src' / 'tests').mkdir()
     (source / 'src' / 'tests' / 'test_x.py').write_text('', encoding='utf-8')
-    (source / 'src' / '__pycache__').mkdir()
-    (source / 'RUN.bat').write_text('@echo off\n', encoding='utf-8')
+    (source / 'RUN.bat').write_text('@echo off\n:A\ngoto A\n', encoding='utf-8')
     (source / 'README.md').write_text('readme', encoding='utf-8')
+    (source / '.gitignore').write_text('__pycache__/\nusers/\n', encoding='utf-8')
+    _git(source, 'init', '-q')
+    commit_all(source)
+    (source / 'src' / '__pycache__').mkdir()
     (source / 'users').mkdir()
     return source
 
 
 def test_the_program_is_copied_without_tests_or_state(tmp_path):
     from installer.steps import app
+    from core import program_integrity
     source = checkout(tmp_path)
     target = tmp_path / 'LocalAI' / 'app'
     assert app.deploy(source, target)
@@ -272,7 +290,27 @@ def test_the_program_is_copied_without_tests_or_state(tmp_path):
     assert (target / 'RUN.bat').is_file() and (target / app.VERSION_FILE).is_file()
     assert not (target / 'src' / 'tests').exists()
     assert not (target / 'users').exists(), 'records never travel with the program'
+    assert not (target / '.gitignore').exists()
     assert list((target / 'src' / 'core').glob('__pycache__/*.pyc')), 'precompiled for read-only use'
+    manifest = program_integrity.load(target)
+    assert manifest['schema'] == program_integrity.SCHEMA
+    assert len(manifest['commit']) == 40 and manifest['remote_branches'] == ['origin/main']
+    assert program_integrity.verify(target) == []
+    assert app.verify_deployed(target, source) == [], 'anchored to the checkout commit'
+
+
+def test_batch_files_are_written_with_crlf_and_still_match_git(tmp_path):
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    data = (target / 'RUN.bat').read_bytes()
+    assert data == b'@echo off\r\n:A\r\ngoto A\r\n', 'cmd.exe labels need CRLF'
+    entry = program_integrity.load(target)['files']['RUN.bat']
+    assert entry['eol'] == 'crlf'
+    assert program_integrity.git_blob_id(
+        program_integrity.to_blob('RUN.bat', data, entry['eol'])) == entry['git']
 
 
 def test_an_update_replaces_the_copy_whole(tmp_path):
@@ -281,6 +319,7 @@ def test_an_update_replaces_the_copy_whole(tmp_path):
     target = tmp_path / 'LocalAI' / 'app'
     app.deploy(source, target)
     (source / 'src' / 'core' / 'x.py').write_text('VALUE = 2\n', encoding='utf-8')
+    commit_all(source, 'v2')
     (target / 'stale.txt').write_text('old', encoding='utf-8')
     assert app.deploy(source, target)
     assert 'VALUE = 2' in (target / 'src' / 'core' / 'x.py').read_text(encoding='utf-8')
@@ -306,6 +345,153 @@ def test_a_failed_swap_keeps_the_running_copy(tmp_path, monkeypatch):
     assert app.deploy(source, target) is False
     assert (target / 'src' / 'core' / 'x.py').is_file()
     assert not target.with_name('app.new').exists()
+
+
+# ── only what Git vouches for is deployed ────────────────────────────────
+
+def test_uncommitted_edits_are_never_deployed(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / 'core' / 'x.py').write_text('import os; os.system("evil")\n', encoding='utf-8')
+    assert app.deploy(source, target) is False
+    assert not target.exists()
+
+
+def test_an_extra_untracked_program_is_never_deployed(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / 'sitecustomize.py').write_text('print("injected")\n', encoding='utf-8')
+    assert app.deploy(source, target) is False
+    assert not target.exists()
+
+
+def test_a_git_ignored_extra_is_not_copied_either(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / '__pycache__' / 'json.cpython-313.pyc').write_bytes(b'planted')
+    assert app.deploy(source, target)
+    assert not (target / 'src' / '__pycache__' / 'json.cpython-313.pyc').exists()
+
+
+def test_a_commit_no_remote_branch_contains_is_refused(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    (source / 'src' / 'core' / 'x.py').write_text('VALUE = 3\n', encoding='utf-8')
+    _git(source, 'commit', '-q', '-am', 'local only')
+    with pytest.raises(app.DeploySourceError, match='원격'):
+        app.git_source(source)
+    assert app.deploy(source, target) is False
+
+
+def test_a_symlink_in_the_commit_is_refused(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    (source / 'src' / 'link.py').symlink_to('/etc/hostname')
+    commit_all(source, 'link')
+    with pytest.raises(app.DeploySourceError, match='일반 파일'):
+        app.git_source(source)
+
+
+def test_a_subfolder_of_a_repository_is_not_a_source(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    with pytest.raises(app.DeploySourceError, match='최상위'):
+        app.git_source(source / 'src')
+
+
+def test_a_checkouts_own_git_config_cannot_run_a_program(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    marker = tmp_path / 'ran'
+    hook = tmp_path / 'fsmonitor.sh'
+    hook.write_text('#!/bin/sh\ntouch %s\n' % marker, encoding='utf-8')
+    hook.chmod(0o755)
+    _git(source, 'config', 'core.fsmonitor', str(hook))
+    _git(source, 'config', 'core.hooksPath', str(tmp_path))
+    app.git_source(source)
+    assert not marker.exists(), 'core.fsmonitor must be forced off for Setup'
+
+
+def test_borrowed_object_stores_are_refused(tmp_path):
+    from installer.steps import app
+    source = checkout(tmp_path)
+    (source / '.git' / 'objects' / 'info' / 'alternates').write_text(
+        str(tmp_path / 'elsewhere') + '\n', encoding='utf-8')
+    with pytest.raises(app.DeploySourceError, match='alternates'):
+        app.git_source(source)
+
+
+def test_an_object_whose_content_does_not_match_its_id_is_refused(tmp_path, monkeypatch):
+    from installer.steps import app
+    oid = 'a' * 40
+    monkeypatch.setattr(app, '_git', lambda source, *args, **kw:
+                        ('%s blob 4\n' % oid).encode() + b'evil\n')
+    with pytest.raises(app.DeploySourceError, match='해시'):
+        app._read_blobs(tmp_path, {'src/x.py': oid})
+
+
+# ── the deployed copy stays what the commit says ─────────────────────────
+
+def test_drift_in_the_deployed_copy_is_detected(tmp_path):
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    (target / 'src' / 'core' / 'x.py').write_text('VALUE = "tampered"\n', encoding='utf-8')
+    (target / 'src' / 'sitecustomize.py').write_text('', encoding='utf-8')
+    pyc = next((target / 'src' / 'core' / '__pycache__').glob('*.pyc'))
+    pyc.unlink()
+    problems = program_integrity.verify(target)
+    assert any('변경된 파일: src/core/x.py' in p for p in problems)
+    assert any('추가된 파일: src/sitecustomize.py' in p for p in problems)
+    assert any('없어진 파일' in p and '.pyc' in p for p in problems)
+    with pytest.raises(program_integrity.IntegrityError, match='Git 커밋'):
+        program_integrity.check_running_copy(target)
+    assert app.deploy(target, target) is False, 'Setup run from a drifted copy refuses too'
+
+
+def test_a_rewritten_manifest_does_not_pass_as_the_commit(tmp_path):
+    """Tampering plus a recomputed manifest: drift check passes, Git does not."""
+    import json
+    from installer.steps import app
+    from core import program_integrity
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    evil = b'VALUE = "tampered"\n'
+    (target / 'src' / 'core' / 'x.py').write_bytes(evil)
+    manifest = program_integrity.load(target)
+    manifest['files']['src/core/x.py'] = {'git': program_integrity.git_blob_id(evil),
+                                          'sha256': program_integrity.sha256(evil)}
+    (target / app.VERSION_FILE).write_text(json.dumps(manifest), encoding='utf-8')
+    assert program_integrity.verify(target) == []
+    assert any('커밋과 다른 내용: src/core/x.py' in p
+               for p in app.verify_deployed(target, source))
+
+
+def test_development_checkouts_and_legacy_copies_are_not_blocked(tmp_path):
+    from core import program_integrity
+    assert program_integrity.check_running_copy(tmp_path) is None
+    (tmp_path / program_integrity.VERSION_FILE).write_text(
+        '{"revision": "abc1234", "deployed_at": "x"}', encoding='utf-8')
+    assert '무결성 정보' in program_integrity.check_running_copy(tmp_path)
+
+
+def test_the_verify_tool_reports_the_git_anchored_result(tmp_path, capsys):
+    from installer.steps import app
+    from tools import verify_app
+    source = checkout(tmp_path)
+    target = tmp_path / 'LocalAI' / 'app'
+    assert app.deploy(source, target)
+    assert verify_app.main(['--app', str(target), '--source', str(source)]) == 0
+    assert 'Git ls-tree' in capsys.readouterr().out
+    (target / 'README.md').write_text('changed', encoding='utf-8')
+    assert verify_app.main(['--app', str(target), '--source', str(source)]) == 1
 
 
 def test_setup_run_from_the_shared_copy_does_not_copy_onto_itself(tmp_path):
@@ -446,3 +632,19 @@ def test_group_members_are_read_by_sid_and_unreadable_is_unknown(monkeypatch):
     monkeypatch.setattr(windows, 'run_script', lambda script, **kw:
                         types.SimpleNamespace(returncode=1, stdout='', stderr='x'))
     assert windows.group_member_sids(machine.ADMINS_GROUP) is None
+
+
+def test_a_drifted_shared_copy_is_not_started(monkeypatch):
+    from apps.shared import entry
+    from core import program_integrity
+    import services.system.bootstrap as bootstrap
+
+    def drifted(root=None):
+        raise program_integrity.IntegrityError('변경된 파일: src/core/x.py')
+
+    monkeypatch.setattr(program_integrity, 'check_running_copy', drifted)
+    monkeypatch.setattr(entry, '_report_startup_error', lambda exc, hint='': None)
+    monkeypatch.setattr(bootstrap, 'install_exit_hooks',
+                        lambda *a, **k: pytest.fail('nothing may start'))
+    assert entry.main('studio', []) == 4
+    assert entry.main('studio', ['--tui']) == 4

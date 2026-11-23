@@ -37,8 +37,28 @@ def parse_args(app,argv=None):
     return args
 
 
+def _report_startup_error(exc,hint=''):
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root=tk.Tk();root.withdraw()
+        messagebox.showerror('LocalAI startup error',str(exc)+hint,parent=root)
+        root.destroy()
+    except Exception:pass
+
+
 def main(app='studio',argv=None):
     args=parse_args(app,argv)
+    # Before any other program module runs: a shared copy that no longer
+    # matches the Git commit it was deployed from is not started at all.
+    from core.program_integrity import check_running_copy,IntegrityError
+    try:
+        notice=check_running_copy()
+    except IntegrityError as exc:
+        if sys.stderr is not None:print(str(exc),file=sys.stderr)
+        _report_startup_error(exc)
+        return 4
+    if notice and sys.stderr is not None:print(notice,file=sys.stderr)
     from services.system.bootstrap import (run_module_entry, initialize_language,
                                            install_exit_hooks)
     installer_flags=[]
@@ -77,13 +97,7 @@ def main(app='studio',argv=None):
         import traceback
         text=traceback.format_exc()
         if sys.stderr is not None:print(text,file=sys.stderr)
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-            root=tk.Tk();root.withdraw()
-            messagebox.showerror('LocalAI startup error',str(exc)+'\n\nUse RUN.bat --tui for the terminal launcher.',parent=root)
-            root.destroy()
-        except Exception:pass
+        _report_startup_error(exc,'\n\nUse RUN.bat --tui for the terminal launcher.')
         return 3
     finally:
         if services is not None:
