@@ -26,6 +26,7 @@ def _variables(w):
     w.subtitle_format = tk.StringVar(master=root, value=tuple(FORMATS)[0])
     w.subtitle_model = tk.StringVar(master=root)
     w.subtitle_translate = tk.BooleanVar(master=root, value=False)
+    w.subtitle_main_name = tk.BooleanVar(master=root, value=True)
     w.subtitle_target = tk.StringVar(master=root, value='한국어')
     w.subtitle_llm = tk.StringVar(master=root)
     w.subtitle_style = tk.StringVar(master=root, value='자연스러운 번역')
@@ -128,6 +129,9 @@ def build(parent, w, toolbar=None):
     ttk.Button(row, text='↻', width=3, command=w.refresh_subtitle_llms).pack(side='right', padx=(4, 0))
     w.subtitle_llm_box = ttk.Combobox(row, textvariable=w.subtitle_llm, values=(), state='readonly')
     w.subtitle_llm_box.pack(side='left', fill='x', expand=True, padx=(6, 0))
+    _check(w.subtitle_translate_options, '번역 자막을 원본 이름으로 저장', w.subtitle_main_name,
+           '번역 자막이 "영상.srt"가 되어 재생기가 바로 불러오고, 원어 자막은 "영상.<원어>.srt"(예: 영상.ja.srt)로 '
+           '저장합니다. 끄면 원어 자막이 "영상.srt", 번역 자막이 "영상.<번역 언어>.srt"입니다.')
     w.subtitle_translate.trace_add('write', lambda *_: w.toggle_subtitle_translation())
 
     w.subtitle_advanced_button = ttk.Button(body, text='고급 설정 ▸', command=w.toggle_subtitle_advanced)
@@ -175,7 +179,7 @@ def build(parent, w, toolbar=None):
     set_text(w.subtitle_translated_text, '[번역 자막도 함께 만들기]를 켜면 번역 자막이 표시됩니다.')
     set_text(w.subtitle_report_text, '확인이 필요한 자막(인식 확신도 낮음, 읽기 속도 빠름)과 '
                                      '자동으로 지운 반복·환각 문장을 보여 줍니다.')
-    for variable in (w.subtitle_path, w.subtitle_model, w.subtitle_translate, w.subtitle_llm,
+    for variable in (w.subtitle_path, w.subtitle_model, w.subtitle_translate, w.subtitle_llm, w.subtitle_main_name,
                      w.subtitle_target, w.subtitle_format, w.subtitle_language):
         variable.trace_add('write', lambda *_: w.update_subtitle_destination())
     w.toggle_subtitle_translation()

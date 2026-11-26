@@ -512,7 +512,8 @@ def test_translation_is_chained_and_rewrapped_for_the_target_language(tmp_path, 
     call = translator.calls[0]
     assert call['kind'] == 'subtitle' and call['style'] == 'natural' and call['source_language'] == 'English'
     assert call['glossary'] == 'LocalAI = 로컬AI'
-    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.srt', 'show.ko.srt']
+    # 기본: 번역 자막이 원본 이름(재생기가 바로 불러옴), 원어 자막은 원어 코드
+    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.en.srt', 'show.srt']
     korean = parse(result.translated_outputs[0].read_text(encoding='utf-8-sig'))
     assert validate(korean, rules_for('ko')).ok
     assert any(len(cue.lines) == 2 for cue in korean)          # 번역문을 한국어 줄 길이로 다시 나눴다
@@ -624,9 +625,9 @@ def test_subtitle_tool_opens_and_starts_only_when_ready(ui, tmp_path, fake_engin
     pump(w, lambda: w.subtitle_llm.get() == 'gemma4:12b', timeout=5)
     svc.subtitles.translator = FakeTranslator()
     w.start_subtitles()
-    pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'ui.ko.srt').exists(), timeout=15)
+    pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'ui.en.srt').exists(), timeout=15)
     pump(w, lambda: str(w.subtitle_open_button['state']) == 'normal', timeout=5)
-    assert (tmp_path / 'ui.srt').exists()
+    assert (tmp_path / 'ui.srt').exists()          # 번역 자막이 원본 이름, 원어 자막은 ui.en.srt
     assert '번역된 문장' in w.subtitle_translated_text.get('1.0', 'end')
     assert '확인하면 좋은 자막' in w.subtitle_report_text.get('1.0', 'end')
 
@@ -644,9 +645,9 @@ def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_p
     w.translation_path.set(str(media)); w.analyze_translation_file()
     pump(w, lambda: w.translation_kind.get() == '자막' and '준비됨' in w.translation_status.get(), timeout=5)
     assert w.translation_style.get() == '자연스러운 번역'             # 번역 목적은 사용자 값 그대로
-    assert 'movie.ko.srt' in w.translation_destination.cget('text')
+    assert '"movie.srt"(번역 자막' in w.translation_destination.cget('text') and w.translation_main_name.get()
     w.start_translation()
-    pump(w, lambda: (tmp_path / 'movie.ko.srt').exists() and not w.runner.busy('tools.translate'), timeout=15)
+    pump(w, lambda: (tmp_path / 'movie.en.srt').exists() and not w.runner.busy('tools.translate'), timeout=15)
     pump(w, lambda: '완료' in w.translation_status.get(), timeout=5)
     assert (tmp_path / 'movie.srt').exists()
     # 자막용 자동 설정은 일반 번역의 기본값으로 저장하지 않는다(다른 값을 바꿔 저장해도)
@@ -658,6 +659,7 @@ def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_p
     text_file.write_text('こんにちは。', encoding='utf-8')
     w.translation_path.set(str(text_file)); w.analyze_translation_file()
     assert w.translation_kind.get() == '자동 감지'
+    assert not w.translation_main_name.get()                  # 일반 문서는 원본을 그대로 둔다
 
 
 from test_desktop_ui import ui  # noqa: E402,F401  (실제 Tk 창 fixture를 함께 쓴다)
@@ -777,10 +779,10 @@ def test_folder_translation_turns_media_into_subtitles_and_shares_the_folder_mem
                                          on_file=lambda i, n, name: names.append(name))
     out = folder.with_name('series.ko')
     assert sorted(p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file()) == [
-        'cover.png', 'ep2.ko.srt', 'ep2.srt', 'note.txt', 'season/ep10.ko.srt', 'season/ep10.srt']
+        'cover.png', 'ep2.en.srt', 'ep2.srt', 'note.txt', 'season/ep10.en.srt', 'season/ep10.srt']
     assert not list(out.rglob('*.wav'))                       # 큰 영상·음성은 복사하지 않는다
     assert any(name.startswith('자막 만들기 · ') for name in names)
-    korean = parse((out / 'ep2.ko.srt').read_text(encoding='utf-8-sig'))
+    korean = parse((out / 'ep2.srt').read_text(encoding='utf-8-sig'))
     assert korean and validate(korean, rules_for('ko')).ok
     assert {rel for rel, _ in result.translated} == {'ep2.wav', 'season/ep10.wav', 'note.txt'}
     assert result.memory is not None                          # 자막도 폴더 메모리를 함께 쓴다
@@ -962,3 +964,90 @@ def test_speech_models_live_in_the_models_screen_with_a_shortcut_from_subtitles(
     pump(w, lambda: w.speech_model_table.item('large-v3-turbo', 'values')[3] == '설치됨', timeout=8)
     assert w.subtitle_model.get() == 'large-v3-turbo · 권장'
     assert not w.subtitle_status_label.action.winfo_ismapped()
+
+
+# ── 첫 파일 번역 누락(실사용 보고) ──
+class ColdStartInference:
+    """막 켠 Ollama: 처음 몇 번은 모델 목록을 못 준다(None → 빈 목록 → 정상)."""
+    def __init__(self):
+        self.answers = [None, [], ['m:1']]
+
+    def ensure_ready(self):
+        return 'http://127.0.0.1:11434'
+
+    def local_models(self):
+        return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+
+
+def test_the_first_translation_waits_for_a_just_started_ollama(tmp_path, monkeypatch):
+    from services.tools import translation
+    from services.tools.translation import TranslationService
+    monkeypatch.setattr(translation.time, 'sleep', lambda seconds: None)
+    source = tmp_path / 'a.txt'
+    source.write_text('Sato smiled.\n', encoding='utf-8')
+    service = TranslationService(ColdStartInference(), lambda _: GlossaryModel(), checkpoint_dir=tmp_path / 'cp',
+                                 protector=None, check_language=False)
+    assert '사토' in service.translate_file(source, model='m:1', target='한국어', kind='general').text
+
+
+def test_a_failed_translation_keeps_the_subtitle_and_the_rerun_translates_only(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, SubtitleService, Translate
+    translator = _translator(tmp_path, GlossaryModel())
+    real = translator.translate_file
+    calls = {'n': 0}
+
+    def flaky(*args, **kwargs):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise RuntimeError('Selected model is not available locally')
+        return real(*args, **kwargs)
+    translator.translate_file = flaky
+    service = SubtitleService(translator, work_dir=tmp_path / 'work', store_dir=tmp_path / 'models',
+                              engine=fake_engine, access=lambda refresh: {'allowed': True})
+    files = [_wav(tmp_path / 'first.wav'), _wav(tmp_path / 'second.wav')]
+    job = Translate(target='한국어', model='m:1')
+    batch = service.make_many(files, Options(model='large-v3-turbo', quality='fast'), translate=job)
+    first, second = (result for _, result in batch.results)
+    assert batch.failed == () and 'not available' in first.translation_error
+    assert (tmp_path / 'first.en.srt').exists() and not (tmp_path / 'first.srt').exists()
+    assert (tmp_path / 'second.srt').exists()
+    recognitions = len(list((tmp_path / 'work').rglob('result-cpu.calls')))
+    again = service.make_many(files, Options(model='large-v3-turbo', quality='fast'), translate=job)
+    assert [p.name for p, _ in again.skipped] == ['second.wav']           # 끝난 파일만 건너뜀
+    redo = again.results[0][1]
+    assert redo.translated_outputs[0].name == 'first.srt' and not redo.translation_error
+    assert redo.outputs[0].name == 'first.en.srt' and redo.reused        # 원어 자막·인식 결과 재사용
+    assert not (tmp_path / 'first.en (2).srt').exists()
+    assert len(list((tmp_path / 'work').rglob('result-cpu.calls'))) == recognitions
+
+
+def test_the_old_naming_is_kept_when_the_option_is_off(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, SubtitleService, Translate
+    service = SubtitleService(_translator(tmp_path, GlossaryModel()), work_dir=tmp_path / 'work',
+                              store_dir=tmp_path / 'models', engine=fake_engine,
+                              access=lambda refresh: {'allowed': True})
+    result = service.make(_wav(tmp_path / 'clip.wav'), Options(model='large-v3-turbo', quality='fast'),
+                          translate=Translate(target='한국어', model='m:1', main_name=False))
+    assert [p.name for p in result.outputs + result.translated_outputs] == ['clip.srt', 'clip.ko.srt']
+
+
+def test_a_translated_document_can_take_the_original_name(tmp_path):
+    from services.tools.translation import place_as_original
+    source = tmp_path / 'story.txt'
+    source.write_text('Sato smiled.\n', encoding='utf-8')
+    service = _translator(tmp_path, GlossaryModel())
+    result = service.translate_file(source, model='m:1', target='한국어', kind='general',
+                                    source_language='English')
+    placed, kept = place_as_original(result, source)
+    assert placed.output == source and source.read_text(encoding='utf-8') == '사토 웃었다.\n'
+    assert kept.name == 'story.en.txt' and kept.read_text(encoding='utf-8') == 'Sato smiled.\n'
+    assert not (tmp_path / 'story.ko.txt').exists()
+    unknown = tmp_path / 'memo.txt'
+    unknown.write_text('Sato left.\n', encoding='utf-8')
+    other = service.translate_file(unknown, model='m:1', target='한국어', kind='general')
+    assert place_as_original(replace_revision(other), unknown)[1].name == 'memo.og.txt'   # 원문 언어 모름
+
+
+def replace_revision(result):
+    from dataclasses import replace
+    return replace(result, revision=None)

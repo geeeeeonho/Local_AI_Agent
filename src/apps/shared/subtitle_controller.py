@@ -73,6 +73,9 @@ def report_text(result):
     lines += ['저장: ' + str(path) for path in result.outputs + tuple(result.translated_outputs)]
     if result.translation_skipped:
         lines.append('번역 생략: 음성 언어와 번역 언어가 같습니다.')
+    if getattr(result, 'translation_error', ''):
+        lines.append('번역 실패(원어 자막은 저장됨, 다시 시작하면 인식 없이 번역만 합니다): '
+                     + friendly(result.translation_error))
     lines += ['', '확인하면 좋은 자막 (%d)' % len(result.review)]
     lines += ['  %d번: %s' % (number, _REASONS.get(reason, reason)) for number, reason in result.review[:80]]
     if not result.review:
@@ -149,6 +152,7 @@ class SubtitleController:
         return {'language': self.subtitle_language, 'format': self.subtitle_format,
                 'model': self.subtitle_model, 'translate': self.subtitle_translate,
                 'target': self.subtitle_target, 'llm': self.subtitle_llm, 'style': self.subtitle_style,
+                'main_name': self.subtitle_main_name,
                 'quality': self.subtitle_quality, 'vad': self.subtitle_vad,
                 'keep_sounds': self.subtitle_keep_sounds, 'gpu': self.subtitle_gpu,
                 'sensitive_vad': self.subtitle_sensitive}
@@ -363,10 +367,14 @@ class SubtitleController:
                     '옆에 자막이 이미 있는 파일은 건너뜁니다.')
         else:
             first = files[0]
-            text = '→ 결과: "%s.%s"%s%s · 이미 자막이 있는 파일은 건너뜀' % (
-                first.stem, suffixes,
-                ' + 번역 "%s.<번역 언어>.%s"' % (first.stem, suffixes) if translate else '',
-                (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
+            if translate and self.subtitle_main_name.get():
+                names = '번역 "%s.%s" + 원어 "%s.<원어>.%s"' % (first.stem, suffixes, first.stem, suffixes)
+            elif translate:
+                names = '"%s.%s" + 번역 "%s.<번역 언어>.%s"' % (first.stem, suffixes, first.stem, suffixes)
+            else:
+                names = '"%s.%s"' % (first.stem, suffixes)
+            text = '→ 결과: %s%s · 이미 자막이 있는 파일은 건너뜀' % (
+                names, (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
         self.subtitle_destination.configure(text=text)
         if not self.runner.busy('tools.subtitles'):
             ready = bool(files and self.subtitle_model.get() and getattr(self, '_speech_engine', None)
@@ -425,7 +433,7 @@ class SubtitleController:
                 self.subtitle_say('Failed', '번역 모델을 먼저 고르세요.')
                 return
             translate = Translate(target=self.subtitle_target.get(), model=self.subtitle_llm.get(),
-                                  style=prefs['style'])
+                                  style=prefs['style'], main_name=self.subtitle_main_name.get())
         self.save_subtitle_preferences()
         self._subtitle_cancel = Event()
         self.subtitle_start_button.configure(state='disabled')
@@ -461,7 +469,8 @@ class SubtitleController:
             job = translate
             if job is not None:            # [파일 번역]의 고정 용어집을 자막 번역에도 쓴다
                 glossary = self.services.settings.translation_preferences().get('glossary', '')
-                job = Translate(target=job.target, model=job.model, style=job.style, glossary=glossary)
+                job = Translate(target=job.target, model=job.model, style=job.style, glossary=glossary,
+                                main_name=job.main_name)
             return self.services.subtitles.make_many(files, options, translate=job, progress=progress,
                                                      on_file=on_file, cancelled=stop, on_text=on_text)
 
@@ -489,9 +498,11 @@ class SubtitleController:
                     reports.append(skipped_text(batch))
                 set_text(self.subtitle_report_text, '\n\n'.join(reports))
                 review = sum(len(result.review) for _, result in batch.results)
-                self.subtitle_say('Ready' if not batch.failed else 'Failed',
-                                  '완료: 자막 %d개 파일%s%s%s · %s' % (
+                untranslated = sum(1 for _, result in batch.results if result.translation_error)
+                self.subtitle_say('Ready' if not batch.failed and not untranslated else 'Failed',
+                                  '완료: 자막 %d개 파일%s%s%s%s · %s' % (
                                       len(batch.results), (' · 실패 %d개' % len(batch.failed)) if batch.failed else '',
+                                      (' · 번역 실패 %d개(다시 시작하면 번역만)' % untranslated) if untranslated else '',
                                       (' · 이미 자막 있음 %d개 건너뜀' % len(batch.skipped)) if batch.skipped else '',
                                       (' · 확인하면 좋은 자막 %d개' % review) if review else '',
                                       self._subtitle_last_output), log=True)

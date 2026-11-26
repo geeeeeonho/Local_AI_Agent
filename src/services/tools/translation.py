@@ -83,6 +83,7 @@ _ECHO = re.compile(r'^\s*["\']?(?:id|text|speaker|section)["\']?\s*[:=]|["\']?\b
 _LABEL_PREFIX = re.compile(r'^\s*[^\s:：「」"\']{1,24}(?:\s[^\s:：「」"\']{1,24})?\s*[:：]\s*')
 SINGLE_SCHEMA = {'type':'object','properties':{'translation':{'type':'string'}},'required':['translation']}
 TRANSPORT_RETRIES = 2
+READY_WAIT = 15.0      # Ollama가 막 켜졌을 때 모델 목록을 기다리는 최대 초
 
 _CLASSICAL_MARK = re.compile(r'[ゐゑ]|けり|けむ|らむ|なむ|べし|ざりき|たまふ|はべり|をかし|いと[^\s]')
 
@@ -671,6 +672,28 @@ class FolderResult:
     memory: object = None       # 폴더 맥락 공유 시 모든 파일이 함께 쓴 폴더 메모리
 
 
+def place_as_original(result, original):
+    """번역본을 원본 이름에 둔다: 원본은 '이름.<원문 언어>.확장자'(모르면 '이름.og.확장자')로 이름을 바꿔
+    보관하고, 번역본을 원본 이름으로 옮긴다. 바꾼 결과(Result, output=원본 이름)와 보관한 원본 경로를 돌려준다."""
+    original, translated = Path(original), Path(result.output)
+    state = result.revision or {}
+    name = getattr(state.get('memory'), 'source_language', '') if state else ''
+    found = LANGUAGE_BY_NAME.get(name)
+    code = found.code if found else 'og'
+    kept = original.with_name('%s.%s%s' % (original.stem, code, original.suffix))
+    number = 2
+    while kept.exists() and number < 1000:
+        kept = original.with_name('%s.%s (%d)%s' % (original.stem, code, number, original.suffix))
+        number += 1
+    os.replace(original, kept)
+    try:
+        os.replace(translated, original)
+    except OSError:
+        os.replace(kept, original)          # 번역본을 옮기지 못하면 원본을 되돌린다
+        raise
+    return replace(result, output=original), kept
+
+
 def folder_output(folder, target):
     """폴더 단위 이름: 'docs' → 'docs.ko'. 안의 파일 이름은 원본 그대로 둔다."""
     folder = Path(folder)
@@ -832,6 +855,13 @@ class TranslationService:
         endpoint=self.inference.ensure_ready()
         available=self.inference.local_models()
         names={str(x).lower() for x in (available or ())}
+        # 막 켠 Ollama는 잠깐 동안 모델 목록을 못 주거나 비어 있다. 그 순간 시작한 첫 파일만 '모델 없음'으로
+        # 실패하고 다음 파일부터 되던 문제가 있었다. 바로 실패하지 않고 잠시 다시 확인한다.
+        deadline=time.monotonic()+READY_WAIT
+        while (available is None or model.lower() not in names) and time.monotonic()<deadline:
+            time.sleep(1.0)
+            available=self.inference.local_models()
+            names={str(x).lower() for x in (available or ())}
         if available is None or model.lower() not in names:
             self._ready_cache=None
             raise RuntimeError('Selected model is not available locally')
