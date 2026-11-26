@@ -127,6 +127,76 @@ def parse_glossary(text):
     return terms
 LABEL = re.compile(r'^\s*(?:translation|translated text|output|answer|번역(?:문|본| 결과)?|訳文|翻訳|翻译|译文|traducci[oó]n)\s*[:：]\s*', re.I)
 
+# ── 모델이 번역 대신 내놓는 엉뚱한 응답 ──
+# 번역 거절·AI 자기소개. 원문 자체가 사과·거절 대사면(“미안, 못 도와줘”) 정상 번역이므로 원문도 함께 본다.
+REFUSAL = re.compile(
+    r"\bI(?:'m| am) (?:sorry|afraid|unable|not able)\b.{0,60}\b(?:can(?:not|'t)|unable|translat|help|assist|provid|comply)"
+    r"|\bI (?:can(?:not|'t)|won't|am unable to) (?:help|assist|translate|provide|comply|fulfil)"
+    r"|\bas an AI\b|\bAI (?:language )?model\b|\bcontent polic|\binappropriate content\b"
+    r"|(?:죄송|미안)(?:합니다|하지만|해요|하네요).{0,40}(?:번역|도와|도움|제공|응답|답변).{0,15}(?:수 없|어렵|못)"
+    r"|(?:번역|제공|응답)(?:해 드릴|을 해 드릴|할) 수 없습니다|AI(?: 언어)? 모델(?:로서|이기)|부적절한 (?:내용|표현)(?:이|을|은)"
+    r"|申し訳(?:ありません|ございません).{0,40}(?:翻訳|お手伝い|対応|提供).{0,15}(?:できません|いたしかねます)"
+    r"|AIとして|(?:很?抱歉|对不起|對不起).{0,40}(?:无法|不能|無法).{0,15}(?:翻译|翻譯|协助|協助|提供)|作为(?:一个)?AI",
+    re.I | re.S)
+# 원문에 없는 설명·역주·메모
+ADDED_NOTE = re.compile(
+    r"[(（\[]\s*(?:참고|역주|역자 ?주|주|설명|의미|note|notes|translator'?s note|t/?n|注|译注|譯註|訳注|注釈|补充)\s*[:：]"
+    r"|※|\btranslator'?s note\b|\bliterally\s*[:：]|\(lit\.", re.I)
+# 번역문 대신 들어간 자리표시
+PLACEHOLDER = re.compile(r'^\s*[\[(（【]?\s*(?:번역 ?(?:불가|안 ?됨|할 수 없음)|n/?a|untranslat\w*|no translation|翻訳不可|无法翻译)'
+                         r'\s*[\])）】]?\s*[.。]?\s*$', re.I)
+
+
+def _clean_answer(unit_text, answer):
+    """배치 응답의 한 항목에서 추론 블록(<think>…</think>)만 걷어 낸다. 'Translation:' 같은 라벨은
+    정상 번역('答：…' → 'Answer: …')일 수도 있어 잘라 내지 않고 _misbehaviour가 판단한다."""
+    return strip_reasoning(answer) if isinstance(answer, str) else answer
+
+
+_SOURCE_LABEL = re.compile(r'^\s*[^\s:：]{1,12}\s*[:：]')
+
+
+def _misbehaviour(unit_text, answer):
+    """번역 대신 엉뚱한 것을 내놓았는가(거절, 덧붙인 설명, 반복 루프, 글자 없음). 사유 또는 ''."""
+    if REFUSAL.search(answer) and not REFUSAL.search(unit_text) and not _apology(unit_text):
+        return 'Model refused or talked about itself instead of translating'
+    if ADDED_NOTE.search(answer) and not ADDED_NOTE.search(unit_text):
+        return 'Model added a note or explanation that is not in the source'
+    if LABEL.match(answer) and not _SOURCE_LABEL.match(unit_text):
+        return "Model prefixed the translation with a label such as 'Translation:'"
+    # 화자가 없는 줄(제목·지문·설명)에 '화자: '·'Alice: ' 같은 이름표를 붙였다. 화자가 있는 대사 줄은
+    # _strip_added_label이 먼저 걷어 내므로 여기까지 남은 이름표는 원문에 없던 것이다.
+    if _LABEL_PREFIX.match(answer) and not _SOURCE_LABEL.match(unit_text) and \
+            len(answer) > _LABEL_PREFIX.match(answer).end():
+        return 'Model added a speaker label that is not in the source'
+    if PLACEHOLDER.match(answer) and not PLACEHOLDER.match(unit_text):
+        return 'Model returned a placeholder instead of a translation'
+    letters_in = sum(char.isalpha() for char in _TOKEN.sub(' ', unit_text))
+    letters_out = sum(char.isalpha() for char in _TOKEN.sub(' ', answer))
+    if letters_in >= 3 and letters_out == 0:
+        return 'Translation has no text (only punctuation or symbols)'
+    # 생성 루프: 같은 구절이 원문의 구절 수보다 훨씬 많이 되풀이된다('Yes, I see.' → '알겠어.' × 8).
+    # 원문 구절마다 같은 말이 한 번씩 나오는 번역(목록·되풀이 대사)은 정상이므로 원문 구절 수와 비교한다.
+    from core.tools import speech
+    loop_out = speech.LOOP.search(speech.normalize(answer))
+    if loop_out and not speech.LOOP.search(speech.normalize(unit_text)):
+        repeats = (loop_out.end() - loop_out.start()) // max(1, len(loop_out.group(1)))
+        clauses = len([part for part in _CLAUSES.split(_TOKEN.sub(' ', unit_text)) if part.strip()])
+        if repeats > max(5, clauses * 2):
+            return 'Translation repeats itself (generation loop)'
+    return ''
+
+
+_CLAUSES = re.compile(r'[,.!?;:，。、！？；：…·\-—–\n「」『』“”‘’"()（）\[\]【】《》〈〉]+')
+_SORRY = re.compile(r"\b(?:sorry|apologi[sz]e|afraid)\b|미안|죄송|すみません|ごめん|申し訳|抱歉|对不起|對不起", re.I)
+_UNABLE = re.compile(r"\b(?:can(?:not|'t)|unable|won't)\b|수 없|못 |못해|できない|できません|不能|无法|無法", re.I)
+
+
+def _apology(text):
+    """원문이 사과하며 거절하는 대사인가(“미안, 못 도와줘”). 그 번역은 거절 문구처럼 보여도 정상이다.
+    사과와 '할 수 없음'이 둘 다 있어야 한다('I can't believe it!'만으로는 거절 검사를 건너뛰지 않는다)."""
+    return bool(_SORRY.search(text) and _UNABLE.search(text))
+
 
 def _units(document: Document, allow=(), cjk=False):
     units = []
@@ -181,6 +251,11 @@ LeakError = ReviewError   # 의심 신호(재시도 후 남으면 '검토 필요
 def _validate(unit_text, answer, memory, tokens):
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError('Empty translation')
+    # 거절·설명·반복·자리표시는 '검토 필요'로 받아들이지 않는다(ReviewError가 아닌 ValueError):
+    # 다시 번역시키고, 끝내 안 되면 [실패한 구간은 원문 유지]로 원문을 남기고 줄 번호를 알린다.
+    problem = _misbehaviour(unit_text, answer)
+    if problem:
+        raise ValueError(problem)
     if len(answer) > max(4000,len(unit_text)*6):
         raise ValueError('Unexpectedly long translation')
     if ('\r' in answer or '\n' in answer) and not ('\r' in unit_text or '\n' in unit_text):
@@ -499,7 +574,7 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
         try:
             values,learned=_ask(client,model,items,memory,target,style,kind,recent,doc,strict=bool(retry),
                                 notes=notes)
-            values=[_strip_added_label(unit.text,_speaker(doc,unit),value)
+            values=[_strip_added_label(unit.text,_speaker(doc,unit),_clean_answer(unit.text,value))
                     for (idx,unit),value in zip(items,values)]
             for (idx,unit),value in zip(items,values):
                 _validate(unit.text,value,memory,tokens_for_segment[unit.segment_index])
