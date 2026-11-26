@@ -35,6 +35,8 @@ _NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 # (ja clean 0.030 → 0.095) 기본값은 whisper.cpp 그대로 두고 사용자가 고르게 한다.
 SENSITIVE_VAD = ('-vt', '0.35', '-vspd', '150', '-vsd', '300', '-vp', '250')
 _PROGRESS = re.compile(r'progress\s*=\s*(\d+)%')
+# 여러 파일을 한 번에 인식할 때 다음 파일로 넘어가는 줄('main: processing 'a.wav' (…)').
+_PROCESSING = re.compile(r": processing '")
 # VAD가 무음을 잘라 낸 구간 대응표. whisper-cli의 JSON은 구간 시각만 원래 오디오 기준으로 되돌리고
 # 토큰 시각은 잘라 낸 시간 그대로 내보내므로, 이 로그로 토큰 시각을 직접 되돌린다(core.tools.speech).
 _VAD_MAP = re.compile(r'vad_segment_info: orig_start: ([\d.]+), orig_end: ([\d.]+), '
@@ -317,10 +319,18 @@ class SpeechEngine:
         return wav
 
     # ── 음성 인식 ──
-    def transcribe(self, audio, model_key, *, work, language='auto', quality='best', vad=True,
-                   prompt='', gpu=True, threads=None, progress=None, cancelled=None, on_text=None,
-                   sensitive=False):
-        """audio(ASCII 경로의 WAV/MP3/FLAC)를 인식해 상세 JSON(dict)을 돌려준다."""
+    def transcribe(self, audio, model_key, **options):
+        """audio(ASCII 경로의 WAV/MP3/FLAC)를 인식해 Transcript(상세 JSON 등)를 돌려준다."""
+        return self.transcribe_many([audio], model_key, **options)[0]
+
+    def transcribe_many(self, audios, model_key, *, work, language='auto', quality='best', vad=True,
+                        prompt='', gpu=True, threads=None, progress=None, cancelled=None, on_text=None,
+                        sensitive=False):
+        """여러 오디오를 whisper-cli 한 번에 인식한다(모델을 한 번만 올린다). 순서대로 Transcript 목록.
+        언어 자동 감지는 파일마다 따로 한다. progress는 전체 진행률(0~1)."""
+        audios = list(audios)
+        if not audios:
+            return []
         status = self.status()
         if not status.builds:
             raise EngineMissing('whisper.cpp is not installed')
@@ -335,16 +345,20 @@ class SpeechEngine:
             builds.append('cpu')
         errors = []
         use_vad = vad and self.vad_available()
-        for attempt, build in enumerate(builds):
+        count = len(audios)
+        for build in builds:
             if not self.cli(build).is_file():
                 continue
-            out = work / ('result-' + build)
-            for old in (out.with_suffix('.json'),):
-                old.unlink(missing_ok=True)
-            args = ['-m', model_file, '-f', audio, '-l', speech.whisper_code(language),
-                    '-ojf', '-of', out, '-pp', '-sns',
-                    '-bs', str(preset['beam']), '-bo', str(preset['best_of']),
-                    '-t', str(threads or _threads())]
+            outs = ([work / ('result-' + build)] if count == 1
+                    else [work / ('result-%s-%d' % (build, index)) for index in range(count)])
+            for out in outs:
+                out.with_suffix('.json').unlink(missing_ok=True)
+            args = ['-m', model_file]
+            for audio, out in zip(audios, outs):
+                args += ['-f', audio, '-of', out]
+            args += ['-l', speech.whisper_code(language), '-ojf', '-pp', '-sns',
+                     '-bs', str(preset['beam']), '-bo', str(preset['best_of']),
+                     '-t', str(threads or _threads())]
             if preset['dtw']:
                 args += ['-dtw', speech.model(model_key).dtw, '-nfa']
             if use_vad:
@@ -358,17 +372,21 @@ class SpeechEngine:
             response.write_bytes(('\n'.join(str(arg).replace('\n', ' ') for arg in args) + '\n')
                                  .encode('utf-8'))
 
-            mapping = []
+            mappings = [[] for _ in audios]
+            current = [-1 if count > 1 else 0]
 
-            def on_line(line, build=build, mapping=mapping):
+            def on_line(line, mappings=mappings, current=current):
+                if count > 1 and _PROCESSING.search(line):
+                    current[0] = min(count - 1, current[0] + 1)
+                index = max(0, current[0])
                 found = _PROGRESS.search(line)
                 if found and progress:
-                    progress(int(found.group(1)) / 100.0)
+                    progress((index + int(found.group(1)) / 100.0) / count)
                 elif on_text and line.startswith('[') and '-->' in line:
                     on_text(line.split(']', 1)[-1].strip())
-                vad = _VAD_MAP.search(line)
-                if vad:
-                    mapping.append([int(round(float(value) * 1000)) for value in vad.groups()])
+                vad_line = _VAD_MAP.search(line)
+                if vad_line:
+                    mappings[index].append([int(round(float(value) * 1000)) for value in vad_line.groups()])
 
             started = time.monotonic()
             try:
@@ -381,17 +399,23 @@ class SpeechEngine:
                 if progress:
                     progress(0.0)
                 continue
-            result = out.with_suffix('.json')
-            if code == 0 and result.is_file():
-                raw = result.read_bytes().decode('utf-8', 'replace')
-                try:
-                    data = json.loads(raw, strict=False)
-                except ValueError as exc:
-                    errors.append('%s: unreadable result (%s)' % (build, exc))
-                    continue
-                if mapping:
-                    data[speech.VAD_MAP_KEY] = mapping      # [원래 시작, 원래 끝, 처리 시작, 처리 끝] ms
-                return Transcript(data, build, time.monotonic() - started, tail)
+            results = [out.with_suffix('.json') for out in outs]
+            if code == 0 and all(result.is_file() for result in results):
+                transcripts = []
+                for result, mapping in zip(results, mappings):
+                    raw = result.read_bytes().decode('utf-8', 'replace')
+                    try:
+                        data = json.loads(raw, strict=False)
+                    except ValueError as exc:
+                        errors.append('%s: unreadable result (%s)' % (build, exc))
+                        break
+                    if mapping:
+                        data[speech.VAD_MAP_KEY] = mapping  # [원래 시작, 원래 끝, 처리 시작, 처리 끝] ms
+                    transcripts.append(data)
+                else:
+                    seconds = time.monotonic() - started
+                    return [Transcript(data, build, seconds / count, tail) for data in transcripts]
+                continue
             errors.append('%s exit %s: %s' % (build, code, ' / '.join(line for line in tail[-4:] if line)))
             if progress:
                 progress(0.0)

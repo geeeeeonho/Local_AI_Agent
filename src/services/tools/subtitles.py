@@ -398,14 +398,12 @@ class SubtitleService:
         retry_model = ('large-v3' if options.quality == 'best' and 'large-v3' in installed
                        else options.model)
         chosen = language_code(options.language)
-        decisions = []
+        retry = work / 'retry'
+        shutil.rmtree(retry, ignore_errors=True)
+        retry.mkdir(parents=True, exist_ok=True)
+        snippets, languages = [], []
         for index, item in enumerate(ranges):
-            if cancelled():
-                raise InterruptedError('Cancelled')
-            report('review', index / max(1, len(ranges)), '%d/%d' % (index + 1, len(ranges)))
-            folder = work / 'retry' / str(index)
-            folder.mkdir(parents=True, exist_ok=True)
-            snippet = folder / 'audio.wav'
+            snippet = retry / ('%d.wav' % index)
             first = min(params.nframes, item.start * params.framerate // 1000)
             source.setpos(first)
             piece = source.readframes(max(0, item.end * params.framerate // 1000 - first))
@@ -414,26 +412,26 @@ class SubtitleService:
                 handle.setsampwidth(2)
                 handle.setframerate(params.framerate)
                 handle.writeframes(piece)
+            snippets.append(snippet)
             # 다른 언어로 의심되는 구간과 건너뛴 말소리(대개 다른 언어)는 그 구간만 언어를 다시 감지한다.
-            language = ('auto' if item.reason in ('language mismatch', 'possible missing speech')
-                        or chosen == 'auto' and code == 'und'
-                        else chosen if chosen != 'auto' else speech.whisper_code(code))
+            languages.append('auto' if item.reason in ('language mismatch', 'possible missing speech')
+                             or chosen == 'auto' and code == 'und'
+                             else chosen if chosen != 'auto' else speech.whisper_code(code))
+        try:
+            answers = self._recognize_snippets(snippets, languages, retry_model, options, retry, report,
+                                               cancelled)
+        finally:
+            shutil.rmtree(retry, ignore_errors=True)
+        decisions = []
+        for item, answer in zip(ranges, answers):
             missing = item.reason == 'possible missing speech'
             original = [] if missing else [segment for segment in segments
                                            if segment.end > item.start and segment.start < item.end]
-            try:
-                again = self.engine.transcribe(snippet, retry_model, work=folder, language=language,
-                                               quality='best', vad=False, prompt=options.prompt,
-                                               gpu=options.gpu, cancelled=cancelled)
-            except InterruptedError:
-                raise
-            except (OSError, RuntimeError, ValueError) as exc:
+            if isinstance(answer, Exception):
                 decisions.append(asr_review.Decision(item, ' '.join(s.text for s in original), '', False,
-                                                     'retry failed: ' + str(exc)[:120]))
+                                                     'retry failed: ' + str(answer)[:120]))
                 continue
-            finally:
-                shutil.rmtree(folder, ignore_errors=True)
-            _, candidate = speech.parse_result(again.data, spaced=rules.spaced)
+            _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
             candidate = asr_review.shift(candidate, item.start)
             decision = asr_review.choose(item, original, candidate)
             decisions.append(decision)
@@ -446,6 +444,48 @@ class SubtitleService:
                                      'decisions': [_decision_dict(item) for item in decisions],
                                      'note': note}, ensure_ascii=False), encoding='utf-8')
         return segments, tuple(decisions), names, note
+
+    def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled):
+        """재인식 구간들을 언어별로 묶어 whisper-cli 한 번에 인식한다(모델을 구간마다 다시 올리지 않는다).
+        묶음이 실패하면 그 묶음만 구간별로 다시 시도해, 한 구간의 문제가 다른 구간을 막지 않게 한다.
+        구간 순서대로 Transcript 또는 그 구간의 예외."""
+        answers = [None] * len(snippets)
+        groups = {}
+        for index, language in enumerate(languages):
+            groups.setdefault(language, []).append(index)
+        finished = 0
+
+        def run(indexes, language):
+            done = finished
+
+            def progress(fraction):
+                report('review', (done + fraction * len(indexes)) / max(1, len(snippets)),
+                       '%d/%d' % (min(len(snippets), done + 1 + int(fraction * len(indexes))), len(snippets)))
+            return self.engine.transcribe_many([snippets[index] for index in indexes], model, work=work,
+                                               language=language, quality='best', vad=False,
+                                               prompt=options.prompt, gpu=options.gpu, progress=progress,
+                                               cancelled=cancelled)
+        for language, indexes in groups.items():
+            if cancelled():
+                raise InterruptedError('Cancelled')
+            try:
+                for index, answer in zip(indexes, run(indexes, language)):
+                    answers[index] = answer
+            except InterruptedError:
+                raise
+            except (OSError, RuntimeError, ValueError) as exc:
+                if len(indexes) == 1:
+                    answers[indexes[0]] = exc
+                else:
+                    for index in indexes:
+                        try:
+                            answers[index] = run([index], language)[0]
+                        except InterruptedError:
+                            raise
+                        except (OSError, RuntimeError, ValueError) as single:
+                            answers[index] = single
+            finished += len(indexes)
+        return answers
 
     # ── 만들기 ──
     def make(self, path, options: Options, *, translate: Translate | None = None,

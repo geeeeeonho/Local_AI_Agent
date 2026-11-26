@@ -376,41 +376,44 @@ def test_engine_install_is_skipped_outside_windows(tmp_path):
 
 # ── 서비스 전 과정 (가짜 whisper-cli) ──
 FAKE_CLI = r'''#!{python}
-import json, sys
+import json, os, sys
 args = open(sys.argv[1][1:], encoding='utf-8').read().split('\n')
 def value(flag):
     return args[args.index(flag) + 1]
-log = open(value('-of') + '.calls', 'a', encoding='utf-8'); log.write(json.dumps(args) + '\n'); log.close()
-lang = value('-l')
-if lang == 'auto':
-    lang = 'en'
-sentences = {{'en': [' Hello and welcome to the show.', ' Today we talk about subtitles, and why rules matter.'],
-             'ko': [' 안녕하세요 방송에 오신 것을 환영합니다.', ' 오늘은 자막 규칙이 왜 중요한지 이야기합니다.']}}[lang]
-import os
-retry = 'retry' in value('-f')
-if os.environ.get('FAKE_SCENARIO') == 'loop' and not retry:
-    sentences = [' ' + 'na ' * 20] + sentences[1:]
-if os.environ.get('FAKE_SCENARIO') == 'skip':
-    # 첫 인식은 앞 발화(0.5~3초)만, 두 번째 VAD 구간(4~6초, 다른 언어)은 건너뜀. 재인식(언어 자동)은 영어로.
-    sentences = ([' English words were spoken here.'] if retry and value('-l') == 'auto'
-                 else [' 안녕하세요 반갑습니다 오늘은.'])
-segments, t = [], 0
-for sentence in sentences:
-    tokens = []
-    for word in sentence.split(' ')[1:]:
-        if not word:
-            continue
-        tokens.append({{'text': ' ' + word, 'offsets': {{'from': t, 'to': t + 300}},
-                       'p': 0.3 if word == 'na' else 0.93, 't_dtw': -1}})
-        t += 330
-    segments.append({{'offsets': {{'from': tokens[0]['offsets']['from'], 'to': t}}, 'text': sentence, 'tokens': tokens}})
-    print('[00:00:00.000 --> 00:00:01.000]  ' + sentence.strip(), flush=True)
-if os.environ.get('FAKE_VAD_LOG') and '--vad' in args:
-    print('whisper_vad: vad_segment_info: orig_start: 0.50, orig_end: 3.00, vad_start: 0.00, vad_end: 2.50', file=sys.stderr)
-    print('whisper_vad: vad_segment_info: orig_start: 4.00, orig_end: 6.00, vad_start: 2.60, vad_end: 4.60', file=sys.stderr)
-for p in (0, 50, 100):
-    print('whisper_print_progress_callback: progress = %3d%%' % p, file=sys.stderr, flush=True)
-json.dump({{'result': {{'language': lang}}, 'transcription': segments}}, open(value('-of') + '.json', 'w', encoding='utf-8'))
+def values(flag):
+    return [args[i + 1] for i, arg in enumerate(args) if arg == flag]
+log = open(values('-of')[0] + '.calls', 'a', encoding='utf-8'); log.write(json.dumps(args) + '\n'); log.close()
+for audio, out in zip(values('-f'), values('-of')):
+    print("main: processing '%s' (16000 samples, 1.0 sec), 1 threads" % audio, file=sys.stderr, flush=True)
+    lang = value('-l')
+    if lang == 'auto':
+        lang = 'en'
+    sentences = {{'en': [' Hello and welcome to the show.', ' Today we talk about subtitles, and why rules matter.'],
+                 'ko': [' 안녕하세요 방송에 오신 것을 환영합니다.', ' 오늘은 자막 규칙이 왜 중요한지 이야기합니다.']}}[lang]
+    retry = 'retry' in audio
+    if os.environ.get('FAKE_SCENARIO') == 'loop' and not retry:
+        sentences = [' ' + 'na ' * 20] + sentences[1:]
+    if os.environ.get('FAKE_SCENARIO') == 'skip':
+        # 첫 인식은 앞 발화(0.5~3초)만, 두 번째 VAD 구간(4~6초, 다른 언어)은 건너뜀. 재인식(언어 자동)은 영어로.
+        sentences = ([' English words were spoken here.'] if retry and value('-l') == 'auto'
+                     else [' 안녕하세요 반갑습니다 오늘은.'])
+    segments, t = [], 0
+    for sentence in sentences:
+        tokens = []
+        for word in sentence.split(' ')[1:]:
+            if not word:
+                continue
+            tokens.append({{'text': ' ' + word, 'offsets': {{'from': t, 'to': t + 300}},
+                           'p': 0.3 if word == 'na' else 0.93, 't_dtw': -1}})
+            t += 330
+        segments.append({{'offsets': {{'from': tokens[0]['offsets']['from'], 'to': t}}, 'text': sentence, 'tokens': tokens}})
+        print('[00:00:00.000 --> 00:00:01.000]  ' + sentence.strip(), flush=True)
+    if os.environ.get('FAKE_VAD_LOG') and '--vad' in args:
+        print('whisper_vad: vad_segment_info: orig_start: 0.50, orig_end: 3.00, vad_start: 0.00, vad_end: 2.50', file=sys.stderr)
+        print('whisper_vad: vad_segment_info: orig_start: 4.00, orig_end: 6.00, vad_start: 2.60, vad_end: 4.60', file=sys.stderr)
+    for p in (0, 50, 100):
+        print('whisper_print_progress_callback: progress = %3d%%' % p, file=sys.stderr, flush=True)
+    json.dump({{'result': {{'language': lang}}, 'transcription': segments}}, open(out + '.json', 'w', encoding='utf-8'))
 '''
 
 
@@ -507,6 +510,42 @@ def test_only_the_suspicious_range_is_recognized_again_and_the_better_candidate_
     calls = next((tmp_path / 'user_data').rglob('result-cpu.calls')).read_text(encoding='utf-8')
     assert len(calls.splitlines()) == 1                        # 원래 작업 폴더의 호출은 최초 인식 1번뿐
     assert not list((tmp_path / 'user_data').rglob('audio.wav')) and not list((tmp_path / 'user_data').rglob('input.wav'))
+
+
+def test_several_files_are_recognized_in_one_run_with_their_own_results(tmp_path, fake_engine, monkeypatch):
+    monkeypatch.setenv('FAKE_VAD_LOG', '1')
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    first, second = _wav(tmp_path / 'a.wav'), _wav(tmp_path / 'b.wav')
+    seen = []
+    answers = fake_engine.transcribe_many([first, second], 'large-v3-turbo', work=tmp_path / 'w', language='ko',
+                                          progress=seen.append)
+    assert len(answers) == 2 and all(answer.data['result']['language'] == 'ko' for answer in answers)
+    calls = (tmp_path / 'w' / 'result-cpu-0.calls').read_text(encoding='utf-8').splitlines()
+    assert len(calls) == 1 and json.loads(calls[0]).count('-f') == 2       # 모델은 한 번만 올린다
+    assert all(len(answer.data[speech.VAD_MAP_KEY]) == 2 for answer in answers)   # 파일마다 제 대응표
+    assert seen == sorted(seen) and seen[-1] == 1.0                          # 전체 진행률
+
+
+def test_a_failed_review_batch_is_retried_one_range_at_a_time(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    service = _service(tmp_path, fake_engine)
+    real = fake_engine.transcribe_many
+    batches = []
+
+    def flaky(audios, model, **options):
+        batches.append(len(audios))
+        if len(audios) > 1 or 'bad' in str(audios[0]):
+            raise RuntimeError('Speech recognition failed: exit 10')
+        return real(audios, model, **options)
+    fake_engine.transcribe_many = flaky
+    snippets = [_wav(tmp_path / name) for name in ('good-1.wav', 'bad.wav', 'good-2.wav')]
+    answers = service._recognize_snippets(snippets, ['en', 'en', 'auto'], 'large-v3-turbo',
+                                          Options(model='large-v3-turbo'), tmp_path / 'retry',
+                                          lambda *args: None, lambda: False)
+    assert batches == [2, 1, 1, 1]                      # en 묶음 실패 → 구간별, auto 묶음은 그대로
+    assert not isinstance(answers[0], Exception) and isinstance(answers[1], RuntimeError)
+    assert not isinstance(answers[2], Exception)
 
 
 def test_fast_mode_skips_re_recognition(tmp_path, fake_engine, monkeypatch):
