@@ -375,6 +375,9 @@ for sentence in sentences:
         t += 330
     segments.append({{'offsets': {{'from': tokens[0]['offsets']['from'], 'to': t}}, 'text': sentence, 'tokens': tokens}})
     print('[00:00:00.000 --> 00:00:01.000]  ' + sentence.strip(), flush=True)
+if os.environ.get('FAKE_VAD_LOG') and '--vad' in args:
+    print('whisper_vad: vad_segment_info: orig_start: 0.50, orig_end: 3.00, vad_start: 0.00, vad_end: 2.50', file=sys.stderr)
+    print('whisper_vad: vad_segment_info: orig_start: 4.00, orig_end: 6.00, vad_start: 2.60, vad_end: 4.60', file=sys.stderr)
 for p in (0, 50, 100):
     print('whisper_print_progress_callback: progress = %3d%%' % p, file=sys.stderr, flush=True)
 json.dump({{'result': {{'language': lang}}, 'transcription': segments}}, open(value('-of') + '.json', 'w', encoding='utf-8'))
@@ -421,7 +424,8 @@ class FakeTranslator:
         Path(output_path).write_text(to_srt(translated), encoding='utf-8')
         if progress:
             progress(len(cues), len(cues))
-        return type('Result', (), {'kept_lines': [], 'audit': []})()
+        return type('Result', (), {'kept_lines': [], 'audit': [], 'glossary': {'Hello': '안녕'}, 'revision': None,
+                                   'revised': 0})()
 
     def abort(self):
         pass
@@ -654,3 +658,175 @@ def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_p
 
 
 from test_desktop_ui import ui  # noqa: E402,F401  (실제 Tk 창 fixture를 함께 쓴다)
+
+
+# ── 번역 용어 수정 ──
+class GlossaryModel:
+    """'Sato'를 문서 메모리의 용어(없으면 '사토')로 옮기는 가짜 모델. 번역한 항목 수를 센다."""
+    def __init__(self):
+        self.items = 0
+
+    def chat(self, name, messages, **kwargs):
+        data = json.loads(messages[-1]['content'])
+        if 'items' not in data:
+            return '{}'
+        terms = json.loads(data['document_memory']).get('terminology', {})
+        self.items += len(data['items'])
+        out = []
+        for row in data['items']:
+            text = row['text'].replace('Sato', terms.get('Sato', '사토'))
+            for source, target in terms.items():
+                text = text.replace(source, target)
+            text = text.replace('smiled.', '웃었다.').replace('left.', '떠났다.').replace('The sky is blue.', '하늘이 파랗다.')
+            out.append({'id': row['id'], 'text': text})
+        return json.dumps({'translations': out, 'new_terms': {}}, ensure_ascii=False)
+
+
+def _translator(tmp_path, model):
+    from services.tools.translation import TranslationService
+
+    class Inference:
+        def ensure_ready(self):
+            return 'http://127.0.0.1:11434'
+
+        def local_models(self):
+            return ['m:1']
+    return TranslationService(Inference(), lambda _: model, checkpoint_dir=tmp_path / 'cp', protector=None,
+                              check_language=False)
+
+
+def test_changed_terms_retranslate_only_the_lines_that_use_them(tmp_path):
+    source = tmp_path / 'story.txt'
+    source.write_text('Sato smiled.\nThe sky is blue.\nSato left.\n', encoding='utf-8')
+    model = GlossaryModel()
+    service = _translator(tmp_path, model)
+    first = service.translate_file(source, model='m:1', target='한국어', kind='general')
+    assert first.text.count('사토') == 2 and first.revision is not None
+    before = model.items
+    assert service.affected_by(first, {'Sato': '사이토'}) == [0, 2]
+    revised = service.revise_terms(first, {'Sato': '사이토'})
+    assert model.items - before == 2                           # 바뀐 용어가 든 두 줄만
+    assert revised.revised == 2 and revised.glossary['Sato'] == '사이토'
+    assert first.output.read_text(encoding='utf-8') == '사이토 웃었다.\n하늘이 파랗다.\n사이토 떠났다.\n'
+    again = service.revise_terms(revised, {'Sato': '사토 씨'})   # 고친 결과를 다시 고칠 수 있다
+    assert '사토 씨 떠났다.' in again.text and first.output.read_text(encoding='utf-8') == again.text
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match='No glossary changes'):
+        service.revise_terms(again, {'Sato': ' '})
+
+
+# ── VAD 시각 보정 (실측에서 찾은 문제) ──
+REAL_VAD_MAP = [[1670, 7200, 0, 5530], [7620, 12700, 5730, 10810], [23430, 34080, 11010, 21660]]
+
+
+def test_token_times_are_mapped_back_from_the_vad_timeline():
+    """whisper-cli -ojf는 VAD를 켜면 구간 시각만 원래 오디오 기준이고 토큰 시각은 무음을 잘라 낸 시간이다.
+    (실측: 23.4초에 시작한 말이 12.3초에 표시되고 일부 큐가 1ms가 됐다.)"""
+    data = {'result': {'language': 'ko'}, speech.VAD_MAP_KEY: REAL_VAD_MAP, 'transcription': [
+        {'offsets': {'from': 7650, 'to': 12310}, 'text': ' 같은 결과를 얻었습니다.',
+         'tokens': [_token(' 같은', 9500, 9800), _token(' 결과를', 9800, 10200), _token(' 얻었습니다.', 10200, 10800)]},
+        {'offsets': {'from': 12310, 'to': 34080}, 'text': ' 몰 박사는 일부 환자가',
+         'tokens': [_token(' 몰', 10700, 10790), _token(' 박사는', 10790, 11220), _token(' 일부', 11220, 11750),
+                    _token(' 환자가', 11750, 12400)]}]}
+    _, segments = speech.parse_result(data)
+    first, second = segments
+    assert 11000 < first.words[0].start < 12000 and first.end <= 12700
+    assert [w.text for w in second.words] == [' 몰', ' 박사는', ' 일부', ' 환자가']
+    assert second.words[1].start == 23430                      # 무음을 가로지르지 않고 다음 발화에서 시작
+    assert 22000 < second.words[0].start < 23430               # 문장 첫 단어도 다음 발화 바로 앞으로
+    assert second.start == second.words[0].start and second.end < 25000
+    assert all(w.end > w.start for s in segments for w in s.words)
+
+
+def test_vad_gap_times_follow_the_side_of_the_word():
+    segments = [tuple(item) for item in REAL_VAD_MAP]
+    assert speech.map_vad_time(3000, segments) == 1670 + 3000 * (7200 - 1670) // 5530
+    assert speech.map_vad_time(10900, segments, side=1) == 23430    # 단어 시작 → 다음 발화
+    assert speech.map_vad_time(10900, segments, side=-1) == 12700   # 단어 끝 → 앞 발화
+    assert speech.map_vad_time(99999, segments) == 34080 and speech.map_vad_time(-5, segments) == 1670
+
+
+def test_engine_keeps_the_vad_map_from_whisper_logs(tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options
+    monkeypatch.setenv('FAKE_VAD_LOG', '1')
+    media = _wav(tmp_path / 'v.wav', seconds=6)
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    _service(tmp_path, fake_engine).make(media, Options(model='large-v3-turbo', quality='fast'))
+    saved = json.loads(next((tmp_path / 'user_data').rglob('transcript.json')).read_text(encoding='utf-8'))
+    assert saved['data'][speech.VAD_MAP_KEY] == [[500, 3000, 0, 2500], [4000, 6000, 2600, 4600]]
+
+
+def test_folder_translation_turns_media_into_subtitles_and_shares_the_folder_memory(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, SubtitleService
+    folder = tmp_path / 'series'
+    (folder / 'season').mkdir(parents=True)
+    _wav(folder / 'ep2.wav'); _wav(folder / 'season' / 'ep10.wav')
+    (folder / 'note.txt').write_text('Sato smiled.\n', encoding='utf-8')
+    (folder / 'cover.png').write_bytes(b'png')
+    model = GlossaryModel()
+    translator = _translator(tmp_path, model)
+    subtitles_service = SubtitleService(translator, work_dir=tmp_path / 'work', store_dir=tmp_path / 'models',
+                                        engine=fake_engine, access=lambda refresh: {'allowed': True})
+    media = subtitles_service.folder_media(Options(model='large-v3-turbo', quality='fast'))
+    names = []
+    result = translator.translate_folder(folder, model='m:1', target='한국어', media=media,
+                                         on_file=lambda i, n, name: names.append(name))
+    out = folder.with_name('series.ko')
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file()) == [
+        'cover.png', 'ep2.en.srt', 'ep2.ko.srt', 'note.txt', 'season/ep10.en.srt', 'season/ep10.ko.srt']
+    assert not list(out.rglob('*.wav'))                       # 큰 영상·음성은 복사하지 않는다
+    assert any(name.startswith('자막 만들기 · ') for name in names)
+    korean = parse((out / 'ep2.ko.srt').read_text(encoding='utf-8-sig'))
+    assert korean and validate(korean, rules_for('ko')).ok
+    assert {rel for rel, _ in result.translated} == {'ep2.wav', 'season/ep10.wav', 'note.txt'}
+    assert result.memory is not None                          # 자막도 폴더 메모리를 함께 쓴다
+    calls = len(list((tmp_path / 'work').rglob('result-cpu.calls')))
+    again = translator.translate_folder(folder, model='m:1', target='한국어', media=media)
+    assert {rel for rel, why in again.skipped} >= {'ep2.wav', 'season/ep10.wav'}
+    assert len(list((tmp_path / 'work').rglob('result-cpu.calls'))) == calls   # 다시 인식하지 않음
+
+
+def test_translated_subtitle_terms_can_be_revised(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, SubtitleService, Translate
+    translator = _translator(tmp_path, GlossaryModel())
+    service = SubtitleService(translator, work_dir=tmp_path / 'work', store_dir=tmp_path / 'models',
+                              engine=fake_engine, access=lambda refresh: {'allowed': True})
+    result = service.make(_wav(tmp_path / 'talk.wav'), Options(model='large-v3-turbo', quality='fast'),
+                          translate=Translate(target='한국어', model='m:1'))
+    before = result.translated_outputs[0].read_text(encoding='utf-8-sig')
+    assert 'Hello' in before
+    revised = service.revise_terms(result, {'Hello': '안녕하세요'})
+    after = revised.translated_outputs[0].read_text(encoding='utf-8-sig')
+    assert 'Hello' not in after and '안녕하세요' in after and revised.translated.revised >= 1
+    assert revised.translated_outputs == result.translated_outputs     # 같은 번역 자막 파일을 고쳐 쓴다
+    assert validate(parse(after), rules_for('ko')).ok
+
+
+def test_translation_glossary_editor_applies_and_remembers_terms(ui, tmp_path):
+    from test_desktop_ui import pump
+    w, svc, _ = ui
+    model = GlossaryModel()
+    svc.translator = _translator(tmp_path, model)
+    svc.translator.local_models = lambda: ['m:1']
+    w.navigate('tools'); w.open_tool('translate')
+    pump(w, lambda: w.translation_model.get() == 'm:1', timeout=5)
+    source = tmp_path / 'story.txt'
+    source.write_text('Sato smiled.\nThe sky is blue.\nSato left.\n', encoding='utf-8')
+    w.translation_path.set(str(source)); w.analyze_translation_file()
+    pump(w, lambda: '준비됨' in w.translation_status.get(), timeout=5)
+    w.start_translation()
+    pump(w, lambda: '번역 완료' in w.translation_status.get(), timeout=10)
+    output = tmp_path / 'story.ko.txt'
+    assert output.read_text(encoding='utf-8').count('사토') == 2
+    editor = w.translation_terms_editor
+    assert str(editor.apply_button['state']) == 'disabled'
+    editor.source.set('Sato'); editor.target.set('사이토'); editor.set_term()
+    assert editor.changes() == {'Sato': '사이토'} and str(editor.apply_button['state']) == 'normal'
+    before = model.items
+    editor._apply()
+    pump(w, lambda: '용어 적용 완료' in w.translation_status.get(), timeout=10)
+    assert output.read_text(encoding='utf-8') == '사이토 웃었다.\n하늘이 파랗다.\n사이토 떠났다.\n'
+    assert model.items - before == 2
+    assert 'Sato = 사이토' in w.translation_glossary_text.get('1.0', 'end')
+    pump(w, lambda: 'Sato = 사이토' in svc.settings.translation_preferences().get('glossary', ''), timeout=4)

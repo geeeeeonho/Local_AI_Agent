@@ -86,6 +86,42 @@ def whisper_code(code):
 
 
 # ── 상세 JSON → 구간·단어 ──
+VAD_MAP_KEY = 'localai_vad_map'
+
+
+def map_vad_time(t, segments, *, side=0):
+    """VAD로 무음을 잘라 낸 시간 t(ms)를 원래 오디오 시간으로 되돌린다.
+    segments: [(원래 시작, 원래 끝, 처리 시작, 처리 끝)]. 구간 안은 비례 보간(whisper.cpp와 같음).
+    잘라 낸 틈에 떨어진 시간은 side로 정한다: +1 다음 구간 시작(단어 시작), -1 앞 구간 끝(단어 끝),
+    0 가까운 쪽(whisper.cpp의 whisper_map_token_time_segment_aware)."""
+    if not segments:
+        return t
+    if t <= segments[0][2]:
+        return segments[0][0]
+    if t >= segments[-1][3]:
+        return segments[-1][1]
+    for index, (orig_start, orig_end, vad_start, vad_end) in enumerate(segments):
+        if vad_start <= t <= vad_end:
+            if vad_end <= vad_start:
+                return orig_start
+            return orig_start + (t - vad_start) * (orig_end - orig_start) // (vad_end - vad_start)
+        if index + 1 < len(segments) and vad_end < t < segments[index + 1][2]:
+            if side:
+                return segments[index + 1][0] if side > 0 else orig_end
+            middle = (vad_end + segments[index + 1][2]) // 2
+            return orig_end if t <= middle else segments[index + 1][0]
+    return t
+
+
+def _vad_segment_start(t, segments):
+    """원래 시간 t가 속한(또는 바로 앞의) 말소리 구간의 원래 시작."""
+    found = segments[0][0] if segments else 0
+    for orig_start, _orig_end, _vad_start, _vad_end in segments:
+        if orig_start <= t:
+            found = orig_start
+    return found
+
+
 @dataclass(frozen=True)
 class Segment:
     start: int              # ms
@@ -107,13 +143,14 @@ def _is_attached(text):
     return all(unicodedata.category(char)[0] in 'PS' for char in stripped) or stripped[0] in NO_LINE_START
 
 
-def _token_time(token, key):
+def _token_time(token, key, vad=()):
     offsets = token.get('offsets') or {}
     value = offsets.get(key)
-    return int(value) if isinstance(value, (int, float)) else None
+    side = 1 if key == 'from' else -1
+    return map_vad_time(int(value), vad, side=side) if isinstance(value, (int, float)) else None
 
 
-def _words(tokens, seg_start, seg_end, spaced):
+def _words(tokens, seg_start, seg_end, spaced, vad=()):
     """토큰을 단어로 묶는다. 띄어 쓰는 언어는 공백으로 시작하는 토큰이 새 단어,
     아니면 한중일 토큰 하나하나가 단위다. 문장부호 토큰은 앞 단어에 붙인다."""
     groups = []
@@ -134,10 +171,14 @@ def _words(tokens, seg_start, seg_end, spaced):
     for index, group in enumerate(groups):
         text = ''.join(str(token.get('text') or '') for token in group)
         dtw = group[0].get('t_dtw')
-        start = int(dtw) * 10 if isinstance(dtw, (int, float)) and dtw >= 0 else _token_time(group[0], 'from')
-        end = _token_time(group[-1], 'to')
+        start = (map_vad_time(int(dtw) * 10, vad, side=1) if isinstance(dtw, (int, float)) and dtw >= 0
+                 else _token_time(group[0], 'from', vad))
+        end = _token_time(group[-1], 'to', vad)
         start = seg_start if start is None else start
         end = seg_end if end is None else end
+        if vad and end > start:
+            # 한 단어가 잘라 낸 무음(구간 사이)을 가로지를 수 없다: 끝이 속한 말소리 구간에서 시작한다.
+            start = max(start, min(_vad_segment_start(end - 1, vad), end - 1))
         probs = [float(token.get('p', 1.0)) for token in group if isinstance(token.get('p'), (int, float))]
         words.append([start, end, text, sum(probs) / len(probs) if probs else 1.0])
     # 시각을 구간 안으로, 앞뒤 순서대로 맞춘다.
@@ -153,15 +194,39 @@ def _words(tokens, seg_start, seg_end, spaced):
     return tuple(Word(start, end, text, prob) for start, end, text, prob in words)
 
 
+def _reattach_heads(words, vad, *, gap=1000, head_ms=1500):
+    """문장(whisper 구간)의 첫 한두 단어만 앞 말소리 구간 끝에 남고 나머지가 몇 초 뒤 다음 구간에서
+    이어지는 경우: 경계 근처 토큰 시각이 부정확해서 생긴 것이므로, 그 단어들을 다음 발화 바로 앞으로 옮긴다."""
+    for cut in range(1, min(3, len(words))):
+        if words[cut].start - words[cut - 1].end >= gap and \
+                _vad_segment_start(words[cut].start, vad) > words[cut - 1].end and \
+                words[cut - 1].end - words[0].start <= head_ms:
+            moved, at = [], words[cut].start
+            for word in reversed(words[:cut]):
+                length = min(400, max(80, word.end - word.start))
+                moved.insert(0, Word(max(0, at - length), max(1, at), word.text, word.prob))
+                at -= length
+            return tuple(moved) + tuple(words[cut:])
+    return words
+
+
 def parse_result(data, *, spaced=True):
     """whisper-cli -ojf JSON → (감지 언어 코드, [Segment]). spaced=False면 한중일 방식으로 단어를 묶는다."""
     language = str(((data or {}).get('result') or {}).get('language') or '')
+    vad = [tuple(item) for item in (data or {}).get(VAD_MAP_KEY) or ()]
     segments = []
     for item in (data or {}).get('transcription') or ():
         offsets = item.get('offsets') or {}
         start, end = int(offsets.get('from', 0)), int(offsets.get('to', 0))
         tokens = item.get('tokens') or ()
-        words = _words(tokens, start, max(end, start + 1), spaced) if tokens else ()
+        if vad and tokens:
+            # whisper-cli의 구간 시각은 VAD 대응표 전체를 한 번에 보간해 무음 틈에 떨어질 수 있다.
+            # 단어 시각을 구간별로 되돌린 뒤, 구간 시작·끝은 그 단어들로 다시 정한다.
+            words = _reattach_heads(_words(tokens, 0, 1 << 40, spaced, vad), vad)
+            if words:
+                start, end = words[0].start, words[-1].end
+        else:
+            words = _words(tokens, start, max(end, start + 1), spaced, vad) if tokens else ()
         text = str(item.get('text') or '').strip()
         if not words and text:
             words = (Word(start, max(end, start + 1), (' ' if spaced else '') + text),)

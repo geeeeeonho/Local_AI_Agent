@@ -1,5 +1,6 @@
 """Tk 화면에서 번역 도구를 사용하기 위한 콜백. 실제 작업은 worker thread."""
 import time
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from tkinter import filedialog
@@ -7,7 +8,7 @@ from .translation_view import KINDS, STYLES, LANGUAGES as TARGETS
 from services.tools.languages import SOURCE_LABELS as SOURCES
 from .widgets import set_text, set_status
 from core.tools.speech import MEDIA
-from services.tools.subtitles import Translate
+from services.tools.subtitles import Translate, scan as scan_media
 from .subtitle_controller import options_from, overall, report_text, friendly as subtitle_error, STAGES
 from .subtitle_view import MEDIA_PATTERN
 
@@ -188,18 +189,22 @@ class TranslationController:
         if Path(path).is_dir():
             self.translation_say('Working','폴더 안의 파일 분석 중...')
             def folder_done(found):
-                rows,others=found
+                (rows,others),media=found
+                others-=media
                 units=sum(count for _,_,count in rows)
                 errors=[rel for rel,kind,_ in rows if kind.startswith('error')]
-                self.translation_say('Ready' if rows else 'Failed',
-                    ('준비됨 · 번역할 파일 %d개(%d구간) · 그대로 복사 %d개%s · [번역 시작]을 누르세요'
-                     % (len(rows),units,others,(' · 읽을 수 없는 파일 %d개'%len(errors)) if errors else ''))
-                    if rows else '이 폴더에는 번역할 TXT·JSON·MD·SRT·VTT 파일이 없습니다.')
+                self.translation_say('Ready' if rows or media else 'Failed',
+                    ('준비됨 · 번역할 파일 %d개(%d구간)%s · 그대로 복사 %d개%s · [번역 시작]을 누르세요'
+                     % (len(rows),units,(' · 영상·음성 %d개(자막을 만든 뒤 번역, 영상은 복사 안 함)'%media)
+                        if media else '',others,(' · 읽을 수 없는 파일 %d개'%len(errors)) if errors else ''))
+                    if rows or media else '이 폴더에는 번역할 TXT·JSON·MD·SRT·VTT·영상·음성 파일이 없습니다.')
                 set_text(self.translation_source_text,'\n'.join(
                     '%-48s %-12s %6d구간'%(rel,kind[:40],count) for rel,kind,count in rows)
                     or '(번역할 파일 없음)')
                 self.translation_tabs.select(0)
-            self.run_task('tools.inspect',lambda:self.services.translator.inspect_folder(path),folder_done,
+            def inspect():
+                return self.services.translator.inspect_folder(path),len(scan_media(path))
+            self.run_task('tools.inspect',inspect,folder_done,
                 mutate=False,announce=False,
                 error=lambda e:self.translation_say('Failed','폴더 분석 실패: '+friendly_error(e)))
             return
@@ -291,7 +296,8 @@ class TranslationController:
                 folder_options.pop('path');output_dir=folder_options.pop('output_path')
                 return self.services.translator.translate_folder(
                     path,output_dir=output_dir,progress=progress,on_file=on_file,cancelled=stop,
-                    shared_context=shared_context,**folder_options)
+                    shared_context=shared_context,media=self._folder_media(options['source_language']),
+                    **folder_options)
             return self.services.translator.translate_file(**options,progress=progress,cancelled=stop)
         def unlock():
             if not self.translation_progress.get()>=100:
@@ -313,6 +319,8 @@ class TranslationController:
                                   audit_note(result),result.output),log=True)
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
+            self._translation_revisable=('file',result)
+            self.translation_terms_editor.load(result.glossary)
             self.root.bell()
             # 다음 번역(다른 언어 등)이 이전 결과 경로를 재사용하지 않도록 비운다.
             self.translation_output.set('')
@@ -342,6 +350,13 @@ class TranslationController:
                 result.output),log=True,level='error' if state=='Failed' else 'info')
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
+            self._translation_revisable=('folder',result)
+            terms={}
+            for _rel,item in result.translated:
+                terms.update(item.glossary)
+            if result.memory is not None:
+                terms.update(result.memory.terms)
+            self.translation_terms_editor.load(terms)
             self.root.bell()
             self.translation_output.set('')
             reasons={'already translated':'이미 번역됨','already in the target language':'이미 번역 언어',
@@ -450,6 +465,8 @@ class TranslationController:
             note=('번역 생략: 음성 언어(%s)와 번역 언어가 같아 원어 자막만 만들었습니다'%result.language_label
                   if result.translation_skipped else '번역 자막 %d개 구간'%len(result.cues))
             self.translation_say('Ready','완료: %s · %s'%(note,outputs[0]),log=True)
+            self._translation_revisable=('media',result)
+            self.translation_terms_editor.load(getattr(result.translated,'glossary',None) or {})
             set_text(self.translation_source_text,result.text[:12000])
             set_text(self.translation_result_text,(result.translated_text or result.text)[:12000])
             set_text(self.translation_memory_text,report_text(result))
@@ -464,6 +481,77 @@ class TranslationController:
                 self.root.bell()
         if not self.run_task('tools.translate',work,done,mutate=False,long=True,announce=False,error=failed):
             unlock()
+
+    def _folder_media(self,source_language):
+        """폴더 안 영상·음성을 자막으로 만들 처리기. 엔진·모델이 없으면 None(예전처럼 복사)."""
+        status=self.services.subtitles.status()
+        prefs=self.services.settings.subtitle_preferences()
+        model=self.services.subtitles.recommend_model(status.models,prefs.get('model',''))
+        if not status.builds or not model:
+            return None
+        language=source_language if source_language in SOURCES else '자동 감지'
+        return self.services.subtitles.folder_media(options_from(prefs,language=language,model=model))
+
+    def apply_translation_terms(self,changes,remember):
+        """용어 사전에서 고친 용어를 마지막 번역 결과에 적용한다(그 용어가 든 줄만 다시 번역)."""
+        found=getattr(self,'_translation_revisable',None)
+        if found is None or self.runner.busy('tools.translate'):
+            return
+        kind,result=found
+        if remember:
+            self._remember_terms(changes)
+        editor=self.translation_terms_editor
+        editor.busy(True)
+        self._translation_cancel=Event()
+        self.translation_cancel_button.configure(state='normal')
+        self.translation_say('Working','바꾼 용어 %d개 적용 중 · 그 용어가 든 줄만 다시 번역합니다...'%len(changes),log=True)
+        stop=lambda:self._translation_cancel.is_set() or self.runner.cancel.is_set()
+        translator=self.services.translator
+        def work():
+            if kind=='file':
+                return kind,translator.revise_terms(result,changes,cancelled=stop)
+            if kind=='media':
+                return kind,self.services.subtitles.revise_terms(result,changes,cancelled=stop)
+            items=[]
+            for rel,item in result.translated:
+                if item.revision is not None and translator.affected_by(item,changes):
+                    item=translator.revise_terms(item,changes,cancelled=stop)
+                items.append((rel,item))
+            return kind,replace(result,translated=tuple(items))
+        def done(found):
+            kind,new=found
+            self.translation_cancel_button.configure(state='disabled')
+            self._translation_revisable=(kind,new)
+            if kind=='file':
+                count,terms,text=new.revised,new.glossary,new.text
+            elif kind=='media':
+                count,terms,text=new.translated.revised,new.translated.glossary,new.translated_text
+            else:
+                count=sum(item.revised for _rel,item in new.translated)
+                terms={key:value for _rel,item in new.translated for key,value in item.glossary.items()}
+                terms.update(changes)
+                text=new.translated[0][1].text if new.translated else ''
+            set_text(self.translation_result_text,text[:12000])
+            editor.load(terms,note='적용 완료: %d줄을 다시 번역했습니다. 결과 파일을 고쳐 썼습니다.'%count)
+            self.translation_say('Ready','용어 적용 완료: %d줄 다시 번역'%count,log=True)
+            self.translation_tabs.select(1)
+        def failed(exc):
+            self.translation_cancel_button.configure(state='disabled')
+            editor.busy(False)
+            if isinstance(exc,InterruptedError):
+                self.translation_say('Waiting','용어 적용을 중단했습니다. 결과 파일은 바뀌지 않았습니다.',log=True)
+            else:
+                self.translation_say('Failed','용어 적용 실패: '+friendly_error(exc),log=True,level='error')
+        self.run_task('tools.translate',work,done,mutate=False,long=True,announce=False,error=failed)
+
+    def _remember_terms(self,changes):
+        """고친 용어를 고정 용어집(번역·자막 도구 공용)에 반영한다. 같은 원문 줄은 새 번역으로 바꾼다."""
+        lines=[line for line in self.translation_glossary_text.get('1.0','end').splitlines() if line.strip()]
+        kept=[line for line in lines if line.split('=',1)[0].strip() not in changes]
+        kept+=['%s = %s'%(source,target) for source,target in changes.items()]
+        self.translation_glossary_text.delete('1.0','end')
+        self.translation_glossary_text.insert('1.0','\n'.join(kept))
+        self.schedule_translation_save()
 
     def set_translation_progress(self,done,total,note=''):
         if not self.translation_progress_row.winfo_manager():

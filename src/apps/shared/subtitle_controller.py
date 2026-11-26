@@ -554,7 +554,11 @@ class SubtitleController:
         stop = lambda: self._subtitle_cancel.is_set() or self.runner.cancel.is_set()
 
         def work():
-            return self.services.subtitles.make_many(files, options, translate=translate, progress=progress,
+            job = translate
+            if job is not None:            # [파일 번역]의 고정 용어집을 자막 번역에도 쓴다
+                glossary = self.services.settings.translation_preferences().get('glossary', '')
+                job = Translate(target=job.target, model=job.model, style=job.style, glossary=glossary)
+            return self.services.subtitles.make_many(files, options, translate=job, progress=progress,
                                                      on_file=on_file, cancelled=stop, on_text=on_text)
 
         def unlock():
@@ -585,6 +589,12 @@ class SubtitleController:
                                       (' · 확인하면 좋은 자막 %d개' % review) if review else '',
                                       self._subtitle_last_output), log=True)
                 self.subtitle_tabs.select(1 if last.translated_text else 0)
+                self._subtitle_results = [result for _path, result in batch.results]
+                terms = {}
+                for result in self._subtitle_results:
+                    terms.update(getattr(result.translated, 'glossary', None) or {})
+                self.subtitle_terms_editor.load(terms, note='' if terms else
+                                                '번역 자막을 만들면 번역에 쓴 용어가 여기에 표시됩니다.')
             else:
                 set_text(self.subtitle_report_text, '\n'.join('%s — %s' % (path.name, friendly(exc))
                                                               for path, exc in batch.failed))
@@ -603,3 +613,60 @@ class SubtitleController:
                 self.root.bell()
         if not self.run_task('tools.subtitles', work, done, mutate=False, long=True, announce=False, error=failed):
             unlock()
+
+    def apply_subtitle_terms(self, changes, remember):
+        """번역 자막에서 고친 용어를 적용한다(그 용어가 든 자막만 다시 번역해 번역 자막을 고쳐 씀)."""
+        results = [item for item in getattr(self, '_subtitle_results', []) if item.translated is not None]
+        if not results or self.runner.busy('tools.subtitles'):
+            return
+        if remember:
+            self._remember_shared_terms(changes)
+        editor = self.subtitle_terms_editor
+        editor.busy(True)
+        self._subtitle_cancel = Event()
+        self.subtitle_cancel_button.configure(state='normal')
+        self.subtitle_say('Working', '바꾼 용어 %d개 적용 중…' % len(changes), log=True)
+        stop = lambda: self._subtitle_cancel.is_set() or self.runner.cancel.is_set()
+        translator = self.services.translator
+
+        def work():
+            out = []
+            for item in results:
+                if translator.affected_by(item.translated, changes):
+                    item = self.services.subtitles.revise_terms(item, changes, cancelled=stop)
+                out.append(item)
+            return out
+
+        def done(items):
+            self.subtitle_cancel_button.configure(state='disabled')
+            self._subtitle_results = items
+            count = sum(item.translated.revised for item in items)
+            terms = {key: value for item in items for key, value in item.translated.glossary.items()}
+            set_text(self.subtitle_translated_text, items[-1].translated_text[:20000])
+            editor.load(terms, note='적용 완료: 자막 %d개 구간을 다시 번역해 번역 자막을 고쳐 썼습니다.' % count)
+            self.subtitle_say('Ready', '용어 적용 완료: %d개 구간 다시 번역' % count, log=True)
+            self.subtitle_tabs.select(1)
+
+        def failed(exc):
+            self.subtitle_cancel_button.configure(state='disabled')
+            editor.busy(False)
+            if isinstance(exc, InterruptedError):
+                self.subtitle_say('Waiting', '용어 적용을 중단했습니다. 번역 자막은 바뀌지 않았습니다.', log=True)
+            else:
+                self.subtitle_say('Failed', '용어 적용 실패: ' + friendly(exc), log=True, level='error')
+        self.run_task('tools.subtitles', work, done, mutate=False, long=True, announce=False, error=failed)
+
+    def _remember_shared_terms(self, changes):
+        """고정 용어집([파일 번역] 기본값)에 고친 용어를 넣는다. 번역 화면이 열려 있으면 그 칸도 고친다."""
+        if hasattr(self, 'translation_glossary_text'):
+            self._remember_terms(changes)
+            return
+        def update():
+            prefs = self.services.settings.translation_preferences()
+            lines = [line for line in prefs.get('glossary', '').splitlines()
+                     if line.strip() and line.split('=', 1)[0].strip() not in changes]
+            lines += ['%s = %s' % pair for pair in changes.items()]
+            prefs['glossary'] = '\n'.join(lines)[:20000]
+            self.services.settings.set_translation_preferences(prefs)
+        self.runner.submit('tools.prefs.terms', update, lambda _: None,
+                           lambda exc: self.log('용어집 저장 실패: ' + str(exc), level='error'), mutate=False)

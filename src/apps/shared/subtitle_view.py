@@ -10,6 +10,7 @@ from core.tools import speech
 from services.tools.languages import SOURCE_LABELS, TARGET_LABELS
 from .translation_view import STYLES
 from .widgets import ScrollArea, note, set_text, status_line, text_box, wrap_to_parent
+from .glossary_editor import GlossaryEditor
 
 FORMATS = {'SRT (가장 널리 쓰임)': ('srt',), 'WebVTT (웹·유튜브)': ('vtt',), 'SRT + WebVTT': ('srt', 'vtt')}
 QUALITIES = {'최고 정확도 (정밀 단어 시각 · 느림)': 'best', '균형': 'balanced', '빠름': 'fast'}
@@ -176,6 +177,10 @@ def build(parent, w, toolbar=None):
     preview, translated, report = ttk.Frame(notebook), ttk.Frame(notebook), ttk.Frame(notebook)
     notebook.add(preview, text='자막'); notebook.add(translated, text='번역 자막')
     notebook.add(report, text='검토 · 정리 내역')
+    terms = ttk.Frame(notebook, padding=8); notebook.add(terms, text='용어 사전 수정')
+    w.subtitle_terms_editor = GlossaryEditor(
+        terms, w.root, on_apply=w.apply_subtitle_terms,
+        remember_label='고정 용어집에도 추가([파일 번역]과 함께 쓰며 다음 번역에도 적용)')
     w.subtitle_preview_text = text_box(preview, height=12)
     w.subtitle_translated_text = text_box(translated, height=12)
     w.subtitle_report_text = text_box(report, height=12)

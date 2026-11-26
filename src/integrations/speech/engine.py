@@ -31,6 +31,10 @@ VARIANTS = ('cuda', 'cpu')
 _EXE = '.exe' if os.name == 'nt' else ''
 _NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 _PROGRESS = re.compile(r'progress\s*=\s*(\d+)%')
+# VAD가 무음을 잘라 낸 구간 대응표. whisper-cli의 JSON은 구간 시각만 원래 오디오 기준으로 되돌리고
+# 토큰 시각은 잘라 낸 시간 그대로 내보내므로, 이 로그로 토큰 시각을 직접 되돌린다(core.tools.speech).
+_VAD_MAP = re.compile(r'vad_segment_info: orig_start: ([\d.]+), orig_end: ([\d.]+), '
+                      r'vad_start: ([\d.]+), vad_end: ([\d.]+)')
 
 
 class EngineMissing(RuntimeError):
@@ -250,12 +254,17 @@ class SpeechEngine:
             response.write_bytes(('\n'.join(str(arg).replace('\n', ' ') for arg in args) + '\n')
                                  .encode('utf-8'))
 
-            def on_line(line, build=build):
+            mapping = []
+
+            def on_line(line, build=build, mapping=mapping):
                 found = _PROGRESS.search(line)
                 if found and progress:
                     progress(int(found.group(1)) / 100.0)
                 elif on_text and line.startswith('[') and '-->' in line:
                     on_text(line.split(']', 1)[-1].strip())
+                vad = _VAD_MAP.search(line)
+                if vad:
+                    mapping.append([int(round(float(value) * 1000)) for value in vad.groups()])
 
             started = time.monotonic()
             code, tail = self._run([self.cli(build), '@' + str(response)], on_line=on_line,
@@ -268,6 +277,8 @@ class SpeechEngine:
                 except ValueError as exc:
                     errors.append('%s: unreadable result (%s)' % (build, exc))
                     continue
+                if mapping:
+                    data[speech.VAD_MAP_KEY] = mapping      # [원래 시작, 원래 끝, 처리 시작, 처리 끝] ms
                 return Transcript(data, build, time.monotonic() - started, tail)
             errors.append('%s exit %s: %s' % (build, code, ' / '.join(line for line in tail[-4:] if line)))
             if progress:

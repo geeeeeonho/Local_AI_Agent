@@ -118,9 +118,20 @@ def numbered(path):
     return candidate
 
 
-def output_path(media, code, fmt):
+def output_path(media, code, fmt, folder=None):
+    """원본 옆(또는 folder 안)의 '이름.<언어>.srt'. 이미 있으면 번호를 붙인다."""
     media = Path(media)
-    return numbered(media.with_name('%s.%s%s' % (media.stem, code, subtitles.FORMATS[fmt][0])))
+    name = '%s.%s%s' % (media.stem, code, subtitles.FORMATS[fmt][0])
+    return numbered((Path(folder) / name) if folder is not None else media.with_name(name))
+
+
+def _format_of(path):
+    return next(fmt for fmt, (suffix, _) in subtitles.FORMATS.items() if Path(path).suffix.lower() == suffix)
+
+
+def language_label_from(answer):
+    """번역 결과(Result)에 기록된 번역 언어의 화면 이름."""
+    return answer.revision['target'] if getattr(answer, 'revision', None) else '한국어'
 
 
 def scan(folder):
@@ -405,8 +416,9 @@ class SubtitleService:
     def make(self, path, options: Options, *, translate: Translate | None = None,
              progress: Callable[[str, float, str], None] | None = None,
              cancelled: Callable[[], bool] | None = None,
-             on_text: Callable[[str], None] | None = None) -> Result:
-        """progress(단계, 0~1, 설명): 단계는 'audio'·'speech'·'review'·'write'·'translate'."""
+             on_text: Callable[[str], None] | None = None, output_dir=None) -> Result:
+        """progress(단계, 0~1, 설명): 단계는 'audio'·'speech'·'review'·'write'·'translate'.
+        output_dir를 주면 원본 옆 대신 그 폴더에 자막을 쓴다(폴더 번역의 결과 폴더)."""
         self._abort.clear()
         user_cancelled = cancelled
         cancelled = lambda: self._abort.is_set() or bool(user_cancelled and user_cancelled())
@@ -455,34 +467,62 @@ class SubtitleService:
             number = next((i for i, cue in enumerate(cues, 1) if cue.end > start), len(cues))
             review.append(subtitles.Review(number, reason))
         review = tuple(sorted({(item.index, item.reason) for item in review}))
-        outputs = tuple(_write_new(output_path(media, code, fmt), subtitles.render(cues, fmt))
+        if output_dir is not None:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+        outputs = tuple(_write_new(output_path(media, code, fmt, output_dir), subtitles.render(cues, fmt))
                         for fmt in formats)
         result = Result(media, outputs, code, label, tuple(cues), subtitles.render(cues, formats[0]),
                         review, tuple(cleaned.removed), build, seconds, duration, reused,
                         decisions=decisions, names=names, review_note=review_note)
         if translate is None:
             return result
-        return self._translate(result, translate, formats, work, report, cancelled)
+        return self._translate(result, translate, formats, work, report, cancelled, output_dir)
 
-    def _translate(self, result, options, formats, work, report, cancelled):
-        target = language_code(options.target)
+    @staticmethod
+    def same_language(result, target_label):
+        """번역할 필요가 없는지(같은 언어). 간체 ↔ 번체 중국어는 다른 자막으로 본다."""
+        target = language_code(target_label)
         same_base = target.split('-')[0] == result.language.split('-')[0]
-        # 같은 언어면 번역하지 않는다(간체 ↔ 번체 중국어는 다른 자막으로 본다).
-        if target == result.language or (same_base and target.split('-')[0] != 'zh'):
+        return target == result.language or (same_base and target.split('-')[0] != 'zh')
+
+    @staticmethod
+    def translation_source(result, path):
+        """번역 도구에 넘길 사본: 큐마다 한 줄(번역 도구는 줄 단위로 번역하므로 두 줄로 나뉜 문장을 잇는다).
+        번역 도구에 알려 줄 원문 언어(화면 이름 또는 'auto')를 돌려준다."""
+        rules = subtitles.rules_for(result.language)
+        single = [subtitles.Cue(cue.start, cue.end, ((' ' if rules.spaced else '').join(cue.lines),),
+                                cue.confidence) for cue in result.cues]
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(subtitles.to_srt(single), encoding='utf-8', newline='')
+        return result.language_label if any(item.label == result.language_label for item in LANGUAGES) else 'auto'
+
+    @staticmethod
+    def finish_translation(translated, target_label, destinations, *, overwrite=False):
+        """번역된 한 줄 자막을 번역 언어 규칙으로 다시 나눠 형식별 경로 {fmt: Path}에 쓴다.
+        (쓴 경로들, 첫 형식의 글). overwrite는 이 도구가 만든 번역 자막을 고쳐 쓸 때만."""
+        rules = subtitles.rules_for(language_code(target_label))
+        cues = subtitles.reflow(subtitles.parse(Path(translated).read_text(encoding='utf-8-sig')), rules)
+        written = []
+        for fmt, path in destinations.items():
+            text = subtitles.render(cues, fmt)
+            if overwrite:
+                temporary = Path(path).with_name('.%s.%d.tmp' % (Path(path).name, os.getpid()))
+                temporary.write_text(text, encoding='utf-8-sig', newline='')
+                os.replace(temporary, path)
+                written.append(Path(path))
+            else:
+                written.append(_write_new(path, text))
+        return tuple(written), subtitles.render(cues, next(iter(destinations)))
+
+    def _translate(self, result, options, formats, work, report, cancelled, output_dir=None):
+        if self.same_language(result, options.target):
             return replace(result, translation_skipped='same language')
-        rules = subtitles.rules_for(target)
-        # 큐마다 한 줄: 번역 도구는 줄 단위로 번역하므로 두 줄로 나뉜 문장을 이어 준다.
-        source_rules = subtitles.rules_for(result.language)
-        single = [subtitles.Cue(cue.start, cue.end,
-                                ((' ' if source_rules.spaced else '').join(cue.lines),), cue.confidence)
-                  for cue in result.cues]
+        target = language_code(options.target)
         source = work / 'translate-source.srt'
-        source.write_text(subtitles.to_srt(single), encoding='utf-8', newline='')
+        source_language = self.translation_source(result, source)
         translated = work / ('translate-%s.srt' % target)
         translated.unlink(missing_ok=True)
         report('translate', 0.0, '')
-        source_language = result.language_label if any(
-            item.label == result.language_label for item in LANGUAGES) else 'auto'
         answer = self.translator.translate_file(
             source, model=options.model, target=options.target, kind='subtitle', style=options.style,
             output_path=translated, resume=True, keep_failed=options.keep_failed,
@@ -490,13 +530,32 @@ class SubtitleService:
             progress=lambda done, total: report('translate', done / total if total else 0.0,
                                                 '%d/%d' % (done, total)),
             cancelled=cancelled)
-        cues = subtitles.reflow(subtitles.parse(translated.read_text(encoding='utf-8-sig')), rules)
-        outputs = tuple(_write_new(output_path(result.source, target, fmt), subtitles.render(cues, fmt))
-                        for fmt in formats)
+        outputs, text = self.finish_translation(
+            translated, options.target, {fmt: output_path(result.source, target, fmt, output_dir) for fmt in formats})
         for item in (source, translated):
             item.unlink(missing_ok=True)
-        return replace(result, translated=answer, translated_outputs=outputs,
-                       translated_text=subtitles.render(cues, formats[0]))
+        return replace(result, translated=answer, translated_outputs=outputs, translated_text=text)
+
+    def revise_terms(self, result, changes, *, progress=None, cancelled=None):
+        """번역 자막의 용어를 고친다: 그 용어가 든 큐만 다시 번역하고 번역 자막 파일을 고쳐 쓴다."""
+        if result.translated is None or not result.translated_outputs:
+            raise ValueError('There is no translated subtitle to revise')
+        scratch = self.work_dir / 'revise'
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = scratch / ('revise-%d.srt' % os.getpid())
+        try:
+            answer = self.translator.revise_terms(result.translated, changes, output_path=temporary,
+                                                  progress=progress, cancelled=cancelled)
+            target = language_label_from(answer)
+            outputs, text = self.finish_translation(
+                temporary, target, {_format_of(path): path for path in result.translated_outputs}, overwrite=True)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return replace(result, translated=answer, translated_outputs=outputs, translated_text=text)
+
+    def folder_media(self, options: Options):
+        """번역 도구의 폴더 번역이 영상·음성 파일에 쓰는 처리기(FolderMedia)."""
+        return FolderMedia(self, options)
 
     def make_many(self, paths, options: Options, *, translate: Translate | None = None,
                   progress=None, on_file=None, cancelled=None, on_text=None) -> Batch:
@@ -516,3 +575,52 @@ class SubtitleService:
             except (OSError, ValueError, RuntimeError) as exc:
                 failed.append((path, exc))
         return Batch(tuple(results), tuple(failed))
+
+
+@dataclass
+class MediaJob:
+    """폴더 번역에서 영상·음성 하나: 원어 자막을 만든 뒤 번역 도구가 번역할 한 줄 자막(source)."""
+    media: Path
+    result: Result | None
+    source: Path | None
+    language: str                   # 번역 도구에 알려 줄 원문 언어
+    destinations: dict              # {형식: 결과 폴더의 번역 자막 경로}
+    target: str = ''                # 번역 언어(화면 이름)
+    skip: str = ''
+
+
+class FolderMedia:
+    """TranslationService.translate_folder가 영상·음성 파일을 다루는 방법.
+
+    prepare: 결과 폴더에 원어 자막을 만들고, 번역 도구에 넘길 한 줄 자막을 작업 폴더에 둔다.
+             번역 자막이 이미 있으면(중단 후 다시 실행) 인식하지 않고 건너뛴다.
+    finish : 번역된 한 줄 자막을 번역 언어 규칙으로 다시 나눠 결과 폴더에 쓴다.
+    """
+    suffixes = speech.MEDIA
+
+    def __init__(self, service, options):
+        self.service = service
+        self.options = options
+        self.formats = tuple(fmt for fmt in options.formats if fmt in subtitles.FORMATS) or ('srt',)
+
+    def prepare(self, media, out_dir, target_label, *, cancelled=None, progress=None):
+        media, out_dir = Path(media), Path(out_dir)
+        code = language_code(target_label)
+        destinations = {fmt: out_dir / ('%s.%s%s' % (media.stem, code, subtitles.FORMATS[fmt][0]))
+                        for fmt in self.formats}
+        if any(path.exists() for path in destinations.values()):
+            return MediaJob(media, None, None, 'auto', destinations, target_label, 'already translated')
+        result = self.service.make(media, self.options, output_dir=out_dir, cancelled=cancelled,
+                                   progress=progress)
+        if self.service.same_language(result, target_label):
+            return MediaJob(media, result, None, result.language_label, destinations, target_label,
+                            'already in the target language')
+        key = hashlib.sha256(str(media.resolve()).encode('utf-8')).hexdigest()[:16]
+        source = self.service.work_dir / 'folder' / (key + '.srt')
+        language = self.service.translation_source(result, source)
+        return MediaJob(media, result, source, language, destinations, target_label)
+
+    def finish(self, job, translated):
+        outputs, _ = self.service.finish_translation(translated, job.target, job.destinations)
+        job.source.unlink(missing_ok=True)
+        return outputs
