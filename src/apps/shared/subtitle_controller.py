@@ -246,7 +246,7 @@ class SubtitleController:
             self.subtitle_translate_options.pack_forget()
 
     # ── 상태 · 모델 관리 ──
-    def refresh_subtitle_status(self):
+    def refresh_subtitle_status(self, *, preserve_message=False):
         def fetch():
             return (self.services.subtitles.status(), self.services.subtitles.management(),
                     self.services.subtitles.supported())
@@ -270,8 +270,10 @@ class SubtitleController:
                 engine += ' ' + reason
             elif not access.get('allowed'):
                 engine += ' 엔진·모델 설치와 삭제는 LocalAI 관리자만 할 수 있습니다. 설치된 모델은 사용할 수 있습니다.'
+            if status.issues:
+                engine += ' · ' + ' / '.join(status.issues)
             self.subtitle_engine_text.set(engine)
-            manage = 'normal' if supported and access.get('allowed') else 'disabled'
+            manage = 'normal' if supported and access.get('allowed') and not self._subtitle_management_busy() else 'disabled'
             for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button):
                 button.configure(state=manage)
             table = self.subtitle_model_table
@@ -281,9 +283,12 @@ class SubtitleController:
                 table.insert('', 'end', iid=item.key, values=(
                     item.label, '%.1f GB' % (item.size_mib / 1024) if item.size_mib >= 1000 else '%d MB' % item.size_mib,
                     '약 %.0f GB' % item.vram_gib if item.vram_gib >= 1 else '1 GB 미만',
-                    '설치됨' if item.key in status.models else '-'))
+                    '설치됨' if item.key in status.models else ('복구 필요' if item.key in status.damaged_models else '-')))
             if selected and table.exists(selected[0]):
                 table.selection_set(selected[0])
+            if preserve_message or self._subtitle_management_busy():
+                self.update_subtitle_destination()
+                return
             if not status.builds:
                 self.subtitle_say('Failed', '음성 인식 엔진이 없습니다. 관리자 계정에서 [엔진 설치 / 복구]를 누르세요.')
             elif not status.models:
@@ -312,18 +317,24 @@ class SubtitleController:
         self.run_task('tools.subtitles.llms', self.services.translator.local_models, done, mutate=False,
                       announce=False, error=lambda e: self.subtitle_say('Failed', '번역 모델 조회 실패: ' + str(e)))
 
+    def _subtitle_management_busy(self):
+        return any(self.runner.busy(key) for key in ('tools.subtitles.engine', 'tools.subtitles.model'))
+
     def _manage(self, key, work, message):
-        if self.runner.busy('tools.subtitles'):
-            self.subtitle_say('Failed', '자막을 만드는 중에는 엔진·모델을 바꿀 수 없습니다.')
+        if self.runner.busy('tools.subtitles') or self._subtitle_management_busy():
+            self.subtitle_say('Working', '기존 자막 작업 또는 설치/복구가 끝난 뒤 다시 시도하세요.')
             return
         self._subtitle_manage_cancel = Event()
         self.subtitle_cancel_button.configure(state='normal')
         self.subtitle_say('Working', message, log=True)
+        for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button,
+                       self.subtitle_start_button):
+            button.configure(state='disabled')
 
         def done(value):
             self.subtitle_cancel_button.configure(state='disabled')
             self.subtitle_say('Ready', '완료했습니다.', log=True)
-            self.refresh_subtitle_status()
+            self.refresh_subtitle_status(preserve_message=True)
 
         def failed(exc):
             self.subtitle_cancel_button.configure(state='disabled')
@@ -331,8 +342,9 @@ class SubtitleController:
                 self.subtitle_say('Waiting', '중단했습니다. 다시 시작하면 받던 곳부터 이어서 받습니다.', log=True)
             else:
                 self.subtitle_say('Failed', friendly(exc), log=True, level='error')
-            self.refresh_subtitle_status()
-        self.run_task(key, work, done, mutate=False, long=True, announce=False, error=failed)
+            self.refresh_subtitle_status(preserve_message=True)
+        if not self.run_task(key, work, done, mutate=False, long=True, announce=False, error=failed):
+            failed(RuntimeError('설치 작업을 시작하지 못했습니다. 다시 시도하세요.'))
 
     def _manage_cancelled(self):
         flag = getattr(self, '_subtitle_manage_cancel', None)
@@ -470,7 +482,9 @@ class SubtitleController:
                 (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
         self.subtitle_destination.configure(text=text)
         if not self.runner.busy('tools.subtitles'):
-            ready = bool(files and self.subtitle_model.get() and (not translate or self.subtitle_llm.get()))
+            ready = bool(files and self.subtitle_model.get() and getattr(self, '_subtitle_engine', None)
+                         and self._subtitle_engine.builds and not self._subtitle_management_busy()
+                         and (not translate or self.subtitle_llm.get()))
             self.subtitle_start_button.configure(state='normal' if ready else 'disabled')
 
     def open_subtitle_folder(self):
@@ -515,7 +529,7 @@ class SubtitleController:
         self.subtitle_say('Working', '중단 중 · 인식을 마친 파일의 결과는 저장되어 있습니다.')
 
     def start_subtitles(self):
-        if self.runner.busy('tools.subtitles'):
+        if self.runner.busy('tools.subtitles') or self._subtitle_management_busy():
             return
         files = list(getattr(self, '_subtitle_files', []))
         if not files or not self.subtitle_model.get():

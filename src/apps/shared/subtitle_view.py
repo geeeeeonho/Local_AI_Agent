@@ -172,7 +172,7 @@ def build(parent, w, toolbar=None):
     buttons = ttk.Frame(manage); buttons.pack(fill='x', pady=(6, 0))
     w.subtitle_engine_button = ttk.Button(buttons, text='엔진 설치 / 복구', command=w.install_subtitle_engine)
     w.subtitle_engine_button.pack(side='left')
-    w.subtitle_get_button = ttk.Button(buttons, text='선택 모델 받기', command=w.download_subtitle_model)
+    w.subtitle_get_button = ttk.Button(buttons, text='선택 모델 받기 / 복구', command=w.download_subtitle_model)
     w.subtitle_get_button.pack(side='left', padx=(6, 0))
     w.subtitle_remove_button = ttk.Button(buttons, text='선택 모델 삭제', command=w.remove_subtitle_model)
     w.subtitle_remove_button.pack(side='left', padx=(6, 0))

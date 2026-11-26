@@ -45,6 +45,19 @@ class EngineMissing(RuntimeError):
     pass
 
 
+def probe_executable(exe, *args, expect):
+    """Run a lightweight executable/DLL check; no model load or network access."""
+    try:
+        result = subprocess.run([str(exe), *args], capture_output=True, timeout=30,
+                                creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL, cwd=str(Path(exe).parent))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    output = (result.stdout + result.stderr).decode('utf-8', 'replace')
+    if result.returncode == 0 and expect in output:
+        return True, ''
+    return False, 'exit %s: %s' % (result.returncode, output[-500:].strip() or 'no output')
+
+
 @dataclass(frozen=True)
 class Status:
     builds: tuple = ()              # 사용할 수 있는 빌드('cuda', 'cpu') — 앞쪽 우선
@@ -52,6 +65,8 @@ class Status:
     vad: bool = False
     models: tuple = ()              # 설치된 모델 키(정확도 높은 순)
     version: str = ''
+    issues: tuple = ()
+    damaged_models: tuple = ()
 
     @property
     def ready(self):
@@ -100,11 +115,68 @@ class SpeechEngine:
         except (OSError, ValueError):
             return {}
 
-    def status(self):
-        builds = tuple(variant for variant in VARIANTS if self.cli(variant).is_file())
-        models = tuple(item.key for item in speech.MODELS if self.model_path(item.key).is_file())
-        return Status(builds, self.ffmpeg().is_file(), self.vad_model().is_file(), models,
-                      str((self.manifest().get('whisper') or {}).get('version') or ''))
+    def model_available(self, key):
+        path = self.model_path(key)
+        try:
+            if not path.is_file():
+                return False
+            # Explicit external development/test CLI may use fixture models.
+            if os.environ.get('LOCAL_AI_WHISPER_CLI'):
+                return True
+            size = path.stat().st_size
+            nominal = speech.model(key).size_mib * 1048576
+            if not nominal * 0.90 <= size <= nominal * 1.15:
+                return False
+            with path.open('rb') as stream:
+                return stream.read(4) == b'lmgg'  # little-endian GGML magic
+        except OSError:
+            return False
+
+    def status(self, *, verify_runtime=False):
+        issues, builds, models, damaged = [], [], [], []
+        for variant in VARIANTS:
+            cli = self.cli(variant)
+            if not cli.is_file():
+                continue
+            if verify_runtime and not (variant == 'cpu' and os.environ.get('LOCAL_AI_WHISPER_CLI')):
+                ok, detail = probe_executable(cli, '-h', expect='--vad')
+                if not ok:
+                    issues.append('Whisper %s 복구 필요: %s' % (variant.upper(), detail))
+                    continue
+            builds.append(variant)
+        for item in speech.MODELS:
+            if self.model_available(item.key):
+                models.append(item.key)
+            elif self.model_path(item.key).is_file():
+                damaged.append(item.key)
+        ffmpeg = self.ffmpeg().is_file() and self.ffmpeg('ffprobe').is_file()
+        if verify_runtime and ffmpeg and not os.environ.get('LOCAL_AI_FFMPEG'):
+            for name in ('ffmpeg', 'ffprobe'):
+                ok, detail = probe_executable(self.ffmpeg(name), '-version', expect=name + ' version')
+                if not ok:
+                    issues.append('%s 복구 필요: %s' % (name, detail))
+                    ffmpeg = False
+        if self.ffmpeg().is_file() != self.ffmpeg('ffprobe').is_file():
+            issues.append('FFmpeg/FFprobe 일부 파일 누락')
+        vad = self.vad_model().is_file()
+        if vad and verify_runtime:
+            from .install import VAD_SHA256, VAD_SIZE
+            from .download import _hash_existing
+            try:
+                vad = (self.vad_model().stat().st_size == VAD_SIZE
+                       and _hash_existing(self.vad_model(), 'sha256').hexdigest() == VAD_SHA256)
+            except OSError:
+                vad = False
+            if not vad:
+                issues.append('VAD 복구 필요')
+        manifest = self.manifest().get('whisper') or {}
+        if builds and verify_runtime and not os.environ.get('LOCAL_AI_WHISPER_CLI'):
+            from runtime_versions import WHISPER_CPP_VERSION, WHISPER_CPP_BUILD_TAG
+            if (manifest.get('version') != WHISPER_CPP_VERSION or
+                    manifest.get('build_tag') != WHISPER_CPP_BUILD_TAG):
+                issues.append('Whisper 설치 기록 확인/복구 필요')
+        return Status(tuple(builds), ffmpeg, vad, tuple(models), str(manifest.get('version') or ''),
+                      tuple(issues), tuple(damaged))
 
     # ── 실행 공통 ──
     def abort(self):
@@ -227,8 +299,8 @@ class SpeechEngine:
         if not status.builds:
             raise EngineMissing('whisper.cpp is not installed')
         model_file = self.model_path(model_key)
-        if not model_file.is_file():
-            raise EngineMissing('Speech model is not installed: ' + model_key)
+        if not self.model_available(model_key):
+            raise EngineMissing('Speech model is not installed or needs repair: ' + model_key)
         preset = speech.QUALITY.get(quality, speech.QUALITY['best'])
         work = Path(work)
         work.mkdir(parents=True, exist_ok=True)
@@ -272,8 +344,16 @@ class SpeechEngine:
                     mapping.append([int(round(float(value) * 1000)) for value in vad.groups()])
 
             started = time.monotonic()
-            code, tail = self._run([self.cli(build), '@' + str(response)], on_line=on_line,
-                                   cancelled=cancelled, cwd=str(work), stdout_lines=True)
+            try:
+                code, tail = self._run([self.cli(build), '@' + str(response)], on_line=on_line,
+                                       cancelled=cancelled, cwd=str(work), stdout_lines=True)
+            except InterruptedError:
+                raise
+            except OSError as exc:
+                errors.append('%s could not start: %s' % (build, exc))
+                if progress:
+                    progress(0.0)
+                continue
             result = out.with_suffix('.json')
             if code == 0 and result.is_file():
                 raw = result.read_bytes().decode('utf-8', 'replace')

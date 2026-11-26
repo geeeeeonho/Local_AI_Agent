@@ -1,6 +1,6 @@
 """자막 도구의 음성 런타임 설치·갱신과 음성 인식 모델 받기·지우기.
 
-* whisper.cpp — 고정 태그(runtime_versions.WHISPER_CPP_TAG)의 공식 Windows x64 빌드.
+* whisper.cpp — 고정 바이너리 태그(runtime_versions.WHISPER_CPP_BUILD_TAG)의 공식 Windows x64 빌드.
   CPU 빌드는 항상, NVIDIA GPU가 있으면 CUDA 빌드도 받는다. 각 ZIP은 GitHub가 릴리스
   자산마다 기록한 SHA-256(digest)과 대조한다. digest가 없으면 설치하지 않는다.
 * ffmpeg — 고정 빌드 태그(FFMPEG_BUILD_TAG)의 LGPL Windows x64 빌드. 같은 릴리스의
@@ -19,18 +19,18 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 import zipfile
 from pathlib import Path
 
 from core.tools import speech
-from runtime_versions import FFMPEG_BUILD_TAG, WHISPER_CPP_COMMIT, WHISPER_CPP_TAG, WHISPER_CPP_VERSION
+from runtime_versions import (FFMPEG_BUILD_TAG, WHISPER_CPP_COMMIT,
+                              WHISPER_CPP_BUILD_TAG, WHISPER_CPP_VERSION)
 
 from . import download
-from .engine import VAD_FILE, SpeechEngine
+from .engine import VAD_FILE, SpeechEngine, probe_executable
 
-WHISPER_RELEASE = 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/tags/' + WHISPER_CPP_TAG
-FFMPEG_RELEASE = 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/' + FFMPEG_BUILD_TAG
+WHISPER_RELEASE = 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/tags/' + WHISPER_CPP_BUILD_TAG
+FFMPEG_RELEASE = 'https://api.github.com/repos/FFmpeg-Builds/FFmpeg-Builds/releases/tags/' + FFMPEG_BUILD_TAG
 VAD_URL = ('https://raw.githubusercontent.com/ggml-org/whisper.cpp/' + WHISPER_CPP_COMMIT +
            '/models/for-tests-silero-v6.2.0-ggml.bin')
 VAD_SHA256 = '2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987'
@@ -41,7 +41,6 @@ LIMITS = {'cpu': 200 * 1024 * 1024, 'cuda': 1500 * 1024 * 1024, 'ffmpeg': 400 * 
 # 릴리스 분기 빌드(ffmpeg-n8.0.1-…-win64-lgpl-8.0.zip)를 고르고, 없으면 master 빌드
 FFMPEG_ASSET = re.compile(r'^ffmpeg-n(\d+(?:\.\d+)*)-.*-win64-lgpl-\d+(?:\.\d+)*\.zip$')
 FFMPEG_MASTER = re.compile(r'^ffmpeg-N-\d+-g[0-9a-f]+-win64-lgpl\.zip$')
-_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
 
 def _say(log, text):
@@ -51,7 +50,7 @@ def _say(log, text):
 
 def _asset_digest(asset):
     value = str(asset.get('digest') or '')
-    if not value.startswith('sha256:') or len(value) != 71:
+    if not re.fullmatch(r'sha256:[0-9a-fA-F]{64}', value):
         raise ValueError('GitHub did not record a SHA-256 digest for ' + str(asset.get('name')))
     return value.split(':', 1)[1].lower()
 
@@ -87,7 +86,11 @@ def _replace_dir(staged, final):
     """검증을 마친 staged 폴더를 final로 바꾼다(기존 폴더는 다 바꾼 뒤에 지운다)."""
     final = Path(final)
     old = final.with_name(final.name + '.old')
-    shutil.rmtree(old, ignore_errors=True)
+    # Recover a backup left by an interruption before attempting another swap.
+    if old.exists() and not final.exists():
+        os.replace(old, final)
+    if old.exists():
+        shutil.rmtree(old)
     if final.exists():
         os.replace(final, old)
     try:
@@ -101,12 +104,7 @@ def _replace_dir(staged, final):
 
 def _runs(exe, *args, expect):
     """실행 파일이 이 PC에서 실제로 시작되고 기대한 글을 출력하는지(DLL 누락·차단 확인)."""
-    try:
-        result = subprocess.run([str(exe), *args], capture_output=True, timeout=60,
-                                creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return expect in (result.stdout + result.stderr).decode('utf-8', 'replace')
+    return probe_executable(exe, *args, expect=expect)[0]
 
 
 def _staging(root):
@@ -126,7 +124,7 @@ def _archive(root, name):
 def _install_whisper(engine, variant, assets, log, cancelled):
     asset = assets.get(ASSETS[variant])
     if asset is None:
-        raise ValueError('Release %s has no %s' % (WHISPER_CPP_TAG, ASSETS[variant]))
+        raise ValueError('Release %s has no %s' % (WHISPER_CPP_BUILD_TAG, ASSETS[variant]))
     staging = _staging(engine.root)
     archive = _archive(engine.root, ASSETS[variant])
     _say(log, '자막 엔진: whisper.cpp %s (%s) 받는 중…' % (WHISPER_CPP_VERSION, variant.upper()))
@@ -137,8 +135,9 @@ def _install_whisper(engine, variant, assets, log, cancelled):
         _safe_extract(stream, staging / 'unpacked')
     cli = _find(staging / 'unpacked', 'whisper-cli.exe')
     folder = cli.parent
-    if not _runs(cli, '-h', expect='--vad'):
-        raise ValueError('whisper-cli did not start (%s build)' % variant)
+    ok, detail = probe_executable(cli, '-h', expect='--vad')
+    if not ok:
+        raise ValueError('whisper-cli did not start (%s build): %s' % (variant, detail))
     final = engine.root / 'whisper' / variant
     final.parent.mkdir(parents=True, exist_ok=True)
     _replace_dir(folder, final)
@@ -187,8 +186,10 @@ def _install_ffmpeg(engine, log, cancelled):
     license_files = list((staging / 'unpacked').rglob('LICENSE*'))
     if license_files:
         shutil.copy2(license_files[0], ready / 'LICENSE.txt')
-    if not _runs(ready / 'ffmpeg.exe', '-version', expect='ffmpeg version'):
-        raise ValueError('ffmpeg did not start')
+    for name in ('ffmpeg', 'ffprobe'):
+        ok, detail = probe_executable(ready / (name + '.exe'), '-version', expect=name + ' version')
+        if not ok:
+            raise ValueError('%s did not start: %s' % (name, detail))
     _replace_dir(ready, engine.root / 'ffmpeg')
     shutil.rmtree(staging, ignore_errors=True)
     archive.unlink(missing_ok=True)
@@ -234,58 +235,146 @@ def has_nvidia_gpu():
         return False
 
 
-def install(root=None, *, log=None, cancelled=None, gpu=None, force=False):
-    """엔진(whisper.cpp CPU[+CUDA]·ffmpeg·VAD)을 설치하거나 갱신한다. 성공하면 True.
-    이미 같은 고정 버전이 설치되어 있으면 받지 않는다. CUDA 빌드 실패는 CPU만으로 계속한다."""
+class InstallFailed(RuntimeError):
+    """The optional speech runtime could not be fully repaired."""
+
+
+def _record_manifest(engine, manifest):
+    target = engine.root / 'install.json'
+    temporary = target.with_suffix('.json.tmp')
+    try:
+        temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _check_cancel(cancelled):
+    if cancelled and cancelled():
+        raise download.DownloadCancelled('Download cancelled; it resumes next time')
+
+
+def _restore_backups(engine):
+    # Only the engine installer owns these paths, under its exclusive lock.
+    for final in (engine.root / 'whisper' / 'cpu', engine.root / 'whisper' / 'cuda',
+                  engine.root / 'ffmpeg'):
+        old = final.with_name(final.name + '.old')
+        if not final.exists() and old.is_dir():
+            os.replace(old, final)
+
+
+def _install_components(engine, *, log, cancelled, gpu, force):
+    _restore_backups(engine)
+    manifest = engine.manifest()
+    whisper = manifest.get('whisper') or {}
+    same_build = (whisper.get('version') == WHISPER_CPP_VERSION
+                  and whisper.get('build_tag') == WHISPER_CPP_BUILD_TAG)
+    variants = dict(whisper.get('variants') or {}) if same_build else {}
+    wanted = ['cpu'] + (['cuda'] if (has_nvidia_gpu() if gpu is None else gpu) else [])
+    failures = []
+    assets = None
+
+    def save():
+        _record_manifest(engine, manifest)
+
+    def report_failure(name, exc, *, optional=False):
+        message = '%s: %s' % (name, exc)
+        _say(log, '자막 엔진 설치/복구 실패: ' + message)
+        if not optional:
+            failures.append(message)
+
+    for variant in wanted:
+        _check_cancel(cancelled)
+        record = variants.get(variant) or {}
+        valid = (not force and record.get('asset') == ASSETS[variant]
+                 and re.fullmatch(r'[0-9a-f]{64}', str(record.get('sha256') or ''))
+                 and _runs(engine.cli(variant), '-h', expect='--vad'))
+        if valid:
+            _say(log, '자막 엔진: Whisper %s 기존 설치 정상' % variant.upper())
+            continue
+        # A failed replacement must not mark a broken component as installed.
+        variants.pop(variant, None)
+        try:
+            if assets is None:
+                assets = _assets(WHISPER_RELEASE)
+            variants[variant] = _install_whisper(engine, variant, assets, log, cancelled)
+        except download.DownloadCancelled:
+            raise
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+            report_failure('Whisper ' + variant.upper(), exc, optional=variant == 'cuda')
+            if variant == 'cuda':
+                _say(log, '자막 엔진: GPU 사용 불가 시 CPU로 실행합니다.')
+        finally:
+            manifest['whisper'] = {'version': WHISPER_CPP_VERSION,
+                                   'build_tag': WHISPER_CPP_BUILD_TAG, 'variants': variants}
+            save()
+
+    _check_cancel(cancelled)
+    ffmpeg = manifest.get('ffmpeg') or {}
+    ffmpeg_ok = (not force and ffmpeg.get('tag') == FFMPEG_BUILD_TAG
+                 and all(_runs(engine.ffmpeg(name), '-version', expect=name + ' version')
+                         for name in ('ffmpeg', 'ffprobe')))
+    if not ffmpeg_ok:
+        manifest.pop('ffmpeg', None)
+        try:
+            manifest['ffmpeg'] = _install_ffmpeg(engine, log, cancelled)
+        except download.DownloadCancelled:
+            raise
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+            report_failure('FFmpeg/FFprobe', exc)
+        finally:
+            save()
+    else:
+        _say(log, '자막 엔진: FFmpeg/FFprobe 기존 설치 정상')
+
+    _check_cancel(cancelled)
+    # VAD is small: always verify the complete pinned hash, not just existence.
+    try:
+        manifest['vad'] = _install_vad(engine, log, cancelled)
+    except download.DownloadCancelled:
+        raise
+    except (OSError, ValueError, KeyError) as exc:
+        manifest.pop('vad', None)
+        report_failure('VAD', exc)
+    finally:
+        save()
+    _check_cancel(cancelled)
+    if failures:
+        raise InstallFailed(' / '.join(failures))
+    _say(log, '자막 엔진 준비 완료: whisper.cpp %s (%s) · ffmpeg · VAD' %
+         (WHISPER_CPP_VERSION, ' + '.join(v.upper() for v in variants)))
+    return True
+
+
+def install(root=None, *, log=None, cancelled=None, gpu=None, force=False, raise_on_error=False):
+    """선택형 엔진만 설치/복구. 정상 구성요소는 유지하고 실패는 다른 기능과 격리한다.
+
+    설치기는 bool을 받고, GUI는 raise_on_error로 실패 상세와 취소를 전달받는다.
+    """
     ok, reason = supported()
     if not ok:
         _say(log, reason)
+        if raise_on_error:
+            raise InstallFailed(reason)
         return False
     engine = SpeechEngine(root)
-    engine.root.mkdir(parents=True, exist_ok=True)
-    manifest = engine.manifest()
-    whisper = dict(manifest.get('whisper') or {})
-    variants = dict(whisper.get('variants') or {}) if whisper.get('version') == WHISPER_CPP_VERSION else {}
-    wanted = ['cpu'] + (['cuda'] if (has_nvidia_gpu() if gpu is None else gpu) else [])
-    success = True
     try:
-        pending = [v for v in wanted if force or v not in variants or not engine.cli(v).is_file()]
-        assets = _assets(WHISPER_RELEASE) if pending else {}
-        for variant in pending:
+        _check_cancel(cancelled)
+        engine.root.mkdir(parents=True, exist_ok=True)
+        with download.exclusive_lock(engine.root / '.install.lock'):
             try:
-                variants[variant] = _install_whisper(engine, variant, assets, log, cancelled)
-            except (OSError, ValueError, zipfile.BadZipFile) as exc:
-                if variant == 'cpu':
-                    raise
-                _say(log, '자막 엔진: GPU(CUDA) 빌드를 설치하지 못해 CPU로 실행합니다: ' + str(exc))
-        manifest['whisper'] = {'version': WHISPER_CPP_VERSION, 'variants': variants}
-        ffmpeg = manifest.get('ffmpeg') or {}
-        if force or ffmpeg.get('tag') != FFMPEG_BUILD_TAG or not engine.ffmpeg().is_file():
-            try:
-                manifest['ffmpeg'] = _install_ffmpeg(engine, log, cancelled)
-            except (OSError, ValueError, zipfile.BadZipFile) as exc:
-                success = False
-                _say(log, '자막 엔진: ffmpeg 설치 실패(영상은 처리할 수 없고 WAV·MP3·FLAC만 됩니다): '
-                     + str(exc))
-        manifest['vad'] = _install_vad(engine, log, cancelled)
+                return _install_components(engine, log=log, cancelled=cancelled, gpu=gpu, force=force)
+            finally:
+                shutil.rmtree(engine.root / '.staging', ignore_errors=True)
     except download.DownloadCancelled:
         _say(log, '자막 엔진 설치를 중단했습니다. 다시 시작하면 이어서 받습니다.')
-        return False
-    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        if raise_on_error:
+            raise
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, InstallFailed) as exc:
         _say(log, '자막 엔진 설치 실패(다른 기능에는 영향 없음): ' + str(exc))
-        return False
-    finally:
-        shutil.rmtree(engine.root / '.staging', ignore_errors=True)
-        if manifest:
-            try:
-                (engine.root / 'install.json').write_text(
-                    json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
-            except OSError:
-                pass
-    _say(log, '자막 엔진 준비 완료: whisper.cpp %s (%s)%s' % (
-        WHISPER_CPP_VERSION, ' + '.join(v.upper() for v in variants),
-        ' · ffmpeg' if engine.ffmpeg().is_file() else ''))
-    return success
+        if raise_on_error:
+            raise InstallFailed(str(exc)) from exc
+    return False
 
 
 def install_model(key, models_dir=None, *, progress=None, cancelled=None):
@@ -293,13 +382,15 @@ def install_model(key, models_dir=None, *, progress=None, cancelled=None):
     item = speech.model(key)
     engine = SpeechEngine(models=models_dir)
     target = engine.model_path(key)
-    return download.fetch(speech.MODEL_URL + item.file, target, algorithm='sha1', expected=item.sha1,
-                          limit=int(item.size_mib * 1.15 * 1048576), progress=progress,
-                          cancelled=cancelled)
+    with download.exclusive_lock(target.with_suffix('.bin.lock')):
+        return download.fetch(speech.MODEL_URL + item.file, target, algorithm='sha1', expected=item.sha1,
+                              limit=int(item.size_mib * 1.15 * 1048576), progress=progress,
+                              cancelled=cancelled)
 
 
 def remove_model(key, models_dir=None):
     engine = SpeechEngine(models=models_dir)
     target = engine.model_path(key)
-    for path in (target, target.with_name(target.name + '.part')):
-        path.unlink(missing_ok=True)
+    with download.exclusive_lock(target.with_suffix('.bin.lock')):
+        for path in (target, target.with_name(target.name + '.part')):
+            path.unlink(missing_ok=True)
