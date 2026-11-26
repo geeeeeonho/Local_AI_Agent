@@ -75,7 +75,8 @@ def test_first_install_creates_groups_adds_me_by_sid_and_locks_the_root():
     assert "/inheritance:r" in script and "'*S-1-5-32-545:(OI)(CI)RX'" in script
     assert "'*%s:(OI)(CI)F'" % ME in script
     assert '(OI)(CI)M' not in script, 'no account other than admins may change the program'
-    assert 'CommonDesktopDirectory' in script and 'CommonPrograms' in script
+    assert 'CommonPrograms' in script
+    assert 'Desktop' not in script, 'Setup must not put a shortcut on any desktop'
     assert script.rstrip().endswith('exit $failed')
     assert windows.first_install_script('ghwork', ROOT, APP) is None
 

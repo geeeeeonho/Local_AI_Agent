@@ -1,8 +1,8 @@
 """The Windows side of LocalAI administration: groups, accounts, one UAC prompt.
 
 Everything here that changes the machine - creating the two local groups,
-adding a member, deleting another account's records, making shortcuts every
-account sees - needs a Windows administrator. Each such change is one
+adding a member, deleting another account's records, making the Start menu
+shortcut every account sees - needs a Windows administrator. Each such change is one
 PowerShell script run through a single UAC prompt (``-EncodedCommand``, so
 nothing is written to disk for the elevated process to read back). Reading -
 which accounts exist, who is in which group - needs no elevation.
@@ -334,11 +334,16 @@ def _member_line(group: str, sid: str, present: bool) -> str:
         % (group, sid, want, verb, want, group, group)
     )
 
+# Only the shared Start menu gets a LocalAI entry. Setup does not touch any
+# desktop: the public desktop shows on every account, and RUN.bat in the
+# program folder remains the entry point.
+_SHORTCUT_FOLDERS = ("[Environment]::GetFolderPath('CommonPrograms')",)
+
+
 def _shortcut_lines(app_dir: Path) -> List[str]:
     target = Path(app_dir) / 'RUN.bat'
     lines = ['$shell = New-Object -ComObject WScript.Shell']
-    for folder in ("[Environment]::GetFolderPath('CommonDesktopDirectory')",
-                   "[Environment]::GetFolderPath('CommonPrograms')"):
+    for folder in _SHORTCUT_FOLDERS:
         lines.append(
             "try { $s = $shell.CreateShortcut((Join-Path (%s) 'LocalAI.lnk')); "
             "$s.TargetPath = %s; $s.WorkingDirectory = %s; $s.WindowStyle = 7; "
