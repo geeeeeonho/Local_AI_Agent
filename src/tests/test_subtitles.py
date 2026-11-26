@@ -69,6 +69,33 @@ def test_japanese_lines_never_start_with_closing_punctuation():
             assert line[0] not in subtitles.NO_LINE_START
 
 
+def test_lines_never_break_inside_a_word_or_before_a_word_that_leans_on_it():
+    ko, ja = rules_for('ko'), rules_for('ja')
+    # 실측에서 나왔던 끊김: '볼 / 수 있고', '가지고 / 있지만', 'アリスタル / コス', '新 / しい'
+    for text in ('이 문제는 우리가 함께 해결할 수 있는 문제라고 생각합니다',
+                 '분위기를 더 많이 가지고 있지만 넓은 대로 정면이',
+                 '오늘은 3 센치 정도 더 잘라서 붙여 주시면 됩니다'):
+        for cue in subtitles.reflow([subtitles.Cue(0, 3000, (text,))], ko):
+            for first, second in zip(cue.lines, cue.lines[1:]):
+                assert subtitles.boundary_score(first, second, True) >= subtitles.BAD_BREAK, cue.lines
+    for text in ('私たちは明日東京の大学で新しい研究を発表する予定です', '何千年も前に、アリスタルコスという学者が'):
+        for cue in subtitles.reflow([subtitles.Cue(0, 3000, (text,))], ja):
+            assert all(not (a.endswith('新') or a.endswith('アリスタル')) for a in cue.lines), cue.lines
+    # 앞말에 기대는 말이 아닌 곳은 그대로 둔다(기와 지붕, 그리고 나는, 나는 수학을).
+    for first, second in (('붉은 기와', '지붕과'), ('그리고', '나는'), ('나는', '수학을'), ('나와', '주말에')):
+        assert subtitles.boundary_score(first, second, True) >= 0
+
+
+def test_a_short_cue_keeps_two_lines_and_whole_words_instead_of_cutting():
+    ko = rules_for('ko')
+    cues = subtitles.reflow([subtitles.Cue(0, 1500, ('저는 지금 학교에서 친구들과 공부하고 있습니다 그리고 내일은',))], ko)
+    assert all(len(cue.lines) <= 2 for cue in cues)
+    assert subtitles.force_wrap('인공지능기반자연어처리시스템개발프로젝트', ko) == ('인공지능기반자연어처리시스템개발프로젝트',)
+    text = ' '.join(['아주길고긴낱말이에요'] * 6)
+    lines = subtitles.force_wrap(text, ko)
+    assert ' '.join(lines) == text                      # 낱말 경계에서만 나눴다
+
+
 def test_timing_minimum_maximum_gap_and_chaining():
     rules = rules_for('en')
     words = [Word(0, 150, ' Hi.'), Word(5000, 5200, ' Yes.'), Word(5600, 5800, ' What?')]

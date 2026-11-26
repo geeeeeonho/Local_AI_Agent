@@ -100,6 +100,62 @@ _KATAKANA = re.compile(r'[゠-ヿㇰ-ㇿー]')
 _KANJI = re.compile(r'[一-鿿㐀-䶿々]')
 _HIRAGANA = re.compile(r'[ぁ-ゖ]')
 
+# 한국어: 띄어 쓰지만 앞말에 기대는 말이 있다. 그 앞에서 줄을 바꾸면 낱말이 끊겨 보인다.
+_HANGUL = re.compile(r'[가-힣]')
+_KO_PARTICLES = frozenset('은 는 이 가 을 를 의 에 에서 에게 께 께서 한테 로 으로 와 과 도 만 까지 부터 처럼 '
+                          '보다 이나 나 랑 이랑 하고 요 이다 입니다 예요 이에요 이야 야'.split())
+# 관형형(-ㄴ/-ㄹ/-는/-던) 뒤에 오는 의존 명사. 뒤에 붙는 조사·어미까지만 허용한다(수학, 것처럼 구분).
+_KO_BOUND = ('때문', '덕분', '만큼', '대로', '동안', '무렵', '듯이', '수', '것', '거', '게', '걸', '건', '겁',
+             '줄', '데', '뿐', '듯', '척', '체', '채', '터', '셈', '리', '바', '때', '적', '지', '뻔')
+_KO_BOUND_REST = frozenset(('', '이', '가', '은', '는', '을', '를', '도', '만', '에', '에는', '에도', '이다',
+                            '입니다', '이에요', '예요', '이야', '야', '이지만', '지만', '죠', '요', '처럼',
+                            '이라', '라', '라고', '이라고', '으로', '로', '인', '일', '이고', '고', '밖에', '부터'))
+# 보조 용언: 앞말의 연결 어미(마지막 음절)와 함께 쓰이는 말의 첫머리.
+_KO_AUXILIARY = (('고', ('있', '계', '싶', '나서')),
+                 ('지', ('않', '못하', '못해', '못했')),
+                 ('게', ('되', '돼', '됐', '하', '해', '했', '만들')),
+                 ('야', ('하', '해', '했', '돼', '되', '됐')),
+                 # '-아/-어' 꼴. 조사와 헷갈리는 '와·가'와 흔한 낱말 첫머리(가·오·내·지)는 넣지 않는다.
+                 ('아어여워해돼려쳐겨져줘봐놔둬써', ('주', '줘', '준', '줄', '줍', '드리', '드려', '드릴', '드립',
+                                                    '보', '봐', '봤', '본', '볼', '봅', '버리', '버려', '버렸',
+                                                    '놓', '놔', '두', '둬', '있')))
+_KO_NOT_ENDING = frozenset('그게 이게 저게 내게 네게 제게 뭐게 그래야 이래야'.split())  # 대명사+조사
+_KO_COUNTER_HEADS = ('개', '명', '번', '살', '시', '분', '초', '마리', '권', '잔', '대', '장', '가지', '년', '달',
+                     '주', '시간', '층', '배', '곳', '군데', '사람', '병', '그릇', '켤레', '쌍')
+_KO_NATIVE_NUMBERS = frozenset('한 두 세 네 다섯 여섯 일곱 여덟 아홉 열 스무 몇 여러'.split())
+_KO_CONNECTIVE = ('지만', '는데', '은데', '니까', '면서', '도록', '려고', '으며', '고', '서', '면', '며')
+_NUMBER = re.compile(r'^[+-]?\d[\d,.]*%?$')
+
+
+def _bound_after(tail):
+    """tail(앞 어절)이 관형형으로 끝나는가: 받침 ㄴ·ㄹ 또는 '는/던'."""
+    last = tail[-1:]
+    if not _HANGUL.match(last):
+        return False
+    return last in '는던' or (ord(last) - 0xAC00) % 28 in (4, 8)
+
+
+def _korean_score(tail, head):
+    """한국어 어절 사이에서 끊을 때의 점수. 앞말에 기대는 말(조사·의존 명사·보조 용언·단위) 앞은 피한다."""
+    if head in _KO_PARTICLES:
+        return -4.0                 # 조사가 떨어져 있다(띄어쓰기 오류): 줄을 바꾸면 낱말이 끊겨 보인다
+    if _bound_after(tail) and any(head.startswith(noun) and head[len(noun):] in _KO_BOUND_REST
+                                  for noun in _KO_BOUND):
+        return -3.0                 # '할 / 수 있다', '모르는 / 것'
+    for endings, stems in _KO_AUXILIARY:
+        if tail[-1:] in endings and head.startswith(stems) and tail not in _KO_NOT_ENDING:
+            return -2.5             # '하고 / 있다', '해 / 주세요', '가지 / 않는다'
+    if tail in _KO_NATIVE_NUMBERS and head.startswith(_KO_COUNTER_HEADS):
+        return -2.5                 # '세 / 개', '두 / 명'
+    if tail.endswith(_KO_CONNECTIVE) and _HANGUL.match(head[:1] or ' '):
+        return 1.0                  # '…했지만 / …', '…하고 / …': 절이 끝나는 곳
+    return 0.0
+
+
+# 이 점수보다 낮은 곳(낱말·어절이 끊겨 보이는 곳)에서는 줄을 바꾸지 않는다. 다른 곳이 없으면 큐를 나누거나
+# (시간이 짧으면) 줄을 조금 길게 쓴다(force_wrap).
+BAD_BREAK = -2.0
+
 
 def boundary_score(left, right, spaced):
     """left 뒤·right 앞에서 끊을 때의 자연스러움. 클수록 좋은 위치다."""
@@ -114,11 +170,15 @@ def boundary_score(left, right, spaced):
     if spaced:
         tail = a.rsplit(None, 1)[-1].lower().strip('.,;:!?"\'')
         head = b.split(None, 1)[0].lower().strip('.,;:!?"\'')
+        if _NUMBER.match(tail) and len(head) <= 4:
+            return -3.0             # 숫자와 단위('3 / 센치', '10 / km')
         score = 0.0
         if head in _GOOD_START:
             score += 1.5
         if tail in _WEAK_END:
             score -= 2.0
+        if _HANGUL.match(tail[-1:]) and _HANGUL.match(head[:1]):
+            score += _korean_score(tail, head)
         return score
     if b[0] in NO_LINE_START or a[-1] in NO_LINE_END:
         return -10.0
@@ -130,10 +190,12 @@ def boundary_score(left, right, spaced):
         score += 1.5
     if _KANJI.match(a[-1]) and _KANJI.match(b[0]):
         score -= 1.5                # 한자어 한가운데일 가능성
+    if _KANJI.match(a[-1]) and _HIRAGANA.match(b[0]):
+        score -= 2.5                # 한자 → 히라가나: 활용 어미('新/しい')나 조사가 떨어진다
     if _HIRAGANA.match(a[-1]) and (_KANJI.match(b[0]) or _KATAKANA.match(b[0])):
         score += 1.0                # 히라가나 → 한자·가타카나: 대개 낱말 경계
-    elif _HIRAGANA.match(a[-1]) and _HIRAGANA.match(b[0]):
-        score -= 0.5
+    elif _HIRAGANA.match(a[-1]) and _HIRAGANA.match(b[0]) and a[-1] not in _PARTICLE_END:
+        score -= 1.0                # 히라가나 낱말·어미 한가운데일 가능성
     if a[-1] in 'すまだ' and b[0] in 'すまだしたよね':
         score -= 2.0                # 'し/ます' 'です/ね' 같은 어미 사이
     return score
@@ -221,6 +283,8 @@ def wrap(text, rules, pieces=None):
         rest = ''.join(pieces[cut:]).strip()
         if display_length(first) > rules.max_chars:
             break
+        if boundary_score(first, rest, rules.spaced) < BAD_BREAK:
+            continue
         if rules.max_lines == 2:
             if display_length(rest) > rules.max_chars:
                 continue
@@ -236,21 +300,28 @@ def wrap(text, rules, pieces=None):
 
 
 def force_wrap(text, rules, pieces=None):
-    """규칙에 맞게 나눌 수 없는 글(한 단어가 너무 긴 경우 등)도 max_chars마다 잘라 표시한다."""
+    """규칙에 맞게 나눌 수 없는 글도 낱말을 자르지 않고 표시한다.
+    1) 줄 수는 지키고 줄을 조금(최대 1.5배) 길게, 2) 그래도 안 되면 줄을 늘린다(낱말 경계에서만).
+    띄어 쓰지 않은 한 덩어리가 1.5배보다 길 때만 그 길이에서 자른다."""
     lines = wrap(text, rules, pieces)
     if lines is not None:
         return lines
-    flat = ' '.join(text.split())
+    limit = max(rules.max_chars + 1, int(rules.max_chars * 1.5))
+    for width in range(rules.max_chars + 1, limit + 1):
+        lines = wrap(text, replace(rules, max_chars=width), pieces)
+        if lines is not None:
+            return lines
+    flat = ' '.join(text.split()) if rules.spaced else re.sub(r'\s*\n\s*', '', text).strip()
     out, current = [], ''
     for piece in _pieces(flat, rules.spaced):
-        if current and display_length(current + piece) > rules.max_chars:
+        if current.strip() and display_length(current + piece) > rules.max_chars:
             out.append(current.strip())
             current = piece.lstrip()
         else:
             current += piece
-        while display_length(current) > rules.max_chars:
-            out.append(current[:rules.max_chars].strip())
-            current = current[rules.max_chars:]
+        while display_length(current) > limit:
+            out.append(current.strip()[:limit])
+            current = current.strip()[limit:]
     if current.strip():
         out.append(current.strip())
     return tuple(out)
