@@ -237,7 +237,7 @@ class SubtitleService:
 
     # ── 상태·관리 ──
     def status(self):
-        return self.engine.status()
+        return self.engine.status(verify_runtime=True)
 
     def management(self, refresh=False):
         """{'allowed', 'admin', 'reason'}: 엔진·모델 설치/삭제 권한(공용 모델 저장소와 같은 규칙)."""
@@ -260,7 +260,7 @@ class SubtitleService:
     def install_engine(self, *, log=None, cancelled=None):
         self._require_management()
         from integrations.speech import install
-        return install.install(self.engine.root, log=log, cancelled=cancelled)
+        return install.install(self.engine.root, log=log, cancelled=cancelled, raise_on_error=True)
 
     def install_model(self, key, *, progress=None, cancelled=None):
         self._require_management()
@@ -310,7 +310,7 @@ class SubtitleService:
 
     def _audio(self, media, work, duration, report, cancelled):
         suffix = media.suffix.lower()
-        if self.engine.ffmpeg().is_file():
+        if self.engine.ffmpeg_available(verify=True):
             return self.engine.extract_audio(media, work / 'audio.wav', duration_ms=duration,
                                              progress=lambda f: report('audio', f, ''), cancelled=cancelled)
         if suffix in speech.NATIVE_AUDIO:

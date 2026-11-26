@@ -1,100 +1,170 @@
-"""검증하며 받는 다운로드: 크기 제한 · 해시 검증 · 이어받기 · 취소.
-
-받는 중에는 '<이름>.part'에 쓰고, 해시가 맞을 때만 최종 이름으로 바꾼다. 중단되면 .part가
-남아 다음에 이어서 받는다(서버가 Range를 지원할 때). 해시가 다르면 .part를 지우고 실패한다.
-고정한 배포처(GitHub 릴리스, Hugging Face)만 부르며 받은 파일을 실행하지 않는다.
-"""
+"""검증 다운로드: 크기 제한, 해시, 안전한 이어받기, 제한된 재시도 및 취소."""
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
+import re
+import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 USER_AGENT = 'Local_AI_Agent'
 CHUNK = 1024 * 1024
+ATTEMPTS = 3
 
 
 class DownloadCancelled(InterruptedError):
     pass
 
 
+class IncompleteDownload(ConnectionError):
+    pass
+
+
+@contextmanager
+def exclusive_lock(path):
+    """프로세스 간 동일 설치/모델 변경을 차단. 파일은 유지하고 OS 잠금만 해제한다."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'a+b') as handle:
+        handle.seek(0)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise OSError('다른 프로세스에서 설치 또는 복구 중입니다: ' + str(path)) from exc
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == 'nt':
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _cancel(cancelled):
+    if cancelled and cancelled():
+        raise DownloadCancelled('Download cancelled; it resumes next time')
+
+
 def _request(url, *, accept='application/octet-stream', start=0):
-    headers = {'User-Agent': USER_AGENT, 'Accept': accept}
+    headers = {'User-Agent': USER_AGENT, 'Accept': accept, 'Accept-Encoding': 'identity'}
     if start:
         headers['Range'] = 'bytes=%d-' % start
     return urllib.request.Request(url, headers=headers)
 
 
-def get_json(url, *, limit=4 * 1024 * 1024, timeout=45):
-    """작은 JSON 문서(릴리스 정보). limit을 넘으면 실패한다."""
-    request = _request(url, accept='application/vnd.github+json, application/json')
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError('Metadata is larger than expected: ' + url)
-    return json.loads(data.decode('utf-8'))
+def _retryable(exc):
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 429, 500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException))
 
 
-def get_bytes(url, *, limit, timeout=45):
-    with urllib.request.urlopen(_request(url), timeout=timeout) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError('Download is larger than expected: ' + url)
-    return data
+def _retry(action, cancelled=None):
+    for attempt in range(ATTEMPTS):
+        try:
+            return action()
+        except DownloadCancelled:
+            raise
+        except Exception as exc:
+            if attempt == ATTEMPTS - 1 or not _retryable(exc):
+                raise
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
+            # Short bounded delay, with cancellation during backoff.
+            for _ in range(5 * (attempt + 1)):
+                _cancel(cancelled)
+                time.sleep(0.2)
 
 
-def _hash_existing(path, algorithm):
+def _read_small(url, *, accept, limit, timeout, cancelled=None):
+    def read():
+        _cancel(cancelled)
+        with urllib.request.urlopen(_request(url, accept=accept), timeout=timeout) as response:
+            data = response.read(limit + 1)
+        _cancel(cancelled)
+        if len(data) > limit:
+            raise ValueError('Download is larger than expected: ' + url)
+        return data
+    return _retry(read, cancelled)
+
+
+def get_json(url, *, limit=4 * 1024 * 1024, timeout=45, cancelled=None):
+    return json.loads(_read_small(url, accept='application/vnd.github+json, application/json',
+                                  limit=limit, timeout=timeout, cancelled=cancelled).decode('utf-8'))
+
+
+def get_bytes(url, *, limit, timeout=45, cancelled=None):
+    return _read_small(url, accept='application/octet-stream', limit=limit, timeout=timeout,
+                       cancelled=cancelled)
+
+
+def _hash_existing(path, algorithm, cancelled=None):
     digest = hashlib.new(algorithm)
     with open(path, 'rb') as stream:
         for block in iter(lambda: stream.read(CHUNK), b''):
+            _cancel(cancelled)
             digest.update(block)
     return digest
 
 
-def fetch(url, destination, *, algorithm, expected, limit, progress=None, cancelled=None,
-          timeout=60):
-    """url을 destination으로 받는다. algorithm('sha256'·'sha1')의 hex가 expected와 같아야 한다.
-    progress(받은 바이트, 전체 바이트 또는 None). 이미 같은 해시의 파일이 있으면 받지 않는다."""
-    destination = Path(destination)
-    expected = str(expected or '').lower()
-    if not expected:
-        raise ValueError('A pinned checksum is required for ' + url)
-    if destination.is_file() and _hash_existing(destination, algorithm).hexdigest() == expected:
-        return destination
-    destination.parent.mkdir(parents=True, exist_ok=True)
+def _download_once(url, destination, *, algorithm, expected, limit, progress, cancelled, timeout):
     part = destination.with_name(destination.name + '.part')
     start = part.stat().st_size if part.is_file() else 0
     if start > limit:
-        part.unlink(missing_ok=True)
+        part.unlink()
         start = 0
-    digest = _hash_existing(part, algorithm) if start else hashlib.new(algorithm)
+    digest = _hash_existing(part, algorithm, cancelled) if start else hashlib.new(algorithm)
+    # A complete verified .part may remain if the previous final rename failed.
+    if start and digest.hexdigest() == expected:
+        _cancel(cancelled)
+        os.replace(part, destination)
+        return destination
     try:
         response = urllib.request.urlopen(_request(url, start=start), timeout=timeout)
     except urllib.error.HTTPError as exc:
-        if exc.code != 416 or not start:        # 416: 이미 끝까지 받은 .part
-            raise
-        response = None
-    try:
-        if response is not None and start and response.status != 206:
-            # 서버가 이어받기를 무시하고 처음부터 보낸다.
-            start, digest = 0, hashlib.new(algorithm)
-            mode = 'wb'
+        if exc.code == 416 and start:
+            exc.close()
+            part.unlink(missing_ok=True)
+            raise IncompleteDownload('Invalid resume offset; restarting ' + destination.name) from exc
+        raise
+    with response:
+        status = getattr(response, 'status', None)
+        length = response.headers.get('Content-Length')
+        length = int(length) if length and length.isdigit() else None
+        if status == 206:
+            value = response.headers.get('Content-Range', '')
+            match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', value)
+            if not match:
+                part.unlink(missing_ok=True)
+                raise IncompleteDownload('Missing or invalid Content-Range: ' + value)
+            first, last, total = map(int, match.groups())
+            if first != start or not first <= last < total or (length is not None and length != last - first + 1):
+                part.unlink(missing_ok=True)
+                raise IncompleteDownload('Unexpected Content-Range: ' + value)
+            length = last - first + 1
         else:
-            mode = 'ab' if start else 'wb'
-        length = response.headers.get('Content-Length') if response is not None else None
-        total = start + int(length) if length and length.isdigit() else None
+            # Server ignored Range: safely overwrite instead of appending.
+            start, digest = 0, hashlib.new(algorithm)
+            total = length
         if total is not None and total > limit:
+            part.unlink(missing_ok=True)
             raise ValueError('Download is larger than expected: ' + url)
         received = start
         if progress:
             progress(received, total)
-        with open(part, mode) as output:
-            while response is not None:
-                if cancelled and cancelled():
-                    raise DownloadCancelled('Download cancelled; it resumes next time')
+        with open(part, 'ab' if start else 'wb') as output:
+            while True:
+                _cancel(cancelled)
                 block = response.read(CHUNK)
                 if not block:
                     break
@@ -105,11 +175,29 @@ def fetch(url, destination, *, algorithm, expected, limit, progress=None, cancel
                 digest.update(block)
                 if progress:
                     progress(received, total)
-    finally:
-        if response is not None:
-            response.close()
+        if (length is not None and received - start != length) or (total is not None and received != total):
+            raise IncompleteDownload('Incomplete download: ' + destination.name)
+    _cancel(cancelled)
     if digest.hexdigest() != expected:
         part.unlink(missing_ok=True)
         raise ValueError('Checksum mismatch for %s (expected %s)' % (destination.name, expected))
     os.replace(part, destination)
     return destination
+
+
+def fetch(url, destination, *, algorithm, expected, limit, progress=None, cancelled=None,
+          timeout=60):
+    """해시가 맞을 때만 최종 이름으로 이동. 정상 기존 파일은 다시 받지 않는다."""
+    destination = Path(destination)
+    expected = str(expected or '').lower()
+    if not expected:
+        raise ValueError('A pinned checksum is required for ' + url)
+    if not re.fullmatch(r'[0-9a-f]{%d}' % (hashlib.new(algorithm).digest_size * 2), expected):
+        raise ValueError('Invalid pinned checksum for ' + url)
+    # Hash the final model only on explicit installation/repair, not on GUI refresh.
+    if destination.is_file() and destination.stat().st_size <= limit:
+        if _hash_existing(destination, algorithm, cancelled).hexdigest() == expected:
+            return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return _retry(lambda: _download_once(url, destination, algorithm=algorithm, expected=expected,
+                  limit=limit, progress=progress, cancelled=cancelled, timeout=timeout), cancelled)

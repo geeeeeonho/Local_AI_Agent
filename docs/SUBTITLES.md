@@ -46,8 +46,8 @@
 
 | 구성요소 | 위치(공용, 관리자만 쓰기) | 고정 버전·검증 |
 |---|---|---|
-| whisper.cpp CPU / CUDA | `environment\speech\whisper\cpu`, `...\cuda` | `v1.9.5` 공식 릴리스, GitHub 자산 SHA-256 digest |
-| FFmpeg(LGPL) | `environment\speech\ffmpeg` | BtbN `autobuild-2026-10-31-12-59`, checksums.sha256 + digest |
+| whisper.cpp CPU / CUDA | `environment\speech\whisper\cpu`, `...\cuda` | `v1.9.5` 소스 / 공식 `b5454` 바이너리 릴리스, GitHub 자산 SHA-256 digest |
+| FFmpeg(LGPL) | `environment\speech\ffmpeg` | FFmpeg-Builds `autobuild-2026-10-31-12-59` (static LGPL), checksums.sha256 + digest |
 | Silero VAD | `environment\speech\vad` | whisper.cpp 고정 커밋의 파일, 코드에 적은 SHA-256 |
 | 음성 인식 모델 | `models\speech\ggml-*.bin` | whisper.cpp 모델 표의 SHA-1 |
 
@@ -55,7 +55,16 @@
   관리자 계정의 자막 화면 [엔진 설치 / 복구]로도 설치·복구할 수 있습니다.
 - 모델(0.5~3GB)은 설치기에서 받지 않고, 관리자가 자막 화면의 표에서 골라 받습니다. 다른 계정은
   설치된 모델을 그대로 씁니다. Ollama는 `models\manifests`·`blobs`만 읽으므로 `models\speech`를 건드리지 않습니다.
-- 받는 중 중단하면 `.part`가 남아 다음에 이어 받습니다. 검증값이 다르면 지우고 실패합니다.
+- 엔진 설치/복구는 버전·배포 태그와 실행 가능 여부를 확인하고, 정상 구성은 유지합니다. CPU, CUDA(선택),
+  FFmpeg/FFprobe, VAD를 각각 확인하며 실패한 구성의 원인을 표시합니다. CUDA 실패는 CPU 사용을 막지 않습니다.
+  설치 기록은 구성별로 원자적으로 저장합니다. 정상 설치를 강제로 다시 내려받지 않습니다.
+  실행 확인은 도움말/버전 출력까지의 가벼운 검사이며, 실제 GPU 인식 가능 여부는 첫 인식 때 확인합니다.
+  손상된 VAD는 인식에 사용하지 않고, FFmpeg/FFprobe 문제는 화면에 복구 필요로 표시합니다.
+- 모델 목록은 파일 크기와 GGML 머리글을 빠르게 확인합니다. 손상되었거나 의심되는 모델은 [선택 모델 받기 / 복구]로
+  전체 SHA-1을 검증하고 필요한 경우에만 다시 받습니다(목록 조회 때마다 수 GB를 읽지 않습니다).
+- 받는 중 중단하면 `.part`가 남아 다음에 이어 받습니다. 일시적 네트워크 오류는 최대 3회 시도하며,
+  서버가 이어받기를 거부하거나 범위가 맞지 않으면 처음부터 받습니다. 검증값이 다르면 임시 파일만 지우고 실패합니다.
+  같은 엔진이나 모델에 대한 동시 변경을 차단하며, 검증 완료 전 기존 최종 파일은 유지합니다.
 - NVIDIA GPU가 있으면 CUDA 빌드를 먼저 쓰고, 실패하면(드라이버·메모리 부족) CPU 빌드로 다시 실행합니다.
   공용 Ollama가 올려 둔 다른 계정의 모델을 임의로 내리지 않습니다.
 - 한글 파일 이름·용어 힌트: whisper-cli는 시스템 코드 페이지로 인자를 받으므로 ASCII 작업 폴더의
