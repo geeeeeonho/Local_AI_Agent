@@ -30,6 +30,8 @@ VAD_FILE = 'ggml-silero-v6.2.0.bin'
 VARIANTS = ('cuda', 'cpu')
 _EXE = '.exe' if os.name == 'nt' else ''
 _NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
+# 음성 구간 감지 설정(whisper-cli). 비어 있으면 whisper.cpp 기본값. 환경 변수로 실험할 수 있다.
+VAD_SETTINGS = tuple(os.environ.get('LOCAL_AI_VAD_ARGS', '').split())
 _PROGRESS = re.compile(r'progress\s*=\s*(\d+)%')
 # VAD가 무음을 잘라 낸 구간 대응표. whisper-cli의 JSON은 구간 시각만 원래 오디오 기준으로 되돌리고
 # 토큰 시각은 잘라 낸 시간 그대로 내보내므로, 이 로그로 토큰 시각을 직접 되돌린다(core.tools.speech).
@@ -244,7 +246,7 @@ class SpeechEngine:
             if preset['dtw']:
                 args += ['-dtw', speech.model(model_key).dtw, '-nfa']
             if vad and self.vad_model().is_file():
-                args += ['--vad', '-vm', self.vad_model()]
+                args += ['--vad', '-vm', self.vad_model()] + list(VAD_SETTINGS)
             if prompt.strip():
                 args += ['--prompt', ' '.join(prompt.split())[:600]]
             if build == 'cpu' or not gpu:
