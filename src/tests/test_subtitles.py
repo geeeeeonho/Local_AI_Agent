@@ -1,0 +1,656 @@
+"""자막 만들기: 자막 문법 규칙, Whisper 결과 해석, 검증 다운로드, 서비스 전 과정, 화면.
+
+실제 whisper.cpp 대신 같은 명령줄 계약(@응답 파일, -ojf JSON, stderr 진행률)을 지키는
+작은 가짜 실행 파일을 써서, 프로세스 실행·취소·결과 해석·파일 쓰기까지 진짜 경로로 검증한다.
+"""
+import hashlib
+import json
+import os
+import stat
+import sys
+import wave
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from core.tools import speech, subtitles
+from core.tools.subtitles import Cue, Word, build_cues, parse, reflow, rules_for, to_srt, to_vtt, validate
+
+
+def words_of_text(text, *, step=330, length=300, spaced=True):
+    out, t = [], 0
+    units = text.split(' ') if spaced else list(text)
+    for unit in units:
+        out.append(Word(t, t + length, (' ' + unit) if spaced else unit, 0.9))
+        t += step
+    return out
+
+
+# ── 자막 문법 ──
+@pytest.mark.parametrize('code,text,spaced', [
+    ('en', 'So today we are going to talk about how the new engine works, and why it matters for '
+           'everyone who builds tools. It is fast. It is small.', True),
+    ('ko', '오늘은 새로운 엔진이 어떻게 동작하는지 그리고 왜 도구를 만드는 모든 사람에게 중요한지 '
+           '이야기하겠습니다. 빠릅니다. 작습니다.', True),
+    ('ja', '今日は新しいエンジンがどのように動くのか、そしてなぜ道具を作るすべての人にとって大切なのかを話します。', False),
+    ('zh', '今天我们来谈谈新的引擎是如何工作的，以及为什么它对每一个制作工具的人都很重要。它很快。', False),
+])
+def test_built_cues_follow_the_subtitle_rules(code, text, spaced):
+    rules = rules_for(code)
+    cues = build_cues(words_of_text(text, step=330 if spaced else 150, length=300 if spaced else 140,
+                                    spaced=spaced), rules)
+    assert cues and validate(cues, rules).ok, validate(cues, rules).errors
+    # 글은 하나도 빠지거나 늘지 않는다
+    joined = ''.join(''.join(cue.lines) for cue in cues).replace(' ', '')
+    assert joined == text.replace(' ', '')
+
+
+def test_line_lengths_are_language_specific():
+    assert rules_for('ko').max_chars == 16 and rules_for('ja').max_chars == 13
+    assert rules_for('en').max_chars == 42 and rules_for('zh-Hant').max_chars == 16
+    assert rules_for('ja').spaced is False and rules_for('ko').spaced is True
+    assert rules_for('en', max_chars=30, max_lines=1).capacity == 30
+
+
+def test_one_line_when_it_fits_and_balanced_two_lines_otherwise():
+    rules = rules_for('en')
+    assert subtitles.wrap('A short line.', rules) == ('A short line.',)
+    lines = subtitles.wrap('We went to the market, and then we walked all the way back home.', rules)
+    assert len(lines) == 2 and all(len(line) <= 42 for line in lines)
+    assert lines[0].endswith(',')                       # 쉼표 뒤에서 나눈다
+    assert not lines[0].endswith(' the')                # 기능어를 줄 끝에 남기지 않는다
+
+
+def test_japanese_lines_never_start_with_closing_punctuation():
+    rules = rules_for('ja')
+    for cut_text in ('東京都の新しい図書館は、来月から開館します。', 'すべての人にとって大切なのかを話します。'):
+        for line in subtitles.force_wrap(cut_text, rules):
+            assert line[0] not in subtitles.NO_LINE_START
+
+
+def test_timing_minimum_maximum_gap_and_chaining():
+    rules = rules_for('en')
+    words = [Word(0, 150, ' Hi.'), Word(5000, 5200, ' Yes.'), Word(5600, 5800, ' What?')]
+    cues = build_cues(words, rules)
+    assert all(cue.end - cue.start >= rules.min_ms or cue is cues[-1] for cue in cues)
+    for first, second in zip(cues, cues[1:]):
+        assert second.start - first.end >= rules.gap_ms
+    long_words = [Word(i * 400, i * 400 + 380, ' word') for i in range(60)]
+    assert all(cue.end - cue.start <= rules.max_ms for cue in build_cues(long_words, rules))
+    chained = subtitles.retime([Cue(0, 1000, ('a',)), Cue(1300, 2500, ('b',))], rules)
+    assert chained[1].start - chained[0].end == rules.gap_ms   # 0.5초 미만 틈은 2프레임으로 잇는다
+
+
+def test_reading_speed_extends_display_until_the_next_cue():
+    rules = rules_for('en')
+    cues = subtitles.retime([Cue(0, 400, ('This sentence has quite a few characters in it.',)),
+                             Cue(9000, 9500, ('Next.',))], rules)
+    assert cues[0].end >= 47 / rules.cps * 1000 - 1
+
+
+def test_short_fragments_are_merged_instead_of_flashing():
+    rules = rules_for('en')
+    words = [Word(0, 200, ' Yes.'), Word(250, 400, ' No.'), Word(420, 600, ' Maybe'), Word(620, 900, ' later.')]
+    assert [cue.lines for cue in build_cues(words, rules)] == [('Yes. No. Maybe later.',)]
+
+
+def test_srt_and_webvtt_syntax_and_round_trip():
+    cues = [Cue(1000, 3500, ('Hello <world> & you', 'second line')), Cue(3600, 3661001, ('a --> b',))]
+    srt = to_srt(cues)
+    assert srt.startswith('1\r\n00:00:01,000 --> 00:00:03,500\r\nHello <world> & you\r\nsecond line\r\n\r\n2\r\n')
+    assert '01:01:01,001' in srt and '-->' not in srt.split('\r\n')[-2]
+    vtt = to_vtt(cues)
+    assert vtt.startswith('WEBVTT\n\n00:00:01.000 --> 00:00:03.500\nHello &lt;world&gt; &amp; you\n')
+    assert parse(srt)[0].lines == ('Hello <world> & you', 'second line')
+    assert parse(vtt)[0].lines == ('Hello <world> & you', 'second line')
+    assert [(c.start, c.end) for c in parse('﻿' + srt)] == [(1000, 3500), (3600, 3661001)]
+
+
+def test_vtt_reader_skips_header_notes_and_identifiers():
+    text = 'WEBVTT Kind: captions\n\nNOTE made by hand\n\nintro\n00:01.000 --> 00:02.000 align:start\nHi\n'
+    assert parse(text) == [Cue(1000, 2000, ('Hi',))]
+
+
+def test_reflow_rewraps_translated_text_for_the_target_language():
+    long_korean = Cue(0, 4000, ('오늘은 새로운 엔진이 어떻게 동작하는지 설명하겠습니다',))
+    cues = reflow([long_korean], rules_for('ko'))
+    assert len(cues[0].lines) == 2 and all(len(line) <= 16 for line in cues[0].lines)
+    assert validate(cues, rules_for('ko')).ok
+
+
+# ── Whisper 결과 ──
+def _token(text, start, end, p=0.9, dtw=-1):
+    return {'text': text, 'offsets': {'from': start, 'to': end}, 'p': p, 't_dtw': dtw}
+
+
+def test_parse_result_groups_tokens_into_words_and_skips_special_tokens():
+    data = {'result': {'language': 'en'}, 'transcription': [{
+        'offsets': {'from': 0, 'to': 3000}, 'text': ' Hello there, friend.',
+        'tokens': [_token('[_BEG_]', 0, 0), _token(' Hel', 0, 200, dtw=5), _token('lo', 200, 500),
+                   _token(' there', 500, 900), _token(',', 900, 950), _token(' friend', 1200, 1600),
+                   _token('.', 1600, 1700), _token('[_TT_150]', 3000, 3000)]}]}
+    language, segments = speech.parse_result(data)
+    assert language == 'en'
+    assert [w.text for w in segments[0].words] == [' Hello', ' there,', ' friend.']
+    assert segments[0].words[0].start == 50                    # DTW 시각(센티초)을 우선
+    assert all(a.end <= b.start for a, b in zip(segments[0].words, segments[0].words[1:]))
+
+
+def test_parse_result_treats_cjk_tokens_as_units():
+    data = {'result': {'language': 'ja'}, 'transcription': [{
+        'offsets': {'from': 0, 'to': 2000}, 'text': '今日は晴れ。',
+        'tokens': [_token('今日は', 0, 600), _token('晴れ', 600, 1200), _token('。', 1200, 1300)]}]}
+    _, segments = speech.parse_result(data, spaced=False)
+    assert [w.text for w in segments[0].words] == ['今日は', '晴れ。']
+
+
+def _segment(text, start, end, prob=0.9):
+    words = tuple(Word(start + i * 10, start + i * 10 + 5, ' ' + part, prob) for i, part in enumerate(text.split()))
+    return speech.Segment(start, end, text, words, prob)
+
+
+def test_cleanup_removes_only_what_is_backed_by_evidence():
+    loop = 'yes ' * 12
+    segments = [_segment('Hello there.', 0, 1000), _segment('[Music]', 1000, 5000),
+                _segment('Again.', 5000, 6000, 0.3), _segment('Again.', 6000, 7000, 0.3),
+                _segment('Again.', 7000, 8000, 0.3),
+                _segment('Thank you for watching.', 9000, 11000, prob=0.3),
+                _segment(loop.strip(), 12000, 16000)]
+    result = speech.clean(segments)
+    texts = [segment.text for segment in result.segments]
+    assert texts[:3] == ['Hello there.', 'Again.', 'Again.']
+    assert texts[-1].count('yes') == 2                         # 12번 되풀이: 그것만으로 루프
+    reasons = {reason for _, _, reason in result.removed}
+    assert reasons == {'sound description', 'repeated', 'typical hallucination'}
+    assert any(reason == 'repetition loop shortened' for _, _, reason in result.flagged)
+
+
+def test_real_repetition_and_disfluency_are_kept_without_other_evidence():
+    """'Go! Go! Go!', '네 네 네 네 네', 말 더듬기는 실제 발화일 수 있다(원문 보존)."""
+    segments = [_segment('Go!', 0, 800), _segment('Go!', 900, 1700), _segment('Go!', 1800, 2600),
+                _segment('네 네 네 네 네 네', 3000, 6000), _segment('I- I- I- I- I- I think so.', 7000, 11000)]
+    result = speech.clean(segments)
+    assert [s.text for s in result.segments] == [s.text for s in segments]
+    assert not result.removed
+    assert {reason for _, _, reason in result.flagged} == {'repetition kept'}
+
+
+def test_impossible_speech_rate_backs_removal_of_a_repeat():
+    fast = [_segment('Again and again and again.', i * 300, i * 300 + 250) for i in range(3)]
+    result = speech.clean(fast)
+    assert len(result.segments) == 2 and result.removed[0][2] == 'repeated'
+
+
+def test_cleanup_keeps_sounds_on_request_and_only_flags_confident_fillers():
+    result = speech.clean([_segment('[Music]', 0, 2000), _segment('Thanks for watching!', 3000, 4000)],
+                          keep_sounds=True)
+    assert [s.text for s in result.segments] == ['[Music]', 'Thanks for watching!']
+    assert result.flagged and not result.removed
+
+
+# ── 재인식 판단 ──
+def test_evidence_signals_and_compression_ratio():
+    from core.tools import asr_review
+    assert asr_review.compression_ratio('short') == 1.0
+    assert asr_review.compression_ratio('na ' * 60) > speech.COMPRESSION_LIMIT
+    assert asr_review.compression_ratio('The quick brown fox jumps over the lazy dog near the river bank.') < 2.0
+    signals = asr_review.evidence(_segment('a b c d e f g h i j k l m n o p q r s t u v w x y z', 0, 300, 0.2)).signals
+    assert 'low confidence' in signals and 'implausible speech rate' in signals
+
+
+def test_candidate_replaces_only_when_clearly_better():
+    from core.tools import asr_review
+    span = asr_review.Range(0, 3000, 'low confidence')
+    weak = [_segment('the whether is nice', 0, 2000, 0.40)]
+    keep = asr_review.choose(span, weak, [_segment('the weather is nice', 0, 2000, 0.46)])
+    assert not keep.accepted and 'kept original' in keep.why
+    better = asr_review.choose(span, weak, [_segment('the weather is nice', 0, 2000, 0.80)])
+    assert better.accepted
+    looped = [_segment('na ' * 30, 0, 2000, 0.7)]
+    fixed = asr_review.choose(span, looped, [_segment('nothing at all here', 0, 2000, 0.6)])
+    assert fixed.accepted and fixed.why.startswith('original had')
+    bad = asr_review.choose(span, weak, [_segment('la ' * 30, 0, 2000, 0.9)])
+    assert not bad.accepted and 'candidate also suspicious' in bad.why
+    recovered = asr_review.choose(asr_review.Range(5000, 7000, 'possible missing speech'), [],
+                                  [_segment('wait for me', 5100, 6000, 0.7)])
+    assert recovered.accepted and recovered.why == 'recovered missing speech'
+
+
+def test_uncovered_loud_audio_is_a_missing_speech_candidate():
+    from core.tools import asr_review
+    import array as _array
+    quiet, loud = [10] * 1600, [6000, -6000] * 800
+    samples = _array.array('h', quiet * 10 + loud * 30 + quiet * 10)   # 1초 조용 · 3초 소리 · 1초 조용
+    profile = asr_review.rms_profile(samples.tobytes())
+    assert len(profile) == 50
+    found = asr_review.uncovered_speech([], profile)
+    assert found == [(1000, 4000)]
+    assert asr_review.uncovered_speech([_segment('covered', 900, 4100)], profile) == []
+
+
+def test_ranges_are_merged_padded_and_limited():
+    from core.tools import asr_review
+    ranges = [asr_review.Range(1000, 1200, 'a'), asr_review.Range(1800, 2400, 'b'), asr_review.Range(9000, 9100, 'c')]
+    merged = asr_review.merge_ranges(ranges, total=9500)
+    assert merged[0].start < 1000 and merged[0].reason == 'a' and merged[0].end >= 2700
+    assert merged[-1].end <= 9500 and merged[-1].end - merged[-1].start >= 1000
+    assert len(asr_review.merge_ranges([asr_review.Range(i * 5000, i * 5000 + 100, 'x') for i in range(40)])) == 24
+
+
+def test_replace_range_and_shift_keep_time_order():
+    from core.tools import asr_review
+    original = [_segment('one', 0, 900), _segment('bad guess', 1000, 2000), _segment('three', 2100, 3000)]
+    candidate = asr_review.shift([_segment('good words', 100, 600)], 1000)
+    out = asr_review.replace_range(original, asr_review.Range(1000, 2000, 'x'), candidate)
+    assert [s.text for s in out] == ['one', 'good words', 'three']
+    assert out[1].start >= 1000 and out[1].end <= 2000
+
+
+def test_similar_names_are_reported_not_merged():
+    from core.tools import asr_review
+    segments = [_segment('Then Katherine left.', 0, 1000), _segment('I saw Catherine there.', 1000, 2000),
+                _segment('Katherine is back.', 2000, 3000), _segment('ハインリッヒとハインリヒ', 3000, 4000)]
+    pairs = asr_review.similar_names(segments)
+    names = {frozenset((a, b)) for a, _, b, _ in pairs}
+    assert frozenset(('Katherine', 'Catherine')) in names
+    assert frozenset(('ハインリッヒとハインリヒ'[:6], 'ハインリヒ')) in names or any('ハインリ' in a for a, _, _, _ in pairs)
+
+
+# ── 평가 도구 ──
+def test_evaluation_measures_errors_coverage_and_overcorrection(capsys, tmp_path):
+    from core.tools import subtitle_eval
+    reference = [Cue(0, 2000, ('the weather is nice today',)), Cue(3000, 5000, ('see you tomorrow',))]
+    hypothesis = [Cue(100, 2100, ('the whether is nice today',)), Cue(6000, 7000, ('thanks for watching',))]
+    report = subtitle_eval.evaluate(reference, hypothesis)
+    assert round(report.wer, 2) == round(4 / 8, 2)        # 단어 1개 틀림 + 누락 2 + 추가 3 → 편집 거리
+    assert 0.5 < report.omission < 0.55 and 0.35 < report.hallucination < 0.4
+    assert report.timestamp_mae == 100
+    change = subtitle_eval.compare(reference, hypothesis, [Cue(0, 2000, ('the weather is nice today',)),
+                                                           Cue(3000, 5000, ('see you',))])
+    assert change.improved == 2 and change.worsened == 0 and change.overcorrection == 0.0
+    from tools import evaluate_subtitles
+    ref, hyp = tmp_path / 'r.srt', tmp_path / 'h.srt'
+    ref.write_text(to_srt(reference), encoding='utf-8'); hyp.write_text(to_srt(hypothesis), encoding='utf-8')
+    assert evaluate_subtitles.main([str(ref), str(hyp), '--baseline', str(hyp), '--language', 'en']) == 0
+    out = capsys.readouterr().out
+    assert 'WER' in out and '과잉 교정' in out and '자막 규칙 위반' in out
+
+
+def test_model_catalog_is_pinned_and_ordered_by_accuracy():
+    assert speech.MODELS[0].key == 'large-v3' and speech.RECOMMENDED in speech.BY_KEY
+    for item in speech.MODELS:
+            assert len(item.sha1) == 40 and item.file.startswith('ggml-') and item.dtw
+    assert speech.whisper_code('zh-Hant') == 'zh' and speech.whisper_code('auto') == 'auto'
+
+
+# ── 검증 다운로드 · 설치 ──
+def test_fetch_verifies_checksum_and_never_keeps_a_bad_file(tmp_path):
+    from integrations.speech import download
+    source = tmp_path / 'source.bin'
+    source.write_bytes(b'weights' * 1000)
+    good = hashlib.sha1(source.read_bytes()).hexdigest()
+    target = tmp_path / 'out' / 'model.bin'
+    download.fetch(source.as_uri(), target, algorithm='sha1', expected=good, limit=10 ** 6)
+    assert target.read_bytes() == source.read_bytes()
+    other = tmp_path / 'out' / 'other.bin'
+    with pytest.raises(ValueError, match='Checksum mismatch'):
+        download.fetch(source.as_uri(), other, algorithm='sha1', expected='0' * 40, limit=10 ** 6)
+    assert not other.exists() and not other.with_name('other.bin.part').exists()
+    with pytest.raises(ValueError, match='larger'):
+        download.fetch(source.as_uri(), tmp_path / 'out' / 'big.bin', algorithm='sha1', expected=good, limit=10)
+    with pytest.raises(ValueError, match='pinned checksum'):
+        download.fetch(source.as_uri(), tmp_path / 'x', algorithm='sha1', expected='', limit=10)
+
+
+def test_fetch_stops_when_cancelled_and_keeps_the_partial_file(tmp_path):
+    from integrations.speech import download
+    source = tmp_path / 'source.bin'
+    source.write_bytes(os.urandom(3 * download.CHUNK))
+    target = tmp_path / 'model.bin'
+    calls = {'n': 0}
+
+    def cancelled():
+        calls['n'] += 1
+        return calls['n'] > 1
+    with pytest.raises(download.DownloadCancelled):
+        download.fetch(source.as_uri(), target, algorithm='sha256',
+                       expected=hashlib.sha256(source.read_bytes()).hexdigest(), limit=10 ** 8, cancelled=cancelled)
+    assert not target.exists() and target.with_name('model.bin.part').stat().st_size == download.CHUNK
+
+
+def test_archives_with_unsafe_paths_are_refused(tmp_path):
+    from integrations.speech import install
+    archive = tmp_path / 'bad.zip'
+    with zipfile.ZipFile(archive, 'w') as handle:
+        handle.writestr('../escape.exe', b'x')
+    with pytest.raises(ValueError, match='Unsafe'):
+        install._safe_extract(archive.read_bytes(), tmp_path / 'out')
+    assert not (tmp_path / 'escape.exe').exists()
+
+
+def test_ffmpeg_asset_prefers_the_newest_lgpl_release_build():
+    from integrations.speech import install
+    assets = {name: {'name': name} for name in (
+        'ffmpeg-n7.1.2-10-gabc-win64-lgpl-7.1.zip', 'ffmpeg-n8.0.1-3-gdef-win64-lgpl-8.0.zip',
+        'ffmpeg-n8.0.1-3-gdef-win64-gpl-8.0.zip', 'ffmpeg-N-121000-g0123abc-win64-lgpl.zip',
+        'ffmpeg-n8.0.1-3-gdef-linux64-lgpl-8.0.tar.xz', 'checksums.sha256')}
+    assert install._ffmpeg_asset(assets)['name'] == 'ffmpeg-n8.0.1-3-gdef-win64-lgpl-8.0.zip'
+    with pytest.raises(ValueError, match='GitHub did not record'):
+        install._asset_digest({'name': 'x', 'digest': None})
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='checks the non-Windows refusal')
+def test_engine_install_is_skipped_outside_windows(tmp_path):
+    from integrations.speech import install
+    messages = []
+    assert install.install(tmp_path, log=messages.append) is False
+    assert 'Windows' in messages[0] and not any(tmp_path.iterdir())
+
+
+# ── 서비스 전 과정 (가짜 whisper-cli) ──
+FAKE_CLI = r'''#!{python}
+import json, sys
+args = open(sys.argv[1][1:], encoding='utf-8').read().split('\n')
+def value(flag):
+    return args[args.index(flag) + 1]
+log = open(value('-of') + '.calls', 'a', encoding='utf-8'); log.write(json.dumps(args) + '\n'); log.close()
+lang = value('-l')
+if lang == 'auto':
+    lang = 'en'
+sentences = {{'en': [' Hello and welcome to the show.', ' Today we talk about subtitles, and why rules matter.'],
+             'ko': [' 안녕하세요 방송에 오신 것을 환영합니다.', ' 오늘은 자막 규칙이 왜 중요한지 이야기합니다.']}}[lang]
+import os
+retry = 'retry' in value('-f')
+if os.environ.get('FAKE_SCENARIO') == 'loop' and not retry:
+    sentences = [' ' + 'na ' * 20] + sentences[1:]
+segments, t = [], 0
+for sentence in sentences:
+    tokens = []
+    for word in sentence.split(' ')[1:]:
+        if not word:
+            continue
+        tokens.append({{'text': ' ' + word, 'offsets': {{'from': t, 'to': t + 300}},
+                       'p': 0.3 if word == 'na' else 0.93, 't_dtw': -1}})
+        t += 330
+    segments.append({{'offsets': {{'from': tokens[0]['offsets']['from'], 'to': t}}, 'text': sentence, 'tokens': tokens}})
+    print('[00:00:00.000 --> 00:00:01.000]  ' + sentence.strip(), flush=True)
+for p in (0, 50, 100):
+    print('whisper_print_progress_callback: progress = %3d%%' % p, file=sys.stderr, flush=True)
+json.dump({{'result': {{'language': lang}}, 'transcription': segments}}, open(value('-of') + '.json', 'w', encoding='utf-8'))
+'''
+
+
+@pytest.fixture
+def fake_engine(tmp_path, monkeypatch):
+    if os.name == 'nt':
+        pytest.skip('the fake whisper-cli is a POSIX script')
+    cli = tmp_path / 'bin' / 'whisper-cli'
+    cli.parent.mkdir()
+    cli.write_text(FAKE_CLI.format(python=sys.executable), encoding='utf-8')
+    cli.chmod(cli.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv('LOCAL_AI_WHISPER_CLI', str(cli))
+    monkeypatch.setenv('LOCAL_AI_FFMPEG', str(tmp_path / 'bin' / 'missing-ffmpeg'))
+    from integrations.speech.engine import SpeechEngine
+    engine = SpeechEngine(tmp_path / 'speech', tmp_path / 'models' / 'speech')
+    model = engine.model_path('large-v3-turbo')
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b'weights')
+    return engine
+
+
+def _wav(path, seconds=1):
+    with wave.open(str(path), 'wb') as handle:
+        handle.setnchannels(1); handle.setsampwidth(2); handle.setframerate(16000)
+        handle.writeframes(b'\x00\x00' * 16000 * seconds)
+    return path
+
+
+class FakeTranslator:
+    """번역 도구 계약만 지키는 가짜: 줄마다 '[번역]'을 붙여 새 파일로 쓴다."""
+    def __init__(self):
+        self.calls = []
+
+    def translate_file(self, path, *, model, target, kind, style, output_path, progress=None, cancelled=None,
+                       **options):
+        self.calls.append(dict(path=Path(path), model=model, target=target, kind=kind, style=style, **options))
+        cues = parse(Path(path).read_text(encoding='utf-8'))
+        assert all(len(cue.lines) == 1 for cue in cues)       # 큐마다 한 줄로 합쳐 넘긴다
+        translated = [Cue(c.start, c.end, ('번역된 문장입니다 ' + c.lines[0][:12] + ' 그리고 조금 더 긴 내용',))
+                      for c in cues]
+        Path(output_path).write_text(to_srt(translated), encoding='utf-8')
+        if progress:
+            progress(len(cues), len(cues))
+        return type('Result', (), {'kept_lines': [], 'audit': []})()
+
+    def abort(self):
+        pass
+
+
+def _service(tmp_path, engine, translator=None, allowed=True):
+    from services.tools.subtitles import SubtitleService
+    return SubtitleService(translator or FakeTranslator(), work_dir=tmp_path / 'user_data' / 'tools' / 'subtitles',
+                           store_dir=tmp_path / 'models', engine=engine,
+                           access=lambda refresh: {'allowed': allowed, 'admin': allowed, 'reason': 'admins only'})
+
+
+def test_wav_becomes_a_rule_following_srt_next_to_the_original(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    media = _wav(tmp_path / '강의 녹음.wav')
+    stages, lines = [], []
+    result = _service(tmp_path, fake_engine).make(
+        media, Options(model='large-v3-turbo', formats=('srt', 'vtt'), prompt='자막 용어 LocalAI'),
+        progress=lambda stage, fraction, note: stages.append(stage), on_text=lines.append)
+    srt, vtt = result.outputs
+    assert srt == tmp_path / '강의 녹음.en.srt' and vtt == tmp_path / '강의 녹음.en.vtt'
+    raw = srt.read_bytes()
+    assert raw.startswith(b'\xef\xbb\xbf1\r\n00:00:00,000 --> ')
+    cues = parse(raw.decode('utf-8-sig'))
+    assert validate(cues, rules_for('en')).ok and len(cues) >= 2
+    assert vtt.read_text(encoding='utf-8-sig').startswith('WEBVTT\n')
+    assert {'speech', 'write'} <= set(stages) and lines and result.language_label == 'English'
+    assert media.read_bytes()[:4] == b'RIFF'                  # 원본은 그대로
+    calls = (tmp_path / 'user_data').rglob('result-cpu.calls')
+    args = json.loads(next(calls).read_text(encoding='utf-8').splitlines()[0])
+    assert args[args.index('--prompt') + 1] == '자막 용어 LocalAI'   # 한글도 응답 파일(UTF-8)로
+    assert '-ng' in args and '-dtw' in args and '-nfa' in args  # CPU, 최고 정확도 = 정밀 단어 시각
+
+
+def test_only_the_suspicious_range_is_recognized_again_and_the_better_candidate_wins(
+        tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options
+    monkeypatch.setenv('FAKE_SCENARIO', 'loop')
+    media = _wav(tmp_path / 'loop.wav', seconds=10)
+    result = _service(tmp_path, fake_engine).make(media, Options(model='large-v3-turbo', quality='balanced'))
+    text = result.outputs[0].read_text(encoding='utf-8-sig')
+    assert 'na na na na' not in text and 'Hello and welcome' in text
+    assert len(result.decisions) == 1 and result.decisions[0].accepted
+    assert result.decisions[0].range.reason in ('high compression ratio', 'low confidence', 'repetition loop')
+    assert 'subtitles' in text                                 # 문제없는 구간은 그대로
+    log = next((tmp_path / 'user_data').rglob('review-balanced.json'))
+    saved = json.loads(log.read_text(encoding='utf-8'))
+    assert saved['decisions'][0]['original'].startswith('na na')   # 최초 결과와 판단 근거를 보관
+    calls = next((tmp_path / 'user_data').rglob('result-cpu.calls')).read_text(encoding='utf-8')
+    assert len(calls.splitlines()) == 1                        # 원래 작업 폴더의 호출은 최초 인식 1번뿐
+    assert not list((tmp_path / 'user_data').rglob('audio.wav')) and not list((tmp_path / 'user_data').rglob('input.wav'))
+
+
+def test_fast_mode_skips_re_recognition(tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options
+    monkeypatch.setenv('FAKE_SCENARIO', 'loop')
+    result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'f.wav', seconds=10),
+                                                  Options(model='large-v3-turbo', quality='fast'))
+    assert result.decisions == () and 'na na' in result.text    # 줄이기만(두 번), 바꾸지 않음
+
+
+def test_existing_subtitles_are_never_overwritten_and_recognition_is_reused(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    media = _wav(tmp_path / 'talk.wav')
+    service = _service(tmp_path, fake_engine)
+    first = service.make(media, Options(model='large-v3-turbo'))
+    second = service.make(media, Options(model='large-v3-turbo'))
+    assert first.outputs[0].name == 'talk.en.srt' and second.outputs[0].name == 'talk.en (2).srt'
+    assert second.reused and not first.reused
+    calls = next((tmp_path / 'user_data').rglob('result-cpu.calls')).read_text(encoding='utf-8')
+    assert len(calls.splitlines()) == 1                        # 두 번째는 다시 인식하지 않았다
+
+
+def test_translation_is_chained_and_rewrapped_for_the_target_language(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, Translate
+    media = _wav(tmp_path / 'show.wav')
+    translator = FakeTranslator()
+    result = _service(tmp_path, fake_engine, translator).make(
+        media, Options(model='large-v3-turbo', language='English'),
+        translate=Translate(target='한국어', model='gemma4:12b', glossary='LocalAI = 로컬AI'))
+    call = translator.calls[0]
+    assert call['kind'] == 'subtitle' and call['style'] == 'natural' and call['source_language'] == 'English'
+    assert call['glossary'] == 'LocalAI = 로컬AI'
+    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.en.srt', 'show.ko.srt']
+    korean = parse(result.translated_outputs[0].read_text(encoding='utf-8-sig'))
+    assert validate(korean, rules_for('ko')).ok
+    assert any(len(cue.lines) == 2 for cue in korean)          # 번역문을 한국어 줄 길이로 다시 나눴다
+    assert len(korean) > len(result.cues)                     # 두 큐 분량의 번역문은 시간 안에서 둘로
+    assert not list((tmp_path / 'user_data').rglob('translate-*.srt'))
+
+
+def test_same_language_translation_is_skipped(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, Translate
+    translator = FakeTranslator()
+    result = _service(tmp_path, fake_engine, translator).make(
+        _wav(tmp_path / 'ko.wav'), Options(model='large-v3-turbo', language='한국어'),
+        translate=Translate(target='한국어', model='m'))
+    assert result.translation_skipped and not translator.calls and result.outputs[0].name == 'ko.ko.srt'
+
+
+def test_video_needs_ffmpeg_and_bad_inputs_are_explained(tmp_path, fake_engine):
+    from integrations.speech.engine import EngineMissing
+    from services.tools.subtitles import Options
+    service = _service(tmp_path, fake_engine)
+    video = tmp_path / 'clip.mp4'
+    video.write_bytes(b'not really a video')
+    with pytest.raises(EngineMissing, match='ffmpeg'):
+        service.make(video, Options(model='large-v3-turbo'))
+    with pytest.raises(ValueError, match='Unsupported media'):
+        service.make(_touch(tmp_path / 'notes.txt'), Options(model='large-v3-turbo'))
+    with pytest.raises(EngineMissing, match='not installed'):
+        service.make(_wav(tmp_path / 'a.wav'), Options(model='large-v3'))
+
+
+def _touch(path):
+    path.write_text('x', encoding='utf-8')
+    return path
+
+
+def test_batch_continues_after_a_failed_file(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    bad = tmp_path / 'broken.mp4'
+    bad.write_bytes(b'x')
+    batch = _service(tmp_path, fake_engine).make_many([bad, _wav(tmp_path / 'good.wav')], Options(model='large-v3-turbo'))
+    assert [path.name for path, _ in batch.results] == ['good.wav'] and batch.failed[0][0] == bad
+
+
+def test_cancelling_stops_without_writing_a_subtitle(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    media = _wav(tmp_path / 'stop.wav')
+    with pytest.raises(InterruptedError):
+        _service(tmp_path, fake_engine).make(media, Options(model='large-v3-turbo'), cancelled=lambda: True)
+    assert not list(tmp_path.glob('stop.*.srt'))
+
+
+def test_engine_and_model_changes_are_for_administrators_only(tmp_path, fake_engine):
+    service = _service(tmp_path, fake_engine, allowed=False)
+    for action in (lambda: service.install_model('small'), lambda: service.remove_model('large-v3-turbo'),
+                   lambda: service.install_engine()):
+        with pytest.raises(PermissionError, match='admins only'):
+            action()
+    assert fake_engine.model_path('large-v3-turbo').is_file()
+
+
+def test_recommended_model_is_the_last_one_or_the_most_accurate(tmp_path, fake_engine):
+    service = _service(tmp_path, fake_engine)
+    assert service.recommend_model(('small', 'large-v3-turbo')) == 'large-v3-turbo'
+    assert service.recommend_model(('small', 'large-v3-turbo'), 'small') == 'small'
+    assert service.recommend_model(()) == ''
+
+
+def test_folder_scan_finds_media_in_reading_order(tmp_path):
+    from services.tools.subtitles import scan
+    for name in ('ep10.mp4', 'ep2.mkv', 'notes.txt', '.hidden.mp4', 'sub/ep1.wav'):
+        path = tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b'x')
+    assert [p.relative_to(tmp_path).as_posix() for p in scan(tmp_path)] == ['ep2.mkv', 'ep10.mp4', 'sub/ep1.wav']
+
+
+def test_subtitle_preferences_are_validated(tmp_path):
+    from core.settings.store import SettingsStore
+    store = SettingsStore(tmp_path / 'settings.json')
+    store.set_subtitle_preferences({'model': 'large-v3', 'max_chars': 20, 'max_lines': True, 'vad': False,
+                                    'unknown': 1, 'prompt': 'x' * 3000})
+    assert store.subtitle_preferences() == {'model': 'large-v3', 'max_chars': 20, 'vad': False}
+    store.set_translation_preferences({'target': 'English', 'glossary': 'a = b'})
+    assert store.translation_preferences() == {'target': 'English', 'glossary': 'a = b'}
+    assert store.subtitle_preferences()['model'] == 'large-v3'
+
+
+def test_paths_are_shared_admin_locations():
+    import project_paths
+    assert project_paths.speech_engine_dir(Path('E')) == Path('E') / 'speech'
+    assert project_paths.speech_model_dir(Path('M')) == Path('M') / 'speech'
+
+
+# ── 화면 ──
+def test_subtitle_tool_opens_and_starts_only_when_ready(ui, tmp_path, fake_engine):
+    from test_desktop_ui import pump
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    svc.translator.local_models = lambda: ['gemma4:12b']
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
+    assert w.subtitle_model.get() == 'large-v3-turbo · 권장'
+    assert str(w.subtitle_start_button['state']) == 'disabled'
+    media = _wav(tmp_path / 'ui.wav')
+    w.subtitle_path.set(str(media)); w.analyze_subtitle_input()
+    pump(w, lambda: str(w.subtitle_start_button['state']) == 'normal')
+    assert '"ui.<음성 언어>.srt"' in w.subtitle_destination.cget('text')
+    w.subtitle_translate.set(True)
+    pump(w, lambda: w.subtitle_llm.get() == 'gemma4:12b', timeout=5)
+    svc.subtitles.translator = FakeTranslator()
+    w.start_subtitles()
+    pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'ui.ko.srt').exists(), timeout=15)
+    pump(w, lambda: str(w.subtitle_open_button['state']) == 'normal', timeout=5)
+    assert (tmp_path / 'ui.en.srt').exists()
+    assert '번역된 문장' in w.subtitle_translated_text.get('1.0', 'end')
+    assert '확인하면 좋은 자막' in w.subtitle_report_text.get('1.0', 'end')
+
+
+def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_path, fake_engine):
+    from test_desktop_ui import pump
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    svc.subtitles.translator = FakeTranslator()
+    svc.translator.local_models = lambda: ['gemma4:12b']
+    svc.settings.set_subtitle_preferences({'model': 'large-v3-turbo', 'quality': 'fast'})
+    w.navigate('tools'); w.open_tool('translate')
+    pump(w, lambda: w.translation_model.get() == 'gemma4:12b', timeout=5)
+    media = _wav(tmp_path / 'movie.wav')
+    w.translation_path.set(str(media)); w.analyze_translation_file()
+    pump(w, lambda: w.translation_kind.get() == '자막' and '준비됨' in w.translation_status.get(), timeout=5)
+    assert w.translation_style.get() == '자연스러운 번역'             # 번역 목적은 사용자 값 그대로
+    assert 'movie.ko.srt' in w.translation_destination.cget('text')
+    w.start_translation()
+    pump(w, lambda: (tmp_path / 'movie.ko.srt').exists() and not w.runner.busy('tools.translate'), timeout=15)
+    pump(w, lambda: '완료' in w.translation_status.get(), timeout=5)
+    assert (tmp_path / 'movie.en.srt').exists()
+    # 자막용 자동 설정은 일반 번역의 기본값으로 저장하지 않는다(다른 값을 바꿔 저장해도)
+    w.translation_language.set('English')
+    pump(w, lambda: svc.settings.translation_preferences().get('target') == 'English', timeout=4)
+    assert svc.settings.translation_preferences().get('kind') == '자동 감지'
+    # 영상이 아닌 파일을 고르면 원래 유형으로 돌아간다
+    text_file = tmp_path / 'plain.txt'
+    text_file.write_text('こんにちは。', encoding='utf-8')
+    w.translation_path.set(str(text_file)); w.analyze_translation_file()
+    assert w.translation_kind.get() == '자동 감지'
+
+
+from test_desktop_ui import ui  # noqa: E402,F401  (실제 Tk 창 fixture를 함께 쓴다)

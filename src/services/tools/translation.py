@@ -32,8 +32,12 @@ AUTO_SOURCE = ('auto','자동 감지','')
 CJK_SOURCES = ('Japanese','Simplified Chinese','Traditional Chinese','Korean')
 STYLES = {'faithful':'원문에 충실하게','natural':'자연스럽게, 정보 생략 없이',
           'concise':'자막에 맞게 간결하게'}
-CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투',
-           'subtitle':'읽기 쉬운 자막','code':'기술 문서 및 코드 보호',
+# 대본·자막: 원문의 말투와 표현 강도를 보존한다(순화·평탄화·생략·설명 추가는 오역으로 본다).
+_SPOKEN = ('. Preserve each speaker\'s voice: tone, emotion and intensity, profanity, slang, dialect, '
+           'coined words, verbal tics and interjections, with equivalent target expressions. Do not soften, '
+           'censor, normalize, summarize or explain; keep deliberate ambiguity')
+CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투'+_SPOKEN,
+           'subtitle':'읽기 쉬운 자막'+_SPOKEN,'code':'기술 문서 및 코드 보호',
            'structured':'구조화 데이터 문자열 값'}
 MAX_BATCH_CHARS = 2600
 MAX_BATCH_ITEMS = 20   # 짧은 줄(자막·대사)이 많을 때 요청 수를 줄인다. 글자 수 상한은 그대로

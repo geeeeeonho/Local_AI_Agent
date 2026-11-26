@@ -18,13 +18,14 @@ from .widgets import (opening_geometry, set_text, set_status, theme,
 from .themes import themed
 from . import views
 from .translation_controller import TranslationController
+from .subtitle_controller import SubtitleController
 from .tools_view import ToolsController
 from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
 from .widgets import ScrollArea
 
 
-class DesktopWindow(TranslationController, ToolsController):
+class DesktopWindow(TranslationController, SubtitleController, ToolsController):
     def __init__(self, app, services, *, root=None, start_polling=True):
         self.app, self.spec, self.services = app, SPECS[app], services
         self.root = root if root is not None else tk.Tk()
@@ -313,6 +314,10 @@ class DesktopWindow(TranslationController, ToolsController):
                 self.translation_say('Working',str(data.get('message') or '번역 중...'))
                 if isinstance(data.get('total'),int):
                     self.set_translation_progress(data.get('done') or 0,data['total'],data.get('eta') or '')
+            return
+        if event.topic=='runtime.progress' and data.get('service')=='subtitles':
+            if hasattr(self,'subtitle_status'):
+                self.subtitle_progress_event(data)
             return
         if event.topic.startswith('agent.') and self.agent_session is not None:
             if data.get('session')!=self.agent_session.id:return
@@ -1769,6 +1774,8 @@ class DesktopWindow(TranslationController, ToolsController):
         # 번역 중이면 모델 응답을 기다리지 않고 끊어 창이 '응답 없음'으로 멈추지 않게 한다.
         translator=getattr(self.services,'translator',None)
         if translator is not None and hasattr(translator,'abort'):translator.abort()
+        subtitles=getattr(self.services,'subtitles',None)
+        if subtitles is not None and hasattr(subtitles,'abort'):subtitles.abort()
         session=self.services.agent.session
         if session is not None:
             session.closing.set()

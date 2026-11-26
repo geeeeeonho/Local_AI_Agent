@@ -12,6 +12,7 @@ from installer.steps import machine as machine_step
 from installer.steps import ollama
 from installer.steps import python_tools
 from installer.steps import llmfit as llmfit_step
+from installer.steps import speech as speech_step
 from installer.steps import sandbox
 from installer.steps import searxng
 from installer.steps import tor
@@ -143,6 +144,14 @@ def _run_install(args) -> int:
     else:
         skipped_components.append("llmfit")
         utils.warn("LLMfit 준비 실패: 모델 카탈로그 추정값을 사용합니다.")
+
+    # Optional speech runtime for Tools > subtitles. Same rule as LLMfit: a
+    # failure is reported and skipped, never a reason to stop the install.
+    if speech_step.install(paths, log=utils.info):
+        components.append("speech")
+    else:
+        skipped_components.append("speech")
+        utils.warn("자막 엔진 준비 실패: Tools → 자막 만들기에서 다시 설치할 수 있습니다.")
 
     if python_tools.install_anythingllm(paths, profile):
         components.append("anythingllm")

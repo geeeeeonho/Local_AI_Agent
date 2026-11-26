@@ -6,6 +6,10 @@ from tkinter import filedialog
 from .translation_view import KINDS, STYLES, LANGUAGES as TARGETS
 from services.tools.languages import SOURCE_LABELS as SOURCES
 from .widgets import set_text, set_status
+from core.tools.speech import MEDIA
+from services.tools.subtitles import Translate
+from .subtitle_controller import options_from, overall, report_text, friendly as subtitle_error, STAGES
+from .subtitle_view import MEDIA_PATTERN
 
 KIND_NAMES={value:label for label,value in KINDS.items()}
 
@@ -65,6 +69,10 @@ class TranslationController:
     def save_translation_preferences(self):
         self._translation_save_job=None
         values={key:variable.get() for key,variable in self._translation_fields().items()}
+        # 영상·음성 파일 때문에 자동으로 바꾼 유형·목적은 일반 번역의 기본값으로 남기지 않는다.
+        saved=getattr(self,'_translation_media_saved',None)
+        if saved and is_media(self.translation_path.get()):
+            values['kind'],values['style']=saved
         values['advanced']=bool(getattr(self,'_translation_advanced_open',False))
         values['last_dir']=getattr(self,'_translation_last_dir','') or ''
         values['glossary']=self.translation_glossary_text.get('1.0','end').strip()[:20000]
@@ -100,6 +108,9 @@ class TranslationController:
             path=Path(raw)
             if custom:
                 text='→ 결과: '+custom+'  (고급 설정에서 지정)'
+            elif is_media(path):
+                text=('→ 결과: 원본 옆 "%s.<음성 언어>.srt"(원어 자막)와 "%s.%s.srt"(번역 자막). '
+                      '음성 인식 설정은 [자막 만들기] 도구의 값을 씁니다.'%(path.stem,path.stem,code))
             elif path.is_dir():
                 text='→ 결과: 원본 옆 "%s.%s" 폴더 (같은 구조·같은 파일 이름, 다른 파일은 복사)'%(path.name,code)
             elif path.suffix:
@@ -123,6 +134,7 @@ class TranslationController:
         value=filedialog.askopenfilename(parent=self.root,title='번역할 파일',
               initialdir=self._translation_start_dir(),
               filetypes=[('텍스트/JSON/자막','*.txt *.json *.md *.markdown *.srt *.vtt'),
+                         ('영상·음성 (자막을 만든 뒤 번역)',MEDIA_PATTERN),
                          ('모든 파일','*.*')])
         if value:
             self._remember_translation_dir(Path(value).parent)
@@ -163,6 +175,16 @@ class TranslationController:
         path=self.translation_path.get().strip()
         if not path:
             self.translation_say('Waiting','파일을 먼저 선택하세요.');return
+        if is_media(path):
+            return self.analyze_translation_media(path)
+        saved=getattr(self,'_translation_media_saved',None)
+        if saved:
+            self._translation_media_saved=None
+            self._translation_loading=True
+            try:
+                self.translation_kind.set(saved[0]);self.translation_style.set(saved[1])
+            finally:
+                self._translation_loading=False
         if Path(path).is_dir():
             self.translation_say('Working','폴더 안의 파일 분석 중...')
             def folder_done(found):
@@ -234,6 +256,8 @@ class TranslationController:
                  'source_language':self.translation_source_language.get(),
                  'glossary':self.translation_glossary_text.get('1.0','end'),
                  'output_path':self.translation_output.get().strip() or None}
+        if is_media(path):
+            return self.start_media_translation(options)
         self.save_translation_preferences()
         self._translation_cancel=Event()
         self.translation_start_button.configure(state='disabled')
@@ -354,6 +378,93 @@ class TranslationController:
                              announce=False,error=failed):
             unlock()
 
+    # ── 영상·음성: 자막을 만든 뒤 그 자막을 번역한다(자막 도구와 같은 서비스) ──
+    def analyze_translation_media(self,path):
+        # 자막용으로 자동 설정한다. 일반 번역의 기본값으로는 저장하지 않는다.
+        # 번역 목적은 사용자가 고른 값을 그대로 쓴다(줄 길이는 자막 규칙이 다시 나눈다).
+        if not getattr(self,'_translation_media_saved',None):
+            self._translation_media_saved=(self.translation_kind.get(),self.translation_style.get())
+        self._translation_loading=True
+        try:
+            self.translation_kind.set(KIND_NAMES['subtitle'])
+        finally:
+            self._translation_loading=False
+        self.translation_say('Working','영상·음성 파일 확인 중...')
+        def fetch():
+            return self.services.subtitles.status(),self.services.subtitles.media_info(path)
+        def done(found):
+            status,(duration,audio)=found
+            self._translation_media_status=status
+            if not status.builds:
+                return self.translation_say('Failed','음성 인식 엔진이 없습니다. Tools → 자막 만들기에서 엔진을 설치하세요(관리자).')
+            if not status.models:
+                return self.translation_say('Failed','음성 인식 모델이 없습니다. Tools → 자막 만들기에서 모델을 받으세요(관리자).')
+            if audio is False:
+                return self.translation_say('Failed','이 파일에는 오디오 트랙이 없습니다.')
+            seconds=int((duration or 0)//1000)
+            self.translation_say('Ready','준비됨 · 영상·음성 → 자막 → 번역%s · 콘텐츠 유형을 [자막]으로 맞췄습니다 · [번역 시작]을 누르세요'%(
+                ' · 길이 %d:%02d:%02d'%(seconds//3600,seconds//60%60,seconds%60) if duration else ''))
+            set_text(self.translation_source_text,'영상·음성 파일: '+str(path)+
+                     '\n\n1. 말소리를 받아 적어 원어 자막(SRT)을 만듭니다.'
+                     '\n2. 그 자막을 선택한 모델로 번역하고, 번역 언어의 자막 규칙(줄 길이·2줄)으로 다시 나눕니다.'
+                     '\n\n받아 적은 원어 자막은 번역을 마친 뒤 이 탭에 표시됩니다.')
+            self.translation_tabs.select(0)
+        self.run_task('tools.inspect',fetch,done,mutate=False,announce=False,
+            error=lambda e:self.translation_say('Failed','파일 확인 실패: '+subtitle_error(e)))
+
+    def start_media_translation(self,options):
+        path=options['path']
+        self._translation_cancel=Event()
+        self.translation_start_button.configure(state='disabled')
+        self.translation_cancel_button.configure(state='normal')
+        self.translation_open_button.configure(state='disabled')
+        self.translation_say('Working','자막을 만든 뒤 번역합니다...',log=True)
+        self.set_translation_progress(0,100,'준비 중')
+        events=self.services.events
+        def progress(stage,fraction,note):
+            value=overall(stage,fraction,True)
+            events.emit('runtime.progress',{'service':'translator','done':int(value*1000),'total':1000,
+                        'message':'%s%s'%(STAGES.get(stage,stage),' '+note if note else '')})
+        stop=lambda:self._translation_cancel.is_set() or self.runner.cancel.is_set()
+        def work():
+            prefs=self.services.settings.subtitle_preferences()
+            status=self.services.subtitles.status()
+            model=self.services.subtitles.recommend_model(status.models,prefs.get('model',''))
+            if not model:
+                raise RuntimeError('Speech model is not installed')
+            source=options['source_language']
+            recognition=options_from(prefs,language=source if source in SOURCES else '자동 감지',model=model)
+            return self.services.subtitles.make(path,recognition,translate=Translate(
+                target=options['target'],model=options['model'],style=options['style'],
+                glossary=options['glossary'],precise=options['precise'],keep_failed=options['keep_failed']),
+                progress=progress,cancelled=stop)
+        def unlock():
+            self.translation_cancel_button.configure(state='disabled')
+            self.root.after_idle(self.update_translation_destination)
+        def done(result):
+            unlock()
+            self.set_translation_progress(100,100,'')
+            outputs=result.translated_outputs or result.outputs
+            self._translation_last_output=outputs[0]
+            self.translation_open_button.configure(state='normal')
+            note=('번역 생략: 음성 언어(%s)와 번역 언어가 같아 원어 자막만 만들었습니다'%result.language_label
+                  if result.translation_skipped else '번역 자막 %d개 구간'%len(result.cues))
+            self.translation_say('Ready','완료: %s · %s'%(note,outputs[0]),log=True)
+            set_text(self.translation_source_text,result.text[:12000])
+            set_text(self.translation_result_text,(result.translated_text or result.text)[:12000])
+            set_text(self.translation_memory_text,report_text(result))
+            self.translation_tabs.select(1)
+            self.root.bell()
+        def failed(exc):
+            unlock()
+            if isinstance(exc,InterruptedError):
+                self.translation_say('Waiting','중단됨 · 다시 시작하면 인식 결과와 번역한 구간을 이어서 씁니다.',log=True)
+            else:
+                self.translation_say('Failed','실패: '+subtitle_error(friendly_error(exc)),log=True,level='error')
+                self.root.bell()
+        if not self.run_task('tools.translate',work,done,mutate=False,long=True,announce=False,error=failed):
+            unlock()
+
     def set_translation_progress(self,done,total,note=''):
         if not self.translation_progress_row.winfo_manager():
             self.translation_progress_row.pack(fill='x')
@@ -363,6 +474,12 @@ class TranslationController:
         if note:
             text=(text+' · ' if text else '')+note
         self.translation_progress_label.configure(text=text)
+
+
+def is_media(path):
+    """영상·음성 파일이면 번역 전에 자막을 먼저 만든다."""
+    path=Path(str(path).strip())
+    return path.suffix.lower() in MEDIA and not path.is_dir()
 
 
 def _duration(seconds):

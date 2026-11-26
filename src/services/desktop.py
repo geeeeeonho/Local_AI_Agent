@@ -13,6 +13,9 @@ from services.search.service import SearchService
 from services.chat.service import ChatService
 from services.agent.launcher import AgentLauncher
 from services.tools.translation import TranslationService
+from services.tools.subtitles import SubtitleService
+from integrations.speech.engine import SpeechEngine
+from project_paths import speech_engine_dir, speech_model_dir
 from services.tools.calendar import CalendarService
 from services.tools.reminder_worker import ReminderManager
 from services.system.desktop import SetupService, SystemService
@@ -123,6 +126,9 @@ class DesktopServices:
         self.agent = AgentLauncher(backend, self.network, self.events, stores=self.records)
         self.translator = TranslationService(
             self.inference, checkpoint_dir=self.data / 'tools' / 'translation')
+        self.subtitles = SubtitleService(
+            self.translator, work_dir=self.data / 'tools' / 'subtitles', store_dir=self.model_dir,
+            engine=SpeechEngine(speech_engine_dir(self.env), speech_model_dir(self.model_dir)))
         self.calendar = CalendarService(self.data / 'tools' / 'calendar' / 'items.json')
         self.reminders = ReminderManager()
         self.system = SystemService(backend)

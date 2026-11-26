@@ -126,6 +126,25 @@ def model_dir() -> Path:
     return runtime_dir() / runtime_root.MODELS
 
 
+def speech_engine_dir(env=None) -> Path:
+    """Shared, administrator-written: the subtitle tool's speech runtimes.
+
+    whisper.cpp builds, ffmpeg and the voice-activity model live here, beside
+    the other managed runtimes, so every account runs the same verified copy.
+    """
+    return (env_dir() if env is None else Path(env)) / "speech"
+
+
+def speech_model_dir(storage_dir=None) -> Path:
+    """Shared, administrator-written: speech-recognition weights.
+
+    They sit in the machine-wide model library next to the Ollama store and
+    under the same read-only policy. Ollama reads only ``manifests`` and
+    ``blobs``, so this folder is invisible to it and to the model index.
+    """
+    return (model_dir() if storage_dir is None else Path(storage_dir)) / "speech"
+
+
 def model_control_dir(storage_dir=None) -> Path:
     """Shared control state for one LocalAI-managed model library."""
     root = model_dir() if storage_dir is None else Path(storage_dir)
