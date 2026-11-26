@@ -30,8 +30,10 @@ VAD_FILE = 'ggml-silero-v6.2.0.bin'
 VARIANTS = ('cuda', 'cpu')
 _EXE = '.exe' if os.name == 'nt' else ''
 _NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
-# 음성 구간 감지 설정(whisper-cli). 비어 있으면 whisper.cpp 기본값. 환경 변수로 실험할 수 있다.
-VAD_SETTINGS = tuple(os.environ.get('LOCAL_AI_VAD_ARGS', '').split())
+# '작은 목소리 우선' 음성 구간 감지(whisper-cli). 실측(FLEURS 4개 언어 8개 시나리오): 작은 목소리·건너뛴
+# 발화가 있는 영상은 크게 좋아졌지만(en hard CER 0.194 → 0.034) 깨끗한 한중일 녹음은 나빠져
+# (ja clean 0.030 → 0.095) 기본값은 whisper.cpp 그대로 두고 사용자가 고르게 한다.
+SENSITIVE_VAD = ('-vt', '0.35', '-vspd', '150', '-vsd', '300', '-vp', '250')
 _PROGRESS = re.compile(r'progress\s*=\s*(\d+)%')
 # VAD가 무음을 잘라 낸 구간 대응표. whisper-cli의 JSON은 구간 시각만 원래 오디오 기준으로 되돌리고
 # 토큰 시각은 잘라 낸 시간 그대로 내보내므로, 이 로그로 토큰 시각을 직접 되돌린다(core.tools.speech).
@@ -218,7 +220,8 @@ class SpeechEngine:
 
     # ── 음성 인식 ──
     def transcribe(self, audio, model_key, *, work, language='auto', quality='best', vad=True,
-                   prompt='', gpu=True, threads=None, progress=None, cancelled=None, on_text=None):
+                   prompt='', gpu=True, threads=None, progress=None, cancelled=None, on_text=None,
+                   sensitive=False):
         """audio(ASCII 경로의 WAV/MP3/FLAC)를 인식해 상세 JSON(dict)을 돌려준다."""
         status = self.status()
         if not status.builds:
@@ -246,7 +249,7 @@ class SpeechEngine:
             if preset['dtw']:
                 args += ['-dtw', speech.model(model_key).dtw, '-nfa']
             if vad and self.vad_model().is_file():
-                args += ['--vad', '-vm', self.vad_model()] + list(VAD_SETTINGS)
+                args += ['--vad', '-vm', self.vad_model()] + (list(SENSITIVE_VAD) if sensitive else [])
             if prompt.strip():
                 args += ['--prompt', ' '.join(prompt.split())[:600]]
             if build == 'cpu' or not gpu:

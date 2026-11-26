@@ -900,3 +900,15 @@ def test_recovered_speech_is_inserted_without_touching_neighbours():
     assert asr_review.choose(range_, [], recovered).accepted
     out = asr_review.insert_range([neighbour], range_, recovered)
     assert [s.text for s in out] == ['However, most signs are', '겨울은 쌀쌀하다.']   # 겹치는 단어는 넣지 않음
+
+
+def test_sensitive_vad_is_an_explicit_choice(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    service = _service(tmp_path, fake_engine)
+    service.make(_wav(tmp_path / 'a.wav'), Options(model='large-v3-turbo', quality='fast'))
+    service.make(_wav(tmp_path / 'b.wav'), Options(model='large-v3-turbo', quality='fast', sensitive_vad=True))
+    calls = [json.loads(path.read_text(encoding='utf-8').splitlines()[0])
+             for path in sorted((tmp_path / 'user_data').rglob('result-cpu.calls'), key=lambda p: p.stat().st_mtime)]
+    assert '-vt' not in calls[0] and calls[1][calls[1].index('-vt') + 1] == '0.35'

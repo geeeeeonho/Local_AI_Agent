@@ -33,6 +33,7 @@ def _variables(w):
     w.subtitle_vad = tk.BooleanVar(master=root, value=True)
     w.subtitle_keep_sounds = tk.BooleanVar(master=root, value=False)
     w.subtitle_gpu = tk.BooleanVar(master=root, value=True)
+    w.subtitle_sensitive = tk.BooleanVar(master=root, value=False)
     w.subtitle_lines = tk.StringVar(master=root, value=tuple(LINES)[0])
     w.subtitle_chars = tk.StringVar(master=root, value='자동')
     w.subtitle_progress = tk.DoubleVar(master=root, value=0)
@@ -140,6 +141,9 @@ def build(parent, w, toolbar=None):
         side='left', padx=(8, 0))
     _check(options, '음성 구간 감지(VAD)', w.subtitle_vad,
            '말소리가 없는 구간을 먼저 걸러 내 무음·음악에서 문장을 지어내는 현상을 크게 줄입니다.')
+    _check(options, '작은 목소리 우선 (누락 줄이기)', w.subtitle_sensitive,
+           '말소리 감지를 더 민감하게 합니다. 작게 말하거나 다른 언어가 섞인 영상에서 빠지는 대사가 줄지만, '
+           '깨끗한 녹음은 오히려 인식이 조금 나빠질 수 있어 기본은 꺼 둡니다.')
     _check(options, '효과음·음악 표기 유지', w.subtitle_keep_sounds,
            '[음악] (박수) ♪ 같은 소리 묘사를 자막에 남깁니다(청각 장애인용 자막). 끄면 대사만 남깁니다.')
     _check(options, 'GPU 사용', w.subtitle_gpu,

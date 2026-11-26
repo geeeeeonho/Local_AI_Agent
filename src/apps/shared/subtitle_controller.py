@@ -43,6 +43,7 @@ def options_from(prefs, *, language='자동 감지', model=''):
                    quality=prefs.get('quality') if prefs.get('quality') in QUALITY_NAMES else 'best',
                    vad=prefs.get('vad', True), keep_sounds=prefs.get('keep_sounds', False),
                    prompt=prefs.get('prompt', ''), gpu=prefs.get('gpu', True),
+                   sensitive_vad=prefs.get('sensitive_vad', False),
                    max_chars=chars if isinstance(chars, int) and chars > 0 else None,
                    max_lines=lines if lines in (1, 2) else None)
 
@@ -144,7 +145,8 @@ class SubtitleController:
                 'model': self.subtitle_model, 'translate': self.subtitle_translate,
                 'target': self.subtitle_target, 'llm': self.subtitle_llm, 'style': self.subtitle_style,
                 'quality': self.subtitle_quality, 'vad': self.subtitle_vad,
-                'keep_sounds': self.subtitle_keep_sounds, 'gpu': self.subtitle_gpu}
+                'keep_sounds': self.subtitle_keep_sounds, 'gpu': self.subtitle_gpu,
+                'sensitive_vad': self.subtitle_sensitive}
 
     def subtitles_opened(self):
         if getattr(self, '_subtitle_prefs_loaded', False):

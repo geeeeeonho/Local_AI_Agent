@@ -84,7 +84,7 @@ class SettingsStore:
 
     # 자막 도구에서 지난번에 고른 값(인식 모델·언어·형식·품질·번역 연결).
     SUBTITLE_KEYS = {'model': str, 'language': str, 'format': str, 'quality': str, 'vad': bool,
-                     'keep_sounds': bool, 'gpu': bool, 'max_chars': int, 'max_lines': int,
+                     'keep_sounds': bool, 'gpu': bool, 'sensitive_vad': bool, 'max_chars': int, 'max_lines': int,
                      'prompt': str, 'translate': bool, 'target': str, 'llm': str, 'style': str,
                      'advanced': bool, 'last_dir': str}
     SUBTITLE_LIMITS = {'last_dir': 2000, 'prompt': 2000}

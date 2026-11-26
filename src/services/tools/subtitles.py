@@ -47,6 +47,7 @@ class Options:
     max_chars: int | None = None
     max_lines: int | None = None
     gpu: bool = True
+    sensitive_vad: bool = False     # 작은 목소리 우선(누락 줄이기). 깨끗한 녹음은 오히려 나빠질 수 있다.
 
 
 @dataclass(frozen=True)
@@ -263,7 +264,8 @@ class SubtitleService:
         info = Path(path).stat()
         raw = json.dumps([str(Path(path).resolve()), info.st_size, info.st_mtime_ns, options.model,
                           speech.whisper_code(language_code(options.language)), options.quality,
-                          options.vad, ' '.join(options.prompt.split())], ensure_ascii=False)
+                          options.vad, ' '.join(options.prompt.split())]
+                         + (['sensitive'] if options.sensitive_vad else []), ensure_ascii=False)
         return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]
 
     def _prune(self):
@@ -302,7 +304,8 @@ class SubtitleService:
         transcript = self.engine.transcribe(
             audio, options.model, work=work, language=language_code(options.language),
             quality=options.quality, vad=options.vad, prompt=options.prompt, gpu=options.gpu,
-            progress=lambda f: report('speech', f, ''), cancelled=cancelled, on_text=on_text)
+            progress=lambda f: report('speech', f, ''), cancelled=cancelled, on_text=on_text,
+            sensitive=options.sensitive_vad)
         cache.write_text(json.dumps({'data': transcript.data, 'build': transcript.build,
                                      'seconds': transcript.seconds}, ensure_ascii=False),
                          encoding='utf-8')
