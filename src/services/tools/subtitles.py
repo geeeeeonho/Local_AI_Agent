@@ -317,7 +317,7 @@ class SubtitleService:
         return self._audio(media, work, duration, report, cancelled)
 
     # ── 선택적 재인식 ──
-    def _review(self, media, options, work, segments, code, rules, duration, report, cancelled):
+    def _review(self, media, options, work, segments, code, rules, duration, report, cancelled, vad_map=()):
         """오류 의심·발언 누락 구간만 다시 인식해, 명확히 나은 후보만 반영한다.
         (구간, 판단 기록, 비슷한 이름). 판단 기록은 작업 폴더에 보관해 다시 계산하지 않는다."""
         cache = work / ('review-%s.json' % options.quality)
@@ -338,21 +338,14 @@ class SubtitleService:
             return segments, (), names, 'audio is not PCM WAV; selective re-recognition skipped'
         with source:
             return self._review_audio(source, options, work, segments, code, rules, report, cancelled,
-                                      cache, names)
+                                      cache, names, vad_map)
 
-    def _review_audio(self, source, options, work, segments, code, rules, report, cancelled, cache, names):
+    def _review_audio(self, source, options, work, segments, code, rules, report, cancelled, cache, names,
+                      vad_map):
         params = source.getparams()
         if params.sampwidth != 2:
             return segments, (), names, 'audio is not 16-bit PCM; selective re-recognition skipped'
         total = int(params.nframes * 1000 / params.framerate)
-        # 100ms씩 흘려 읽어 에너지만 남긴다(긴 영상도 오디오 전체를 메모리에 올리지 않음).
-        window = max(1, params.framerate // 10)
-        profile = []
-        while True:
-            chunk = source.readframes(window)
-            if not chunk:
-                break
-            profile.append(asr_review.rms(chunk))
         main = _language_name(code)
         mismatched = []
         for segment in segments:
@@ -362,7 +355,7 @@ class SubtitleService:
                     mismatched.append(segment.start)
         found = asr_review.suspicious_ranges(segments, spaced=rules.spaced, mismatched=mismatched)
         found += [asr_review.Range(start, end, 'possible missing speech')
-                  for start, end in asr_review.uncovered_speech(segments, profile)]
+                  for start, end in asr_review.unrecognized_speech(segments, vad_map)]
         ranges = asr_review.merge_ranges(found, limit=24 if options.quality == 'best' else 12, total=total)
         installed = self.engine.status().models
         retry_model = ('large-v3' if options.quality == 'best' and 'large-v3' in installed
@@ -384,7 +377,9 @@ class SubtitleService:
                 handle.setsampwidth(2)
                 handle.setframerate(params.framerate)
                 handle.writeframes(piece)
-            language = ('auto' if item.reason == 'language mismatch' or chosen == 'auto' and code == 'und'
+            # 다른 언어로 의심되는 구간과 건너뛴 말소리(대개 다른 언어)는 그 구간만 언어를 다시 감지한다.
+            language = ('auto' if item.reason in ('language mismatch', 'possible missing speech')
+                        or chosen == 'auto' and code == 'und'
                         else chosen if chosen != 'auto' else speech.whisper_code(code))
             original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
             try:
@@ -449,7 +444,8 @@ class SubtitleService:
         _, segments = speech.parse_result(data, spaced=rules.spaced)
         try:
             segments, decisions, names, review_note = self._review(
-                media, options, work, segments, code, rules, duration, report, cancelled)
+                media, options, work, segments, code, rules, duration, report, cancelled,
+                data.get(speech.VAD_MAP_KEY) or ())
         finally:
             for name in ('audio.wav',) + tuple('input' + suffix for suffix in sorted(speech.NATIVE_AUDIO)):
                 (work / name).unlink(missing_ok=True)       # 큰 임시 오디오는 끝나면 지운다

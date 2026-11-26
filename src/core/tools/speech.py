@@ -254,6 +254,7 @@ KNOWN_FILLERS = tuple(normalize(text) for text in (
     'Thank you for watching', 'Thanks for watching', 'Please subscribe', 'like and subscribe',
     'Subtitles by the Amara.org community', 'Transcription by CastingWords',
     '시청해주셔서 감사합니다', '시청해 주셔서 감사합니다', '구독과 좋아요', 'MBC 뉴스', '자막 제공',
+    '광고를 포함하고 있습니다', '한글자막 by', '자막 by',
     'ご視聴ありがとうございました', 'チャンネル登録', '最後までご視聴',
     '字幕由Amara.org社区提供', '请不吝点赞 订阅 转发 打赏支持明镜与点点栏目',
     '請不吝點贊 訂閱 轉發 打賞支持明鏡與點點欄目', '感谢观看', '谢谢观看',
@@ -289,8 +290,9 @@ def speech_rate(segment):
 
 
 def is_filler(text):
+    """방송 자막을 흉내 낸 정형 문구가 글의 큰 부분을 차지하는지('자막 제공 및 광고를 포함…'도 포함)."""
     norm = normalize(text)
-    return bool(norm) and any(filler and filler in norm and len(norm) <= len(filler) + 12
+    return bool(norm) and any(filler and filler in norm and len(norm) <= len(filler) * 3 + 12
                               for filler in KNOWN_FILLERS)
 
 

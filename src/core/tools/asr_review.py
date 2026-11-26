@@ -7,20 +7,19 @@
     근거가 부족하면 원래 결과를 유지한 채 '확인 필요'로 기록한다.
   * 비슷한 이름은 알려 주기만 하고 하나로 통일하지 않는다(다른 호칭일 수 있다).
 
-외부 의존이 없다(zlib·array·difflib). 오디오는 16비트 PCM 샘플 바이트를 받는다.
+외부 의존이 없다(difflib).
 """
 from __future__ import annotations
 
-import array
-import math
 import re
-import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from core.tools import speech
 
 from core.tools.speech import COMPRESSION_LIMIT, LOW_PROB, MAX_RATE, compression_ratio, speech_rate
+
+MISSING_PROB = 0.7              # 누락 복구 후보의 최소 확신도(실측 후 0.55에서 올림)
 
 
 @dataclass(frozen=True)
@@ -57,59 +56,25 @@ def evidence(segment, *, spaced=True):
                     speech.is_filler(segment.text), rate <= MAX_RATE[bool(spaced)])
 
 
-# ── 오디오 에너지 ──
-def rms(frames, *, stride=4):
-    """16비트 PCM 바이트 한 덩어리의 RMS. 속도를 위해 stride 샘플마다 하나씩 본다(에너지 추정엔 충분)."""
-    samples = array.array('h')
-    samples.frombytes(frames[:len(frames) - len(frames) % 2])
-    if sys.byteorder == 'big':
-        samples.byteswap()
-    picked = samples[::stride]
-    return math.sqrt(sum(value * value for value in picked) / len(picked)) if picked else 0.0
+# ── 발언 누락 ──
+def unrecognized_speech(segments, vad_map, *, min_ms=1000, coverage=0.3):
+    """VAD가 말소리라고 판단했는데 인식된 단어가 거의 없는 구간: 발언 누락 후보 [(시작 ms, 끝 ms)].
 
-
-def rms_profile(frames, *, channels=1, rate=16000, window_ms=100):
-    """16비트 PCM 바이트 → window_ms마다 RMS(0~32767) 목록."""
-    step = max(1, int(rate * window_ms / 1000)) * channels * 2
-    return [rms(frames[index:index + step]) for index in range(0, len(frames), step)
-            if frames[index:index + step]]
-
-
-def speech_threshold(profile):
-    """잡음 바닥(하위 20%)의 3배 이상이면서 아주 작은 소리(300)는 넘어야 말소리 후보로 본다."""
-    if not profile:
-        return float('inf')
-    ordered = sorted(profile)
-    floor = ordered[int(len(ordered) * 0.2)]
-    return max(300.0, floor * 3.0)
-
-
-def uncovered_speech(segments, profile, *, window_ms=100, min_ms=1500, dip_ms=300):
-    """인식된 글이 없는데 소리가 이어지는 구간: 발언 누락 후보 [(시작 ms, 끝 ms)].
-    잠깐(dip_ms 이하) 조용해지는 것은 이어진 것으로 본다. 음악·효과음도 걸릴 수 있으므로
-    바로 바꾸지 않고, 다시 인식해서 확인하는 데만 쓴다."""
-    threshold = speech_threshold(profile)
-    covered = [False] * len(profile)
-    for segment in segments:
-        for index in range(max(0, segment.start // window_ms), min(len(profile), segment.end // window_ms + 1)):
-            covered[index] = True
-    allowed_dip = max(0, dip_ms // window_ms)
-    ranges, start, quiet = [], None, 0
-    for index in range(len(profile) + 1):
-        loud = index < len(profile) and not covered[index] and profile[index] >= threshold
-        if loud:
-            if start is None:
-                start = index
-            quiet = 0
+    실측: 소리 에너지로 찾으면 음량이 작은 화자는 놓치고 음악만 잡아, 다시 인식할 때 음악에서
+    문장을 지어냈다. VAD(Silero)는 음악을 말소리로 보지 않으므로 그 판단을 근거로 쓴다.
+    전형적인 원인은 다른 언어로 말한 구간을 Whisper가 건너뛰는 것이다(파일 언어로 고정됨)."""
+    found = []
+    for orig_start, orig_end, _vad_start, _vad_end in vad_map or ():
+        length = orig_end - orig_start
+        if length < min_ms:
             continue
-        if start is not None:
-            quiet += 1
-            if quiet > allowed_dip or index >= len(profile) or covered[index]:
-                end = index - quiet + 1
-                if (end - start) * window_ms >= min_ms:
-                    ranges.append((start * window_ms, end * window_ms))
-                start, quiet = None, 0
-    return ranges
+        heard = 0
+        for segment in segments:
+            for word in segment.words:
+                heard += max(0, min(word.end, orig_end) - max(word.start, orig_start))
+        if heard < length * coverage:
+            found.append((orig_start, orig_end))
+    return found
 
 
 # ── 다시 인식할 구간 ──
@@ -185,8 +150,8 @@ def choose(range_, original, candidate, *, spaced=True, margin=0.08):
         return Decision(range_, original_text, candidate_text, False,
                         'candidate also suspicious: ' + ', '.join(new.signals))
     old = _quality(original, spaced)
-    if old is None:                       # 발언 누락 후보: 깨끗하고 확신도가 충분할 때만 넣는다
-        accepted = new.prob >= 0.55
+    if old is None:                       # 발언 누락 후보: 깨끗하고 확신도가 높을 때만 넣는다
+        accepted = new.prob >= MISSING_PROB
         return Decision(range_, '', candidate_text, accepted,
                         'recovered missing speech' if accepted else 'candidate confidence too low')
     if speech.normalize(candidate_text) == speech.normalize(original_text):

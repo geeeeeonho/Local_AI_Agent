@@ -217,16 +217,14 @@ def test_candidate_replaces_only_when_clearly_better():
     assert recovered.accepted and recovered.why == 'recovered missing speech'
 
 
-def test_uncovered_loud_audio_is_a_missing_speech_candidate():
+def test_missing_speech_comes_from_vad_speech_that_nothing_was_recognized_in():
+    """실측: 에너지 기준은 작은 목소리를 놓치고 음악만 잡았다. VAD가 말소리라고 한 구간만 본다."""
     from core.tools import asr_review
-    import array as _array
-    quiet, loud = [10] * 1600, [6000, -6000] * 800
-    samples = _array.array('h', quiet * 10 + loud * 30 + quiet * 10)   # 1초 조용 · 3초 소리 · 1초 조용
-    profile = asr_review.rms_profile(samples.tobytes())
-    assert len(profile) == 50
-    found = asr_review.uncovered_speech([], profile)
-    assert found == [(1000, 4000)]
-    assert asr_review.uncovered_speech([_segment('covered', 900, 4100)], profile) == []
+    vad_map = [(1000, 6000, 0, 5000), (8000, 12000, 5100, 9100), (13000, 13500, 9200, 9700)]
+    words = tuple(Word(1000 + i * 1600, 2500 + i * 1600, ' ' + text) for i, text in enumerate(('first', 'second', 'third')))
+    heard = [speech.Segment(1000, 6000, 'first second third', words, 0.9)]
+    assert asr_review.unrecognized_speech(heard, vad_map) == [(8000, 12000)]   # 0.5초 구간은 너무 짧음
+    assert asr_review.unrecognized_speech(heard, ()) == []                      # VAD 정보 없으면 추측하지 않음
 
 
 def test_ranges_are_merged_padded_and_limited():
@@ -264,7 +262,8 @@ def test_evaluation_measures_errors_coverage_and_overcorrection(capsys, tmp_path
     hypothesis = [Cue(100, 2100, ('the whether is nice today',)), Cue(6000, 7000, ('thanks for watching',))]
     report = subtitle_eval.evaluate(reference, hypothesis)
     assert round(report.wer, 2) == round(4 / 8, 2)        # 단어 1개 틀림 + 누락 2 + 추가 3 → 편집 거리
-    assert 0.5 < report.omission < 0.55 and 0.35 < report.hallucination < 0.4
+    # 기준 경계 ±0.5초(collar)를 뺀 시간으로 비교: 덮인 1초 / 기준 2초, 생성 2초
+    assert report.omission == 0.5 and report.hallucination == 0.5
     assert report.timestamp_mae == 100
     change = subtitle_eval.compare(reference, hypothesis, [Cue(0, 2000, ('the weather is nice today',)),
                                                            Cue(3000, 5000, ('see you',))])
@@ -364,6 +363,10 @@ import os
 retry = 'retry' in value('-f')
 if os.environ.get('FAKE_SCENARIO') == 'loop' and not retry:
     sentences = [' ' + 'na ' * 20] + sentences[1:]
+if os.environ.get('FAKE_SCENARIO') == 'skip':
+    # 첫 인식은 앞 발화(0.5~3초)만, 두 번째 VAD 구간(4~6초, 다른 언어)은 건너뜀. 재인식(언어 자동)은 영어로.
+    sentences = ([' English words were spoken here.'] if retry and value('-l') == 'auto'
+                 else [' 안녕하세요 반갑습니다 오늘은.'])
 segments, t = [], 0
 for sentence in sentences:
     tokens = []
@@ -830,3 +833,38 @@ def test_translation_glossary_editor_applies_and_remembers_terms(ui, tmp_path):
     assert model.items - before == 2
     assert 'Sato = 사이토' in w.translation_glossary_text.get('1.0', 'end')
     pump(w, lambda: 'Sato = 사이토' in svc.settings.translation_preferences().get('glossary', ''), timeout=4)
+
+
+def test_evaluation_is_fair_to_an_utterance_split_into_several_cues():
+    """실측에서 찾은 평가 오류: 긴 발화를 규칙대로 여러 큐로 나누면 큐마다 발화 전체와 비교해 오차가 부풀었다."""
+    from core.tools import subtitle_eval
+    reference = [Cue(1000, 9000, ('one long utterance that the subtitle rules split into three cues',))]
+    hypothesis = [Cue(1100, 3500, ('one long utterance',)), Cue(3583, 6000, ('that the subtitle rules',)),
+                  Cue(6083, 8900, ('split into three cues',))]
+    report = subtitle_eval.evaluate(reference, hypothesis)
+    assert report.timestamp_mae == 100 and report.omission == 0.0 and report.hallucination == 0.0
+
+
+def test_partial_broadcast_fillers_are_recognized():
+    assert speech.is_filler('자막 제공 및 자막 제공 및 광고를 포함하고 있습니다.')
+    assert speech.is_filler('Thank you for watching!')
+    assert not speech.is_filler('오늘은 자막을 만드는 방법과 그 규칙이 왜 중요한지 자세히 이야기해 보겠습니다.')
+
+
+def test_speech_the_file_language_skipped_is_recognized_again_with_language_detection(
+        tmp_path, fake_engine, monkeypatch):
+    """실측: 한국어 프로그램 속 영어 발화를 Whisper가 통째로 건너뛰었다(파일 언어 ko로 고정)."""
+    from services.tools.subtitles import Options
+    monkeypatch.setenv('FAKE_SCENARIO', 'skip')
+    monkeypatch.setenv('FAKE_VAD_LOG', '1')
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'mixed.wav', seconds=8),
+                                                  Options(model='large-v3-turbo', language='한국어',
+                                                          quality='balanced'))
+    recovered = [d for d in result.decisions if d.range.reason == 'possible missing speech']
+    assert recovered and recovered[0].accepted and 'English words' in recovered[0].candidate
+    assert 'English words' in result.text and '안녕하세요' in result.text
+    calls = json.loads(next((tmp_path / 'user_data').rglob('result-cpu.calls')).read_text(
+        encoding='utf-8').splitlines()[0])
+    assert calls[calls.index('-l') + 1] == 'ko'                # 최초 인식은 고른 언어
