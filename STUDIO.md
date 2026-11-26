@@ -139,6 +139,18 @@ management downloads. Saved Setup Block intent or a currently pinned Block mode
 rejects the model download action. Setup keeps installation, repair and the
 maintenance actions.
 
+### Tools: subtitles
+
+Tools > 자막 만들기 turns video and audio (mp4, mkv, mp3, wav, ...) into SRT/WebVTT
+subtitles with whisper.cpp, then optionally hands the result to the existing
+translation service. Choosing a media file in Tools > 파일 번역 runs the same
+pipeline and sets the content type to subtitles for that run only. The view
+(`apps/shared/subtitle_view.py`, `subtitle_controller.py`) calls
+`services.subtitles` only; process control lives in `integrations/speech`, and
+the subtitle grammar, Whisper parsing and review rules are pure `core/tools`
+modules. Engine and model changes follow the shared model-store administrator
+rule. See [docs/SUBTITLES.md](docs/SUBTITLES.md).
+
 ## Ownership, policy and shutdown
 
 Network preferences resolve Session > Project > App > Global, falling back to

@@ -1,0 +1,689 @@
+"""Tk 화면에서 자막 만들기 도구를 쓰기 위한 콜백. 실제 작업은 worker thread.
+
+번역 화면도 영상·음성 파일을 받으면 여기의 공통 함수(options_from, overall, report_text)로
+같은 자막 서비스를 부른다. 두 화면이 서로 다른 규칙을 갖지 않게 하기 위해서다.
+"""
+import time
+from pathlib import Path
+from threading import Event
+from tkinter import filedialog, messagebox
+
+from core.tools import speech
+from services.tools.subtitles import Options, Translate
+from .subtitle_view import FORMATS, LINES, MEDIA_PATTERN, MODEL_LABELS, QUALITIES
+from .translation_view import STYLES
+from .widgets import set_status, set_text
+
+KEY_LABELS = {key: label for label, key in MODEL_LABELS.items()}
+# 저장값('srt'·'vtt'·'both') ↔ 화면 이름
+FORMAT_KEYS = {(value[0] if len(value) == 1 else 'both'): value for value in FORMATS.values()}
+FORMAT_NAMES = {(value[0] if len(value) == 1 else 'both'): label for label, value in FORMATS.items()}
+QUALITY_NAMES = {value: label for label, value in QUALITIES.items()}
+LINE_NAMES = {value: label for label, value in LINES.items()}
+STAGES = {'audio': '오디오 추출', 'speech': '음성 인식', 'review': '의심 구간 재확인', 'write': '자막 쓰기',
+          'translate': '번역'}
+# (시작, 폭): 단계별 진행률을 전체 진행률로. 번역이 있으면 인식 몫을 줄인다.
+_WEIGHTS = {False: {'audio': (0.0, 0.06), 'speech': (0.06, 0.72), 'review': (0.78, 0.18),
+                    'write': (0.96, 0.04)},
+            True: {'audio': (0.0, 0.04), 'speech': (0.04, 0.46), 'review': (0.50, 0.12),
+                   'write': (0.62, 0.02), 'translate': (0.64, 0.36)}}
+
+
+def overall(stage, fraction, translating):
+    start, width = _WEIGHTS[bool(translating)].get(stage, (0.0, 0.0))
+    return min(1.0, start + width * max(0.0, min(1.0, fraction)))
+
+
+def options_from(prefs, *, language='자동 감지', model=''):
+    """저장된 자막 기본값 → 서비스 옵션. 번역 화면은 원문 언어를 음성 언어로 넘긴다."""
+    lines = prefs.get('max_lines')
+    chars = prefs.get('max_chars')
+    return Options(model=model or prefs.get('model') or '', language=language,
+                   formats=FORMAT_KEYS.get(prefs.get('format'), ('srt',)),
+                   quality=prefs.get('quality') if prefs.get('quality') in QUALITY_NAMES else 'best',
+                   vad=prefs.get('vad', True), keep_sounds=prefs.get('keep_sounds', False),
+                   prompt=prefs.get('prompt', ''), gpu=prefs.get('gpu', True),
+                   sensitive_vad=prefs.get('sensitive_vad', False),
+                   max_chars=chars if isinstance(chars, int) and chars > 0 else None,
+                   max_lines=lines if lines in (1, 2) else None)
+
+
+_REASONS = {'low confidence': '인식 확신도 낮음', 'fast reading speed': '읽기 속도 빠름(글이 많음)',
+            'line too long': '줄이 규칙보다 김', 'typical hallucination': '무음에서 자주 지어내는 문구',
+            'repetition loop shortened': '반복 루프를 줄임', 'long segment with little text': '긴 구간에 글이 거의 없음',
+            'sound description': '소리 표기', 'repeated': '같은 문장 반복(다른 근거와 겹침)',
+            'repetition kept': '반복이 있으나 실제 발화일 수 있어 유지', 'high compression ratio': '같은 말이 과하게 반복됨',
+            'implausible speech rate': '사람이 낼 수 없는 발화 속도', 'repetition loop': '반복 루프',
+            'language mismatch': '다른 언어로 인식된 듯함', 'possible missing speech': '말소리가 있는데 자막 없음'}
+_WHY = {'recovered missing speech': '누락된 발언을 찾아 넣음', 'clearly higher confidence': '확신도가 명확히 높아 교체',
+        'same text': '다시 인식해도 같음', 'not clearly better; kept original': '명확히 낫지 않아 원래 결과 유지',
+        'no candidate text': '다시 인식해도 말소리 없음', 'candidate confidence too low': '확신도가 낮아 넣지 않음'}
+
+
+def _clock(ms):
+    seconds = int(ms // 1000)
+    return '%02d:%02d:%02d' % (seconds // 3600, seconds // 60 % 60, seconds % 60)
+
+
+def report_text(result):
+    lines = ['언어: %s · 자막 %d개 · 엔진 %s%s' % (
+        result.language_label, len(result.cues), (result.build or '?').upper(),
+        ' · 보관한 인식 결과 재사용' if result.reused else
+        (' · 인식 %.0f초' % result.seconds if result.seconds else ''))]
+    lines += ['저장: ' + str(path) for path in result.outputs + tuple(result.translated_outputs)]
+    if result.translation_skipped:
+        lines.append('번역 생략: 음성 언어와 번역 언어가 같습니다.')
+    lines += ['', '확인하면 좋은 자막 (%d)' % len(result.review)]
+    lines += ['  %d번: %s' % (number, _REASONS.get(reason, reason)) for number, reason in result.review[:80]]
+    if not result.review:
+        lines.append('  (없음)')
+    lines += ['', '자동으로 지운 문장 (%d)' % len(result.removed)]
+    lines += ['  %s  %s — %s' % (_clock(start), text[:60], _REASONS.get(reason, reason))
+              for start, text, reason in result.removed[:80]]
+    if not result.removed:
+        lines.append('  (없음)')
+    decisions = getattr(result, 'decisions', ())
+    if decisions:
+        changed = sum(1 for item in decisions if item.accepted)
+        lines += ['', '의심 구간 재확인 %d곳 · 반영 %d곳 · 원래 결과 유지 %d곳' % (
+            len(decisions), changed, len(decisions) - changed)]
+        for item in decisions[:60]:
+            why = _WHY.get(item.why, item.why)
+            if why.startswith('original had '):
+                why = '원래 결과에 문제가 있어 교체(' + ', '.join(
+                    _REASONS.get(part.strip(), part.strip()) for part in item.why[13:].split(',')) + ')'
+            elif why.startswith('candidate also suspicious'):
+                why = '다시 인식한 결과도 의심스러워 원래 결과 유지'
+            lines.append('  %s  [%s] %s%s' % (_clock(item.range.start), _REASONS.get(item.range.reason, item.range.reason),
+                                              why, (' → ' + item.candidate[:50]) if item.accepted else ''))
+    elif getattr(result, 'review_note', ''):
+        lines += ['', '재확인: ' + result.review_note]
+    names = getattr(result, 'names', ())
+    if names:
+        lines += ['', '철자가 비슷한 이름(통일하지 않았습니다. 같은 인물인지 확인하세요)']
+        lines += ['  %s(%d회) / %s(%d회)' % pair for pair in names[:20]]
+    answer = result.translated
+    if answer is not None:
+        kept = getattr(answer, 'kept_lines', ())
+        audit = getattr(answer, 'audit', ())
+        lines += ['', '번역 검수: 원문 유지 %d줄 · 확인 필요 %d줄' % (len(kept), len(audit))]
+    return '\n'.join(lines)
+
+
+def skipped_text(batch):
+    return '이미 자막이 있어 건너뛴 파일 (%d)\n' % len(batch.skipped) + '\n'.join(
+        '  %s  (있는 자막: %s)' % (path.name, existing.name) for path, existing in batch.skipped[:200])
+
+
+_FRIENDLY = (
+    ('whisper.cpp is not installed', '음성 인식 엔진이 없습니다. 관리자 계정에서 [엔진 설치 / 복구]를 누르세요.'),
+    ('speech model is not installed', '선택한 음성 인식 모델이 없습니다. 아래 표에서 받으세요(관리자).'),
+    ('ffmpeg is not installed', '영상을 읽을 ffmpeg가 없습니다. [엔진 설치 / 복구]를 다시 실행하세요(WAV·MP3·FLAC은 됩니다).'),
+    ('could not read audio', '파일에서 소리를 읽지 못했습니다. 오디오 트랙이 있는 파일인지 확인하세요.'),
+    ('no speech was recognized', '말소리를 찾지 못했습니다. 음성 언어를 직접 고르거나 VAD를 꺼 보세요.'),
+    ('speech recognition failed', '음성 인식이 실패했습니다. GPU 사용을 끄거나 더 작은 모델로 다시 시도하세요.'),
+    ('checksum mismatch', '받은 파일의 검증값이 맞지 않아 지웠습니다. 다시 시도하세요.'),
+    ('unsupported media', '지원하지 않는 형식입니다.'),
+    ('too many media', '폴더의 영상·음성 파일이 너무 많습니다(최대 500개).'),
+    ('urlopen error', '내려받기 서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요.'),
+)
+
+
+def friendly(exc):
+    text = str(exc)
+    lower = text.lower()
+    for key, message in _FRIENDLY:
+        if key in lower:
+            return message + ' (' + text[:160] + ')'
+    return text
+
+
+class SubtitleController:
+    def subtitle_say(self, state, text, *, log=False, level='info'):
+        set_status(self.subtitle_status_label, state, text)
+        if log:
+            self.log('[자막] ' + text, level=level)
+
+    # ── 기본값 ──
+    def _subtitle_fields(self):
+        return {'language': self.subtitle_language, 'format': self.subtitle_format,
+                'model': self.subtitle_model, 'translate': self.subtitle_translate,
+                'target': self.subtitle_target, 'llm': self.subtitle_llm, 'style': self.subtitle_style,
+                'quality': self.subtitle_quality, 'vad': self.subtitle_vad,
+                'keep_sounds': self.subtitle_keep_sounds, 'gpu': self.subtitle_gpu,
+                'sensitive_vad': self.subtitle_sensitive}
+
+    def subtitles_opened(self):
+        if getattr(self, '_subtitle_prefs_loaded', False):
+            self.refresh_subtitle_status()
+            return
+        self._subtitle_prefs_loaded = True
+        self._subtitle_last = {}
+
+        def apply(prefs):
+            self._subtitle_loading = True
+            self._subtitle_last = dict(prefs)
+            fields = self._subtitle_fields()
+            names = {'format': FORMAT_NAMES, 'quality': QUALITY_NAMES, 'model': KEY_LABELS,
+                     'style': {v: k for k, v in STYLES.items()}}
+            for key, variable in fields.items():
+                if key in prefs and key not in ('llm',):
+                    value = prefs[key]
+                    variable.set(names[key].get(value, variable.get()) if key in names else value)
+            if prefs.get('max_lines') in LINE_NAMES:
+                self.subtitle_lines.set(LINE_NAMES[prefs['max_lines']])
+            if isinstance(prefs.get('max_chars'), int) and prefs['max_chars'] > 0:
+                self.subtitle_chars.set(str(prefs['max_chars']))
+            if prefs.get('prompt'):
+                self.subtitle_prompt_text.delete('1.0', 'end')
+                self.subtitle_prompt_text.insert('1.0', prefs['prompt'])
+            self.toggle_subtitle_advanced(prefs.get('advanced', False), save=False)
+            self._subtitle_loading = False
+            for variable in list(fields.values()) + [self.subtitle_lines, self.subtitle_chars]:
+                variable.trace_add('write', lambda *_: self.schedule_subtitle_save())
+            self.subtitle_prompt_text.bind('<KeyRelease>', lambda _e: self.schedule_subtitle_save(), add='+')
+            self.refresh_subtitle_status()
+            if self.subtitle_translate.get():
+                self.refresh_subtitle_llms()
+        self.run_task('tools.subtitles.prefs', self.services.settings.subtitle_preferences, apply,
+                      mutate=False, announce=False, error=lambda _e: self.refresh_subtitle_status())
+
+    def subtitle_preferences_now(self):
+        values = {key: variable.get() for key, variable in self._subtitle_fields().items()}
+        chosen = FORMATS.get(values['format'], ('srt',))
+        values['format'] = chosen[0] if len(chosen) == 1 else 'both'
+        values['quality'] = QUALITIES[values['quality']]
+        values['model'] = MODEL_LABELS.get(values['model'], self._subtitle_last.get('model', ''))
+        values['style'] = STYLES.get(values['style'], 'natural')
+        values['llm'] = values['llm'] or self._subtitle_last.get('llm', '')
+        values['max_lines'] = LINES.get(self.subtitle_lines.get(), 2)
+        chars = self.subtitle_chars.get().strip()
+        values['max_chars'] = int(chars) if chars.isdigit() else 0
+        values['prompt'] = self.subtitle_prompt_text.get('1.0', 'end').strip()[:2000]
+        values['advanced'] = bool(getattr(self, '_subtitle_advanced_open', False))
+        values['last_dir'] = self._subtitle_last.get('last_dir', '')
+        return values
+
+    def schedule_subtitle_save(self):
+        if getattr(self, '_subtitle_loading', False) or self.closing:
+            return
+        pending = getattr(self, '_subtitle_save_job', None)
+        if pending is not None:
+            self.root.after_cancel(pending)
+        self._subtitle_save_job = self.root.after(800, self.save_subtitle_preferences)
+
+    def save_subtitle_preferences(self):
+        self._subtitle_save_job = None
+        values = self.subtitle_preferences_now()
+        self._subtitle_last.update(values)
+        self.runner.submit('tools.subtitles.prefs.save',
+                           lambda: self.services.settings.set_subtitle_preferences(values), lambda _: None,
+                           lambda exc: self.log('자막 기본값 저장 실패: ' + str(exc), level='error'),
+                           mutate=False)
+
+    def toggle_subtitle_advanced(self, show=None, *, save=True):
+        visible = bool(getattr(self, '_subtitle_advanced_open', False))
+        show = not visible if show is None else bool(show)
+        self._subtitle_advanced_open = show
+        if show and not visible:
+            self.subtitle_advanced.pack(fill='x', after=self.subtitle_advanced_button)
+        elif not show and visible:
+            self.subtitle_advanced.pack_forget()
+        self.subtitle_advanced_button.configure(text='고급 설정 ▾' if show else '고급 설정 ▸')
+        scroller = self.page_scrolls.get('tools.subtitles')
+        if scroller is not None:
+            scroller.bind_content()
+        if save:
+            self.schedule_subtitle_save()
+
+    def toggle_subtitle_translation(self):
+        if self.subtitle_translate.get():
+            if not self.subtitle_translate_options.winfo_manager():
+                self.subtitle_translate_options.pack(fill='x')
+            if not self.subtitle_llm_box.cget('values') and getattr(self, '_subtitle_prefs_loaded', False):
+                self.refresh_subtitle_llms()
+        else:
+            self.subtitle_translate_options.pack_forget()
+
+    # ── 상태 · 모델 관리 ──
+    def refresh_subtitle_status(self):
+        def fetch():
+            return (self.services.subtitles.status(), self.services.subtitles.management(),
+                    self.services.subtitles.supported())
+
+        def done(found):
+            status, access, (supported, reason) = found
+            self._subtitle_engine = status
+            self._subtitle_access = access
+            installed = [KEY_LABELS[key] for key in status.models]
+            self.subtitle_model_box.configure(values=installed)
+            if self.subtitle_model.get() not in installed:
+                key = self.services.subtitles.recommend_model(status.models, self._subtitle_last.get('model', ''))
+                self.subtitle_model.set(KEY_LABELS.get(key, ''))
+            if not status.builds:
+                engine = '음성 인식 엔진이 설치되지 않았습니다.'
+            else:
+                engine = 'whisper.cpp %s · %s · 영상 읽기(ffmpeg) %s · 음성 구간 감지 %s' % (
+                    status.version or '?', ' + '.join('GPU(CUDA)' if b == 'cuda' else 'CPU' for b in status.builds),
+                    '준비됨' if status.ffmpeg else '없음(WAV·MP3·FLAC만)', '준비됨' if status.vad else '없음')
+            if not supported:
+                engine += ' ' + reason
+            elif not access.get('allowed'):
+                engine += ' 엔진·모델 설치와 삭제는 LocalAI 관리자만 할 수 있습니다. 설치된 모델은 사용할 수 있습니다.'
+            self.subtitle_engine_text.set(engine)
+            manage = 'normal' if supported and access.get('allowed') else 'disabled'
+            for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button):
+                button.configure(state=manage)
+            table = self.subtitle_model_table
+            selected = table.selection()
+            table.delete(*table.get_children())
+            for item in speech.MODELS:
+                table.insert('', 'end', iid=item.key, values=(
+                    item.label, '%.1f GB' % (item.size_mib / 1024) if item.size_mib >= 1000 else '%d MB' % item.size_mib,
+                    '약 %.0f GB' % item.vram_gib if item.vram_gib >= 1 else '1 GB 미만',
+                    '설치됨' if item.key in status.models else '-'))
+            if selected and table.exists(selected[0]):
+                table.selection_set(selected[0])
+            if not status.builds:
+                self.subtitle_say('Failed', '음성 인식 엔진이 없습니다. 관리자 계정에서 [엔진 설치 / 복구]를 누르세요.')
+            elif not status.models:
+                self.subtitle_say('Failed', '음성 인식 모델이 없습니다. 아래 표에서 모델을 골라 [선택 모델 받기]를 누르세요'
+                                  ' (권장: large-v3-turbo, 최고 정확도: large-v3).')
+            elif not self.runner.busy('tools.subtitles'):
+                self.subtitle_say('Waiting' if not self._subtitle_files else 'Ready',
+                                  '자막을 만들 영상이나 음성 파일을 선택하세요.' if not self._subtitle_files else
+                                  '준비됨 · [자막 만들기]를 누르세요.')
+            self.update_subtitle_destination()
+        self.run_task('tools.subtitles.status', fetch, done, mutate=False, announce=False,
+                      error=lambda e: self.subtitle_say('Failed', '엔진 상태 확인 실패: ' + friendly(e)))
+
+    def describe_subtitle_model(self):
+        selected = self.subtitle_model_table.selection()
+        if selected:
+            item = speech.model(selected[0])
+            self.subtitle_model_note.configure(text=item.label + ': ' + item.note)
+
+    def refresh_subtitle_llms(self):
+        def done(names):
+            self.subtitle_llm_box.configure(values=names)
+            if self.subtitle_llm.get() not in names:
+                self.subtitle_llm.set(self.services.translator.recommend_model(
+                    names, self._subtitle_last.get('llm', '')))
+        self.run_task('tools.subtitles.llms', self.services.translator.local_models, done, mutate=False,
+                      announce=False, error=lambda e: self.subtitle_say('Failed', '번역 모델 조회 실패: ' + str(e)))
+
+    def _manage(self, key, work, message):
+        if self.runner.busy('tools.subtitles'):
+            self.subtitle_say('Failed', '자막을 만드는 중에는 엔진·모델을 바꿀 수 없습니다.')
+            return
+        self._subtitle_manage_cancel = Event()
+        self.subtitle_cancel_button.configure(state='normal')
+        self.subtitle_say('Working', message, log=True)
+
+        def done(value):
+            self.subtitle_cancel_button.configure(state='disabled')
+            self.subtitle_say('Ready', '완료했습니다.', log=True)
+            self.refresh_subtitle_status()
+
+        def failed(exc):
+            self.subtitle_cancel_button.configure(state='disabled')
+            if isinstance(exc, InterruptedError):
+                self.subtitle_say('Waiting', '중단했습니다. 다시 시작하면 받던 곳부터 이어서 받습니다.', log=True)
+            else:
+                self.subtitle_say('Failed', friendly(exc), log=True, level='error')
+            self.refresh_subtitle_status()
+        self.run_task(key, work, done, mutate=False, long=True, announce=False, error=failed)
+
+    def _manage_cancelled(self):
+        flag = getattr(self, '_subtitle_manage_cancel', None)
+        return bool(flag is not None and flag.is_set()) or self.runner.cancel.is_set()
+
+    def install_subtitle_engine(self):
+        def log(text):
+            self.services.events.emit('runtime.progress', {'service': 'subtitles', 'message': text})
+        self._manage('tools.subtitles.engine',
+                     lambda: self._engine_result(self.services.subtitles.install_engine(
+                         log=log, cancelled=self._manage_cancelled)),
+                     '음성 인식 엔진(whisper.cpp · ffmpeg · VAD) 설치 중… GPU 빌드는 1GB 안팎입니다.')
+
+    @staticmethod
+    def _engine_result(ok):
+        if not ok:
+            raise RuntimeError('엔진 설치가 완료되지 않았습니다. 활동 기록에서 원인을 확인하세요.')
+        return ok
+
+    def _selected_model(self):
+        selected = self.subtitle_model_table.selection()
+        if not selected:
+            self.subtitle_say('Failed', '아래 표에서 모델을 먼저 고르세요.')
+            return None
+        return selected[0]
+
+    def download_subtitle_model(self):
+        key = self._selected_model()
+        if key is None:
+            return
+        item = speech.model(key)
+
+        def progress(done, total):
+            if total:
+                self.services.events.emit('runtime.progress', {
+                    'service': 'subtitles', 'fraction': done / total,
+                    'message': '%s 받는 중: %.0f / %.0f MB' % (item.key, done / 1048576, total / 1048576)})
+        self._manage('tools.subtitles.model',
+                     lambda: self.services.subtitles.install_model(key, progress=progress,
+                                                                  cancelled=self._manage_cancelled),
+                     '%s 받는 중(약 %d MB, 검증 후 저장)…' % (item.key, item.size_mib))
+
+    def remove_subtitle_model(self):
+        key = self._selected_model()
+        if key is None:
+            return
+        if not messagebox.askyesno('음성 인식 모델 삭제', speech.model(key).label +
+                                   ' 모델을 이 PC에서 삭제할까요? 모든 계정에서 사용할 수 없게 됩니다.',
+                                   parent=self.root):
+            return
+        self._manage('tools.subtitles.model', lambda: self.services.subtitles.remove_model(key),
+                     key + ' 삭제 중…')
+
+    # ── 파일 ──
+    def _subtitle_start_dir(self):
+        folder = self._subtitle_last.get('last_dir', '') if hasattr(self, '_subtitle_last') else ''
+        return folder if folder and Path(folder).is_dir() else ''
+
+    def _remember_subtitle_dir(self, folder):
+        if not hasattr(self, '_subtitle_last'):
+            self._subtitle_last = {}
+        self._subtitle_last['last_dir'] = str(folder)
+        self.schedule_subtitle_save()
+
+    def choose_subtitle_files(self):
+        values = filedialog.askopenfilenames(parent=self.root, title='자막을 만들 영상·음성 파일',
+                                             initialdir=self._subtitle_start_dir(),
+                                             filetypes=[('영상·음성', MEDIA_PATTERN), ('모든 파일', '*.*')])
+        if values:
+            self._remember_subtitle_dir(Path(values[0]).parent)
+            self._subtitle_files = [Path(value) for value in values]
+            self.subtitle_path.set(values[0] if len(values) == 1 else '%s 외 %d개' % (values[0], len(values) - 1))
+            self.analyze_subtitle_input(keep=True)
+
+    def choose_subtitle_folder(self):
+        value = filedialog.askdirectory(parent=self.root, title='영상·음성 파일이 있는 폴더', mustexist=True,
+                                        initialdir=self._subtitle_start_dir())
+        if value:
+            self._remember_subtitle_dir(Path(value).parent)
+            self.subtitle_path.set(value)
+            self.analyze_subtitle_input()
+
+    def analyze_subtitle_input(self, keep=False):
+        raw = self.subtitle_path.get().strip()
+        if not keep:
+            path = Path(raw)
+            if path.is_dir():
+                from services.tools.subtitles import scan
+                try:
+                    self._subtitle_files = scan(path)
+                except ValueError as exc:
+                    self._subtitle_files = []
+                    self.subtitle_say('Failed', friendly(exc))
+                    return
+            elif path.is_file():
+                self._subtitle_files = [path]
+            else:
+                self._subtitle_files = []
+        files = self._subtitle_files
+        if not files:
+            self.subtitle_say('Failed', '영상·음성 파일을 찾지 못했습니다.' if raw else '파일을 먼저 선택하세요.')
+            self.update_subtitle_destination()
+            return
+        unsupported = [path.name for path in files if path.suffix.lower() not in speech.MEDIA]
+        if unsupported:
+            self.subtitle_say('Failed', '지원하지 않는 형식: ' + ', '.join(unsupported[:3]))
+            self._subtitle_files = [path for path in files if path.suffix.lower() in speech.MEDIA]
+        if len(files) == 1:
+            def done(info):
+                duration, audio = info
+                if audio is False:
+                    self.subtitle_say('Failed', '이 파일에는 오디오 트랙이 없습니다.')
+                    return
+                self.subtitle_say('Ready', '준비됨 · %s%s · [자막 만들기]를 누르세요.' % (
+                    files[0].name, ' · 길이 ' + _clock(duration) if duration else ''))
+            self.run_task('tools.subtitles.inspect', lambda: self.services.subtitles.media_info(files[0]), done,
+                          mutate=False, announce=False, error=lambda e: None)
+        else:
+            self.subtitle_say('Ready', '준비됨 · 파일 %d개 · [자막 만들기]를 누르세요.' % len(files))
+        set_text(self.subtitle_preview_text, '\n'.join(str(path) for path in files[:200]))
+        self.update_subtitle_destination()
+
+    def update_subtitle_destination(self):
+        files = getattr(self, '_subtitle_files', [])
+        suffixes = ' · '.join(FORMATS.get(self.subtitle_format.get(), ('srt',)))
+        translate = self.subtitle_translate.get()
+        if not files:
+            text = ('자막은 원본 옆에 원본과 같은 이름으로 만듭니다(예: 영상.mp4 → 영상.srt). 원본은 바꾸지 않고, '
+                    '옆에 자막이 이미 있는 파일은 건너뜁니다.')
+        else:
+            first = files[0]
+            text = '→ 결과: "%s.%s"%s%s · 이미 자막이 있는 파일은 건너뜀' % (
+                first.stem, suffixes,
+                ' + 번역 "%s.<번역 언어>.%s"' % (first.stem, suffixes) if translate else '',
+                (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
+        self.subtitle_destination.configure(text=text)
+        if not self.runner.busy('tools.subtitles'):
+            ready = bool(files and self.subtitle_model.get() and (not translate or self.subtitle_llm.get()))
+            self.subtitle_start_button.configure(state='normal' if ready else 'disabled')
+
+    def open_subtitle_folder(self):
+        target = getattr(self, '_subtitle_last_output', None)
+        if target:
+            try:
+                self.services.translator.reveal(target)
+            except OSError as exc:
+                self.subtitle_say('Failed', '폴더를 열 수 없습니다: ' + str(exc))
+
+    # ── 실행 ──
+    def set_subtitle_progress(self, fraction, note=''):
+        if not self.subtitle_progress_row.winfo_manager():
+            self.subtitle_progress_row.pack(fill='x')
+        self.subtitle_progress.set(100.0 * fraction)
+        self.subtitle_progress_label.configure(text='%d%%%s' % (100 * fraction, ' · ' + note if note else ''))
+
+    def subtitle_progress_event(self, data):
+        """작업 스레드가 보낸 진행 이벤트(Tk 스레드에서 처리)."""
+        if 'line' in data:
+            self.subtitle_preview_text.configure(state='normal')
+            self.subtitle_preview_text.insert('end', data['line'] + '\n')
+            self.subtitle_preview_text.see('end')
+            self.subtitle_preview_text.configure(state='disabled')
+            return
+        if data.get('message'):
+            self.subtitle_say('Working', data['message'])
+            self.log('[자막] ' + data['message'])
+        if isinstance(data.get('fraction'), (int, float)):
+            self.set_subtitle_progress(data['fraction'], data.get('eta', ''))
+
+    def cancel_subtitles(self):
+        flag = getattr(self, '_subtitle_manage_cancel', None)
+        if flag is not None and (self.runner.busy('tools.subtitles.engine') or self.runner.busy('tools.subtitles.model')):
+            flag.set()
+            self.subtitle_say('Working', '중단 중…')
+            return
+        if not self.runner.busy('tools.subtitles'):
+            return
+        self._subtitle_cancel.set()
+        self.services.subtitles.abort()
+        self.subtitle_say('Working', '중단 중 · 인식을 마친 파일의 결과는 저장되어 있습니다.')
+
+    def start_subtitles(self):
+        if self.runner.busy('tools.subtitles'):
+            return
+        files = list(getattr(self, '_subtitle_files', []))
+        if not files or not self.subtitle_model.get():
+            self.subtitle_say('Failed', '파일과 인식 모델을 먼저 선택하세요.')
+            return
+        prefs = self.subtitle_preferences_now()
+        options = options_from(prefs, language=self.subtitle_language.get(), model=prefs['model'])
+        translate = None
+        if self.subtitle_translate.get():
+            if not self.subtitle_llm.get():
+                self.subtitle_say('Failed', '번역 모델을 먼저 고르세요.')
+                return
+            translate = Translate(target=self.subtitle_target.get(), model=self.subtitle_llm.get(),
+                                  style=prefs['style'])
+        self.save_subtitle_preferences()
+        self._subtitle_cancel = Event()
+        self.subtitle_start_button.configure(state='disabled')
+        self.subtitle_cancel_button.configure(state='normal')
+        self.subtitle_open_button.configure(state='disabled')
+        set_text(self.subtitle_preview_text, '')
+        self.subtitle_tabs.select(0)
+        self.set_subtitle_progress(0.0, '준비 중')
+        self.subtitle_say('Working', '자막 만들기 시작…', log=True)
+        events = self.services.events
+        current = {'file': '', 'started': time.monotonic()}
+
+        def progress(stage, fraction, note):
+            value = overall(stage, fraction, translate is not None)
+            elapsed = time.monotonic() - current['started']
+            eta = ''
+            if 0.05 < value < 1.0 and elapsed > 10:
+                eta = '약 %d분 남음' % max(1, int(elapsed / value * (1 - value) / 60))
+            events.emit('runtime.progress', {'service': 'subtitles', 'fraction': value, 'eta': eta,
+                                             'message': '%s%s%s' % (current['file'], STAGES.get(stage, stage),
+                                                                    ' ' + note if note else '')})
+
+        def on_file(index, count, path):
+            current['file'] = ('파일 %d/%d · %s · ' % (index, count, path.name)) if count > 1 else ''
+            current['started'] = time.monotonic()
+
+        def on_text(line):
+            events.emit('runtime.progress', {'service': 'subtitles', 'line': line})
+
+        stop = lambda: self._subtitle_cancel.is_set() or self.runner.cancel.is_set()
+
+        def work():
+            job = translate
+            if job is not None:            # [파일 번역]의 고정 용어집을 자막 번역에도 쓴다
+                glossary = self.services.settings.translation_preferences().get('glossary', '')
+                job = Translate(target=job.target, model=job.model, style=job.style, glossary=glossary)
+            return self.services.subtitles.make_many(files, options, translate=job, progress=progress,
+                                                     on_file=on_file, cancelled=stop, on_text=on_text)
+
+        def unlock():
+            self.subtitle_cancel_button.configure(state='disabled')
+            self.root.after_idle(self.update_subtitle_destination)
+
+        def done(batch):
+            unlock()
+            self.set_subtitle_progress(1.0, '파일 %d개' % len(batch.results) if len(files) > 1 else '')
+            if batch.results:
+                last = batch.results[-1][1]
+                self._subtitle_last_output = (last.translated_outputs or last.outputs)[0]
+                self.subtitle_open_button.configure(state='normal')
+                set_text(self.subtitle_preview_text, last.text[:20000])
+                set_text(self.subtitle_translated_text, last.translated_text[:20000] or
+                         ('번역하지 않았습니다(음성 언어와 번역 언어가 같음).' if last.translation_skipped else
+                          '[번역 자막도 함께 만들기]를 켜면 번역 자막이 표시됩니다.'))
+                reports = [report_text(result) if len(batch.results) == 1 else
+                           '■ %s\n%s' % (path.name, report_text(result)) for path, result in batch.results]
+                if batch.failed:
+                    reports.append('실패한 파일\n' + '\n'.join('  %s — %s' % (path.name, friendly(exc))
+                                                           for path, exc in batch.failed))
+                if batch.skipped:
+                    reports.append(skipped_text(batch))
+                set_text(self.subtitle_report_text, '\n\n'.join(reports))
+                review = sum(len(result.review) for _, result in batch.results)
+                self.subtitle_say('Ready' if not batch.failed else 'Failed',
+                                  '완료: 자막 %d개 파일%s%s%s · %s' % (
+                                      len(batch.results), (' · 실패 %d개' % len(batch.failed)) if batch.failed else '',
+                                      (' · 이미 자막 있음 %d개 건너뜀' % len(batch.skipped)) if batch.skipped else '',
+                                      (' · 확인하면 좋은 자막 %d개' % review) if review else '',
+                                      self._subtitle_last_output), log=True)
+                self.subtitle_tabs.select(1 if last.translated_text else 0)
+                self._subtitle_results = [result for _path, result in batch.results]
+                terms = {}
+                for result in self._subtitle_results:
+                    terms.update(getattr(result.translated, 'glossary', None) or {})
+                self.subtitle_terms_editor.load(terms, note='' if terms else
+                                                '번역 자막을 만들면 번역에 쓴 용어가 여기에 표시됩니다.')
+            elif batch.skipped and not batch.failed:
+                set_text(self.subtitle_report_text, skipped_text(batch))
+                self.subtitle_say('Ready', '새로 만들 파일이 없습니다: %d개 모두 옆에 자막이 이미 있어 건너뛰었습니다.'
+                                  % len(batch.skipped), log=True)
+                self.subtitle_tabs.select(2)
+            else:
+                set_text(self.subtitle_report_text, '\n'.join('%s — %s' % (path.name, friendly(exc))
+                                                              for path, exc in batch.failed)
+                         + ('\n\n' + skipped_text(batch) if batch.skipped else ''))
+                self.subtitle_say('Failed', '자막을 만들지 못했습니다: ' +
+                                  (friendly(batch.failed[0][1]) if batch.failed else '처리한 파일 없음'),
+                                  log=True, level='error')
+                self.subtitle_tabs.select(2)
+            self.root.bell()
+
+        def failed(exc):
+            unlock()
+            if isinstance(exc, InterruptedError):
+                self.subtitle_say('Waiting', '중단했습니다. 같은 파일·설정으로 다시 시작하면 인식 결과를 재사용합니다.', log=True)
+            else:
+                self.subtitle_say('Failed', '자막 만들기 실패: ' + friendly(exc), log=True, level='error')
+                self.root.bell()
+        if not self.run_task('tools.subtitles', work, done, mutate=False, long=True, announce=False, error=failed):
+            unlock()
+
+    def apply_subtitle_terms(self, changes, remember):
+        """번역 자막에서 고친 용어를 적용한다(그 용어가 든 자막만 다시 번역해 번역 자막을 고쳐 씀)."""
+        results = [item for item in getattr(self, '_subtitle_results', []) if item.translated is not None]
+        if not results or self.runner.busy('tools.subtitles'):
+            return
+        if remember:
+            self._remember_shared_terms(changes)
+        editor = self.subtitle_terms_editor
+        editor.busy(True)
+        self._subtitle_cancel = Event()
+        self.subtitle_cancel_button.configure(state='normal')
+        self.subtitle_say('Working', '바꾼 용어 %d개 적용 중…' % len(changes), log=True)
+        stop = lambda: self._subtitle_cancel.is_set() or self.runner.cancel.is_set()
+        translator = self.services.translator
+
+        def work():
+            out = []
+            for item in results:
+                if translator.affected_by(item.translated, changes):
+                    item = self.services.subtitles.revise_terms(item, changes, cancelled=stop)
+                out.append(item)
+            return out
+
+        def done(items):
+            self.subtitle_cancel_button.configure(state='disabled')
+            self._subtitle_results = items
+            count = sum(item.translated.revised for item in items)
+            terms = {key: value for item in items for key, value in item.translated.glossary.items()}
+            set_text(self.subtitle_translated_text, items[-1].translated_text[:20000])
+            editor.load(terms, note='적용 완료: 자막 %d개 구간을 다시 번역해 번역 자막을 고쳐 썼습니다.' % count)
+            self.subtitle_say('Ready', '용어 적용 완료: %d개 구간 다시 번역' % count, log=True)
+            self.subtitle_tabs.select(1)
+
+        def failed(exc):
+            self.subtitle_cancel_button.configure(state='disabled')
+            editor.busy(False)
+            if isinstance(exc, InterruptedError):
+                self.subtitle_say('Waiting', '용어 적용을 중단했습니다. 번역 자막은 바뀌지 않았습니다.', log=True)
+            else:
+                self.subtitle_say('Failed', '용어 적용 실패: ' + friendly(exc), log=True, level='error')
+        self.run_task('tools.subtitles', work, done, mutate=False, long=True, announce=False, error=failed)
+
+    def _remember_shared_terms(self, changes):
+        """고정 용어집([파일 번역] 기본값)에 고친 용어를 넣는다. 번역 화면이 열려 있으면 그 칸도 고친다."""
+        if hasattr(self, 'translation_glossary_text'):
+            self._remember_terms(changes)
+            return
+        def update():
+            prefs = self.services.settings.translation_preferences()
+            lines = [line for line in prefs.get('glossary', '').splitlines()
+                     if line.strip() and line.split('=', 1)[0].strip() not in changes]
+            lines += ['%s = %s' % pair for pair in changes.items()]
+            prefs['glossary'] = '\n'.join(lines)[:20000]
+            self.services.settings.set_translation_preferences(prefs)
+        self.runner.submit('tools.prefs.terms', update, lambda _: None,
+                           lambda exc: self.log('용어집 저장 실패: ' + str(exc), level='error'), mutate=False)

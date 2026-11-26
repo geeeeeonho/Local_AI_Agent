@@ -8,7 +8,7 @@ builder(frame, w, toolbar)는 화면 본문을 frame에, 실행 버튼을 맨 �
 from dataclasses import dataclass
 from typing import Callable
 from tkinter import ttk
-from . import translation_view, calendar_view, reminder_view
+from . import translation_view, subtitle_view, calendar_view, reminder_view
 from .widgets import ScrollArea, wrap_to_parent
 
 
@@ -26,6 +26,10 @@ TOOLS = (
          '로컬 모델로 TXT·JSON·Markdown·자막을 구조를 지키며 번역합니다. '
          '고정 용어집, 이어하기, 진행률 표시를 지원합니다.',
          translation_view.build, 'translation_opened'),
+    Tool('subtitles', '자막 만들기',
+         '영상·MP3·WAV 등의 말소리를 이 PC에서 받아 적어 SRT·WebVTT 자막을 만듭니다. '
+         '자막 규칙(2줄·줄 길이·표시 시간)을 지키고, 번역 자막도 함께 만들 수 있습니다.',
+         subtitle_view.build, 'subtitles_opened'),
     Tool('calendar', '일정·할 일',
          '로컬 일정과 할 일 등록·수정·삭제, 반복 일정 및 알림 시간을 관리합니다. '
          '인터넷이나 AI 모델 없이 사용할 수 있습니다.',

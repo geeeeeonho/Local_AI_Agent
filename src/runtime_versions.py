@@ -25,6 +25,19 @@ SANDBOX_RUNTIME_VALUE = "app-server"
 SANDBOX_OI_LABEL = "local-ai-agent.open-interpreter-version"
 
 
+#: Pinned whisper.cpp release (subtitle tool). Windows assets are taken from
+#: this tag only and checked against the SHA-256 digest GitHub records for them.
+WHISPER_CPP_VERSION = "1.9.5"
+WHISPER_CPP_TAG = f"v{WHISPER_CPP_VERSION}"
+#: The commit that tag names; the voice-activity model is fetched from it.
+WHISPER_CPP_COMMIT = "d1be6fde11ac6e0407606b4e42fe72d34add8037"
+
+#: Pinned FFmpeg build (LGPL, shared libraries) used to read audio from video.
+#: BtbN keeps each month-end build; the archive is checked against both the
+#: release's checksums.sha256 and GitHub's own digest.
+FFMPEG_BUILD_TAG = "autobuild-2026-10-31-12-59"
+
+
 def open_interpreter_install_script(extension: str) -> str:
     """Return the pinned upstream install script URL for ``ps1`` or ``sh``."""
     return (
@@ -39,5 +52,9 @@ __all__ = [
     "SANDBOX_RUNTIME_LABEL",
     "SANDBOX_RUNTIME_VALUE",
     "SANDBOX_OI_LABEL",
+    "WHISPER_CPP_VERSION",
+    "WHISPER_CPP_TAG",
+    "WHISPER_CPP_COMMIT",
+    "FFMPEG_BUILD_TAG",
     "open_interpreter_install_script",
 ]

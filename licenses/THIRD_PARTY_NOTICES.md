@@ -15,12 +15,17 @@
 | dperson/torproxy | `dperson/torproxy` Docker 이미지 | AGPL-3.0 | [torproxy-LICENSE](torproxy-LICENSE) · [원본](https://github.com/dperson/torproxy) |
 | Cloudflare WARP 이미지 | `dublok/cloudflare-warp:latest` Docker 이미지 | CC-BY-NC-4.0 | [cloudflare-warp-LICENSE](cloudflare-warp-LICENSE) · [원본](https://github.com/ErcinDedeoglu/cloudflare-warp) |
 | LLMfit | **도입 예정**, 현재 설치/실행 코드에 포함되지 않음 | MIT | [llmfit-LICENSE](llmfit-LICENSE) · [원본](https://github.com/AlexsJones/llmfit) |
+| whisper.cpp | 자막 만들기: `v1.9.5` 공식 Windows x64 빌드(CPU, NVIDIA GPU는 CUDA 12.4 빌드). GitHub 자산 SHA-256 digest 검증 | MIT | [whisper.cpp-LICENSE](whisper.cpp-LICENSE) · [해당 태그](https://github.com/ggml-org/whisper.cpp/tree/v1.9.5) |
+| FFmpeg | 자막 만들기: 영상·음성에서 오디오 추출. BtbN `autobuild-2026-10-31-12-59`의 **LGPL** Windows x64 빌드(checksums.sha256 + GitHub digest 검증) | LGPL-2.1-or-later | 설치 시 배포본의 LICENSE를 `environment\speech\ffmpeg\LICENSE.txt`로 함께 둡니다 · [빌드](https://github.com/BtbN/FFmpeg-Builds) · [FFmpeg 라이선스](https://ffmpeg.org/legal.html) |
+| Silero VAD | 자막 만들기: 음성 구간 감지 모델(whisper.cpp가 변환한 ggml 형식, 고정 커밋·SHA-256) | MIT | [silero-vad-LICENSE](silero-vad-LICENSE) · [원본](https://github.com/snakers4/silero-vad) |
 
 ### 독립 실행환경 또는 이용약관이 별도로 적용되는 항목
 
 - **Docker Desktop:** 오픈소스 Docker 구성요소와 달리 Docker Desktop 배포·사용에는 Docker의 별도 구독·서비스 약관이 적용됩니다. 개인 사용과 특정 비상업적 사용의 무료 사용 조건은 공식 약관을 확인하세요. [Docker Subscription Service Agreement](https://www.docker.com/legal/docker-subscription-service-agreement/).
 - **Cloudflare WARP 클라이언트와 네트워크 서비스:** 위 CC-BY-NC-4.0은 `dublok/cloudflare-warp` 컨테이너 프로젝트에 대한 고지입니다. 컨테이너 안의 Cloudflare WARP 공식 클라이언트와 서비스에는 별도의 Cloudflare 약관이 적용됩니다. 이미지 라이선스만으로 서비스 이용이 무제한 허용되는 것은 아닙니다. [Cloudflare 약관](https://www.cloudflare.com/website-terms/).
 - **Python 3.11 및 샌드박스 운영체제 패키지:** Dockerfile에 `python:3.11-slim`, Debian 패키지(`git`, `curl`, `wget` 등)를 사용합니다. 이 문서는 각각의 시스템 패키지에 포함된 제3자 저작권/라이선스 텍스트를 대신하지 않습니다.
+- **음성 인식 모델(Whisper):** 자막 만들기의 `ggml-large-v3*.bin` 등은 OpenAI Whisper 가중치(MIT, [openai-whisper-LICENSE](openai-whisper-LICENSE))를 whisper.cpp 형식으로 변환한 파일이며 Hugging Face `ggerganov/whisper.cpp`에서 받고 whisper.cpp 표의 SHA-1로 검증합니다. 관리자가 Tools → 자막 만들기에서 받을 때만 내려받습니다.
+- **FFmpeg LGPL:** LGPL 빌드를 별도 실행 파일로 호출할 뿐 LocalAI 코드와 링크하지 않습니다. 설치 패키지에 FFmpeg를 미리 넣어 재배포하는 경우 LGPL의 소스 제공·고지 의무를 검토하세요.
 - **임베딩 모델:** AnythingLLM 설정에는 `Xenova/all-MiniLM-L6-v2`가 기본값으로 포함됩니다. 모델 허브의 해당 리비전 라이선스/NOTICE를 별도 확인해야 합니다.
 
 ## 배포 방식에 따른 유의사항

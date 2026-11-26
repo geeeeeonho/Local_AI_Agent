@@ -32,8 +32,12 @@ AUTO_SOURCE = ('auto','자동 감지','')
 CJK_SOURCES = ('Japanese','Simplified Chinese','Traditional Chinese','Korean')
 STYLES = {'faithful':'원문에 충실하게','natural':'자연스럽게, 정보 생략 없이',
           'concise':'자막에 맞게 간결하게'}
-CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투',
-           'subtitle':'읽기 쉬운 자막','code':'기술 문서 및 코드 보호',
+# 대본·자막: 원문의 말투와 표현 강도를 보존한다(순화·평탄화·생략·설명 추가는 오역으로 본다).
+_SPOKEN = ('. Preserve each speaker\'s voice: tone, emotion and intensity, profanity, slang, dialect, '
+           'coined words, verbal tics and interjections, with equivalent target expressions. Do not soften, '
+           'censor, normalize, summarize or explain; keep deliberate ambiguity')
+CONTEXT = {'general':'일반 문서','novel':'소설 및 인물 말투','script':'대본 및 화자별 말투'+_SPOKEN,
+           'subtitle':'읽기 쉬운 자막'+_SPOKEN,'code':'기술 문서 및 코드 보호',
            'structured':'구조화 데이터 문자열 값'}
 MAX_BATCH_CHARS = 2600
 MAX_BATCH_ITEMS = 20   # 짧은 줄(자막·대사)이 많을 때 요청 수를 줄인다. 글자 수 상한은 그대로
@@ -60,6 +64,9 @@ class Result:
     audit: tuple = ()                  # 최종 검수 후에도 남은 문제 ((줄 번호, 사유), ...)
     audit_fixed: int = 0               # 최종 검수에서 반려해 다시 번역으로 고친 구간 수
     reused: int = 0                    # 같은 문장이라 다시 번역하지 않고 재사용한 구간 수
+    revised: int = 0                   # 용어 수정으로 다시 번역한 구간 수
+    # 용어 수정(revise_terms)에 필요한 상태. 메모리에만 두고 디스크에 남기지 않는다(개인정보).
+    revision: object = field(default=None, compare=False, repr=False)
 
 # 모델 응답 형식을 Ollama 문법 제약(format)으로 강제한다.
 # 각 항목을 {id, text} 객체로 받는다. 문자열 안에 'id: 0, text:'를 흉내 내는 대신 구조로 답하게 하고,
@@ -572,6 +579,19 @@ def _assemble(doc,units,prefixes,maps,saved,names=None):
     return render(doc,outputs,names)
 
 
+def _replace(path,text,encoding):
+    """이 도구가 만든 결과 파일을 고쳐 쓴다(임시 파일 → 교체, 반쯤 쓴 파일이 남지 않음)."""
+    fd,temp=tempfile.mkstemp(prefix='.localai-translation-',suffix='.tmp',dir=Path(path).parent)
+    try:
+        with os.fdopen(fd,'w',encoding=encoding,newline='') as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp,path)
+    finally:
+        Path(temp).unlink(missing_ok=True)
+
+
 def _save_new(path,result,encoding):
     # 임시 파일에 쓰고 동기화한 다음 새 파일명으로 게시해 덮어쓰기 경쟁을 방지한다.
     fd,temp = tempfile.mkstemp(prefix='.localai-translation-',suffix='.tmp',dir=path.parent)
@@ -1031,12 +1051,85 @@ class TranslationService:
             tail=tuple({'before':units[i].text[:170],'after':complete[i][:180]} for i in latest[-4:])
             audit=tuple(sorted({(doc.source.count('\n',0,doc.segments[units[i].segment_index].start)+1,reason)
                                 for i,reason in remaining.items()}))
+            revision={'doc':doc,'units':units,'prefixes':prefixes,'maps':maps,'complete':dict(complete),
+                      'memory':memory,'names':names,'allow':allow,'cjk':cjk,'model':model,'target':target,
+                      'style':style,'encoding':'utf-8' if encoding=='cp949' else encoding,
+                      'user_terms':dict(user_terms),'alias':dict(alias)}
             return Result(output,output_text,doc.detected,doc.selected,len(units),
                           memory.summary,memory.style,dict(memory.terms),resumed,client.calls,kept,
-                          lines(review-failures),memory.rolling,tail,audit,fixed,len(alias))
+                          lines(review-failures),memory.rolling,tail,audit,fixed,len(alias),
+                          revision=revision)
         finally:
             self._active=None
             checkpoint.close(success=success)
+    @staticmethod
+    def affected_by(result,changes):
+        """바꾼 용어 {원문: 새 번역}이 영향을 주는 구간 번호: 원문에 그 말이 있거나 옛 번역이 들어간 구간."""
+        state=result.revision
+        if state is None:
+            return []
+        old=state['memory'].terms
+        found=[]
+        for index,unit in enumerate(state['units']):
+            done=state['complete'].get(index,'')
+            if any(source in unit.text or (old.get(source) and old[source] in done
+                                           and old[source]!=target)
+                   for source,target in changes.items()):
+                found.append(index)
+        return found
+
+    def revise_terms(self,result,changes,*,output_path=None,progress=None,cancelled=None):
+        """번역을 마친 결과의 용어를 고친다. 바뀐 용어가 들어간 구간만, 그 용어를 강제한 채 다시 번역해
+        결과 파일을 고쳐 쓴다(조사·어순도 모델이 다시 맞춘다). 나머지 구간은 그대로 둔다.
+        changes: {원문 용어: 새 번역}. 고친 결과(Result, revised=다시 번역한 구간 수)를 돌려준다."""
+        import copy
+        state=result.revision
+        if state is None:
+            raise ValueError('This translation can no longer be revised; translate it again with the glossary')
+        changes={str(k).strip():str(v).strip() for k,v in dict(changes).items() if str(k).strip() and str(v).strip()}
+        if not changes:
+            raise ValueError('No glossary changes to apply')
+        self._abort.clear()
+        user_cancelled=cancelled
+        cancelled=lambda:self._abort.is_set() or bool(user_cancelled and user_cancelled())
+        doc,units,maps=state['doc'],state['units'],state['maps']
+        memory=copy.deepcopy(state['memory'])
+        affected=self.affected_by(result,changes)
+        memory.terms.update(changes)
+        memory.enforced=dict(state['user_terms']);memory.enforced.update(changes)
+        complete=dict(state['complete'])
+        alias=state['alias']
+        targets=[index for index in affected if index not in alias]
+        if targets:
+            endpoint=self._ready(state['model'])
+            client=_CountedClient(self.client_factory(endpoint),cancelled,self._contexts)
+            self._active=client
+            try:
+                done=0
+                for group in _batch_ranges([units[i] for i in targets]):
+                    if cancelled():
+                        raise InterruptedError('Revision cancelled; the file was not changed')
+                    pending=[targets[i] for i in group]
+                    items=[(idx,units[idx]) for idx in pending]
+                    translated=_translate_batch(client,state['model'],items,memory,state['target'],
+                                                state['style'],doc.selected,_recent(units,complete,pending[0]),
+                                                maps,doc,cancelled=cancelled,failures=None,review=set())
+                    complete.update(zip(pending,translated))
+                    done+=len(pending)
+                    if progress:
+                        progress(done,len(targets))
+            finally:
+                self._active=None
+            for copy_index,origin in alias.items():      # 같은 문장은 같은 번역
+                complete[copy_index]=complete[origin]
+        output_text=_assemble(doc,units,state['prefixes'],maps,complete,state['names'])
+        verify_codes(doc,output_text,state['allow'],state['cjk'])
+        output=Path(output_path) if output_path else result.output
+        _replace(output,output_text,state['encoding'])
+        new_state=dict(state,complete=complete,memory=memory,user_terms=dict(memory.enforced))
+        return replace(result,output=output,text=output_text,glossary=dict(memory.terms),
+                       revised=len(affected),revision=new_state)
+
     def inspect_folder(self,folder,kind='auto',stage=False):
         """폴더 분석: [(상대 경로, 감지 유형 또는 오류, 번역 구간 수)], 그대로 복사할 파일 수."""
         folder=Path(folder)
@@ -1053,11 +1146,13 @@ class TranslationService:
                 rows.append((rel,'error: '+str(exc),0))
         return rows,len(others)
 
-    def _folder_memory(self,folder,output,plan,options,cancelled):
-        """폴더 전체 표본·반복 고유명사로 공유 메모리를 한 번 만든다(중단 후 재실행 시 재사용)."""
+    def _folder_memory(self,folder,output,plan,options,cancelled,labels=None):
+        """폴더 전체 표본·반복 고유명사로 공유 메모리를 한 번 만든다(중단 후 재실행 시 재사용).
+        labels: 원본 폴더 밖에 있는 파일(영상·음성에서 만든 자막)의 폴더 기준 이름."""
         import hashlib
+        labels=labels or {}
         model=local_model_name(options['model'])
-        listing=[(str(path.relative_to(folder)),path.stat().st_size,path.stat().st_mtime_ns)
+        listing=[(str(labels.get(path) or path.relative_to(folder)),path.stat().st_size,path.stat().st_mtime_ns)
                  for path,_size,error in plan if not error]
         material=json.dumps({'folder':str(folder),'output':str(output),'model':model,
                              'target':options.get('target','한국어'),'style':options.get('style','natural'),
@@ -1101,7 +1196,7 @@ class TranslationService:
     def translate_folder(self,folder,*,output_dir=None,copy_others=True,shared_context=True,
                          progress:Callable[[int,int],None]|None=None,
                          on_file:Callable[[int,int,str],None]|None=None,
-                         cancelled:Callable[[],bool]|None=None,**options) -> FolderResult:
+                         cancelled:Callable[[],bool]|None=None,media=None,**options) -> FolderResult:
         """폴더 안의 지원 파일을 모두 번역해 '폴더이름.언어코드' 폴더에 같은 구조·같은 파일 이름으로 만든다.
 
         - 결과 폴더에 이미 있는 파일은 건너뛴다(중단 후 다시 실행하면 남은 파일만 번역).
@@ -1111,6 +1206,8 @@ class TranslationService:
         - shared_context=True면 폴더 전체를 한 작품으로 본다: 폴더 전체에서 용어·인물·문체 메모리를
           한 번 만들어 모든 파일이 공유하고, 파일을 이름의 자연 순서(1장→2장→10장)로 번역하며
           앞 파일까지의 줄거리 요약과 마지막 문장들을 다음 파일로 넘긴다.
+        - media(services.tools.subtitles.FolderMedia)를 주면 영상·음성 파일은 복사하지 않고, 먼저 자막을
+          만들어(결과 폴더에 원어 자막) 그 자막을 다른 파일과 같은 폴더 메모리로 번역한다.
         """
         folder=Path(folder).resolve()
         if not folder.is_dir():
@@ -1122,10 +1219,34 @@ class TranslationService:
         if output==folder or output in folder.parents:
             raise ValueError('Output folder cannot be the source folder or one of its parents')
         files,others=scan_folder(folder,exclude=output)
-        if not files:
+        media_files=[path for path in others if media is not None and path.suffix.lower() in media.suffixes]
+        others=[path for path in others if path not in media_files]
+        if not files and not media_files:
             raise ValueError('No translatable files (TXT/JSON/MD/SRT/VTT) in the folder')
         if len(files)>MAX_FOLDER_FILES:
             raise ValueError('Too many files in the folder (%d maximum)'%MAX_FOLDER_FILES)
+        output.mkdir(parents=True,exist_ok=True)
+        translated,skipped,failed=[],[],[]
+        # 영상·음성: 자막을 먼저 모두 만든다(인식 결과가 폴더 메모리의 재료가 된다).
+        jobs={}
+        for index,path in enumerate(media_files,1):
+            if cancelled and cancelled():
+                raise InterruptedError('Translation cancelled; finished files are kept')
+            rel=path.relative_to(folder)
+            if on_file:
+                on_file(index,len(media_files),'자막 만들기 · '+str(rel))
+            try:
+                job=media.prepare(path,output/rel.parent,target,cancelled=cancelled)
+            except InterruptedError:
+                raise
+            except (OSError,ValueError,RuntimeError) as exc:
+                failed.append((str(rel),str(exc)));continue
+            if job.skip:
+                skipped.append((str(rel),job.skip));continue
+            jobs[job.source]=(rel,job)
+            files.append(job.source)
+        if not files:
+            return FolderResult(output,(),tuple(skipped),tuple(failed),0,0,None)
         kind,stage=options.get('kind','auto'),options.get('stage',False)
         plan,total=[],0
         for path in files:
@@ -1135,11 +1256,10 @@ class TranslationService:
             except ValueError as exc:
                 plan.append((path,0,str(exc)))
         total=max(total,1)
-        output.mkdir(parents=True,exist_ok=True)
-        translated,skipped,failed=[],[],[]
+        labels={source:rel for source,(rel,_job) in jobs.items()}
         point=None;folder_memory=None;carry={'rolling':'','tail':()}
         if shared_context and any(size for _path,size,error in plan if not error):
-            _key,point,folder_memory=self._folder_memory(folder,output,plan,options,cancelled)
+            _key,point,folder_memory=self._folder_memory(folder,output,plan,options,cancelled,labels)
             carry['rolling']=folder_memory.rolling
         def remember(rel,result):
             carry['rolling'],carry['tail']=result.rolling,tuple(result.tail)
@@ -1160,13 +1280,15 @@ class TranslationService:
         try:
             return self._translate_plan(folder,output,plan,total,options,copy_others,progress,on_file,
                                         cancelled,translated,skipped,failed,others,point,folder_memory,
-                                        carry,remember,recall)
+                                        carry,remember,recall,jobs,media)
         finally:
             if point is not None:
                 point.close(success=not failed and len(translated)+len(skipped)==len(plan))
 
     def _translate_plan(self,folder,output,plan,total,options,copy_others,progress,on_file,cancelled,
-                        translated,skipped,failed,others,point,folder_memory,carry,remember,recall):
+                        translated,skipped,failed,others,point,folder_memory,carry,remember,recall,
+                        jobs=None,media=None):
+        jobs=jobs or {}
         done=0
         def report(value):
             if progress:
@@ -1175,7 +1297,12 @@ class TranslationService:
         for index,(path,size,error) in enumerate(plan,1):
             if cancelled and cancelled():
                 raise InterruptedError('Translation cancelled; finished files are kept')
-            rel=path.relative_to(folder);dest=output/rel
+            job=jobs.get(path)
+            # 영상·음성은 작업 폴더의 한 줄 자막을 번역해 임시 파일에 쓴 뒤 finish가 결과 폴더에 다시 나눠 쓴다.
+            rel=job[0] if job else path.relative_to(folder)
+            dest=path.with_name(path.stem+'.translated.srt') if job else output/rel
+            if job:
+                dest.unlink(missing_ok=True)
             if on_file:
                 on_file(index,len(plan),str(rel))
             if error:
@@ -1199,11 +1326,20 @@ class TranslationService:
                                                   rolling=carry['rolling'])
                     shared={'memory':base_memory,'lead_in':carry['tail'],'label':str(rel),
                             'key':point.path.stem}
+                file_options=dict(options)
+                if job:
+                    file_options.update(kind='subtitle',source_language=job[1].language)
                 result=self.translate_file(path,output_path=dest,cancelled=cancelled,shared=shared,
-                                           progress=lambda n,_t,base=base:report(base+n),**options)
+                                           progress=lambda n,_t,base=base:report(base+n),**file_options)
+                if job:
+                    outputs=media.finish(job[1],dest)
+                    dest.unlink(missing_ok=True)
+                    result=replace(result,output=outputs[0])
                 remember(str(rel),result)
                 # 결과 파일은 이미 저장됐다. 수천 개 파일의 전문을 메모리에 들고 있지 않도록 미리보기만 남긴다.
-                translated.append((str(rel),replace(result,text=result.text[:12000])))
+                # 용어 수정용 상태는 앞쪽 100개 파일까지만 들고 있는다(아주 큰 폴더의 메모리 사용 제한).
+                translated.append((str(rel),replace(result,text=result.text[:12000],
+                                                    revision=result.revision if len(translated)<100 else None)))
             except InterruptedError:
                 raise
             except FileExistsError:

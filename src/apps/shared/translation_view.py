@@ -9,6 +9,7 @@ from services.tools.languages import SOURCE_LABELS, TARGET_LABELS, LANGUAGES as 
 
 CODES={item.label:item.code for item in _ALL if item.target}
 from .widgets import note, text_box, set_text, status_line, ScrollArea, wrap_to_parent
+from .glossary_editor import GlossaryEditor
 
 KINDS={'자동 감지':'auto','일반 문서':'general','소설':'novel','대본 / 대사':'script',
        '자막':'subtitle','코드 포함 문서':'code','구조화 데이터':'structured'}
@@ -128,6 +129,8 @@ def build(parent,w,toolbar=None):
     original=ttk.Frame(notebook);translated=ttk.Frame(notebook);memory=ttk.Frame(notebook)
     notebook.add(original,text='원본');notebook.add(translated,text='번역본')
     notebook.add(memory,text='문서 메모리 · 검토')
+    terms=ttk.Frame(notebook,padding=8);notebook.add(terms,text='용어 사전 수정')
+    w.translation_terms_editor=GlossaryEditor(terms,w.root,on_apply=w.apply_translation_terms)
     w.translation_source_text=text_box(original,height=12)
     w.translation_result_text=text_box(translated,height=12)
     w.translation_memory_text=text_box(memory,height=12)

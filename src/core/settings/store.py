@@ -82,21 +82,43 @@ class SettingsStore:
     # 문자열 길이 상한(기본 300자). 폴더 경로와 용어집은 더 길 수 있다.
     TRANSLATION_LIMITS = {'last_dir': 2000, 'glossary': 20000}
 
-    def translation_preferences(self) -> dict:
+    # 자막 도구에서 지난번에 고른 값(인식 모델·언어·형식·품질·번역 연결).
+    SUBTITLE_KEYS = {'model': str, 'language': str, 'format': str, 'quality': str, 'vad': bool,
+                     'keep_sounds': bool, 'gpu': bool, 'sensitive_vad': bool, 'max_chars': int, 'max_lines': int,
+                     'prompt': str, 'translate': bool, 'target': str, 'llm': str, 'style': str,
+                     'advanced': bool, 'last_dir': str}
+    SUBTITLE_LIMITS = {'last_dir': 2000, 'prompt': 2000}
+
+    @staticmethod
+    def _allowed(values, keys, limits):
+        return {key: item for key, item in dict(values).items()
+                if key in keys and isinstance(item, keys[key])
+                and not (keys[key] is int and isinstance(item, bool))
+                and (not isinstance(item, str) or len(item) <= limits.get(key, 300))}
+
+    def _section(self, name, keys, limits) -> dict:
         data = schema_one(self.store.read())
-        value = data.get('translation', {})
+        value = data.get(name, {})
         if not isinstance(value, dict):
             return {}
-        return {key: item for key, item in value.items()
-                if key in self.TRANSLATION_KEYS and isinstance(item, self.TRANSLATION_KEYS[key])
-                and (not isinstance(item, str) or len(item) <= self.TRANSLATION_LIMITS.get(key, 300))}
+        return self._allowed(value, keys, limits)
 
-    def set_translation_preferences(self, values: dict) -> None:
-        clean = {key: item for key, item in dict(values).items()
-                 if key in self.TRANSLATION_KEYS and isinstance(item, self.TRANSLATION_KEYS[key])
-                 and (not isinstance(item, str) or len(item) <= self.TRANSLATION_LIMITS.get(key, 300))}
+    def _set_section(self, name, values, keys, limits) -> None:
+        clean = self._allowed(values, keys, limits)
         def change(data):
             data = schema_one(data)
-            data['translation'] = clean
+            data[name] = clean
             return data
         self.store.update(change)
+
+    def translation_preferences(self) -> dict:
+        return self._section('translation', self.TRANSLATION_KEYS, self.TRANSLATION_LIMITS)
+
+    def set_translation_preferences(self, values: dict) -> None:
+        self._set_section('translation', values, self.TRANSLATION_KEYS, self.TRANSLATION_LIMITS)
+
+    def subtitle_preferences(self) -> dict:
+        return self._section('subtitles', self.SUBTITLE_KEYS, self.SUBTITLE_LIMITS)
+
+    def set_subtitle_preferences(self, values: dict) -> None:
+        self._set_section('subtitles', values, self.SUBTITLE_KEYS, self.SUBTITLE_LIMITS)
