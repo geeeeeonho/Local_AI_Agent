@@ -110,6 +110,8 @@ def report_text(result):
         kept = getattr(answer, 'kept_lines', ())
         audit = getattr(answer, 'audit', ())
         lines += ['', '번역 검수: 원문 유지 %d줄 · 확인 필요 %d줄' % (len(kept), len(audit))]
+        if kept:
+            lines.append('  원문으로 남은 줄(번역 검증을 끝내 통과하지 못함): ' + ', '.join(map(str, kept[:30])))
     return '\n'.join(lines)
 
 
@@ -499,10 +501,14 @@ class SubtitleController:
                 set_text(self.subtitle_report_text, '\n\n'.join(reports))
                 review = sum(len(result.review) for _, result in batch.results)
                 untranslated = sum(1 for _, result in batch.results if result.translation_error)
+                # 검증을 끝내 통과하지 못해 원문으로 남은 줄(예전 숫자 검사 문제)도 상태 줄에서 바로 보이게 한다.
+                source_left = sum(len(getattr(result.translated, 'kept_lines', ()) or ())
+                                  for _, result in batch.results)
                 self.subtitle_say('Ready' if not batch.failed and not untranslated else 'Failed',
-                                  '완료: 자막 %d개 파일%s%s%s%s · %s' % (
+                                  '완료: 자막 %d개 파일%s%s%s%s%s · %s' % (
                                       len(batch.results), (' · 실패 %d개' % len(batch.failed)) if batch.failed else '',
                                       (' · 번역 실패 %d개(다시 시작하면 번역만)' % untranslated) if untranslated else '',
+                                      (' · 원문으로 남은 줄 %d개(검토 탭)' % source_left) if source_left else '',
                                       (' · 이미 자막 있음 %d개 건너뜀' % len(batch.skipped)) if batch.skipped else '',
                                       (' · 확인하면 좋은 자막 %d개' % review) if review else '',
                                       self._subtitle_last_output), log=True)
