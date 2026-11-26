@@ -110,7 +110,7 @@ class TranslationController:
             if custom:
                 text='→ 결과: '+custom+'  (고급 설정에서 지정)'
             elif is_media(path):
-                text=('→ 결과: 원본 옆 "%s.<음성 언어>.srt"(원어 자막)와 "%s.%s.srt"(번역 자막). '
+                text=('→ 결과: 원본 옆 "%s.srt"(원어 자막, 원본과 같은 이름)와 "%s.%s.srt"(번역 자막). '
                       '음성 인식 설정은 [자막 만들기] 도구의 값을 씁니다.'%(path.stem,path.stem,code))
             elif path.is_dir():
                 text='→ 결과: 원본 옆 "%s.%s" 폴더 (같은 구조·같은 파일 이름, 다른 파일은 복사)'%(path.name,code)

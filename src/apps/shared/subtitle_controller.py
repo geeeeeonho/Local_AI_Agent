@@ -110,6 +110,11 @@ def report_text(result):
     return '\n'.join(lines)
 
 
+def skipped_text(batch):
+    return '이미 자막이 있어 건너뛴 파일 (%d)\n' % len(batch.skipped) + '\n'.join(
+        '  %s  (있는 자막: %s)' % (path.name, existing.name) for path, existing in batch.skipped[:200])
+
+
 _FRIENDLY = (
     ('whisper.cpp is not installed', '음성 인식 엔진이 없습니다. 관리자 계정에서 [엔진 설치 / 복구]를 누르세요.'),
     ('speech model is not installed', '선택한 음성 인식 모델이 없습니다. 아래 표에서 받으세요(관리자).'),
@@ -455,10 +460,11 @@ class SubtitleController:
         suffixes = ' · '.join(FORMATS.get(self.subtitle_format.get(), ('srt',)))
         translate = self.subtitle_translate.get()
         if not files:
-            text = '자막은 원본 옆에 "이름.언어코드.%s"로 만듭니다(예: 영상.ja.srt). 원본은 바꾸지 않습니다.' % suffixes
+            text = ('자막은 원본 옆에 원본과 같은 이름으로 만듭니다(예: 영상.mp4 → 영상.srt). 원본은 바꾸지 않고, '
+                    '옆에 자막이 이미 있는 파일은 건너뜁니다.')
         else:
             first = files[0]
-            text = '→ 결과: "%s.<음성 언어>.%s"%s%s' % (
+            text = '→ 결과: "%s.%s"%s%s · 이미 자막이 있는 파일은 건너뜀' % (
                 first.stem, suffixes,
                 ' + 번역 "%s.<번역 언어>.%s"' % (first.stem, suffixes) if translate else '',
                 (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
@@ -583,11 +589,14 @@ class SubtitleController:
                 if batch.failed:
                     reports.append('실패한 파일\n' + '\n'.join('  %s — %s' % (path.name, friendly(exc))
                                                            for path, exc in batch.failed))
+                if batch.skipped:
+                    reports.append(skipped_text(batch))
                 set_text(self.subtitle_report_text, '\n\n'.join(reports))
                 review = sum(len(result.review) for _, result in batch.results)
                 self.subtitle_say('Ready' if not batch.failed else 'Failed',
-                                  '완료: 자막 %d개 파일%s%s · %s' % (
+                                  '완료: 자막 %d개 파일%s%s%s · %s' % (
                                       len(batch.results), (' · 실패 %d개' % len(batch.failed)) if batch.failed else '',
+                                      (' · 이미 자막 있음 %d개 건너뜀' % len(batch.skipped)) if batch.skipped else '',
                                       (' · 확인하면 좋은 자막 %d개' % review) if review else '',
                                       self._subtitle_last_output), log=True)
                 self.subtitle_tabs.select(1 if last.translated_text else 0)
@@ -597,9 +606,15 @@ class SubtitleController:
                     terms.update(getattr(result.translated, 'glossary', None) or {})
                 self.subtitle_terms_editor.load(terms, note='' if terms else
                                                 '번역 자막을 만들면 번역에 쓴 용어가 여기에 표시됩니다.')
+            elif batch.skipped and not batch.failed:
+                set_text(self.subtitle_report_text, skipped_text(batch))
+                self.subtitle_say('Ready', '새로 만들 파일이 없습니다: %d개 모두 옆에 자막이 이미 있어 건너뛰었습니다.'
+                                  % len(batch.skipped), log=True)
+                self.subtitle_tabs.select(2)
             else:
                 set_text(self.subtitle_report_text, '\n'.join('%s — %s' % (path.name, friendly(exc))
-                                                              for path, exc in batch.failed))
+                                                              for path, exc in batch.failed)
+                         + ('\n\n' + skipped_text(batch) if batch.skipped else ''))
                 self.subtitle_say('Failed', '자막을 만들지 못했습니다: ' +
                                   (friendly(batch.failed[0][1]) if batch.failed else '처리한 파일 없음'),
                                   log=True, level='error')

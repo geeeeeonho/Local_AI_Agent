@@ -5,9 +5,10 @@
   2. whisper.cpp로 인식한다(GPU 빌드 → 실패 시 CPU). 결과는 개인 작업 폴더에 보관해, 번역만
      다시 하거나 형식만 바꿀 때 다시 인식하지 않는다.
   3. 반복·환각·소리 표기를 정리하고, 단어 시각으로 큐를 만든다(core.tools.subtitles 규칙).
-  4. 원본 옆에 '이름.<언어>.srt'(이미 있으면 번호)로 쓴다. 원본과 기존 파일은 덮어쓰지 않는다.
+  4. 원본 옆에 원본과 같은 이름 '이름.srt'로 쓴다(재생기가 자동으로 불러온다). 원본과 기존 파일은
+     덮어쓰지 않는다. 여러 파일·폴더는 옆에 자막이 이미 있는 파일을 건너뛴다.
   5. 번역을 함께 고르면, 큐마다 한 줄로 합친 사본을 기존 번역 도구(TranslationService)로 번역한 뒤
-     번역 언어의 줄 길이 규칙으로 다시 나눠 '이름.<번역 언어>.srt'로 쓴다.
+     번역 언어의 줄 길이 규칙으로 다시 나눠 '이름.<번역 언어>.srt'로 쓴다(원어 자막과 이름이 겹치지 않게).
 
 모델·엔진 설치와 삭제는 공용 모델 저장소와 같은 규칙으로 LocalAI 관리자만 할 수 있다.
 """
@@ -87,6 +88,7 @@ class Result:
 class Batch:
     results: tuple = ()             # ((파일, Result), …)
     failed: tuple = ()              # ((파일, 오류), …)
+    skipped: tuple = ()             # ((파일, 이미 있는 자막), …) — 다시 인식하지 않음
 
 
 def language_label(code, text=''):
@@ -117,6 +119,34 @@ def numbered(path):
         candidate = path.with_name('%s (%d)%s' % (path.stem, number, path.suffix))
         number += 1
     return candidate
+
+
+# 재생기가 영상과 함께 불러오는 자막 확장자(이미 자막이 있는지 볼 때)
+SUBTITLE_SUFFIXES = ('.srt', '.vtt', '.ass', '.ssa', '.sub', '.smi')
+
+
+def original_path(media, fmt, folder=None):
+    """원어 자막: 원본과 같은 이름(영상.mp4 → 영상.srt). 재생기가 자동으로 불러온다."""
+    media = Path(media)
+    name = media.stem + subtitles.FORMATS[fmt][0]
+    return numbered((Path(folder) / name) if folder is not None else media.with_name(name))
+
+
+def existing_subtitles(media):
+    """원본 옆에 이미 있는 자막: 영상.srt, 영상.ko.srt, 영상.en.vtt, 영상.ass 등."""
+    media = Path(media)
+    found = []
+    for path in media.parent.glob(glob_escape(media.stem) + '*'):
+        if path.suffix.lower() not in SUBTITLE_SUFFIXES or not path.is_file():
+            continue
+        middle = path.name[len(media.stem):-len(path.suffix)]
+        if middle == '' or (middle.startswith('.') and 0 < len(middle) <= 12 and ' ' not in middle):
+            found.append(path)
+    return sorted(found)
+
+
+def glob_escape(text):
+    return ''.join('[%s]' % char if char in '[]*?' else char for char in text)
 
 
 def output_path(media, code, fmt, folder=None):
@@ -471,7 +501,7 @@ class SubtitleService:
         review = tuple(sorted({(item.index, item.reason) for item in review}))
         if output_dir is not None:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
-        outputs = tuple(_write_new(output_path(media, code, fmt, output_dir), subtitles.render(cues, fmt))
+        outputs = tuple(_write_new(original_path(media, fmt, output_dir), subtitles.render(cues, fmt))
                         for fmt in formats)
         result = Result(media, outputs, code, label, tuple(cues), subtitles.render(cues, formats[0]),
                         review, tuple(cleaned.removed), build, seconds, duration, reused,
@@ -560,13 +590,19 @@ class SubtitleService:
         return FolderMedia(self, options)
 
     def make_many(self, paths, options: Options, *, translate: Translate | None = None,
-                  progress=None, on_file=None, cancelled=None, on_text=None) -> Batch:
-        """여러 파일을 차례로 만든다. 한 파일이 실패해도 나머지는 계속한다(취소는 즉시 멈춤)."""
-        results, failed = [], []
+                  progress=None, on_file=None, cancelled=None, on_text=None, skip_existing=True) -> Batch:
+        """여러 파일을 차례로 만든다. 한 파일이 실패해도 나머지는 계속한다(취소는 즉시 멈춤).
+        skip_existing이면 옆에 자막이 이미 있는 파일은 인식하지 않고 건너뛴다(폴더를 다시 돌려도 새 파일만)."""
+        results, failed, skipped = [], [], []
         paths = [Path(path) for path in paths]
         for index, path in enumerate(paths, 1):
             if cancelled and cancelled():
                 break
+            if skip_existing:
+                existing = existing_subtitles(path)
+                if existing:
+                    skipped.append((path, existing[0]))
+                    continue
             if on_file:
                 on_file(index, len(paths), path)
             try:
@@ -576,7 +612,7 @@ class SubtitleService:
                 raise
             except (OSError, ValueError, RuntimeError) as exc:
                 failed.append((path, exc))
-        return Batch(tuple(results), tuple(failed))
+        return Batch(tuple(results), tuple(failed), tuple(skipped))
 
 
 @dataclass

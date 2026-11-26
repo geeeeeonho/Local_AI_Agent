@@ -449,7 +449,7 @@ def test_wav_becomes_a_rule_following_srt_next_to_the_original(tmp_path, fake_en
         media, Options(model='large-v3-turbo', formats=('srt', 'vtt'), prompt='자막 용어 LocalAI'),
         progress=lambda stage, fraction, note: stages.append(stage), on_text=lines.append)
     srt, vtt = result.outputs
-    assert srt == tmp_path / '강의 녹음.en.srt' and vtt == tmp_path / '강의 녹음.en.vtt'
+    assert srt == tmp_path / '강의 녹음.srt' and vtt == tmp_path / '강의 녹음.vtt'   # 원본과 같은 이름
     raw = srt.read_bytes()
     assert raw.startswith(b'\xef\xbb\xbf1\r\n00:00:00,000 --> ')
     cues = parse(raw.decode('utf-8-sig'))
@@ -496,7 +496,7 @@ def test_existing_subtitles_are_never_overwritten_and_recognition_is_reused(tmp_
     service = _service(tmp_path, fake_engine)
     first = service.make(media, Options(model='large-v3-turbo'))
     second = service.make(media, Options(model='large-v3-turbo'))
-    assert first.outputs[0].name == 'talk.en.srt' and second.outputs[0].name == 'talk.en (2).srt'
+    assert first.outputs[0].name == 'talk.srt' and second.outputs[0].name == 'talk (2).srt'
     assert second.reused and not first.reused
     calls = next((tmp_path / 'user_data').rglob('result-cpu.calls')).read_text(encoding='utf-8')
     assert len(calls.splitlines()) == 1                        # 두 번째는 다시 인식하지 않았다
@@ -512,7 +512,7 @@ def test_translation_is_chained_and_rewrapped_for_the_target_language(tmp_path, 
     call = translator.calls[0]
     assert call['kind'] == 'subtitle' and call['style'] == 'natural' and call['source_language'] == 'English'
     assert call['glossary'] == 'LocalAI = 로컬AI'
-    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.en.srt', 'show.ko.srt']
+    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.srt', 'show.ko.srt']
     korean = parse(result.translated_outputs[0].read_text(encoding='utf-8-sig'))
     assert validate(korean, rules_for('ko')).ok
     assert any(len(cue.lines) == 2 for cue in korean)          # 번역문을 한국어 줄 길이로 다시 나눴다
@@ -526,7 +526,7 @@ def test_same_language_translation_is_skipped(tmp_path, fake_engine):
     result = _service(tmp_path, fake_engine, translator).make(
         _wav(tmp_path / 'ko.wav'), Options(model='large-v3-turbo', language='한국어'),
         translate=Translate(target='한국어', model='m'))
-    assert result.translation_skipped and not translator.calls and result.outputs[0].name == 'ko.ko.srt'
+    assert result.translation_skipped and not translator.calls and result.outputs[0].name == 'ko.srt'
 
 
 def test_video_needs_ffmpeg_and_bad_inputs_are_explained(tmp_path, fake_engine):
@@ -619,14 +619,14 @@ def test_subtitle_tool_opens_and_starts_only_when_ready(ui, tmp_path, fake_engin
     media = _wav(tmp_path / 'ui.wav')
     w.subtitle_path.set(str(media)); w.analyze_subtitle_input()
     pump(w, lambda: str(w.subtitle_start_button['state']) == 'normal')
-    assert '"ui.<음성 언어>.srt"' in w.subtitle_destination.cget('text')
+    assert '"ui.srt"' in w.subtitle_destination.cget('text')
     w.subtitle_translate.set(True)
     pump(w, lambda: w.subtitle_llm.get() == 'gemma4:12b', timeout=5)
     svc.subtitles.translator = FakeTranslator()
     w.start_subtitles()
     pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'ui.ko.srt').exists(), timeout=15)
     pump(w, lambda: str(w.subtitle_open_button['state']) == 'normal', timeout=5)
-    assert (tmp_path / 'ui.en.srt').exists()
+    assert (tmp_path / 'ui.srt').exists()
     assert '번역된 문장' in w.subtitle_translated_text.get('1.0', 'end')
     assert '확인하면 좋은 자막' in w.subtitle_report_text.get('1.0', 'end')
 
@@ -648,7 +648,7 @@ def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_p
     w.start_translation()
     pump(w, lambda: (tmp_path / 'movie.ko.srt').exists() and not w.runner.busy('tools.translate'), timeout=15)
     pump(w, lambda: '완료' in w.translation_status.get(), timeout=5)
-    assert (tmp_path / 'movie.en.srt').exists()
+    assert (tmp_path / 'movie.srt').exists()
     # 자막용 자동 설정은 일반 번역의 기본값으로 저장하지 않는다(다른 값을 바꿔 저장해도)
     w.translation_language.set('English')
     pump(w, lambda: svc.settings.translation_preferences().get('target') == 'English', timeout=4)
@@ -777,7 +777,7 @@ def test_folder_translation_turns_media_into_subtitles_and_shares_the_folder_mem
                                          on_file=lambda i, n, name: names.append(name))
     out = folder.with_name('series.ko')
     assert sorted(p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file()) == [
-        'cover.png', 'ep2.en.srt', 'ep2.ko.srt', 'note.txt', 'season/ep10.en.srt', 'season/ep10.ko.srt']
+        'cover.png', 'ep2.ko.srt', 'ep2.srt', 'note.txt', 'season/ep10.ko.srt', 'season/ep10.srt']
     assert not list(out.rglob('*.wav'))                       # 큰 영상·음성은 복사하지 않는다
     assert any(name.startswith('자막 만들기 · ') for name in names)
     korean = parse((out / 'ep2.ko.srt').read_text(encoding='utf-8-sig'))
@@ -912,3 +912,28 @@ def test_sensitive_vad_is_an_explicit_choice(tmp_path, fake_engine):
     calls = [json.loads(path.read_text(encoding='utf-8').splitlines()[0])
              for path in sorted((tmp_path / 'user_data').rglob('result-cpu.calls'), key=lambda p: p.stat().st_mtime)]
     assert '-vt' not in calls[0] and calls[1][calls[1].index('-vt') + 1] == '0.35'
+
+
+def test_folder_runs_skip_media_that_already_have_subtitles(tmp_path, fake_engine):
+    """폴더를 다시 돌려도 새로 추가된 파일만 인식한다(옆에 영상.srt·영상.ko.srt·영상.ass 등이 있으면 건너뜀)."""
+    from services.tools.subtitles import Options, existing_subtitles, scan
+    folder = tmp_path / 'videos'
+    (folder / 'sub').mkdir(parents=True)
+    for name in ('a.wav', 'b.wav', 'sub/c.wav', 'd.wav', 'e [1].wav'):
+        _wav(folder / name)
+    (folder / 'b.ko.srt').write_text('1\n00:00:00,000 --> 00:00:01,000\nx\n', encoding='utf-8')
+    (folder / 'd.ass').write_text('[Script Info]', encoding='utf-8')
+    (folder / 'e [1].srt').write_text('x', encoding='utf-8')
+    (folder / 'a.notes.txt').write_text('not a subtitle', encoding='utf-8')
+    (folder / 'ab.srt').write_text('another video', encoding='utf-8')     # 'a'로 시작할 뿐 다른 영상의 자막
+    assert existing_subtitles(folder / 'a.wav') == []
+    service = _service(tmp_path, fake_engine)
+    first = service.make_many(scan(folder), Options(model='large-v3-turbo', quality='fast'))
+    assert sorted(p.name for p, _ in first.results) == ['a.wav', 'c.wav']
+    assert sorted(p.name for p, _ in first.skipped) == ['b.wav', 'd.wav', 'e [1].wav']
+    assert (folder / 'a.srt').exists() and (folder / 'sub' / 'c.srt').exists()
+    calls = len(list((tmp_path / 'user_data').rglob('result-cpu.calls')))
+    again = service.make_many(scan(folder), Options(model='large-v3-turbo', quality='fast'))
+    assert again.results == () and len(again.skipped) == 5
+    assert len(list((tmp_path / 'user_data').rglob('result-cpu.calls'))) == calls
+    assert not list(folder.rglob('* (2).srt'))                       # 사본을 만들지 않는다
