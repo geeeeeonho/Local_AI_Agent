@@ -4,8 +4,8 @@ Windows에서 로컬 LLM 채팅과 자동화 에이전트를 실행하기 위한
 
 사용자 관점에서 프로젝트 루트의 **유일한 실행 진입점은 `RUN.bat`** 입니다.
 처음 설치하면 프로그램이 `C:\LocalAI\app`에 한 벌 설치되고, 모든 Windows 계정이
-바탕화면·시작 메뉴의 **LocalAI** 바로가기로 같은 프로그램을 실행합니다. 실행환경·
-Ollama·모델은 PC에 한 벌만 두고, 사용 기록은 계정별로 분리해 **그 계정의 Windows
+시작 메뉴의 **LocalAI** 항목(또는 `C:\LocalAI\app\RUN.bat`)으로 같은 프로그램을 실행합니다.
+바탕화면에는 바로가기를 만들지 않습니다. 실행환경·Ollama·모델은 PC에 한 벌만 두고, 사용 기록은 계정별로 분리해 **그 계정의 Windows
 키로 암호화**합니다.
 
 ```text
@@ -46,7 +46,7 @@ Local_AI_Agent 자체의 라이선스를 지정하는 것은 아닙니다.
 
 - **첫 설치 계정이 LocalAI 관리자**가 됩니다. 처음 [설치 / 복구]를 실행하면 Windows
   확인 창(UAC)이 한 번 뜨고, `LocalAI-Admins` / `LocalAI-Users` 로컬 그룹 생성, 이
-  계정의 관리자 등록, `C:\LocalAI` 권한 잠금, 공용 바로가기 생성이 한 번에 끝납니다.
+  계정의 관리자 등록, `C:\LocalAI` 권한 잠금, 공용 시작 메뉴 항목 생성이 한 번에 끝납니다.
   "처음 설치한 계정"은 `C:\LocalAI` 폴더를 만든 계정(소유자)입니다.
 - `C:\LocalAI`는 이제 C:\ 에서 물려받던 `Authenticated Users: 수정` 권한을 끊습니다.
   관리자만 프로그램·실행환경·**모델 저장소**를 바꿀 수 있고, 다른 계정은 읽기·실행만
@@ -783,7 +783,7 @@ run_gb   상주 크기(메모리)   — 등급 배정과 적재 가능 판정
 ```
 
 Gemma 4의 'effective parameter' 수는 실제 가중치 메모리를 뜻하지 않습니다.
-선택형 경량 멀티모달 폴백인 `gemma4:e2b-it-qat`는 파일이 약 4.3GB이고,
+하 단계 공용 폴백인 `qwen3.5:4b-q4_K_M`는 파일이 약 3.3GB이고,
 실행 시에는 KV 캐시·컨텍스트 크기 때문에 더 많은 메모리가 필요할 수 있습니다.
 
 ### 도구 호출
@@ -802,7 +802,7 @@ Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사�
 | `coding` | 코드 작성·실행 | `devstral-small-2:24b` | `qwen2.5-coder:14b` | `qwen2.5-coder:7b` |
 | `agent` | 검색·도구·자율 실행 | `gemma4:26b-a4b-it-qat` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
 | `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `hf.co/TrevorJS/…:Q8_0` | `huihui_ai/qwen3-abliterated:8b` |
-| `office` | 요약·보고서·스캔본 | `gemma4:26b` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
+| `office` | 요약·보고서·스캔본 | `gemma4:26b-a4b-it-qat` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
 | `balanced` | 일상 대화 | `gpt-oss:20b` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
 
 이 표의 **사다리 기본 모델(primary)**은 기본 설치 모델과 다릅니다. 예를 들어
@@ -899,8 +899,12 @@ OCR 전용 모델로 분기하는 기능은 이번 변경에 포함되지 않습
 최댓값으로, 6.2GB 파일이 곧 VRAM 사용량이라는 뜻은 아닙니다.
 스캔 문서, 표, 한글 OCR 성능은 실제 샘플과 목표 장비에서 검증해야 합니다.
 
-**간소화한 선택 후보:** 중간급 Qwen 계열은 `qwen3.5:9b`,
-무검열 중간급 대안은 `huihui_ai/qwen3.5-abliterated:9b`를 유지합니다.
+**간소화한 선택 후보:** 코딩 상 단계 대안은 `gpt-oss:20b`(16GB 카드의 GPU 예산 안)와
+실험 대안 `hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS`(14.4GB, OpenAI 호환 엔드포인트의
+도구 호출 응답을 설치 후 직접 확인해야 하며 다른 상 단계 코더가 없을 때만 선택됨),
+무검열 중간급 대안은 `huihui_ai/qwen3-vl-abliterated:8b`를 유지합니다.
+같은 구간에서 역할이 겹치던 18GB 급(`qwen3.6:27b`, `gemma4:26b`, `qwen3-coder:30b`,
+무검열 26~27B)과 9B 급·경량 후보는 카탈로그 v8 에서 뺐습니다.
 동일한 용도의 유사 모델이나 별도 검증이 필요한 모델은 추천 목록에서
 제외하며, 이미 설치된 모델 파일은 자동으로 삭제하지 않습니다.
 
@@ -937,8 +941,8 @@ python -m launcher.models --free 12  # 여유 12GB 를 가정
 ### 태그 대소문자
 
 카탈로그에는 대소문자가 섞인 벤더 태그가 있습니다
-(`prutser/...:Q4_K_S`, `huihui_ai/Qwen3.6-abliterated:27b`).
-Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하면 멀쩡히 깔린 18GB 짜리를
+(`prutser/...:Q4_K_S`, `hf.co/TrevorJS/...:Q8_0`).
+Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하면 멀쩡히 깔린 15GB 짜리를
 "미설치"로 보고 다시 받습니다. 설치 목록은 읽는 즉시
 `model_catalog.canonicalize_installed()` 로 카탈로그 표기에 맞춥니다.
 

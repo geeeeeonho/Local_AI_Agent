@@ -84,7 +84,7 @@ class ModelRole:
 
 # 핵심 모델 태그 (v3 카탈로그와 동일)
 _ARA = "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S"   # 무검열·범용·에이전트 (15GB)
-_CODER = "qwen3-coder:30b"                                    # 코딩 (18GB, MoE)
+_CODER = "devstral-small-2:24b"                               # 코딩 (15GB)
 _GEMMA12 = "gemma4:12b"                                       # 맥락/폴백 (7.5GB)
 _CODER_MID = "qwen2.5-coder:14b"                              # 코딩 중간 (9GB, 16GB VRAM 적합)
 _CODER_FB = "qwen2.5-coder:7b"                                # 코딩 폴백 (4.7GB)
@@ -102,8 +102,8 @@ ROLES: List[ModelRole] = [
     ),
     ModelRole(
         key="2", name="coding", label="코딩 에이전트 (Open Interpreter)",
-        description="코드 작성·실행·파일 작업. MoE 코딩 모델 우선, 여유에 따라 중간·경량 코더로 자동 강등.",
-        model=_CODER, need_gb=17.0,
+        description="코드 작성·실행·파일 작업. 에이전트 코딩 모델 우선, 여유에 따라 중간·경량 코더로 자동 강등.",
+        model=_CODER, need_gb=15.0,
         temperature=0.2, context_window=8192,
         system_hint="당신은 코드를 작성하고 실행하는 자율 코딩 에이전트입니다.",
         fallback=_CODER_FB, fallback_need_gb=8.0,
@@ -174,57 +174,56 @@ _SAFETY = 0.92  # 가용 메모리의 92%만 사용 (KV 캐시/순간 스파이�
 # 역할별 후보 사다리 (모델, 권장 최소 여유 GB) — 아래 TIERS 에서 파생된다.
 LADDERS: dict = {}
 
-# >>> TIERS_v4 — three optional runtime levels, lean high/mid default installs.
+# >>> TIERS_v5 — three optional runtime levels, lean high/mid default installs.
 #
 # Default downloads are controlled separately by model_catalog._CORE_TAGS.
 # Keeping a low-level ladder does not mean downloading it automatically.
 # A low-memory PC can manually install the low tier when it needs one.
-# Keep alternatives curated: at most 2 for high/mid, 1 for low.
+# Keep alternatives curated: at most 2 for high/mid, 1 for low. A level may
+# have no alternative when the catalog has nothing better for that band.
+# Within a tier the primary is always tried before its alternatives.
 # Existing off-catalog installs remain visible in the dedicated model panel.
 TIERS = {
     "coding": [
+        # gpt-oss:20b (14GB) is the high-level option that still fits a 16GB
+        # card's GPU budget when devstral (15GB) would spill to CPU.
+        # Qwen3.8 IQ4_XS is last on purpose: its /v1/chat/completions tool
+        # path is unverified (#17790), so it is chosen only when it is the
+        # sole high-level coder installed. Promote it after a real-hardware run.
         {"need": 15.0, "primary": "devstral-small-2:24b",
-         "alts": ["qwen3.6:27b", "qwen3-coder:30b"]},
+         "alts": ["gpt-oss:20b", "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
-         "alts": ["qwen3.5:9b", "gemma4:12b"]},
+         "alts": ["gemma4:12b"]},
         {"need": 4.7, "primary": "qwen2.5-coder:7b",
          "alts": ["qwen3.5:4b-q4_K_M"]},
     ],
     "agent": [
         {"need": 16.0, "primary": "gemma4:26b-a4b-it-qat",
-         "alts": ["gpt-oss:20b", "gemma4:26b"]},
-        {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["qwen3.5:9b", "ministral-3:14b"]},
-        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat"]},
+         "alts": ["gpt-oss:20b"]},
+        {"need": 7.6, "primary": "gemma4:12b", "alts": []},
+        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M", "alts": []},
     ],
     "uncensored": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
-         "alts": ["huihui_ai/gemma-4-abliterated:26b-qat",
-                  "huihui_ai/Qwen3.6-abliterated:27b"]},
+         "alts": []},
+        # Gemma stays primary for Korean translation quality; the Qwen3-VL
+        # abliteration covers the 7-13GB band below the 12.7GB Q8_0.
         {"need": 12.7, "primary": "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
-         "alts": ["huihui_ai/qwen3.5-abliterated:9b",
-                  "huihui_ai/qwen3-vl-abliterated:8b"]},
-        {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b",
-         "alts": ["mannix/llama3.1-8b-abliterated:q5_K_M"]},
+         "alts": ["huihui_ai/qwen3-vl-abliterated:8b"]},
+        {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
     ],
     "office": [
-        {"need": 18.0, "primary": "gemma4:26b",
-         "alts": ["qwen3.6:27b", "gemma4:26b-a4b-it-qat"]},
+        {"need": 16.0, "primary": "gemma4:26b-a4b-it-qat", "alts": []},
         {"need": 7.6, "primary": "gemma4:12b",
          # Qwen3-VL Instruct remains the specialised OCR spotlight; it is not
          # the general-purpose office primary or an automatic download.
-         "alts": ["qwen3-vl:8b-instruct", "qwen3.5:9b"]},
-        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat"]},
+         "alts": ["qwen3-vl:8b-instruct"]},
+        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M", "alts": []},
     ],
     "balanced": [
-        {"need": 14.0, "primary": "gpt-oss:20b",
-         "alts": ["gemma4:26b", "qwen3.6:27b"]},
-        {"need": 7.6, "primary": "gemma4:12b",
-         "alts": ["qwen3.5:9b", "ministral-3:14b"]},
-        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M",
-         "alts": ["gemma4:e2b-it-qat"]},
+        {"need": 14.0, "primary": "gpt-oss:20b", "alts": []},
+        {"need": 7.6, "primary": "gemma4:12b", "alts": []},
+        {"need": 3.8, "primary": "qwen3.5:4b-q4_K_M", "alts": []},
     ],
 }
 

@@ -188,12 +188,12 @@ class MemoryFigureTests(unittest.TestCase):
             self.assertGreater(entry.size_gb, 0.0, entry.tag)
             self.assertGreater(entry.memory_gb, 0.0, entry.tag)
 
-    def test_small_gemma_qat_does_not_underestimate_weight_memory(self):
-        # The retained low-tier vision/tool fallback still needs room for
+    def test_low_tier_fallback_does_not_underestimate_weight_memory(self):
+        # The shared low-tier vision/tool fallback still needs room for
         # KV cache beyond the downloaded artifact.
-        small = catalog.by_tag()["gemma4:e2b-it-qat"]
-        self.assertAlmostEqual(small.size_gb, 4.3)
-        self.assertGreaterEqual(small.memory_gb, small.size_gb)
+        small = catalog.by_tag()["qwen3.5:4b-q4_K_M"]
+        self.assertAlmostEqual(small.size_gb, 3.3)
+        self.assertGreater(small.memory_gb, small.size_gb)
         self.assertEqual(catalog.level_of(small.tag), "low")
 
 
@@ -428,12 +428,41 @@ class ModernModelPolicyTests(unittest.TestCase):
         self.assertNotIn(tag, {m for m, _ in roles.LADDERS["coding"]})
         self.assertIn(tag, catalog.replaced_tags())
 
-    def test_tuned_qwen35_9b_is_optional_in_uncensored_middle(self):
-        tag = "huihui_ai/qwen3.5-abliterated:9b"
+    def test_qwen38_quant_is_the_last_high_coding_option_only(self):
+        # The unofficial-registry IQ4_XS quant fits the 20GB budget, but its
+        # OpenAI-compatible tool path is unverified: never a default download,
+        # never chosen ahead of devstral or gpt-oss when either is installed.
+        tag = "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS"
+        entry = catalog.by_tag()[tag]
+        self.assertTrue(entry.tools)
+        self.assertEqual(catalog.level_of(tag), "high")
+        self.assertEqual(roles.TIERS["coding"][0]["alts"][-1], tag)
+        self.assertNotIn(tag, catalog.core_tags())
+        self.assertNotIn(tag, catalog.recommended_for(20.0))
+        both = {tag, "gpt-oss:20b", "devstral-small-2:24b"}
+        for free in (16.0, 20.0):
+            self.assertNotEqual(
+                roles.resolve_ladder("coding", free_gb=free, installed=both), tag)
+        self.assertEqual(
+            roles.resolve_ladder("coding", free_gb=20.0, installed={tag}), tag)
+
+    def test_qwen3_vl_abliterated_is_optional_in_uncensored_middle(self):
+        tag = "huihui_ai/qwen3-vl-abliterated:8b"
         self.assertTrue(catalog.by_tag()[tag].uncensored)
         self.assertEqual(catalog.level_of(tag), "mid")
         self.assertIn(tag, roles.TIERS["uncensored"][1]["alts"])
         self.assertNotIn(tag, catalog.recommended_for(20.0))
+
+    def test_uncensored_mid_band_is_covered(self):
+        # Q8_0(12.7GB) 가 안 뜨는 7~13GB 여유에서 8b 하 단계로 바로 떨어지지 않고
+        # 중 단계 대안이 맡는다. 메모리가 남는데 품질만 깎이는 낭비를 막는다.
+        tag = "huihui_ai/qwen3-vl-abliterated:8b"
+        installed = {m for m, _need in roles.LADDERS["uncensored"]}
+        for free in (7.0, 9.0, 11.0, 13.0):
+            self.assertEqual(
+                roles.resolve_ladder("uncensored", free_gb=free,
+                                     installed=installed),
+                tag, free)
 
 
 class UncensoredGroupTests(unittest.TestCase):

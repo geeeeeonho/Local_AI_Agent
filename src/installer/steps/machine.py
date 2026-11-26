@@ -3,8 +3,8 @@
 The first account to install becomes the LocalAI administrator: one UAC
 prompt creates the ``LocalAI-Admins`` / ``LocalAI-Users`` groups, adds this
 account to the first, locks the shared root so only administrators can
-change the program and runtimes, and puts a LocalAI shortcut on every
-account's desktop and Start menu. Later Setup runs by an administrator keep
+change the program and runtimes, and puts a LocalAI shortcut in every
+account's Start menu (never on the desktop). Later Setup runs by an administrator keep
 the program current; any other account's Setup prepares only its own private
 folder and leaves the shared parts alone.
 """

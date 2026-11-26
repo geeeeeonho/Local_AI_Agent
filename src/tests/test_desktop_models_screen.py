@@ -417,17 +417,25 @@ def test_the_screen_says_whether_other_accounts_share_the_store(ui, monkeypatch)
 def test_role_groups_contain_three_recommendations_and_optional_choices(ui):
     w, _, _ = ui
     open_models(w)
+    from apps.shared.model_groups import group_catalog
     expected={'coding','agent','uncensored','office','balanced'}
     assert {key.removeprefix('role:') for key in w.catalog_groups
             if key.startswith('role:') and ':' not in key[5:]} == expected
+    optional={role['key']: role['optional_count']
+              for role in group_catalog(w._catalog)['roles']}
+    assert any(optional.values())
 
     for name in expected:
         for number in (1,2,3):
             assert f'role:{name}:tier:{number}' in w.catalog_groups
             assert '(권장)' in w.catalog_groups[
                 f'role:{name}:tier:{number}'].button.cget('text')
-        assert f'role:{name}:options' in w.catalog_groups
-        assert not w.catalog_groups[f'role:{name}:options'].expanded
+        # A role whose levels have no alternative gets no empty options fold.
+        if optional[name]:
+            assert f'role:{name}:options' in w.catalog_groups
+            assert not w.catalog_groups[f'role:{name}:options'].expanded
+        else:
+            assert f'role:{name}:options' not in w.catalog_groups
 
     # Every catalogue entry is still selectable, including RAG embedders.
     tags={model['tag'] for model in w._catalog['models']}
@@ -471,7 +479,7 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     open_models(w)
     trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0'
     trevor_q4='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
-    previous='huihui_ai/qwen3.5-abliterated:9b'
+    previous='huihui_ai/qwen3-vl-abliterated:8b'
     high='prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S'
 
     def inside(widget, container):
@@ -492,10 +500,13 @@ def test_office_mid_shows_qwen3_vl_instruct_ocr_spotlight_without_autocheck(ui):
     tag = 'qwen3-vl:8b-instruct'
 
     mid = w.catalog_groups['role:office:tier:2'].body
-    extras = w.catalog_groups['role:office:options'].body
+    # Office may have no non-featured alternative, hence no options fold.
+    extras_group = w.catalog_groups.get('role:office:options')
 
     def inside(widget, container):
-        return str(widget).startswith(str(container) + '.')
+        return container is not None and str(widget).startswith(str(container) + '.')
+
+    extras = extras_group.body if extras_group is not None else None
 
     # A specialist recommendation appears beside the general-purpose
     # primary, not hidden in the collapsed extra-options list.
