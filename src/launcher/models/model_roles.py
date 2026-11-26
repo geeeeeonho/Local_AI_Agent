@@ -187,8 +187,11 @@ TIERS = {
     "coding": [
         # gpt-oss:20b (14GB) is the high-level option that still fits a 16GB
         # card's GPU budget when devstral (15GB) would spill to CPU.
+        # Qwen3.8 IQ4_XS is last on purpose: its /v1/chat/completions tool
+        # path is unverified (#17790), so it is chosen only when it is the
+        # sole high-level coder installed. Promote it after a real-hardware run.
         {"need": 15.0, "primary": "devstral-small-2:24b",
-         "alts": ["gpt-oss:20b"]},
+         "alts": ["gpt-oss:20b", "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS"]},
         {"need": 9.0, "primary": "qwen2.5-coder:14b",
          "alts": ["gemma4:12b"]},
         {"need": 4.7, "primary": "qwen2.5-coder:7b",

@@ -428,6 +428,24 @@ class ModernModelPolicyTests(unittest.TestCase):
         self.assertNotIn(tag, {m for m, _ in roles.LADDERS["coding"]})
         self.assertIn(tag, catalog.replaced_tags())
 
+    def test_qwen38_quant_is_the_last_high_coding_option_only(self):
+        # The unofficial-registry IQ4_XS quant fits the 20GB budget, but its
+        # OpenAI-compatible tool path is unverified: never a default download,
+        # never chosen ahead of devstral or gpt-oss when either is installed.
+        tag = "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS"
+        entry = catalog.by_tag()[tag]
+        self.assertTrue(entry.tools)
+        self.assertEqual(catalog.level_of(tag), "high")
+        self.assertEqual(roles.TIERS["coding"][0]["alts"][-1], tag)
+        self.assertNotIn(tag, catalog.core_tags())
+        self.assertNotIn(tag, catalog.recommended_for(20.0))
+        both = {tag, "gpt-oss:20b", "devstral-small-2:24b"}
+        for free in (16.0, 20.0):
+            self.assertNotEqual(
+                roles.resolve_ladder("coding", free_gb=free, installed=both), tag)
+        self.assertEqual(
+            roles.resolve_ladder("coding", free_gb=20.0, installed={tag}), tag)
+
     def test_qwen3_vl_abliterated_is_optional_in_uncensored_middle(self):
         tag = "huihui_ai/qwen3-vl-abliterated:8b"
         self.assertTrue(catalog.by_tag()[tag].uncensored)

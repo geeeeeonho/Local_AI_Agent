@@ -95,7 +95,7 @@ class RoleCatalogGroupingTests(unittest.TestCase):
         removed = {'qwen3-vl:8b', 'qwen3.8:27b', 'gemma4:e4b',
                    'qwen3:8b', 'ministral-3:3b'} | PRUNED_V8
         self.assertFalse(removed & catalog.catalog_tags())
-        self.assertEqual(len(catalog.catalog_tags()), 14)
+        self.assertEqual(len(catalog.catalog_tags()), 15)
         for role, tiers in model_roles.TIERS.items():
             self.assertEqual(len(tiers), 3, role)
             for i, tier in enumerate(tiers):

@@ -3,11 +3,12 @@
 
 MODEL_CATALOG_v8 — 기본 5종(상/중) + 역할별 최소 대체 후보. 모델용 메모리 예산 ~20GB.
 
-v8 정리 — 같은 구간에서 품질만 겹치던 후보를 뺐다(chat 22 -> 12, embed 2 유지).
+v8 정리 — 같은 구간에서 품질만 겹치던 후보를 뺐다(chat 22 -> 13, embed 2 유지).
   18GB 급(qwen3.6:27b·gemma4:26b·qwen3-coder:30b·무검열 26~27B)은 가중치 상한
   18.4GB 에 거의 붙어 실제로는 거의 적재되지 않았고, 9B 급 범용·튜닝 모델과
   e2b·Llama 경량은 바로 위·아래 후보와 역할이 겹쳤다. 이미 받아 둔 사용자는
   모델 화면의 "미등록 설치 모델" 패널에서 계속 보고 지울 수 있다(자동 삭제 없음).
+  코딩 상 단계 실험 대안으로 Qwen3.8 27B UD-IQ4_XS(14.4GB) 하나를 더했다.
 
 메모리 예산이 이 파일의 출발점이다. MEMORY_BUDGET_GB 를 넘겨 적재할 수 없는
 모델은 아예 담지 않는다 — 목록에만 있으면 디스크만 먹고 사다리는 매번 그 아래로
@@ -152,6 +153,21 @@ _ALL: List[CatalogEntry] = [
                  run_gb=15.0, ctx_k=384, vision=True,
                  group="advanced", recommended=False,
                  note="에이전트 코딩"),
+    # Qwen 3.8 27B 의 Unsloth Dynamic(UD) imatrix IQ4_XS GGUF. 공식 qwen3.8:27b(Q4 약
+    # 18GB)는 가중치 상한에 붙어 REPLACED 에 있지만, 이 양자화본은 14.4GB 라 20GB
+    # 예산 상 단계에 들어온다. 파일명 Qwen3.8-27B-UD-IQ4_XS.gguf (HF 목록 기준).
+    # 같은 모델이라 #17790(/v1/chat/completions 무응답, ROCm) 영향을 받을 수 있어
+    # 코딩 상 단계의 마지막 대안으로만 둔다 — 자동 설치·우선 선택 대상이 아니다.
+    # 이미지 입력은 mmproj 별도 파일이 필요해 vision=False, 컨텍스트는 실측 전 미상.
+    CatalogEntry("hf.co/unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS",
+                 "코딩 상 단계 실험 대안 (Qwen3.8 IQ4_XS)", 14.4,
+                 "Qwen 3.8 27B dense, Unsloth Dynamic IQ4_XS GGUF. 도구 호출을 지원하지만 "
+                 "Ollama OpenAI 호환 엔드포인트(/v1/chat/completions) 무응답 보고가 있어 "
+                 "설치 후 실제 도구 호출 응답을 확인하고 쓰세요. 기본 thinking 이 켜져 있어 "
+                 "응답이 느릴 수 있습니다.",
+                 run_gb=14.4, ctx_k=0,
+                 group="advanced", recommended=False,
+                 note="실험 · IQ4_XS"),
     CatalogEntry("qwen3.5:4b-q4_K_M", "저사양 공용 폴백 (선택)", 3.3,
                  "공식 Qwen 3.5 4B Q4_K_M. 작은 모델이므로 실행 품질은 "
                  "실측이 필요합니다. 저사양 옵션이며 기본 설치에서 제외합니다.",
