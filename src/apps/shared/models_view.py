@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .widgets import PanelHost, ScrollArea, Disclosure, note, set_text, text_box, wrap_to_parent
+from . import speech_models_view
 
 
 def model_display_name(tag, limit=35):
@@ -462,7 +463,8 @@ def build(parent, w):
     w.model_tabs.pack(fill='both', expand=True)
     pages = (('stack', '현재 스택', _stack),
              ('choose', '설치 · 모델 관리', _choose),
-             ('disk', '디스크 사용량', _disk))
+             ('disk', '디스크 사용량', _disk),
+             ('speech', '음성 인식 (자막)', speech_models_view.build))
     w.model_pages = {}
     for key, title, builder in pages:
         page = ttk.Frame(w.model_tabs, padding=(5, 7))
@@ -472,6 +474,11 @@ def build(parent, w):
     # Most users open Models to browse or manage installations. The runtime
     # stack remains one click away, and the Ollama repair action selects it.
     w.model_tabs.select(w.model_pages['choose'])
+    # 음성 인식 탭은 열 때마다 엔진·모델 상태를 다시 확인한다(파일 확인만, 네트워크 없음).
+    def tab_changed(_event):
+        if w.model_tabs.select() == str(w.model_pages['speech']):
+            w.refresh_speech_status()
+    w.model_tabs.bind('<<NotebookTabChanged>>', tab_changed, add='+')
 
 
 def _stack(parent, w):

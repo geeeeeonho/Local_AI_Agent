@@ -937,3 +937,28 @@ def test_folder_runs_skip_media_that_already_have_subtitles(tmp_path, fake_engin
     assert again.results == () and len(again.skipped) == 5
     assert len(list((tmp_path / 'user_data').rglob('result-cpu.calls'))) == calls
     assert not list(folder.rglob('* (2).srt'))                       # 사본을 만들지 않는다
+
+
+def test_speech_models_live_in_the_models_screen_with_a_shortcut_from_subtitles(ui, tmp_path, fake_engine):
+    from test_desktop_ui import pump
+    from integrations.speech.engine import SpeechEngine
+    w, svc, _ = ui
+    empty = SpeechEngine(tmp_path / 'none', tmp_path / 'none-models')
+    svc.subtitles.engine = empty
+    svc.subtitles.supported = staticmethod(lambda: (True, ''))
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: 'Models' in w.subtitle_status.get() and w.subtitle_status_label.action.winfo_ismapped(),
+         timeout=8)
+    assert not hasattr(w, 'subtitle_model_table')              # 자막 화면에는 관리 표가 없다
+    assert w.subtitle_status_label.action.cget('text') == 'Models에서 받기 →'
+    w.subtitle_status_label.action.invoke()
+    pump(w, lambda: w.current_page == 'models' and
+         w.model_tabs.select() == str(w.model_pages['speech']), timeout=5)
+    pump(w, lambda: len(w.speech_model_table.get_children()) == len(speech.MODELS), timeout=8)
+    states = {key: w.speech_model_table.item(key, 'values')[3] for key in w.speech_model_table.get_children()}
+    assert set(states.values()) == {'-'}
+    svc.subtitles.engine = fake_engine                         # 모델을 받은 뒤: 두 화면 모두 갱신
+    w.refresh_speech_status()
+    pump(w, lambda: w.speech_model_table.item('large-v3-turbo', 'values')[3] == '설치됨', timeout=8)
+    assert w.subtitle_model.get() == 'large-v3-turbo · 권장'
+    assert not w.subtitle_status_label.action.winfo_ismapped()

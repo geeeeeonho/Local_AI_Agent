@@ -19,13 +19,14 @@ from .themes import themed
 from . import views
 from .translation_controller import TranslationController
 from .subtitle_controller import SubtitleController
+from .speech_models_controller import SpeechModelsController
 from .tools_view import ToolsController
 from .models_view import ModelAccordion, CatalogColumns, model_display_name
 from .model_groups import group_catalog
 from .widgets import ScrollArea
 
 
-class DesktopWindow(TranslationController, SubtitleController, ToolsController):
+class DesktopWindow(TranslationController, SubtitleController, SpeechModelsController, ToolsController):
     def __init__(self, app, services, *, root=None, start_polling=True):
         self.app, self.spec, self.services = app, SPECS[app], services
         self.root = root if root is not None else tk.Tk()
@@ -318,6 +319,9 @@ class DesktopWindow(TranslationController, SubtitleController, ToolsController):
         if event.topic=='runtime.progress' and data.get('service')=='subtitles':
             if hasattr(self,'subtitle_status'):
                 self.subtitle_progress_event(data)
+            return
+        if event.topic=='runtime.progress' and data.get('service')=='speech-models':
+            self.speech_progress_event(data)
             return
         if event.topic.startswith('agent.') and self.agent_session is not None:
             if data.get('session')!=self.agent_session.id:return

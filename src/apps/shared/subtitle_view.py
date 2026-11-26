@@ -102,8 +102,13 @@ def build(parent, w, toolbar=None):
     row = ttk.Frame(basic); row.pack(fill='x', pady=(6, 0))
     ttk.Label(row, text='인식 모델').pack(side='left')
     ttk.Button(row, text='↻', width=3, command=w.refresh_subtitle_status).pack(side='right', padx=(4, 0))
+    if 'models' in w.spec.pages:      # 모델 설치·삭제는 Models 화면이 맡는다
+        ttk.Button(row, text='모델 관리 →', command=w.open_speech_models).pack(side='right', padx=(4, 0))
     w.subtitle_model_box = ttk.Combobox(row, textvariable=w.subtitle_model, values=(), state='readonly')
     w.subtitle_model_box.pack(side='left', fill='x', expand=True, padx=(6, 0))
+    engine_label = ttk.Label(basic, textvariable=w.subtitle_engine_text, style='Muted.TLabel',
+                             justify='left', wraplength=600)
+    engine_label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(engine_label, inset=40)
 
     # 번역 자막: 기존 번역 도구(로컬 LLM)를 그대로 쓴다.
     link = ttk.LabelFrame(body, text='번역 자막', padding=12); link.pack(fill='x', pady=(0, 8))
@@ -153,29 +158,6 @@ def build(parent, w, toolbar=None):
                '예: 사토 유키, LocalAI, 쿠버네티스')
     w.subtitle_prompt_text = text_box(hint, height=2, expand=False)
     w.subtitle_prompt_text.configure(state='normal')
-
-    manage = ttk.LabelFrame(body, text='음성 인식 엔진 · 모델', padding=12); manage.pack(fill='x', pady=(0, 8))
-    engine_label = ttk.Label(manage, textvariable=w.subtitle_engine_text, style='Muted.TLabel',
-                             justify='left', wraplength=600)
-    engine_label.pack(anchor='w', fill='x'); wrap_to_parent(engine_label, inset=40)
-    table = ttk.Treeview(manage, columns=('model', 'size', 'gpu', 'state'), show='headings', height=6,
-                         selectmode='browse')
-    for name, heading, width in (('model', '모델', 260), ('size', '크기', 80), ('gpu', 'GPU 메모리', 90),
-                                 ('state', '상태', 90)):
-        table.heading(name, text=heading)
-        table.column(name, width=width, stretch=name == 'model')
-    table.pack(fill='x', pady=(8, 4))
-    w.subtitle_model_table = table
-    w.subtitle_model_note = ttk.Label(manage, text='', style='Muted.TLabel', justify='left', wraplength=600)
-    w.subtitle_model_note.pack(anchor='w', fill='x'); wrap_to_parent(w.subtitle_model_note, inset=40)
-    table.bind('<<TreeviewSelect>>', lambda _e: w.describe_subtitle_model())
-    buttons = ttk.Frame(manage); buttons.pack(fill='x', pady=(6, 0))
-    w.subtitle_engine_button = ttk.Button(buttons, text='엔진 설치 / 복구', command=w.install_subtitle_engine)
-    w.subtitle_engine_button.pack(side='left')
-    w.subtitle_get_button = ttk.Button(buttons, text='선택 모델 받기 / 복구', command=w.download_subtitle_model)
-    w.subtitle_get_button.pack(side='left', padx=(6, 0))
-    w.subtitle_remove_button = ttk.Button(buttons, text='선택 모델 삭제', command=w.remove_subtitle_model)
-    w.subtitle_remove_button.pack(side='left', padx=(6, 0))
 
     notebook = ttk.Notebook(body); notebook.pack(fill='x', pady=(0, 6))
     preview, translated, report = ttk.Frame(notebook), ttk.Frame(notebook), ttk.Frame(notebook)
