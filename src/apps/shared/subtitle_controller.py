@@ -247,14 +247,29 @@ class SubtitleController:
 
     # ── 상태 · 모델 관리 ──
     def refresh_subtitle_status(self, *, preserve_message=False):
+        if self.runner.busy('tools.subtitles.status'):
+            if preserve_message:
+                self._subtitle_status_refresh_pending = True
+            return
+
+        def rerun_pending():
+            if getattr(self, '_subtitle_status_refresh_pending', False):
+                self._subtitle_status_refresh_pending = False
+                self.root.after_idle(lambda: self.refresh_subtitle_status(preserve_message=True))
+                return True
+            return False
+
         def fetch():
             return (self.services.subtitles.status(), self.services.subtitles.management(),
                     self.services.subtitles.supported())
 
         def done(found):
+            if rerun_pending():
+                return
             status, access, (supported, reason) = found
             self._subtitle_engine = status
             self._subtitle_access = access
+            self._subtitle_supported = supported
             installed = [KEY_LABELS[key] for key in status.models]
             self.subtitle_model_box.configure(values=installed)
             if self.subtitle_model.get() not in installed:
@@ -292,15 +307,27 @@ class SubtitleController:
             if not status.builds:
                 self.subtitle_say('Failed', '음성 인식 엔진이 없습니다. 관리자 계정에서 [엔진 설치 / 복구]를 누르세요.')
             elif not status.models:
-                self.subtitle_say('Failed', '음성 인식 모델이 없습니다. 아래 표에서 모델을 골라 [선택 모델 받기]를 누르세요'
+                self.subtitle_say('Failed', '음성 인식 모델이 없습니다. 아래 표에서 모델을 골라 [선택 모델 받기 / 복구]를 누르세요'
                                   ' (권장: large-v3-turbo, 최고 정확도: large-v3).')
             elif not self.runner.busy('tools.subtitles'):
                 self.subtitle_say('Waiting' if not self._subtitle_files else 'Ready',
                                   '자막을 만들 영상이나 음성 파일을 선택하세요.' if not self._subtitle_files else
                                   '준비됨 · [자막 만들기]를 누르세요.')
             self.update_subtitle_destination()
-        self.run_task('tools.subtitles.status', fetch, done, mutate=False, announce=False,
-                      error=lambda e: self.subtitle_say('Failed', '엔진 상태 확인 실패: ' + friendly(e)))
+        def failed(exc):
+            if rerun_pending():
+                return
+            if not preserve_message:
+                self.subtitle_say('Failed', '엔진 상태 확인 실패: ' + friendly(exc))
+            else:
+                self.log('[자막] 엔진 상태 확인 실패: ' + friendly(exc), level='error')
+            if (getattr(self, '_subtitle_supported', False)
+                    and getattr(self, '_subtitle_access', {}).get('allowed')
+                    and not self._subtitle_management_busy()):
+                for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button):
+                    button.configure(state='normal')
+            self.update_subtitle_destination()
+        self.run_task('tools.subtitles.status', fetch, done, mutate=False, announce=False, error=failed)
 
     def describe_subtitle_model(self):
         selected = self.subtitle_model_table.selection()

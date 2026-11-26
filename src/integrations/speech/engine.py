@@ -111,9 +111,21 @@ class SpeechEngine:
 
     def manifest(self):
         try:
-            return json.loads((self.root / 'install.json').read_text(encoding='utf-8'))
+            data = json.loads((self.root / 'install.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             return {}
+        if not isinstance(data, dict):
+            return {}
+        # A syntactically valid but damaged/old manifest must be repairable.
+        for name in ('whisper', 'ffmpeg', 'vad'):
+            if not isinstance(data.get(name), dict):
+                data.pop(name, None)
+        whisper = data.get('whisper', {})
+        variants = whisper.get('variants')
+        whisper['variants'] = ({key: value for key, value in variants.items()
+                                if key in VARIANTS and isinstance(value, dict)}
+                               if isinstance(variants, dict) else {})
+        return data
 
     def model_available(self, key):
         path = self.model_path(key)
@@ -131,6 +143,26 @@ class SpeechEngine:
                 return stream.read(4) == b'lmgg'  # little-endian GGML magic
         except OSError:
             return False
+
+    def vad_available(self):
+        path = self.vad_model()
+        if not path.is_file():
+            return False
+        if os.environ.get('LOCAL_AI_WHISPER_CLI'):
+            return True  # explicit external development/test CLI
+        from .install import VAD_SHA256, VAD_SIZE
+        from .download import _hash_existing
+        try:
+            return (path.stat().st_size == VAD_SIZE
+                    and _hash_existing(path, 'sha256').hexdigest() == VAD_SHA256)
+        except OSError:
+            return False
+
+    def ffmpeg_available(self, *, verify=False):
+        exe = self.ffmpeg()
+        if not exe.is_file():
+            return False
+        return not verify or probe_executable(exe, '-version', expect='ffmpeg version')[0]
 
     def status(self, *, verify_runtime=False):
         issues, builds, models, damaged = [], [], [], []
@@ -158,17 +190,9 @@ class SpeechEngine:
                     ffmpeg = False
         if self.ffmpeg().is_file() != self.ffmpeg('ffprobe').is_file():
             issues.append('FFmpeg/FFprobe 일부 파일 누락')
-        vad = self.vad_model().is_file()
-        if vad and verify_runtime:
-            from .install import VAD_SHA256, VAD_SIZE
-            from .download import _hash_existing
-            try:
-                vad = (self.vad_model().stat().st_size == VAD_SIZE
-                       and _hash_existing(self.vad_model(), 'sha256').hexdigest() == VAD_SHA256)
-            except OSError:
-                vad = False
-            if not vad:
-                issues.append('VAD 복구 필요')
+        vad = self.vad_available() if verify_runtime else self.vad_model().is_file()
+        if verify_runtime and self.vad_model().is_file() and not vad:
+            issues.append('VAD 복구 필요')
         manifest = self.manifest().get('whisper') or {}
         if builds and verify_runtime and not os.environ.get('LOCAL_AI_WHISPER_CLI'):
             from runtime_versions import WHISPER_CPP_VERSION, WHISPER_CPP_BUILD_TAG
@@ -246,6 +270,8 @@ class SpeechEngine:
                 [str(probe), '-v', 'error', '-show_entries', 'format=duration',
                  '-of', 'default=noprint_wrappers=1:nokey=1', str(media)],
                 capture_output=True, timeout=60, creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL)
+            if result.returncode != 0:
+                return None
             return int(float(result.stdout.decode('ascii', 'ignore').strip()) * 1000)
         except (OSError, ValueError, subprocess.TimeoutExpired):
             return None
@@ -259,7 +285,7 @@ class SpeechEngine:
                 [str(probe), '-v', 'error', '-select_streams', 'a', '-show_entries',
                  'stream=index', '-of', 'csv=p=0', str(media)],
                 capture_output=True, timeout=60, creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL)
-            return bool(result.stdout.strip())
+            return bool(result.stdout.strip()) if result.returncode == 0 else None
         except (OSError, subprocess.TimeoutExpired):
             return None
 
@@ -308,6 +334,7 @@ class SpeechEngine:
         if 'cpu' not in builds and 'cpu' in status.builds:
             builds.append('cpu')
         errors = []
+        use_vad = vad and self.vad_available()
         for attempt, build in enumerate(builds):
             if not self.cli(build).is_file():
                 continue
@@ -320,7 +347,7 @@ class SpeechEngine:
                     '-t', str(threads or _threads())]
             if preset['dtw']:
                 args += ['-dtw', speech.model(model_key).dtw, '-nfa']
-            if vad and self.vad_model().is_file():
+            if use_vad:
                 args += ['--vad', '-vm', self.vad_model()] + (list(SENSITIVE_VAD) if sensitive else [])
             if prompt.strip():
                 args += ['--prompt', ' '.join(prompt.split())[:600]]

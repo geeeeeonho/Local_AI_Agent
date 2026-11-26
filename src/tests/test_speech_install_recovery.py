@@ -22,7 +22,7 @@ def test_actual_release_contract():
 
 def _mock_install(monkeypatch, tmp_path, *, bad=()):
     monkeypatch.setattr(install, 'supported', lambda: (True, ''))
-    monkeypatch.setattr(install, '_assets', lambda url: {})
+    monkeypatch.setattr(install, '_assets', lambda url, **kw: {})
     calls = []
     engine = SpeechEngine(tmp_path)
     def whisper(eng, variant, assets, log, cancelled):
@@ -155,3 +155,39 @@ def test_exclusive_lock_blocks_duplicate_mutation(tmp_path):
                 pytest.fail('concurrent mutation allowed')
     with download.exclusive_lock(path):
         pass
+
+
+def test_corrupt_manifest_can_be_repaired(monkeypatch, tmp_path):
+    engine, calls = _mock_install(monkeypatch, tmp_path)
+    tmp_path.joinpath('install.json').write_text('{"whisper": {"variants": "bad"}, "ffmpeg": []}',
+                                                encoding='utf-8')
+    assert install.install(tmp_path, gpu=False)
+    assert calls == ['cpu', 'ffmpeg', 'vad']
+    assert engine.manifest()['whisper']['variants']['cpu']['asset'] == install.ASSETS['cpu']
+
+
+def test_cancel_before_metadata_network(monkeypatch):
+    monkeypatch.setattr(download.urllib.request, 'urlopen', lambda *a, **kw: pytest.fail('unexpected network'))
+    with pytest.raises(download.DownloadCancelled):
+        download.get_json('https://example.com/release', cancelled=lambda: True)
+
+
+def test_failed_ffprobe_is_not_no_audio(monkeypatch, tmp_path):
+    from integrations.speech import engine as module
+    eng = SpeechEngine(tmp_path, tmp_path / 'models')
+    exe = eng.ffmpeg('ffprobe')
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b'broken')
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw:
+                        type('Result', (), {'returncode': 1, 'stdout': b'', 'stderr': b'error'})())
+    assert eng.has_audio(tmp_path / 'media.mp4') is None
+
+
+def test_corrupt_vad_is_not_used(monkeypatch, tmp_path):
+    eng = SpeechEngine(tmp_path, tmp_path / 'models')
+    monkeypatch.delenv('LOCAL_AI_WHISPER_CLI', raising=False)
+    vad = eng.vad_model()
+    vad.parent.mkdir(parents=True)
+    vad.write_bytes(b'broken')
+    assert not eng.vad_available()
+    assert not eng.status(verify_runtime=True).vad

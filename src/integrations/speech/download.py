@@ -78,29 +78,34 @@ def _retry(action, cancelled=None):
         except Exception as exc:
             if attempt == ATTEMPTS - 1 or not _retryable(exc):
                 raise
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
             # Short bounded delay, with cancellation during backoff.
             for _ in range(5 * (attempt + 1)):
                 _cancel(cancelled)
                 time.sleep(0.2)
 
 
-def _read_small(url, *, accept, limit, timeout):
+def _read_small(url, *, accept, limit, timeout, cancelled=None):
     def read():
+        _cancel(cancelled)
         with urllib.request.urlopen(_request(url, accept=accept), timeout=timeout) as response:
             data = response.read(limit + 1)
+        _cancel(cancelled)
         if len(data) > limit:
             raise ValueError('Download is larger than expected: ' + url)
         return data
-    return _retry(read)
+    return _retry(read, cancelled)
 
 
-def get_json(url, *, limit=4 * 1024 * 1024, timeout=45):
+def get_json(url, *, limit=4 * 1024 * 1024, timeout=45, cancelled=None):
     return json.loads(_read_small(url, accept='application/vnd.github+json, application/json',
-                                  limit=limit, timeout=timeout).decode('utf-8'))
+                                  limit=limit, timeout=timeout, cancelled=cancelled).decode('utf-8'))
 
 
-def get_bytes(url, *, limit, timeout=45):
-    return _read_small(url, accept='application/octet-stream', limit=limit, timeout=timeout)
+def get_bytes(url, *, limit, timeout=45, cancelled=None):
+    return _read_small(url, accept='application/octet-stream', limit=limit, timeout=timeout,
+                       cancelled=cancelled)
 
 
 def _hash_existing(path, algorithm, cancelled=None):

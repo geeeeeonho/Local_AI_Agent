@@ -310,7 +310,7 @@ class SubtitleService:
 
     def _audio(self, media, work, duration, report, cancelled):
         suffix = media.suffix.lower()
-        if self.engine.ffmpeg().is_file():
+        if self.engine.ffmpeg_available(verify=True):
             return self.engine.extract_audio(media, work / 'audio.wav', duration_ms=duration,
                                              progress=lambda f: report('audio', f, ''), cancelled=cancelled)
         if suffix in speech.NATIVE_AUDIO:

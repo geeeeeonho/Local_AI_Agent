@@ -55,8 +55,10 @@ def _asset_digest(asset):
     return value.split(':', 1)[1].lower()
 
 
-def _assets(release_url):
-    release = download.get_json(release_url)
+def _assets(release_url, *, cancelled=None):
+    release = download.get_json(release_url, cancelled=cancelled)
+    if not isinstance(release, dict) or not isinstance(release.get('assets'), list):
+        raise ValueError('Invalid release metadata: ' + release_url)
     return {str(asset.get('name')): asset for asset in release.get('assets') or ()}
 
 
@@ -142,7 +144,10 @@ def _install_whisper(engine, variant, assets, log, cancelled):
     final.parent.mkdir(parents=True, exist_ok=True)
     _replace_dir(folder, final)
     shutil.rmtree(staging, ignore_errors=True)
-    archive.unlink(missing_ok=True)
+    try:
+        archive.unlink(missing_ok=True)
+    except OSError as exc:
+        _say(log, '자막 엔진: 검증된 다운로드 캐시 삭제 보류: ' + str(exc))
     return {'asset': ASSETS[variant], 'sha256': _asset_digest(asset)}
 
 
@@ -161,14 +166,14 @@ def _ffmpeg_asset(assets):
 
 
 def _install_ffmpeg(engine, log, cancelled):
-    assets = _assets(FFMPEG_RELEASE)
+    assets = _assets(FFMPEG_RELEASE, cancelled=cancelled)
     asset = _ffmpeg_asset(assets)
     name = asset['name']
     digest = _asset_digest(asset)
     sums = assets.get('checksums.sha256')
     if sums is None:
         raise ValueError('ffmpeg release has no checksums.sha256')
-    listed = download.get_bytes(sums['browser_download_url'], limit=256 * 1024).decode('utf-8', 'replace')
+    listed = download.get_bytes(sums['browser_download_url'], limit=256 * 1024, cancelled=cancelled).decode('utf-8', 'replace')
     line = next((row for row in listed.splitlines() if row.strip().endswith(name)), '')
     if line.split()[:1] != [digest]:
         raise ValueError('ffmpeg checksum file does not match GitHub digest')
@@ -192,7 +197,10 @@ def _install_ffmpeg(engine, log, cancelled):
             raise ValueError('%s did not start: %s' % (name, detail))
     _replace_dir(ready, engine.root / 'ffmpeg')
     shutil.rmtree(staging, ignore_errors=True)
-    archive.unlink(missing_ok=True)
+    try:
+        archive.unlink(missing_ok=True)
+    except OSError as exc:
+        _say(log, '자막 엔진: 검증된 다운로드 캐시 삭제 보류: ' + str(exc))
     return {'tag': FFMPEG_BUILD_TAG, 'asset': name, 'sha256': digest}
 
 
@@ -296,7 +304,7 @@ def _install_components(engine, *, log, cancelled, gpu, force):
         variants.pop(variant, None)
         try:
             if assets is None:
-                assets = _assets(WHISPER_RELEASE)
+                assets = _assets(WHISPER_RELEASE, cancelled=cancelled)
             variants[variant] = _install_whisper(engine, variant, assets, log, cancelled)
         except download.DownloadCancelled:
             raise
@@ -382,6 +390,7 @@ def install_model(key, models_dir=None, *, progress=None, cancelled=None):
     item = speech.model(key)
     engine = SpeechEngine(models=models_dir)
     target = engine.model_path(key)
+    _check_cancel(cancelled)
     with download.exclusive_lock(target.with_suffix('.bin.lock')):
         return download.fetch(speech.MODEL_URL + item.file, target, algorithm='sha1', expected=item.sha1,
                               limit=int(item.size_mib * 1.15 * 1048576), progress=progress,
