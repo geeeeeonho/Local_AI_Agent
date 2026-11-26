@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """model_catalog — 설치/관리용 모델 카탈로그 (단일 소스).
 
-MODEL_CATALOG_v7 — 기본 5종(상/중) + 역할별 최소 대체 후보. 모델용 메모리 예산 ~20GB.
+MODEL_CATALOG_v8 — 기본 5종(상/중) + 역할별 최소 대체 후보. 모델용 메모리 예산 ~20GB.
+
+v8 정리 — 같은 구간에서 품질만 겹치던 후보를 뺐다(chat 22 -> 12, embed 2 유지).
+  18GB 급(qwen3.6:27b·gemma4:26b·qwen3-coder:30b·무검열 26~27B)은 가중치 상한
+  18.4GB 에 거의 붙어 실제로는 거의 적재되지 않았고, 9B 급 범용·튜닝 모델과
+  e2b·Llama 경량은 바로 위·아래 후보와 역할이 겹쳤다. 이미 받아 둔 사용자는
+  모델 화면의 "미등록 설치 모델" 패널에서 계속 보고 지울 수 있다(자동 삭제 없음).
 
 메모리 예산이 이 파일의 출발점이다. MEMORY_BUDGET_GB 를 넘겨 적재할 수 없는
 모델은 아예 담지 않는다 — 목록에만 있으면 디스크만 먹고 사다리는 매번 그 아래로
@@ -30,7 +36,7 @@ import os
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-MARKER = "MODEL_CATALOG_v7"
+MARKER = "MODEL_CATALOG_v8"
 
 # ── 하드웨어 예산 ──────────────────────────────────────────────────
 #  이 PC 가 모델에 내줄 수 있는 최대 상주 메모리(GB).
@@ -97,11 +103,6 @@ _ALL: List[CatalogEntry] = [
                  "거부율·품질 수치는 독립 재평가 전까지 보증하지 않습니다.",
                  run_gb=15.0, ctx_k=256, vision=False,
                  uncensored=True, note="무검열 · 텍스트 입력"),
-    CatalogEntry("qwen3.6:27b", "코딩 에이전트 (Open Interpreter)", 18.0,
-                 "코딩 1순위 — dense 27B, SWE-bench Verified 77.2. 로컬에서 도구 호출이 가장 "
-                 "안정적인 Qwen3 계열이고 Ollama OpenAI 호환 엔드포인트에서 검증됐다.",
-                 run_gb=18.0, ctx_k=256, vision=True,
-                 note="품질 최고"),
     CatalogEntry("gemma4:12b", "맥락/범용 + Gemma 폴백", 7.6,
                  "맥락·범용 + 에이전트 안전 폴백. Gemma 4 12B dense, 256K·멀티모달·함수호출.",
                  run_gb=7.6, ctx_k=256, vision=True,
@@ -125,34 +126,10 @@ _ALL: List[CatalogEntry] = [
                  run_gb=16.0, ctx_k=256, vision=True,
                  group="advanced", recommended=False,
                  note="도구 호출 · QAT"),
-    CatalogEntry("gemma4:26b", "Gemma 정식 26B (검열)", 18.0,
-                 "정식 26B-A4B MoE — 템플릿/툴콜 보장(검열 있음). 범용·맥락 1순위.",
-                 run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 note="이미지·툴콜"),
-    CatalogEntry("gemma4:e2b-it-qat", "Gemma 경량 멀티모달 폴백", 4.3,
-                 "Gemma 4 E2B QAT 공식 GGUF. 128K·이미지·도구 호출을 지원하며 "
-                 "저사양 문서·범용의 별도 선택지입니다.",
-                 run_gb=4.7, ctx_k=128, vision=True,
-                 group="advanced", recommended=False, note="저사양 · 비전"),
     # ── 무검열 그룹 (번역·창작·검열 없는 범용) ──
     #  CORE 의 ARA 는 "거부율 최저" 로 뽑힌 특수 abliteration 이고, 아래는 크기별
     #  사다리를 메우는 축이다. 예전에는 15GB 와 5GB 사이가 통째로 비어 있어서,
     #  여유 8~14GB 인 PC 는 무검열 작업을 8b 로밖에 못 했다.
-    CatalogEntry("huihui_ai/gemma-4-abliterated:26b-qat",
-                 "무검열 1순위 (Gemma 4 QAT abliterated)", 18.0,
-                 "무검열 + QAT — 검열만 제거하고 양자화 내성은 유지한 26B-A4B. "
-                 "멀티모달·256K·툴콜. 무검열 상단에서 형식이 가장 덜 깨진다.",
-                 run_gb=18.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 uncensored=True, note="형식 안정"),
-    CatalogEntry("huihui_ai/Qwen3.6-abliterated:27b",
-                 "무검열 번역·다국어 (Qwen3.6)", 17.0,
-                 "무검열 Qwen3.6 27B — Qwen 계열이 한·중·일 토크나이즈가 가장 좋아 "
-                 "번역·다국어 작업의 무검열 상단으로 적합. 256K·멀티모달.",
-                 run_gb=17.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False,
-                 uncensored=True, note="번역·다국어"),
     # Ollama supports explicit Hugging Face GGUF tags in hf.co/owner/repo:quant form.
     # TrevorJS Q8_0 (~12.7 GB) is the single recommended uncensored
     # middle-tier Gemma 4 quantization; no TrevorJS Q4 alternate is offered.
@@ -168,48 +145,18 @@ _ALL: List[CatalogEntry] = [
                  "스캔본·스크린샷 번역용. 256K.",
                  run_gb=6.1, ctx_k=256, vision=True, uncensored=True, note="이미지",
                  group="advanced", recommended=False),
-    CatalogEntry("mannix/llama3.1-8b-abliterated:q5_K_M", "무검열 경량 (Llama)", 5.7,
-                 "Llama 3.1 8B abliterated — Ollama 에서 가장 많이 받은 abliterated Llama. "
-                 "Qwen 이 안 맞을 때의 다른 계열 선택지.",
-                 run_gb=5.7, ctx_k=128, uncensored=True, note="다른 계열",
-                 group="advanced", recommended=False),
     # ── 코딩 ──
-    CatalogEntry("qwen3-coder:30b", "코딩 MoE (속도 우선)", 18.0,
-                 "30B-A3B MoE(활성 ~3B) — qwen3.6:27b 보다 품질은 조금 낮지만 훨씬 빠르다. "
-                 "긴 에이전트 루프를 자주 돌린다면 이쪽.",
-                 run_gb=18.0, ctx_k=256,
-                 group="advanced", recommended=False,
-                 note="속도 우선"),
     CatalogEntry("devstral-small-2:24b", "에이전트 코딩 특화 (16GB급)", 15.0,
-                 "다중파일·디버깅 루프·툴콜링(Apache). 384K 컨텍스트. 18GB 급이 안 뜨는 "
-                 "구간의 코딩 1순위.",
+                 "다중파일·디버깅 루프·툴콜링(Apache). 384K 컨텍스트. "
+                 "20GB 예산에서 코딩 상 단계 1순위.",
                  run_gb=15.0, ctx_k=384, vision=True,
                  group="advanced", recommended=False,
                  note="에이전트 코딩"),
-    # Qwen 3.8은 Ollama 공식 태그(27B/Q4 약 18GB, 비전·툴콜)지만,
-    # 일부 Ollama 0.32.13 ROCm 환경에서 OpenAI 호환 /v1/chat/completions
-    # 무응답 이슈(#17790)가 있어 자동 설치하지 않습니다. 선택 후 실행 검증 필요.
-    CatalogEntry("qwen3.5:9b", "Qwen 3.5 범용·도구·문서 중간", 6.6,
-                 "공식 Qwen 3.5 9B. 도구 호출·멀티모달·256K를 제공하며 "
-                 "코딩·한국어·문서 중간급 대체 후보입니다.",
-                 run_gb=7.0, ctx_k=256, vision=True,
-                 group="advanced", recommended=False, note="범용·비전·도구"),
     CatalogEntry("qwen3.5:4b-q4_K_M", "저사양 공용 폴백 (선택)", 3.3,
                  "공식 Qwen 3.5 4B Q4_K_M. 작은 모델이므로 실행 품질은 "
                  "실측이 필요합니다. 저사양 옵션이며 기본 설치에서 제외합니다.",
                  run_gb=3.8, ctx_k=256, vision=True,
                  group="advanced", recommended=False, note="하 단계 · 선택"),
-    CatalogEntry("ministral-3:14b", "도구·에이전트 중간 (Mistral)", 9.1,
-                 "Ministral 3 14B. 도구 호출·JSON 출력·이미지 입력 지원. "
-                 "로컬 Open Interpreter 호환성 검증 후 우선순위를 조정합니다.",
-                 run_gb=9.6, ctx_k=256, vision=True,
-                 group="advanced", recommended=False, note="툴콜·JSON"),
-    CatalogEntry("huihui_ai/qwen3.5-abliterated:9b",
-                 "무검열 중간 (Qwen 3.5 튜닝)", 6.6,
-                 "Huihui AI의 공개 Qwen3.5 9B abliterated. 번역·창작 대안이며 "
-                 "실제 거부율/출력 형식과 라이선스는 별도 검증이 필요합니다.",
-                 run_gb=7.0, ctx_k=256, vision=True, uncensored=True,
-                 group="advanced", recommended=False, note="튜닝 · 무검열 대안"),
     CatalogEntry("qwen2.5-coder:14b", "코딩 중간", 9.0,
                  "코딩 중간 롤백 — 10GB 급에서 코드블록·도구 호출이 안정적이라고 실측된 단계.",
                  run_gb=9.0, ctx_k=32,
@@ -282,15 +229,20 @@ def _split(entries: List[CatalogEntry]):
 
 CORE, ADVANCED = _split(_ALL)
 
-# 과거/하위 세트 → 새 세트로 대체되어 삭제 권장
+# 과거/하위 세트 → 새 세트로 대체되어 삭제 권장.
+# v8 에서 정리한 후보는 여기에 넣지 않는다. 고장 난 모델이 아니라 목록에서
+# 빠졌을 뿐이라 "대체됨 — 삭제 권장" 이 아니라 "카탈로그 외" 로 보여야 한다
+# (launcher/actions/model_manage.py 의 표시 구분).
 REPLACED: List[str] = [
     "gemma-agent-fixed:Q3_K_M",
     "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q3_K_M",  # Q4_K_S 로 대체
     "devstral-small:24b",     # Ollama 라이브러리에 없던 이름 — devstral-small-2:24b 로 정정
     "deepseek-coder-v2:16b",  # qwen2.5-coder:14b 와 같은 구간, 세대만 더 오래됨
     "qwen2.5:14b",            # gemma4:12b / gpt-oss:20b 로 대체
-    "qwen3.5:27b",            # Ollama 도구 호출 결함 보고(#14493) — qwen3.6:27b 사용
-    "qwen3.8:27b",            # /v1/chat/completions 무응답 보고 — qwen3.6:27b 사용
+    "qwen3.5:27b",            # Ollama 도구 호출 결함 보고(#14493) — devstral-small-2:24b 사용
+    # Qwen 3.8 공식 태그(27B/Q4 약 18GB, 비전·툴콜). 일부 Ollama 0.32.13 ROCm
+    # 환경에서 OpenAI 호환 /v1/chat/completions 무응답 보고(#17790).
+    "qwen3.8:27b",            # devstral-small-2:24b / gpt-oss:20b 사용
     # 아래는 20GB 예산에서 가중치 상한(18.4GB)을 넘어 절대 적재되지 않는다.
     # 목록에 두면 디스크만 먹고 사다리는 매번 그 아래로 떨어진다.
     "gemma4:31b",

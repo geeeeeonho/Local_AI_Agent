@@ -4,6 +4,14 @@ from apps.shared.model_groups import group_catalog
 from launcher.models import model_catalog as catalog, model_roles as roles
 from services.models.service import ModelService
 
+# MODEL_CATALOG_v8 에서 정리한 후보. 같은 구간의 다른 후보와 역할이 겹쳤다.
+PRUNED_V8 = frozenset({
+    'gemma4:26b', 'qwen3.6:27b', 'qwen3-coder:30b',
+    'huihui_ai/gemma-4-abliterated:26b-qat', 'huihui_ai/Qwen3.6-abliterated:27b',
+    'qwen3.5:9b', 'ministral-3:14b', 'gemma4:e2b-it-qat',
+    'huihui_ai/qwen3.5-abliterated:9b', 'mannix/llama3.1-8b-abliterated:q5_K_M',
+})
+
 
 class RoleCatalogGroupingTests(unittest.TestCase):
     def setUp(self):
@@ -19,7 +27,6 @@ class RoleCatalogGroupingTests(unittest.TestCase):
                              ['상', '중', '하'])
             self.assertTrue(all(x['recommended'] is not None
                                 for x in role['tiers']))
-            self.assertGreater(role['optional_count'], 0)
 
     def test_no_catalog_model_disappears(self):
         tags = {x['tag'] for x in self.groups['extra']}
@@ -46,7 +53,7 @@ class RoleCatalogGroupingTests(unittest.TestCase):
             'hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0')
         self.assertNotIn('hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M',
                          [x['tag'] for x in role['tiers'][1]['options']])
-        self.assertIn('huihui_ai/qwen3.5-abliterated:9b',
+        self.assertIn('huihui_ai/qwen3-vl-abliterated:8b',
                       [x['tag'] for x in role['tiers'][1]['options']])
         self.assertEqual(
             role['tiers'][2]['recommended']['tag'],
@@ -86,9 +93,9 @@ class RoleCatalogGroupingTests(unittest.TestCase):
     def test_only_curated_compact_fallbacks_remain_selectable(self):
         from launcher.models import model_roles
         removed = {'qwen3-vl:8b', 'qwen3.8:27b', 'gemma4:e4b',
-                   'qwen3:8b', 'ministral-3:3b'}
+                   'qwen3:8b', 'ministral-3:3b'} | PRUNED_V8
         self.assertFalse(removed & catalog.catalog_tags())
-        self.assertEqual(len(catalog.catalog_tags()), 24)
+        self.assertEqual(len(catalog.catalog_tags()), 14)
         for role, tiers in model_roles.TIERS.items():
             self.assertEqual(len(tiers), 3, role)
             for i, tier in enumerate(tiers):
@@ -105,6 +112,21 @@ class RoleCatalogGroupingTests(unittest.TestCase):
         self.assertIn(removed, view['extra_installed'])
         self.assertNotIn(removed, view['recommended'])
         self.assertEqual(len(view['recommended']), 5)
+
+    def test_removed_models_are_not_in_catalog(self):
+        tags = catalog.catalog_tags()
+        ladder_tags = {m for lad in roles.LADDERS.values() for m, _need in lad}
+        for tag in sorted(PRUNED_V8):
+            self.assertNotIn(tag, tags, tag)
+            self.assertNotIn(tag, ladder_tags, tag)
+            # 정리 대상일 뿐 고장 난 모델이 아니므로 "대체됨" 으로 표시하지 않는다.
+            self.assertNotIn(tag, catalog.replaced_tags(), tag)
+
+    def test_pruned_models_stay_manageable_if_already_installed(self):
+        service = object.__new__(ModelService)
+        view = service.catalog(installed=set(PRUNED_V8), budget_gb=20.0)
+        self.assertEqual(set(PRUNED_V8), set(view['extra_installed']))
+        self.assertFalse(set(PRUNED_V8) & set(view['recommended']))
 
     def test_unassigned_models_are_still_in_optional_group(self):
         self.assertEqual(
