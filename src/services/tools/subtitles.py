@@ -353,7 +353,7 @@ class SubtitleService:
                 found = detect_language(segment.text)
                 if found and found != main and not ('Chinese' in found and 'Chinese' in main):
                     mismatched.append(segment.start)
-        found = asr_review.suspicious_ranges(segments, spaced=rules.spaced, mismatched=mismatched)
+        found = asr_review.suspicious_ranges(segments, mismatched=mismatched)
         found += [asr_review.Range(start, end, 'possible missing speech')
                   for start, end in asr_review.unrecognized_speech(segments, vad_map)]
         ranges = asr_review.merge_ranges(found, limit=24 if options.quality == 'best' else 12, total=total)
@@ -381,7 +381,9 @@ class SubtitleService:
             language = ('auto' if item.reason in ('language mismatch', 'possible missing speech')
                         or chosen == 'auto' and code == 'und'
                         else chosen if chosen != 'auto' else speech.whisper_code(code))
-            original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
+            missing = item.reason == 'possible missing speech'
+            original = [] if missing else [segment for segment in segments
+                                           if segment.end > item.start and segment.start < item.end]
             try:
                 again = self.engine.transcribe(snippet, retry_model, work=folder, language=language,
                                                quality='best', vad=False, prompt=options.prompt,
@@ -396,10 +398,11 @@ class SubtitleService:
                 shutil.rmtree(folder, ignore_errors=True)
             _, candidate = speech.parse_result(again.data, spaced=rules.spaced)
             candidate = asr_review.shift(candidate, item.start)
-            decision = asr_review.choose(item, original, candidate, spaced=rules.spaced)
+            decision = asr_review.choose(item, original, candidate)
             decisions.append(decision)
             if decision.accepted:
-                segments = asr_review.replace_range(segments, item, candidate)
+                segments = (asr_review.insert_range(segments, item, candidate) if missing
+                            else asr_review.replace_range(segments, item, candidate))
         report('review', 1.0, '')
         note = ('re-recognized with ' + retry_model) if ranges else ''
         cache.write_text(json.dumps({'segments': [_segment_dict(item) for item in segments],
@@ -450,7 +453,7 @@ class SubtitleService:
             for name in ('audio.wav',) + tuple('input' + suffix for suffix in sorted(speech.NATIVE_AUDIO)):
                 (work / name).unlink(missing_ok=True)       # 큰 임시 오디오는 끝나면 지운다
         report('write', 0.0, '')
-        cleaned = speech.clean(segments, keep_sounds=options.keep_sounds, spaced=rules.spaced)
+        cleaned = speech.clean(segments, keep_sounds=options.keep_sounds)
         cues = subtitles.build_cues(speech.words_of(cleaned.segments), rules)
         if not cues:
             raise ValueError('No speech was recognized in the file')

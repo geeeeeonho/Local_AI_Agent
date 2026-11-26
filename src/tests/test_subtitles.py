@@ -868,3 +868,35 @@ def test_speech_the_file_language_skipped_is_recognized_again_with_language_dete
     calls = json.loads(next((tmp_path / 'user_data').rglob('result-cpu.calls')).read_text(
         encoding='utf-8').splitlines()[0])
     assert calls[calls.index('-l') + 1] == 'ko'                # 최초 인식은 고른 언어
+
+
+def test_speech_rate_follows_the_script_of_the_text_not_the_file_language():
+    """실측: 중국어 파일 속 영어 문장이 중국어 기준(초당 글자 수)에 걸려 '불가능한 속도'로 기각됐다."""
+    from core.tools import asr_review
+    english = speech.Segment(0, 4000, 'because it is established by law as the first official language', (), 0.9)
+    assert asr_review.evidence(english).plausible_rate
+    chinese = speech.Segment(0, 1000, '我们今天来谈谈新的引擎是如何工作的以及为什么它对每一个', (), 0.9)
+    assert not asr_review.evidence(chinese).plausible_rate        # 1초에 26자는 불가능
+
+
+def test_a_confident_filler_stretched_over_silence_is_removed():
+    """실측(VAD 끔): 30초 무음에 'ご視聴ありがとうございました'(확신도 0.92)."""
+    result = speech.clean([speech.Segment(90000, 119980, 'ご視聴ありがとうございました', (
+        Word(90000, 119980, 'ご視聴ありがとうございました', 0.92),), 0.92)])
+    assert not result.segments and result.removed[0][2] == 'typical hallucination'
+    kept = speech.clean([speech.Segment(0, 2500, 'ご視聴ありがとうございました', (
+        Word(0, 2500, 'ご視聴ありがとうございました', 0.92),), 0.92)])
+    assert kept.segments and kept.flagged                        # 실제로 말한 인사는 지우지 않고 표시만
+
+
+def test_recovered_speech_is_inserted_without_touching_neighbours():
+    """실측: 여유분 때문에 이웃 한국어 문장을 '원래 결과'로 보고 영어 복구를 기각했다."""
+    from core.tools import asr_review
+    neighbour = speech.Segment(66380, 70000, '겨울은 쌀쌀하다.', (Word(66380, 70000, ' 겨울은 쌀쌀하다.', 0.97),), 0.97)
+    recovered = asr_review.shift([speech.Segment(0, 6000, 'However, most signs are in Catalan.', (
+        Word(300, 1000, ' However,', 0.9), Word(1000, 3000, ' most signs are', 0.9),
+        Word(3000, 6400, ' in Catalan.', 0.9)), 0.9)], 60230)
+    range_ = asr_review.Range(60230, 66690, 'possible missing speech')
+    assert asr_review.choose(range_, [], recovered).accepted
+    out = asr_review.insert_range([neighbour], range_, recovered)
+    assert [s.text for s in out] == ['However, most signs are', '겨울은 쌀쌀하다.']   # 겹치는 단어는 넣지 않음

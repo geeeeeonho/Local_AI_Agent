@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 
 from core.tools import speech
 
-from core.tools.speech import COMPRESSION_LIMIT, LOW_PROB, MAX_RATE, compression_ratio, speech_rate
+from core.tools.speech import COMPRESSION_LIMIT, LOW_PROB, MAX_RATE, compression_ratio, speech_rate, too_slow
 
 MISSING_PROB = 0.7              # 누락 복구 후보의 최소 확신도(실측 후 0.55에서 올림)
 
@@ -30,6 +30,7 @@ class Evidence:
     loop: bool
     filler: bool
     plausible_rate: bool
+    slow: bool = False
 
     @property
     def signals(self):
@@ -45,15 +46,17 @@ class Evidence:
             found.append('repetition loop')
         if self.filler:
             found.append('typical hallucination')
+        if self.slow:
+            found.append('long segment with little text')
         return tuple(found)
 
 
-def evidence(segment, *, spaced=True):
+def evidence(segment):
     norm = speech.normalize(segment.text)
     rate = speech_rate(segment)
     return Evidence(segment.prob, compression_ratio(segment.text), rate,
                     bool(speech.LOOP.search(norm)) and len(norm) >= 6,
-                    speech.is_filler(segment.text), rate <= MAX_RATE[bool(spaced)])
+                    speech.is_filler(segment.text), rate <= MAX_RATE, too_slow(segment))
 
 
 # ── 발언 누락 ──
@@ -104,12 +107,12 @@ def merge_ranges(ranges, *, pad=300, join=1000, minimum=1500, limit=24, total=No
     return merged[:limit]
 
 
-def suspicious_ranges(segments, *, spaced=True, mismatched=()):
+def suspicious_ranges(segments, *, mismatched=()):
     """근거가 하나라도 있는 구간(다시 인식해 비교할 대상). mismatched: 언어가 다른 구간의 시작 ms."""
     found = []
     mismatched = set(mismatched)
     for segment in segments:
-        signals = evidence(segment, spaced=spaced).signals
+        signals = evidence(segment).signals
         if segment.start in mismatched:
             signals = signals + ('language mismatch',)
         if signals:
@@ -127,29 +130,29 @@ class Decision:
     why: str
 
 
-def _quality(segments, spaced):
+def _quality(segments):
     """여러 구간의 대표 근거: 확신도는 글자 수 가중 평균, 나머지는 하나라도 나쁘면 나쁨."""
     if not segments:
         return None
     weights = [max(1, len(speech.normalize(item.text))) for item in segments]
     prob = sum(item.prob * weight for item, weight in zip(segments, weights)) / sum(weights)
-    found = [evidence(item, spaced=spaced) for item in segments]
+    found = [evidence(item) for item in segments]
     return Evidence(prob, max(item.compression for item in found), max(item.rate for item in found),
                     any(item.loop for item in found), any(item.filler for item in found),
-                    all(item.plausible_rate for item in found))
+                    all(item.plausible_rate for item in found), any(item.slow for item in found))
 
 
-def choose(range_, original, candidate, *, spaced=True, margin=0.08):
+def choose(range_, original, candidate, *, margin=0.08):
     """원래 구간들과 다시 인식한 후보 중 하나를 고른다. 후보는 근거가 깨끗하고 명확히 나을 때만."""
     original_text = ' '.join(item.text for item in original).strip()
     candidate_text = ' '.join(item.text for item in candidate).strip()
-    new = _quality(candidate, spaced)
+    new = _quality(candidate)
     if new is None or not speech.normalize(candidate_text):
         return Decision(range_, original_text, candidate_text, False, 'no candidate text')
     if new.signals:
         return Decision(range_, original_text, candidate_text, False,
                         'candidate also suspicious: ' + ', '.join(new.signals))
-    old = _quality(original, spaced)
+    old = _quality(original)
     if old is None:                       # 발언 누락 후보: 깨끗하고 확신도가 높을 때만 넣는다
         accepted = new.prob >= MISSING_PROB
         return Decision(range_, '', candidate_text, accepted,
@@ -173,6 +176,20 @@ def replace_range(segments, range_, candidate):
             clipped.append(speech.Segment(words[0].start, min(words[-1].end, range_.end),
                                           ''.join(word.text for word in words).strip(), words, item.prob))
     return sorted(kept + clipped, key=lambda item: item.start)
+
+
+def insert_range(segments, range_, candidate, *, margin=150):
+    """발언 누락 복구: 원래 구간은 그대로 두고, 이미 인식된 단어와 겹치지 않는 후보 단어만 range_ 안에 넣는다.
+    (실측: 앞뒤 여유분 때문에 이웃 문장을 '원래 결과'로 잘못 보고 복구를 기각했다.)"""
+    taken = [(word.start - margin, word.end + margin) for item in segments for word in item.words]
+    added = []
+    for item in candidate:
+        words = tuple(word for word in item.words if range_.start <= word.start < range_.end
+                      and not any(a < word.end and word.start < b for a, b in taken))
+        if words:
+            added.append(speech.Segment(words[0].start, words[-1].end,
+                                        ''.join(word.text for word in words).strip(), words, item.prob))
+    return sorted(list(segments) + added, key=lambda item: item.start)
 
 
 def shift(segments, offset):

@@ -271,9 +271,12 @@ LOOP = re.compile(r'(.{1,40}?)(?:\1){4,}', re.UNICODE)
 
 COMPRESSION_LIMIT = 2.4         # Whisper가 반복 환각을 거르는 기준과 같은 값
 LOW_PROB = 0.45
-# 사람이 실제로 낼 수 있는 발화 속도의 넉넉한 상한(정규화한 글자 / 초). 키: 띄어 쓰는 언어인지
-MAX_RATE = {True: 25.0, False: 14.0}
+# 발화 속도는 파일 언어가 아니라 글의 문자로 잰다(실측: 중국어 파일 속 영어 문장이 중국어 기준에 걸렸다).
+# 한중일·한글·태국 문자 1자 = 1단위, 라틴 문자·숫자 = 0.4단위(영어 한 음절 ≈ 2.5글자).
+MAX_RATE = 16.0                 # 사람이 낼 수 있는 빠르기의 넉넉한 상한(단위 / 초)
+MIN_RATE = 0.8                  # 5초 넘는 구간이 이보다 느리면 말이 아니라 무음·음악에서 지어낸 글로 본다
 LONG_LOOP = 8                   # 이만큼 되풀이되면 그것만으로 환각으로 본다
+_SYLLABIC = re.compile(r'[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff\u0e00-\u0e7f]')
 
 
 def compression_ratio(text):
@@ -284,9 +287,20 @@ def compression_ratio(text):
     return len(data) / max(1, len(zlib.compress(data)))
 
 
+def text_units(text):
+    """발화 길이 단위: 음절 문자 1, 라틴 문자·숫자 0.4."""
+    norm = normalize(text)
+    syllabic = len(_SYLLABIC.findall(norm))
+    return syllabic + (len(norm) - syllabic) * 0.4
+
+
 def speech_rate(segment):
     seconds = max(0.2, (segment.end - segment.start) / 1000)
-    return len(normalize(segment.text)) / seconds
+    return text_units(segment.text) / seconds
+
+
+def too_slow(segment):
+    return segment.end - segment.start > 5000 and speech_rate(segment) < MIN_RATE
 
 
 def is_filler(text):
@@ -296,10 +310,11 @@ def is_filler(text):
                               for filler in KNOWN_FILLERS)
 
 
-def corroborated(segment, *, spaced=True):
-    """반복·정형 문구를 지우려면 필요한 추가 근거(낮은 확신도·높은 압축률·불가능한 발화 속도)."""
+def corroborated(segment):
+    """반복·정형 문구를 지우려면 필요한 추가 근거: 낮은 확신도, 높은 압축률, 사람이 낼 수 없는 빠르기,
+    또는 긴 구간에 글이 거의 없음(실측: 30초 무음에 '시청해 주셔서 감사합니다', 확신도 0.92)."""
     return (segment.prob < LOW_PROB + 0.15 or compression_ratio(segment.text) > COMPRESSION_LIMIT
-            or speech_rate(segment) > MAX_RATE[bool(spaced)])
+            or speech_rate(segment) > MAX_RATE or too_slow(segment))
 
 
 def _loop(segment):
@@ -340,7 +355,7 @@ def _drop_sound_words(words):
     return tuple(out)
 
 
-def clean(segments, *, keep_sounds=False, spaced=True):
+def clean(segments, *, keep_sounds=False):
     """환각·소리 표기를 정리한다. 지운 것과 확인이 필요한 것은 따로 돌려준다.
 
     반복·감탄사·말 더듬기는 실제 발화일 수 있으므로(원문 보존) 그것만으로 지우지 않는다.
@@ -364,7 +379,7 @@ def clean(segments, *, keep_sounds=False, spaced=True):
             if len(words) != len(segment.words):
                 segment = Segment(words[0].start, words[-1].end,
                                   ''.join(word.text for word in words).strip(), words, segment.prob)
-        backed = corroborated(segment, spaced=spaced)
+        backed = corroborated(segment)
         loop = _loop(segment)
         if loop:
             if loop[1] >= LONG_LOOP or backed:
@@ -383,7 +398,7 @@ def clean(segments, *, keep_sounds=False, spaced=True):
         else:
             last_norm, repeats = norm, 0
         if is_filler(segment.text):
-            if segment.prob < 0.6:
+            if segment.prob < 0.6 or backed:
                 result.removed.append((segment.start, segment.text, 'typical hallucination'))
                 continue
             result.flagged.append((segment.start, segment.text, 'typical hallucination'))
@@ -391,10 +406,9 @@ def clean(segments, *, keep_sounds=False, spaced=True):
             result.flagged.append((segment.start, segment.text, 'low confidence'))
         if compression_ratio(segment.text) > COMPRESSION_LIMIT:
             result.flagged.append((segment.start, segment.text, 'high compression ratio'))
-        if speech_rate(segment) > MAX_RATE[bool(spaced)]:
+        if speech_rate(segment) > MAX_RATE:
             result.flagged.append((segment.start, segment.text, 'implausible speech rate'))
-        seconds = (segment.end - segment.start) / 1000
-        if seconds > 12 and len(norm) < seconds * 0.6:
+        if too_slow(segment):
             result.flagged.append((segment.start, segment.text, 'long segment with little text'))
         result.segments.append(segment)
     return result
