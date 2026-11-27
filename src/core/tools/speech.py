@@ -70,8 +70,10 @@ def model(key):
 
 
 # 품질 설정: whisper-cli 인자. 'best'는 정밀 단어 시각(DTW)을 위해 flash attention을 끈다.
+# 실측(FLEURS hard 4개 언어, turbo q5, CPU): 빔 8은 빔 5보다 CER이 같거나 나빴고(ja .344/.341,
+# en .219/.198) 3~5% 느렸다. DTW는 15% 느리지만 시각 오차를 ko 1410→1105, zh 614→154, en 1587→1132ms로 줄였다.
 QUALITY = {
-    'best': dict(beam=8, best_of=5, dtw=True),
+    'best': dict(beam=5, best_of=5, dtw=True),
     'balanced': dict(beam=5, best_of=5, dtw=False),
     'fast': dict(beam=1, best_of=2, dtw=False),
 }
