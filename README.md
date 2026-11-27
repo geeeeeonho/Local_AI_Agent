@@ -812,7 +812,7 @@ Open Interpreter 는 도구 호출로 동작합니다. `coding` · `agent` 사�
 | --- | --- | --- | --- | --- |
 | `coding` | 코드 작성·실행 | `devstral-small-2:24b` | `qwen2.5-coder:14b` | `qwen2.5-coder:7b` |
 | `agent` | 검색·도구·자율 실행 | `gemma4:26b-a4b-it-qat` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
-| `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `hf.co/TrevorJS/…:Q8_0` | `huihui_ai/qwen3-abliterated:8b` |
+| `uncensored` | 번역·창작 | `prutser/…ara-abliterated:Q4_K_S` | `hf.co/mradermacher/…abliterix-GGUF:Q8_0` | `huihui_ai/qwen3-abliterated:8b` |
 | `office` | 요약·보고서·스캔본 | `gemma4:26b-a4b-it-qat` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
 | `balanced` | 일상 대화 | `gpt-oss:20b` | `gemma4:12b` | `qwen3.5:4b-q4_K_M` |
 
@@ -855,9 +855,9 @@ Gemma 4는 사무·범용·에이전트에 공통 활용합니다. QAT 모델은
 
 ```text
 무검열 · 중 (수동 선택 후보 포함)
-  ★ TrevorJS Gemma 4 12B Q8_0    12.7GB · 기본 권장
-  · Huihui Qwen3.5 Abliterated 9B   7.0GB · 튜닝 후보
-  · Huihui Qwen3 Abliterated 14B    9.0GB · 이전 추천 유지
+  ★ abliterix Gemma 4 12B Q8_0     12.7GB · 기본 권장
+  · TrevorJS Gemma 4 12B Q8_0      12.7GB · 같은 크기 옵션
+  · Huihui Qwen3-VL Abliterated 8B  6.1GB · 이미지 · 이전 추천 유지
 ```
 
 이름·크기는 카탈로그 기준이며, 실제 선택은 현재 여유 메모리와 설치
@@ -884,7 +884,7 @@ Gemma 4는 사무·범용·에이전트에 공통 활용합니다. QAT 모델은
 | 등급 | 모델 | 카탈로그 다운로드 크기 합계 |
 | --- | --- | ---: |
 | 상 | `devstral-small-2:24b`, `prutser/…ara-abliterated:Q4_K_S` | 약 30.0GB |
-| 중 | `qwen2.5-coder:14b`, `gemma4:12b`, `hf.co/TrevorJS/…:Q8_0` | 약 29.3GB |
+| 중 | `qwen2.5-coder:14b`, `gemma4:12b`, `hf.co/mradermacher/…abliterix-GGUF:Q8_0` | 약 29.3GB |
 | 하 | 기본 설치 없음 (수동 선택 가능) | 0GB |
 | **합계** | **5종 (기존 기본 10종에서 축소)** | **약 59.3GB** |
 
@@ -952,7 +952,7 @@ python -m launcher.models --free 12  # 여유 12GB 를 가정
 ### 태그 대소문자
 
 카탈로그에는 대소문자가 섞인 벤더 태그가 있습니다
-(`prutser/...:Q4_K_S`, `hf.co/TrevorJS/...:Q8_0`).
+(`prutser/...:Q4_K_S`, `hf.co/mradermacher/...:Q8_0`, `hf.co/TrevorJS/...:Q8_0`).
 Ollama 가 돌려주는 이름과 대소문자만 달라도 그대로 비교하면 멀쩡히 깔린 15GB 짜리를
 "미설치"로 보고 다시 받습니다. 설치 목록은 읽는 즉시
 `model_catalog.canonicalize_installed()` 로 카탈로그 표기에 맞춥니다.

@@ -132,15 +132,28 @@ _ALL: List[CatalogEntry] = [
     #  사다리를 메우는 축이다. 예전에는 15GB 와 5GB 사이가 통째로 비어 있어서,
     #  여유 8~14GB 인 PC 는 무검열 작업을 8b 로밖에 못 했다.
     # Ollama supports explicit Hugging Face GGUF tags in hf.co/owner/repo:quant form.
-    # TrevorJS Q8_0 (~12.7 GB) is the single recommended uncensored
-    # middle-tier Gemma 4 quantization; no TrevorJS Q4 alternate is offered.
-    CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
-                 "무검열 중간 추천 (TrevorJS Gemma 4 12B Q8_0)", 12.7,
-                 "TrevorJS Gemma 4 12B Uncensored — Q8_0 GGUF (8비트). "
+    # Middle tier: two Gemma 4 12B uncensored fine-tunes at Q8_0 (~12.7 GB).
+    # In a same-condition comparison (structured subtitles/scripts/game files,
+    # a bulk folder and FLEURS), abliterix kept no lines untranslated and wrote
+    # Chinese names in Hangul; TrevorJS kept 9 lines in the source language and
+    # fell back to pinyin names, so abliterix is the recommendation and TrevorJS
+    # remains a selectable option.  No Q4 alternate of either is offered.
+    CatalogEntry("hf.co/mradermacher/gemma-4-12B-it-abliterix-GGUF:Q8_0",
+                 "무검열 중간 추천 (abliterix Gemma 4 12B Q8_0)", 12.7,
+                 "Gemma 4 12B abliterix — Q8_0 GGUF (8비트). 구조화·대량 번역에서 "
+                 "원문 잔류 없이 이름·용어를 한글로 일관되게 옮겼다. "
                  "다운로드 약 12.7GB, 상주 메모리는 실행 환경·컨텍스트에 따라 "
                  "달라집니다. 12GB GPU에는 일부 CPU 오프로딩이 필요할 수 있습니다.",
                  run_gb=12.7, ctx_k=256, tools=False,
                  uncensored=True, note="중간 추천 · Q8_0"),
+    CatalogEntry("hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
+                 "무검열 중간 옵션 (TrevorJS Gemma 4 12B Q8_0)", 12.7,
+                 "TrevorJS Gemma 4 12B Uncensored — Q8_0 GGUF (8비트). "
+                 "영어 일반 번역은 비슷하지만 구조화 번역에서 원문 유지 줄과 "
+                 "병음 이름이 더 많았다. 다운로드 약 12.7GB.",
+                 run_gb=12.7, ctx_k=256, tools=False,
+                 uncensored=True, note="중간 옵션 · Q8_0",
+                 group="advanced", recommended=False),
     CatalogEntry("huihui_ai/qwen3-vl-abliterated:8b", "무검열 + 이미지", 6.1,
                  "무검열 Qwen3-VL 8B — 이미지 속 글자를 검열 없이 읽고 옮긴다. "
                  "스캔본·스크린샷 번역용. 256K.",
@@ -229,7 +242,7 @@ _CORE_TAGS = frozenset({
     "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
     "qwen2.5-coder:14b",
     "gemma4:12b",
-    "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
+    "hf.co/mradermacher/gemma-4-12B-it-abliterix-GGUF:Q8_0",
 })
 
 
