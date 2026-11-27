@@ -69,6 +69,33 @@ def test_japanese_lines_never_start_with_closing_punctuation():
             assert line[0] not in subtitles.NO_LINE_START
 
 
+def test_lines_never_break_inside_a_word_or_before_a_word_that_leans_on_it():
+    ko, ja = rules_for('ko'), rules_for('ja')
+    # 실측에서 나왔던 끊김: '볼 / 수 있고', '가지고 / 있지만', 'アリスタル / コス', '新 / しい'
+    for text in ('이 문제는 우리가 함께 해결할 수 있는 문제라고 생각합니다',
+                 '분위기를 더 많이 가지고 있지만 넓은 대로 정면이',
+                 '오늘은 3 센치 정도 더 잘라서 붙여 주시면 됩니다'):
+        for cue in subtitles.reflow([subtitles.Cue(0, 3000, (text,))], ko):
+            for first, second in zip(cue.lines, cue.lines[1:]):
+                assert subtitles.boundary_score(first, second, True) >= subtitles.BAD_BREAK, cue.lines
+    for text in ('私たちは明日東京の大学で新しい研究を発表する予定です', '何千年も前に、アリスタルコスという学者が'):
+        for cue in subtitles.reflow([subtitles.Cue(0, 3000, (text,))], ja):
+            assert all(not (a.endswith('新') or a.endswith('アリスタル')) for a in cue.lines), cue.lines
+    # 앞말에 기대는 말이 아닌 곳은 그대로 둔다(기와 지붕, 그리고 나는, 나는 수학을).
+    for first, second in (('붉은 기와', '지붕과'), ('그리고', '나는'), ('나는', '수학을'), ('나와', '주말에')):
+        assert subtitles.boundary_score(first, second, True) >= 0
+
+
+def test_a_short_cue_keeps_two_lines_and_whole_words_instead_of_cutting():
+    ko = rules_for('ko')
+    cues = subtitles.reflow([subtitles.Cue(0, 1500, ('저는 지금 학교에서 친구들과 공부하고 있습니다 그리고 내일은',))], ko)
+    assert all(len(cue.lines) <= 2 for cue in cues)
+    assert subtitles.force_wrap('인공지능기반자연어처리시스템개발프로젝트', ko) == ('인공지능기반자연어처리시스템개발프로젝트',)
+    text = ' '.join(['아주길고긴낱말이에요'] * 6)
+    lines = subtitles.force_wrap(text, ko)
+    assert ' '.join(lines) == text                      # 낱말 경계에서만 나눴다
+
+
 def test_timing_minimum_maximum_gap_and_chaining():
     rules = rules_for('en')
     words = [Word(0, 150, ' Hi.'), Word(5000, 5200, ' Yes.'), Word(5600, 5800, ' What?')]
@@ -349,41 +376,44 @@ def test_engine_install_is_skipped_outside_windows(tmp_path):
 
 # ── 서비스 전 과정 (가짜 whisper-cli) ──
 FAKE_CLI = r'''#!{python}
-import json, sys
+import json, os, sys
 args = open(sys.argv[1][1:], encoding='utf-8').read().split('\n')
 def value(flag):
     return args[args.index(flag) + 1]
-log = open(value('-of') + '.calls', 'a', encoding='utf-8'); log.write(json.dumps(args) + '\n'); log.close()
-lang = value('-l')
-if lang == 'auto':
-    lang = 'en'
-sentences = {{'en': [' Hello and welcome to the show.', ' Today we talk about subtitles, and why rules matter.'],
-             'ko': [' 안녕하세요 방송에 오신 것을 환영합니다.', ' 오늘은 자막 규칙이 왜 중요한지 이야기합니다.']}}[lang]
-import os
-retry = 'retry' in value('-f')
-if os.environ.get('FAKE_SCENARIO') == 'loop' and not retry:
-    sentences = [' ' + 'na ' * 20] + sentences[1:]
-if os.environ.get('FAKE_SCENARIO') == 'skip':
-    # 첫 인식은 앞 발화(0.5~3초)만, 두 번째 VAD 구간(4~6초, 다른 언어)은 건너뜀. 재인식(언어 자동)은 영어로.
-    sentences = ([' English words were spoken here.'] if retry and value('-l') == 'auto'
-                 else [' 안녕하세요 반갑습니다 오늘은.'])
-segments, t = [], 0
-for sentence in sentences:
-    tokens = []
-    for word in sentence.split(' ')[1:]:
-        if not word:
-            continue
-        tokens.append({{'text': ' ' + word, 'offsets': {{'from': t, 'to': t + 300}},
-                       'p': 0.3 if word == 'na' else 0.93, 't_dtw': -1}})
-        t += 330
-    segments.append({{'offsets': {{'from': tokens[0]['offsets']['from'], 'to': t}}, 'text': sentence, 'tokens': tokens}})
-    print('[00:00:00.000 --> 00:00:01.000]  ' + sentence.strip(), flush=True)
-if os.environ.get('FAKE_VAD_LOG') and '--vad' in args:
-    print('whisper_vad: vad_segment_info: orig_start: 0.50, orig_end: 3.00, vad_start: 0.00, vad_end: 2.50', file=sys.stderr)
-    print('whisper_vad: vad_segment_info: orig_start: 4.00, orig_end: 6.00, vad_start: 2.60, vad_end: 4.60', file=sys.stderr)
-for p in (0, 50, 100):
-    print('whisper_print_progress_callback: progress = %3d%%' % p, file=sys.stderr, flush=True)
-json.dump({{'result': {{'language': lang}}, 'transcription': segments}}, open(value('-of') + '.json', 'w', encoding='utf-8'))
+def values(flag):
+    return [args[i + 1] for i, arg in enumerate(args) if arg == flag]
+log = open(values('-of')[0] + '.calls', 'a', encoding='utf-8'); log.write(json.dumps(args) + '\n'); log.close()
+for audio, out in zip(values('-f'), values('-of')):
+    print("main: processing '%s' (16000 samples, 1.0 sec), 1 threads" % audio, file=sys.stderr, flush=True)
+    lang = value('-l')
+    if lang == 'auto':
+        lang = 'en'
+    sentences = {{'en': [' Hello and welcome to the show.', ' Today we talk about subtitles, and why rules matter.'],
+                 'ko': [' 안녕하세요 방송에 오신 것을 환영합니다.', ' 오늘은 자막 규칙이 왜 중요한지 이야기합니다.']}}[lang]
+    retry = 'retry' in audio
+    if os.environ.get('FAKE_SCENARIO') == 'loop' and not retry:
+        sentences = [' ' + 'na ' * 20] + sentences[1:]
+    if os.environ.get('FAKE_SCENARIO') == 'skip':
+        # 첫 인식은 앞 발화(0.5~3초)만, 두 번째 VAD 구간(4~6초, 다른 언어)은 건너뜀. 재인식(언어 자동)은 영어로.
+        sentences = ([' English words were spoken here.'] if retry and value('-l') == 'auto'
+                     else [' 안녕하세요 반갑습니다 오늘은.'])
+    segments, t = [], 0
+    for sentence in sentences:
+        tokens = []
+        for word in sentence.split(' ')[1:]:
+            if not word:
+                continue
+            tokens.append({{'text': ' ' + word, 'offsets': {{'from': t, 'to': t + 300}},
+                           'p': 0.3 if word == 'na' else 0.93, 't_dtw': -1}})
+            t += 330
+        segments.append({{'offsets': {{'from': tokens[0]['offsets']['from'], 'to': t}}, 'text': sentence, 'tokens': tokens}})
+        print('[00:00:00.000 --> 00:00:01.000]  ' + sentence.strip(), flush=True)
+    if os.environ.get('FAKE_VAD_LOG') and '--vad' in args:
+        print('whisper_vad: vad_segment_info: orig_start: 0.50, orig_end: 3.00, vad_start: 0.00, vad_end: 2.50', file=sys.stderr)
+        print('whisper_vad: vad_segment_info: orig_start: 4.00, orig_end: 6.00, vad_start: 2.60, vad_end: 4.60', file=sys.stderr)
+    for p in (0, 50, 100):
+        print('whisper_print_progress_callback: progress = %3d%%' % p, file=sys.stderr, flush=True)
+    json.dump({{'result': {{'language': lang}}, 'transcription': segments}}, open(out + '.json', 'w', encoding='utf-8'))
 '''
 
 
@@ -482,6 +512,42 @@ def test_only_the_suspicious_range_is_recognized_again_and_the_better_candidate_
     assert not list((tmp_path / 'user_data').rglob('audio.wav')) and not list((tmp_path / 'user_data').rglob('input.wav'))
 
 
+def test_several_files_are_recognized_in_one_run_with_their_own_results(tmp_path, fake_engine, monkeypatch):
+    monkeypatch.setenv('FAKE_VAD_LOG', '1')
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    first, second = _wav(tmp_path / 'a.wav'), _wav(tmp_path / 'b.wav')
+    seen = []
+    answers = fake_engine.transcribe_many([first, second], 'large-v3-turbo', work=tmp_path / 'w', language='ko',
+                                          progress=seen.append)
+    assert len(answers) == 2 and all(answer.data['result']['language'] == 'ko' for answer in answers)
+    calls = (tmp_path / 'w' / 'result-cpu-0.calls').read_text(encoding='utf-8').splitlines()
+    assert len(calls) == 1 and json.loads(calls[0]).count('-f') == 2       # 모델은 한 번만 올린다
+    assert all(len(answer.data[speech.VAD_MAP_KEY]) == 2 for answer in answers)   # 파일마다 제 대응표
+    assert seen == sorted(seen) and seen[-1] == 1.0                          # 전체 진행률
+
+
+def test_a_failed_review_batch_is_retried_one_range_at_a_time(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    service = _service(tmp_path, fake_engine)
+    real = fake_engine.transcribe_many
+    batches = []
+
+    def flaky(audios, model, **options):
+        batches.append(len(audios))
+        if len(audios) > 1 or 'bad' in str(audios[0]):
+            raise RuntimeError('Speech recognition failed: exit 10')
+        return real(audios, model, **options)
+    fake_engine.transcribe_many = flaky
+    snippets = [_wav(tmp_path / name) for name in ('good-1.wav', 'bad.wav', 'good-2.wav')]
+    answers = service._recognize_snippets(snippets, ['en', 'en', 'auto'], 'large-v3-turbo',
+                                          Options(model='large-v3-turbo'), tmp_path / 'retry',
+                                          lambda *args: None, lambda: False)
+    assert batches == [2, 1, 1, 1]                      # en 묶음 실패 → 구간별, auto 묶음은 그대로
+    assert not isinstance(answers[0], Exception) and isinstance(answers[1], RuntimeError)
+    assert not isinstance(answers[2], Exception)
+
+
 def test_fast_mode_skips_re_recognition(tmp_path, fake_engine, monkeypatch):
     from services.tools.subtitles import Options
     monkeypatch.setenv('FAKE_SCENARIO', 'loop')
@@ -512,7 +578,8 @@ def test_translation_is_chained_and_rewrapped_for_the_target_language(tmp_path, 
     call = translator.calls[0]
     assert call['kind'] == 'subtitle' and call['style'] == 'natural' and call['source_language'] == 'English'
     assert call['glossary'] == 'LocalAI = 로컬AI'
-    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.srt', 'show.ko.srt']
+    # 기본: 번역 자막이 원본 이름(재생기가 바로 불러옴), 원어 자막은 원어 코드
+    assert [path.name for path in result.outputs + result.translated_outputs] == ['show.en.srt', 'show.srt']
     korean = parse(result.translated_outputs[0].read_text(encoding='utf-8-sig'))
     assert validate(korean, rules_for('ko')).ok
     assert any(len(cue.lines) == 2 for cue in korean)          # 번역문을 한국어 줄 길이로 다시 나눴다
@@ -624,9 +691,9 @@ def test_subtitle_tool_opens_and_starts_only_when_ready(ui, tmp_path, fake_engin
     pump(w, lambda: w.subtitle_llm.get() == 'gemma4:12b', timeout=5)
     svc.subtitles.translator = FakeTranslator()
     w.start_subtitles()
-    pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'ui.ko.srt').exists(), timeout=15)
+    pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'ui.en.srt').exists(), timeout=15)
     pump(w, lambda: str(w.subtitle_open_button['state']) == 'normal', timeout=5)
-    assert (tmp_path / 'ui.srt').exists()
+    assert (tmp_path / 'ui.srt').exists()          # 번역 자막이 원본 이름, 원어 자막은 ui.en.srt
     assert '번역된 문장' in w.subtitle_translated_text.get('1.0', 'end')
     assert '확인하면 좋은 자막' in w.subtitle_report_text.get('1.0', 'end')
 
@@ -644,9 +711,9 @@ def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_p
     w.translation_path.set(str(media)); w.analyze_translation_file()
     pump(w, lambda: w.translation_kind.get() == '자막' and '준비됨' in w.translation_status.get(), timeout=5)
     assert w.translation_style.get() == '자연스러운 번역'             # 번역 목적은 사용자 값 그대로
-    assert 'movie.ko.srt' in w.translation_destination.cget('text')
+    assert '"movie.srt"(번역 자막' in w.translation_destination.cget('text') and w.translation_main_name.get()
     w.start_translation()
-    pump(w, lambda: (tmp_path / 'movie.ko.srt').exists() and not w.runner.busy('tools.translate'), timeout=15)
+    pump(w, lambda: (tmp_path / 'movie.en.srt').exists() and not w.runner.busy('tools.translate'), timeout=15)
     pump(w, lambda: '완료' in w.translation_status.get(), timeout=5)
     assert (tmp_path / 'movie.srt').exists()
     # 자막용 자동 설정은 일반 번역의 기본값으로 저장하지 않는다(다른 값을 바꿔 저장해도)
@@ -658,6 +725,7 @@ def test_translation_tool_turns_a_media_file_into_translated_subtitles(ui, tmp_p
     text_file.write_text('こんにちは。', encoding='utf-8')
     w.translation_path.set(str(text_file)); w.analyze_translation_file()
     assert w.translation_kind.get() == '자동 감지'
+    assert not w.translation_main_name.get()                  # 일반 문서는 원본을 그대로 둔다
 
 
 from test_desktop_ui import ui  # noqa: E402,F401  (실제 Tk 창 fixture를 함께 쓴다)
@@ -777,10 +845,10 @@ def test_folder_translation_turns_media_into_subtitles_and_shares_the_folder_mem
                                          on_file=lambda i, n, name: names.append(name))
     out = folder.with_name('series.ko')
     assert sorted(p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file()) == [
-        'cover.png', 'ep2.ko.srt', 'ep2.srt', 'note.txt', 'season/ep10.ko.srt', 'season/ep10.srt']
+        'cover.png', 'ep2.en.srt', 'ep2.srt', 'note.txt', 'season/ep10.en.srt', 'season/ep10.srt']
     assert not list(out.rglob('*.wav'))                       # 큰 영상·음성은 복사하지 않는다
     assert any(name.startswith('자막 만들기 · ') for name in names)
-    korean = parse((out / 'ep2.ko.srt').read_text(encoding='utf-8-sig'))
+    korean = parse((out / 'ep2.srt').read_text(encoding='utf-8-sig'))
     assert korean and validate(korean, rules_for('ko')).ok
     assert {rel for rel, _ in result.translated} == {'ep2.wav', 'season/ep10.wav', 'note.txt'}
     assert result.memory is not None                          # 자막도 폴더 메모리를 함께 쓴다
@@ -937,3 +1005,115 @@ def test_folder_runs_skip_media_that_already_have_subtitles(tmp_path, fake_engin
     assert again.results == () and len(again.skipped) == 5
     assert len(list((tmp_path / 'user_data').rglob('result-cpu.calls'))) == calls
     assert not list(folder.rglob('* (2).srt'))                       # 사본을 만들지 않는다
+
+
+def test_speech_models_live_in_the_models_screen_with_a_shortcut_from_subtitles(ui, tmp_path, fake_engine):
+    from test_desktop_ui import pump
+    from integrations.speech.engine import SpeechEngine
+    w, svc, _ = ui
+    empty = SpeechEngine(tmp_path / 'none', tmp_path / 'none-models')
+    svc.subtitles.engine = empty
+    svc.subtitles.supported = staticmethod(lambda: (True, ''))
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: 'Models' in w.subtitle_status.get() and w.subtitle_status_label.action.winfo_ismapped(),
+         timeout=8)
+    assert not hasattr(w, 'subtitle_model_table')              # 자막 화면에는 관리 표가 없다
+    assert w.subtitle_status_label.action.cget('text') == 'Models에서 받기 →'
+    w.subtitle_status_label.action.invoke()
+    pump(w, lambda: w.current_page == 'models' and
+         w.model_tabs.select() == str(w.model_pages['speech']), timeout=5)
+    pump(w, lambda: len(w.speech_model_table.get_children()) == len(speech.MODELS), timeout=8)
+    states = {key: w.speech_model_table.item(key, 'values')[3] for key in w.speech_model_table.get_children()}
+    assert set(states.values()) == {'-'}
+    svc.subtitles.engine = fake_engine                         # 모델을 받은 뒤: 두 화면 모두 갱신
+    w.refresh_speech_status()
+    pump(w, lambda: w.speech_model_table.item('large-v3-turbo', 'values')[3] == '설치됨', timeout=8)
+    assert w.subtitle_model.get() == 'large-v3-turbo · 권장'
+    assert not w.subtitle_status_label.action.winfo_ismapped()
+
+
+# ── 첫 파일 번역 누락(실사용 보고) ──
+class ColdStartInference:
+    """막 켠 Ollama: 처음 몇 번은 모델 목록을 못 준다(None → 빈 목록 → 정상)."""
+    def __init__(self):
+        self.answers = [None, [], ['m:1']]
+
+    def ensure_ready(self):
+        return 'http://127.0.0.1:11434'
+
+    def local_models(self):
+        return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+
+
+def test_the_first_translation_waits_for_a_just_started_ollama(tmp_path, monkeypatch):
+    from services.tools import translation
+    from services.tools.translation import TranslationService
+    monkeypatch.setattr(translation.time, 'sleep', lambda seconds: None)
+    source = tmp_path / 'a.txt'
+    source.write_text('Sato smiled.\n', encoding='utf-8')
+    service = TranslationService(ColdStartInference(), lambda _: GlossaryModel(), checkpoint_dir=tmp_path / 'cp',
+                                 protector=None, check_language=False)
+    assert '사토' in service.translate_file(source, model='m:1', target='한국어', kind='general').text
+
+
+def test_a_failed_translation_keeps_the_subtitle_and_the_rerun_translates_only(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, SubtitleService, Translate
+    translator = _translator(tmp_path, GlossaryModel())
+    real = translator.translate_file
+    calls = {'n': 0}
+
+    def flaky(*args, **kwargs):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise RuntimeError('Selected model is not available locally')
+        return real(*args, **kwargs)
+    translator.translate_file = flaky
+    service = SubtitleService(translator, work_dir=tmp_path / 'work', store_dir=tmp_path / 'models',
+                              engine=fake_engine, access=lambda refresh: {'allowed': True})
+    files = [_wav(tmp_path / 'first.wav'), _wav(tmp_path / 'second.wav')]
+    job = Translate(target='한국어', model='m:1')
+    batch = service.make_many(files, Options(model='large-v3-turbo', quality='fast'), translate=job)
+    first, second = (result for _, result in batch.results)
+    assert batch.failed == () and 'not available' in first.translation_error
+    assert (tmp_path / 'first.en.srt').exists() and not (tmp_path / 'first.srt').exists()
+    assert (tmp_path / 'second.srt').exists()
+    recognitions = len(list((tmp_path / 'work').rglob('result-cpu.calls')))
+    again = service.make_many(files, Options(model='large-v3-turbo', quality='fast'), translate=job)
+    assert [p.name for p, _ in again.skipped] == ['second.wav']           # 끝난 파일만 건너뜀
+    redo = again.results[0][1]
+    assert redo.translated_outputs[0].name == 'first.srt' and not redo.translation_error
+    assert redo.outputs[0].name == 'first.en.srt' and redo.reused        # 원어 자막·인식 결과 재사용
+    assert not (tmp_path / 'first.en (2).srt').exists()
+    assert len(list((tmp_path / 'work').rglob('result-cpu.calls'))) == recognitions
+
+
+def test_the_old_naming_is_kept_when_the_option_is_off(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, SubtitleService, Translate
+    service = SubtitleService(_translator(tmp_path, GlossaryModel()), work_dir=tmp_path / 'work',
+                              store_dir=tmp_path / 'models', engine=fake_engine,
+                              access=lambda refresh: {'allowed': True})
+    result = service.make(_wav(tmp_path / 'clip.wav'), Options(model='large-v3-turbo', quality='fast'),
+                          translate=Translate(target='한국어', model='m:1', main_name=False))
+    assert [p.name for p in result.outputs + result.translated_outputs] == ['clip.srt', 'clip.ko.srt']
+
+
+def test_a_translated_document_can_take_the_original_name(tmp_path):
+    from services.tools.translation import place_as_original
+    source = tmp_path / 'story.txt'
+    source.write_text('Sato smiled.\n', encoding='utf-8')
+    service = _translator(tmp_path, GlossaryModel())
+    result = service.translate_file(source, model='m:1', target='한국어', kind='general',
+                                    source_language='English')
+    placed, kept = place_as_original(result, source)
+    assert placed.output == source and source.read_text(encoding='utf-8') == '사토 웃었다.\n'
+    assert kept.name == 'story.en.txt' and kept.read_text(encoding='utf-8') == 'Sato smiled.\n'
+    assert not (tmp_path / 'story.ko.txt').exists()
+    unknown = tmp_path / 'memo.txt'
+    unknown.write_text('Sato left.\n', encoding='utf-8')
+    other = service.translate_file(unknown, model='m:1', target='한국어', kind='general')
+    assert place_as_original(replace_revision(other), unknown)[1].name == 'memo.og.txt'   # 원문 언어 모름
+
+
+def replace_revision(result):
+    from dataclasses import replace
+    return replace(result, revision=None)

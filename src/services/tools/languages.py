@@ -254,6 +254,77 @@ def _numbers(text):
     return [re.sub(r'\D', '', group) for group in groups]
 
 
+# ── 숫자 값 비교 ──
+# 모델은 같은 값을 번역 언어의 방식으로 쓴다(300,000 → 30만, 12,000 → 1.2万, 2 → 두, 1st → 처음).
+# 글자만 비교하면 정상 번역을 거절해 그 줄이 원문으로 남았다(실사용: 자막 첫 줄이 번역되지 않음).
+_SCALES = {'십': 10, '백': 100, '천': 1e3, '만': 1e4, '억': 1e8, '조': 1e12,
+           '十': 10, '拾': 10, '百': 100, '千': 1e3, '万': 1e4, '萬': 1e4, '亿': 1e8, '億': 1e8, '兆': 1e12,
+           'thousand': 1e3, 'million': 1e6, 'billion': 1e9, 'trillion': 1e12, 'k': 1e3, 'bn': 1e9}
+_SCALE_WORD = '|'.join(sorted((re.escape(key) for key in _SCALES), key=len, reverse=True))
+_QUANTITY = re.compile(r'(\d+(?:[.,  ]\d+)*)\s?((?:(?:%s)(?![a-z]))*)' % _SCALE_WORD, re.I)
+# 숫자를 쓰지 않고 말로 옮겨도 되는 관용구(24/7 → 연중무휴)
+_NUMBER_IDIOMS = re.compile(r'\b24\s*/\s*7\b|\b9\s*(?:-|to)\s*5\b|\b50\s*/\s*50\b', re.I)
+# 10 이하의 수를 말로 쓴 형태(한국어 고유어·한자 숫자·영어). 작은 수만 이렇게 인정한다.
+_SPELLED = {1: ('하나', '한 ', '한개', '첫', '처음', '一', 'one', 'first', 'once'),
+            2: ('둘', '두', '二', '两', '兩', 'two', 'second', 'twice', 'both'),
+            3: ('셋', '세', '三', 'three', 'third'), 4: ('넷', '네', '四', 'four', 'fourth'),
+            5: ('다섯', '五', 'five', 'fifth'), 6: ('여섯', '六', 'six', 'sixth'),
+            7: ('일곱', '七', 'seven', 'seventh'), 8: ('여덟', '八', 'eight', 'eighth'),
+            9: ('아홉', '九', 'nine', 'ninth'), 10: ('열', '十', 'ten', 'tenth')}
+
+
+def _plain_number(digits):
+    """'1,234.5' → 1234.5, '3,5'(유럽식 소수) → 3.5, '1 000' → 1000."""
+    text = re.sub(r'[  ]', '', digits)
+    parts = re.split(r'[.,]', text)
+    if len(parts) == 1:
+        return float(text)
+    if all(len(part) == 3 for part in parts[1:]):          # 천 단위 구분
+        return float(''.join(parts))
+    whole, fraction = ''.join(parts[:-1]), parts[-1]
+    return float(whole + '.' + fraction)
+
+
+def quantities(text):
+    """글 속 수량 [(숫자 글자, 값)]. 단위(만·億·million …)를 곱하고, '3억 5천만'·'1万2000'처럼
+    큰 단위 뒤에 바로 이어지는 작은 수는 합친 값도 함께 넣는다."""
+    text = unicodedata.normalize('NFKC', _TOKEN.sub(' ', text))
+    text = _ORDINAL.sub(r'\1', text)
+    found, previous = [], None
+    for match in _QUANTITY.finditer(text):
+        try:
+            value = _plain_number(match.group(1))
+        except ValueError:
+            continue
+        scale = 1.0
+        for unit in re.findall(_SCALE_WORD, match.group(2) or '', re.I):
+            scale *= _SCALES.get(unit, _SCALES.get(unit.lower(), 1))
+        value *= scale
+        found.append((re.sub(r'\D', '', match.group(1)), value))
+        if previous is not None and previous[2] > 1 and value < previous[2] and \
+                match.start() - previous[0] <= 2:
+            found.append(('', previous[1] + value))         # 큰 단위 + 이어지는 수
+            previous = (match.end(), previous[1] + value, scale if scale > 1 else 1)
+        else:
+            previous = (match.end(), value, scale)
+    return found
+
+
+def _same_value(a, b):
+    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+
+
+def _number_kept(digits, value, answer, kept_digits, kept_values):
+    if digits and digits in kept_digits:                     # 예전 규칙: 숫자 글자가 그대로 있음
+        return True
+    if any(_same_value(value, other) for other in kept_values):
+        return True
+    if value == int(value) and 1 <= value <= 10:              # 작은 수는 말로 써도 된다
+        lowered = answer.lower()
+        return any(word in lowered for word in _SPELLED[int(value)])
+    return False
+
+
 def _letters(text):
     return re.sub(r'[\W\d_]+', '', unicodedata.normalize('NFKC', text).lower())
 
@@ -351,8 +422,11 @@ def check_output(source_text, answer, source_name, target_name, allowed=''):
                 and not _SCRIPT_RE['kana'].search(plain):
             raise ReviewError('Japanese output without any kana (looks like Chinese)')
 
-    # 6) 원문의 아라비아 숫자는 번역문에도 있어야 한다(형식만 바뀔 수 있음)
-    found = ''.join(_numbers(answer))
-    for number in _numbers(source_text):
-        if number not in found:
-            raise ReviewError('Number changed or dropped: ' + number)
+    # 6) 원문의 수는 번역문에도 같은 값으로 있어야 한다. 쓰는 방식은 바뀔 수 있다
+    #    (1,000 ↔ 1000 ↔ 1천, 300,000 ↔ 30만 ↔ 30万, 2 ↔ 두, 1st ↔ 처음). 단위 환산·값 변경·누락은 거절.
+    kept = quantities(answer)
+    kept_digits = ''.join(_numbers(answer))
+    kept_values = [value for _digits, value in kept]
+    for digits, value in quantities(_NUMBER_IDIOMS.sub(' ', source_text)):
+        if digits and not _number_kept(digits, value, answer, kept_digits, kept_values):
+            raise ReviewError('Number changed or dropped: ' + digits)

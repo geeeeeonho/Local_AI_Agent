@@ -26,6 +26,7 @@ def _variables(w):
     w.subtitle_format = tk.StringVar(master=root, value=tuple(FORMATS)[0])
     w.subtitle_model = tk.StringVar(master=root)
     w.subtitle_translate = tk.BooleanVar(master=root, value=False)
+    w.subtitle_main_name = tk.BooleanVar(master=root, value=True)
     w.subtitle_target = tk.StringVar(master=root, value='한국어')
     w.subtitle_llm = tk.StringVar(master=root)
     w.subtitle_style = tk.StringVar(master=root, value='자연스러운 번역')
@@ -102,8 +103,13 @@ def build(parent, w, toolbar=None):
     row = ttk.Frame(basic); row.pack(fill='x', pady=(6, 0))
     ttk.Label(row, text='인식 모델').pack(side='left')
     ttk.Button(row, text='↻', width=3, command=w.refresh_subtitle_status).pack(side='right', padx=(4, 0))
+    if 'models' in w.spec.pages:      # 모델 설치·삭제는 Models 화면이 맡는다
+        ttk.Button(row, text='모델 관리 →', command=w.open_speech_models).pack(side='right', padx=(4, 0))
     w.subtitle_model_box = ttk.Combobox(row, textvariable=w.subtitle_model, values=(), state='readonly')
     w.subtitle_model_box.pack(side='left', fill='x', expand=True, padx=(6, 0))
+    engine_label = ttk.Label(basic, textvariable=w.subtitle_engine_text, style='Muted.TLabel',
+                             justify='left', wraplength=600)
+    engine_label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(engine_label, inset=40)
 
     # 번역 자막: 기존 번역 도구(로컬 LLM)를 그대로 쓴다.
     link = ttk.LabelFrame(body, text='번역 자막', padding=12); link.pack(fill='x', pady=(0, 8))
@@ -123,6 +129,9 @@ def build(parent, w, toolbar=None):
     ttk.Button(row, text='↻', width=3, command=w.refresh_subtitle_llms).pack(side='right', padx=(4, 0))
     w.subtitle_llm_box = ttk.Combobox(row, textvariable=w.subtitle_llm, values=(), state='readonly')
     w.subtitle_llm_box.pack(side='left', fill='x', expand=True, padx=(6, 0))
+    _check(w.subtitle_translate_options, '번역 자막을 원본 이름으로 저장', w.subtitle_main_name,
+           '번역 자막이 "영상.srt"가 되어 재생기가 바로 불러오고, 원어 자막은 "영상.<원어>.srt"(예: 영상.ja.srt)로 '
+           '저장합니다. 끄면 원어 자막이 "영상.srt", 번역 자막이 "영상.<번역 언어>.srt"입니다.')
     w.subtitle_translate.trace_add('write', lambda *_: w.toggle_subtitle_translation())
 
     w.subtitle_advanced_button = ttk.Button(body, text='고급 설정 ▸', command=w.toggle_subtitle_advanced)
@@ -154,29 +163,6 @@ def build(parent, w, toolbar=None):
     w.subtitle_prompt_text = text_box(hint, height=2, expand=False)
     w.subtitle_prompt_text.configure(state='normal')
 
-    manage = ttk.LabelFrame(body, text='음성 인식 엔진 · 모델', padding=12); manage.pack(fill='x', pady=(0, 8))
-    engine_label = ttk.Label(manage, textvariable=w.subtitle_engine_text, style='Muted.TLabel',
-                             justify='left', wraplength=600)
-    engine_label.pack(anchor='w', fill='x'); wrap_to_parent(engine_label, inset=40)
-    table = ttk.Treeview(manage, columns=('model', 'size', 'gpu', 'state'), show='headings', height=6,
-                         selectmode='browse')
-    for name, heading, width in (('model', '모델', 260), ('size', '크기', 80), ('gpu', 'GPU 메모리', 90),
-                                 ('state', '상태', 90)):
-        table.heading(name, text=heading)
-        table.column(name, width=width, stretch=name == 'model')
-    table.pack(fill='x', pady=(8, 4))
-    w.subtitle_model_table = table
-    w.subtitle_model_note = ttk.Label(manage, text='', style='Muted.TLabel', justify='left', wraplength=600)
-    w.subtitle_model_note.pack(anchor='w', fill='x'); wrap_to_parent(w.subtitle_model_note, inset=40)
-    table.bind('<<TreeviewSelect>>', lambda _e: w.describe_subtitle_model())
-    buttons = ttk.Frame(manage); buttons.pack(fill='x', pady=(6, 0))
-    w.subtitle_engine_button = ttk.Button(buttons, text='엔진 설치 / 복구', command=w.install_subtitle_engine)
-    w.subtitle_engine_button.pack(side='left')
-    w.subtitle_get_button = ttk.Button(buttons, text='선택 모델 받기 / 복구', command=w.download_subtitle_model)
-    w.subtitle_get_button.pack(side='left', padx=(6, 0))
-    w.subtitle_remove_button = ttk.Button(buttons, text='선택 모델 삭제', command=w.remove_subtitle_model)
-    w.subtitle_remove_button.pack(side='left', padx=(6, 0))
-
     notebook = ttk.Notebook(body); notebook.pack(fill='x', pady=(0, 6))
     preview, translated, report = ttk.Frame(notebook), ttk.Frame(notebook), ttk.Frame(notebook)
     notebook.add(preview, text='자막'); notebook.add(translated, text='번역 자막')
@@ -193,7 +179,7 @@ def build(parent, w, toolbar=None):
     set_text(w.subtitle_translated_text, '[번역 자막도 함께 만들기]를 켜면 번역 자막이 표시됩니다.')
     set_text(w.subtitle_report_text, '확인이 필요한 자막(인식 확신도 낮음, 읽기 속도 빠름)과 '
                                      '자동으로 지운 반복·환각 문장을 보여 줍니다.')
-    for variable in (w.subtitle_path, w.subtitle_model, w.subtitle_translate, w.subtitle_llm,
+    for variable in (w.subtitle_path, w.subtitle_model, w.subtitle_translate, w.subtitle_llm, w.subtitle_main_name,
                      w.subtitle_target, w.subtitle_format, w.subtitle_language):
         variable.trace_add('write', lambda *_: w.update_subtitle_destination())
     w.toggle_subtitle_translation()

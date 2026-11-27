@@ -9,6 +9,7 @@ from services.tools.languages import SOURCE_LABELS as SOURCES
 from .widgets import set_text, set_status
 from core.tools.speech import MEDIA
 from services.tools.subtitles import Translate, scan as scan_media
+from services.tools.translation import place_as_original
 from .subtitle_controller import options_from, overall, report_text, friendly as subtitle_error, STAGES
 from .subtitle_view import MEDIA_PATTERN
 
@@ -109,11 +110,17 @@ class TranslationController:
             path=Path(raw)
             if custom:
                 text='→ 결과: '+custom+'  (고급 설정에서 지정)'
+            elif is_media(path) and self.translation_main_name.get():
+                text=('→ 결과: 원본 옆 "%s.srt"(번역 자막, 원본과 같은 이름)와 "%s.<원어>.srt"(원어 자막). '
+                      '음성 인식 설정은 [자막 만들기] 도구의 값을 씁니다.'%(path.stem,path.stem))
             elif is_media(path):
                 text=('→ 결과: 원본 옆 "%s.srt"(원어 자막, 원본과 같은 이름)와 "%s.%s.srt"(번역 자막). '
                       '음성 인식 설정은 [자막 만들기] 도구의 값을 씁니다.'%(path.stem,path.stem,code))
             elif path.is_dir():
                 text='→ 결과: 원본 옆 "%s.%s" 폴더 (같은 구조·같은 파일 이름, 다른 파일은 복사)'%(path.name,code)
+            elif path.suffix and self.translation_main_name.get():
+                text=('→ 결과: "%s"에 번역본을 쓰고, 원본은 "%s.<원문 언어>%s"로 이름을 바꿔 보관합니다'
+                      %(path.name,path.stem,path.suffix))
             elif path.suffix:
                 text='→ 결과: 원본 옆 "%s.%s%s" (이미 있으면 번호를 붙여 새로 만듭니다)'%(path.stem,code,path.suffix)
             else:
@@ -176,6 +183,9 @@ class TranslationController:
         path=self.translation_path.get().strip()
         if not path:
             self.translation_say('Waiting','파일을 먼저 선택하세요.');return
+        # 자막·영상·음성(대본)과 폴더는 번역본이 원본 이름을 쓰는 것이 기본, 일반 문서는 원본을 그대로 둔다.
+        self.translation_main_name.set(is_media(path) or Path(path).is_dir()
+                                       or Path(path).suffix.lower() in ('.srt','.vtt'))
         if is_media(path):
             return self.analyze_translation_media(path)
         saved=getattr(self,'_translation_media_saved',None)
@@ -273,6 +283,8 @@ class TranslationController:
         clock={}
         folder_mode=Path(path).is_dir()
         shared_context=self.translation_shared.get()
+        main_name=self.translation_main_name.get()
+        self._translation_kept_original=None
         current={'file':''}
         def progress(n,total):
             # 작업 스레드에서 호출된다. 화면 갱신은 이벤트로 Tk 스레드에 넘긴다.
@@ -296,9 +308,14 @@ class TranslationController:
                 folder_options.pop('path');output_dir=folder_options.pop('output_path')
                 return self.services.translator.translate_folder(
                     path,output_dir=output_dir,progress=progress,on_file=on_file,cancelled=stop,
-                    shared_context=shared_context,media=self._folder_media(options['source_language']),
+                    shared_context=shared_context,
+                    media=self._folder_media(options['source_language'],main_name),
                     **folder_options)
-            return self.services.translator.translate_file(**options,progress=progress,cancelled=stop)
+            result=self.services.translator.translate_file(**options,progress=progress,cancelled=stop)
+            if main_name and not options['output_path']:
+                result,kept=place_as_original(result,path)
+                self._translation_kept_original=kept
+            return result
         def unlock():
             if not self.translation_progress.get()>=100:
                 self.translation_progress_label.configure(text='중지됨')
@@ -314,9 +331,11 @@ class TranslationController:
                        ' …' if len(kept)>8 else '')) if kept else ''
             review=result.review_lines
             review_note=(' · 검토 필요 %d줄'%len(review)) if review else ''
-            self.translation_say('Ready','번역 완료: %d구간 · 재개 %d구간%s%s%s · %s' %
+            kept_original=getattr(self,'_translation_kept_original',None)
+            self.translation_say('Ready','번역 완료: %d구간 · 재개 %d구간%s%s%s · %s%s' %
                                  (result.count,result.resumed_units,kept_note,review_note,
-                                  audit_note(result),result.output),log=True)
+                                  audit_note(result),result.output,
+                                  (' · 원본은 %s로 보관'%kept_original.name) if kept_original else ''),log=True)
             self._translation_last_output=result.output
             self.translation_open_button.configure(state='normal')
             self._translation_revisable=('file',result)
@@ -429,6 +448,7 @@ class TranslationController:
 
     def start_media_translation(self,options):
         path=options['path']
+        main_name=self.translation_main_name.get()
         self._translation_cancel=Event()
         self.translation_start_button.configure(state='disabled')
         self.translation_cancel_button.configure(state='normal')
@@ -449,10 +469,12 @@ class TranslationController:
                 raise RuntimeError('Speech model is not installed')
             source=options['source_language']
             recognition=options_from(prefs,language=source if source in SOURCES else '자동 감지',model=model)
-            return self.services.subtitles.make(path,recognition,translate=Translate(
-                target=options['target'],model=options['model'],style=options['style'],
-                glossary=options['glossary'],precise=options['precise'],keep_failed=options['keep_failed']),
-                progress=progress,cancelled=stop)
+            job=Translate(target=options['target'],model=options['model'],style=options['style'],main_name=main_name,
+                          glossary=options['glossary'],precise=options['precise'],keep_failed=options['keep_failed'])
+            # 앞선 실행이 원어 자막만 남겼으면(번역 실패) 그 자막을 다시 쓰지 않고 번역만 한다.
+            _done,reuse=self.services.subtitles.already_done(path,recognition,job)
+            return self.services.subtitles.make(path,recognition,translate=job,progress=progress,cancelled=stop,
+                                                existing_original=reuse)
         def unlock():
             self.translation_cancel_button.configure(state='disabled')
             self.root.after_idle(self.update_translation_destination)
@@ -462,9 +484,14 @@ class TranslationController:
             outputs=result.translated_outputs or result.outputs
             self._translation_last_output=outputs[0]
             self.translation_open_button.configure(state='normal')
-            note=('번역 생략: 음성 언어(%s)와 번역 언어가 같아 원어 자막만 만들었습니다'%result.language_label
-                  if result.translation_skipped else '번역 자막 %d개 구간'%len(result.cues))
-            self.translation_say('Ready','완료: %s · %s'%(note,outputs[0]),log=True)
+            if result.translation_error:
+                self.translation_say('Failed','원어 자막은 만들었지만 번역이 실패했습니다: %s · 다시 시작하면 '
+                                     '인식 없이 번역만 합니다. (%s)'%(subtitle_error(result.translation_error),outputs[0]),
+                                     log=True,level='error')
+            else:
+                note=('번역 생략: 음성 언어(%s)와 번역 언어가 같아 원어 자막만 만들었습니다'%result.language_label
+                      if result.translation_skipped else '번역 자막 %d개 구간'%len(result.cues))
+                self.translation_say('Ready','완료: %s · %s'%(note,outputs[0]),log=True)
             self._translation_revisable=('media',result)
             self.translation_terms_editor.load(getattr(result.translated,'glossary',None) or {})
             set_text(self.translation_source_text,result.text[:12000])
@@ -482,7 +509,7 @@ class TranslationController:
         if not self.run_task('tools.translate',work,done,mutate=False,long=True,announce=False,error=failed):
             unlock()
 
-    def _folder_media(self,source_language):
+    def _folder_media(self,source_language,main_name=True):
         """폴더 안 영상·음성을 자막으로 만들 처리기. 엔진·모델이 없으면 None(예전처럼 복사)."""
         status=self.services.subtitles.status()
         prefs=self.services.settings.subtitle_preferences()
@@ -490,7 +517,8 @@ class TranslationController:
         if not status.builds or not model:
             return None
         language=source_language if source_language in SOURCES else '자동 감지'
-        return self.services.subtitles.folder_media(options_from(prefs,language=language,model=model))
+        return self.services.subtitles.folder_media(options_from(prefs,language=language,model=model),
+                                                    main_name=main_name)
 
     def apply_translation_terms(self,changes,remember):
         """용어 사전에서 고친 용어를 마지막 번역 결과에 적용한다(그 용어가 든 줄만 다시 번역)."""

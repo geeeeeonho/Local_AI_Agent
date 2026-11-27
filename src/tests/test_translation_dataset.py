@@ -173,13 +173,16 @@ class DatasetFolderTests(unittest.TestCase):
     def test_names_use_one_form_across_the_folder(self):
         text = '\n'.join(target.read_text(encoding='utf-8') for _, target in self.pairs)
         names = {name for source, _ in self.pairs for name in NAME.findall(source.read_text(encoding='utf-8'))}
+        variants = {name: korean_name(name)[0] + '스' + korean_name(name)[1:] for name in names}
+        # 다른 표기 안에 들어 있는 글자는 기본 표기로 세지 않는다('스이치'는 '스스이치'·'다스이치'의 일부).
+        without_variants = re.sub('|'.join(map(re.escape, sorted(set(variants.values()), key=len, reverse=True))),
+                                  '\0', text)
         forms = {}
         for name in names:
             base = korean_name(name)
             if len(base) < 3:            # 한두 음절은 다른 이름의 일부와 겹쳐 셀 수 없다
                 continue
-            variant = base[0] + '스' + base[1:]
-            forms[name] = (len(re.findall(re.escape(base), text)), text.count(variant))
+            forms[name] = (without_variants.count(base), text.count(variants[name]))
         mixed = {name: count for name, count in forms.items() if all(count)}
         self.assertEqual(mixed, {})
 

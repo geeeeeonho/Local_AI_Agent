@@ -6,7 +6,7 @@
 import time
 from pathlib import Path
 from threading import Event
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 from core.tools import speech
 from services.tools.subtitles import Options, Translate
@@ -73,6 +73,9 @@ def report_text(result):
     lines += ['저장: ' + str(path) for path in result.outputs + tuple(result.translated_outputs)]
     if result.translation_skipped:
         lines.append('번역 생략: 음성 언어와 번역 언어가 같습니다.')
+    if getattr(result, 'translation_error', ''):
+        lines.append('번역 실패(원어 자막은 저장됨, 다시 시작하면 인식 없이 번역만 합니다): '
+                     + friendly(result.translation_error))
     lines += ['', '확인하면 좋은 자막 (%d)' % len(result.review)]
     lines += ['  %d번: %s' % (number, _REASONS.get(reason, reason)) for number, reason in result.review[:80]]
     if not result.review:
@@ -107,6 +110,8 @@ def report_text(result):
         kept = getattr(answer, 'kept_lines', ())
         audit = getattr(answer, 'audit', ())
         lines += ['', '번역 검수: 원문 유지 %d줄 · 확인 필요 %d줄' % (len(kept), len(audit))]
+        if kept:
+            lines.append('  원문으로 남은 줄(번역 검증을 끝내 통과하지 못함): ' + ', '.join(map(str, kept[:30])))
     return '\n'.join(lines)
 
 
@@ -139,8 +144,8 @@ def friendly(exc):
 
 
 class SubtitleController:
-    def subtitle_say(self, state, text, *, log=False, level='info'):
-        set_status(self.subtitle_status_label, state, text)
+    def subtitle_say(self, state, text, *, log=False, level='info', action=None):
+        set_status(self.subtitle_status_label, state, text, action)
         if log:
             self.log('[자막] ' + text, level=level)
 
@@ -149,6 +154,7 @@ class SubtitleController:
         return {'language': self.subtitle_language, 'format': self.subtitle_format,
                 'model': self.subtitle_model, 'translate': self.subtitle_translate,
                 'target': self.subtitle_target, 'llm': self.subtitle_llm, 'style': self.subtitle_style,
+                'main_name': self.subtitle_main_name,
                 'quality': self.subtitle_quality, 'vad': self.subtitle_vad,
                 'keep_sounds': self.subtitle_keep_sounds, 'gpu': self.subtitle_gpu,
                 'sensitive_vad': self.subtitle_sensitive}
@@ -245,95 +251,33 @@ class SubtitleController:
         else:
             self.subtitle_translate_options.pack_forget()
 
-    # ── 상태 · 모델 관리 ──
+    # ── 상태 (모델 관리는 Models → 음성 인식 (자막) 탭) ──
     def refresh_subtitle_status(self, *, preserve_message=False):
-        if self.runner.busy('tools.subtitles.status'):
-            if preserve_message:
-                self._subtitle_status_refresh_pending = True
+        self.refresh_speech_status(preserve_message=preserve_message)
+
+    def subtitle_status_changed(self, status, summary, preserve_message=False):
+        """공용 상태 조회(refresh_speech_status) 결과를 자막 화면에 반영한다."""
+        installed = [KEY_LABELS[key] for key in status.models]
+        self.subtitle_model_box.configure(values=installed)
+        if self.subtitle_model.get() not in installed:
+            key = self.services.subtitles.recommend_model(status.models, self._subtitle_last.get('model', ''))
+            self.subtitle_model.set(KEY_LABELS.get(key, ''))
+        self.subtitle_engine_text.set(summary)
+        if preserve_message or self._subtitle_management_busy() or self.runner.busy('tools.subtitles'):
+            self.update_subtitle_destination()
             return
-
-        def rerun_pending():
-            if getattr(self, '_subtitle_status_refresh_pending', False):
-                self._subtitle_status_refresh_pending = False
-                self.root.after_idle(lambda: self.refresh_subtitle_status(preserve_message=True))
-                return True
-            return False
-
-        def fetch():
-            return (self.services.subtitles.status(), self.services.subtitles.management(),
-                    self.services.subtitles.supported())
-
-        def done(found):
-            if rerun_pending():
-                return
-            status, access, (supported, reason) = found
-            self._subtitle_engine = status
-            self._subtitle_access = access
-            self._subtitle_supported = supported
-            installed = [KEY_LABELS[key] for key in status.models]
-            self.subtitle_model_box.configure(values=installed)
-            if self.subtitle_model.get() not in installed:
-                key = self.services.subtitles.recommend_model(status.models, self._subtitle_last.get('model', ''))
-                self.subtitle_model.set(KEY_LABELS.get(key, ''))
-            if not status.builds:
-                engine = '음성 인식 엔진이 설치되지 않았습니다.'
-            else:
-                engine = 'whisper.cpp %s · %s · 영상 읽기(ffmpeg) %s · 음성 구간 감지 %s' % (
-                    status.version or '?', ' + '.join('GPU(CUDA)' if b == 'cuda' else 'CPU' for b in status.builds),
-                    '준비됨' if status.ffmpeg else '없음(WAV·MP3·FLAC만)', '준비됨' if status.vad else '없음')
-            if not supported:
-                engine += ' ' + reason
-            elif not access.get('allowed'):
-                engine += ' 엔진·모델 설치와 삭제는 LocalAI 관리자만 할 수 있습니다. 설치된 모델은 사용할 수 있습니다.'
-            if status.issues:
-                engine += ' · ' + ' / '.join(status.issues)
-            self.subtitle_engine_text.set(engine)
-            manage = 'normal' if supported and access.get('allowed') and not self._subtitle_management_busy() else 'disabled'
-            for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button):
-                button.configure(state=manage)
-            table = self.subtitle_model_table
-            selected = table.selection()
-            table.delete(*table.get_children())
-            for item in speech.MODELS:
-                table.insert('', 'end', iid=item.key, values=(
-                    item.label, '%.1f GB' % (item.size_mib / 1024) if item.size_mib >= 1000 else '%d MB' % item.size_mib,
-                    '약 %.0f GB' % item.vram_gib if item.vram_gib >= 1 else '1 GB 미만',
-                    '설치됨' if item.key in status.models else ('복구 필요' if item.key in status.damaged_models else '-')))
-            if selected and table.exists(selected[0]):
-                table.selection_set(selected[0])
-            if preserve_message or self._subtitle_management_busy():
-                self.update_subtitle_destination()
-                return
-            if not status.builds:
-                self.subtitle_say('Failed', '음성 인식 엔진이 없습니다. 관리자 계정에서 [엔진 설치 / 복구]를 누르세요.')
-            elif not status.models:
-                self.subtitle_say('Failed', '음성 인식 모델이 없습니다. 아래 표에서 모델을 골라 [선택 모델 받기 / 복구]를 누르세요'
-                                  ' (권장: large-v3-turbo, 최고 정확도: large-v3).')
-            elif not self.runner.busy('tools.subtitles'):
-                self.subtitle_say('Waiting' if not self._subtitle_files else 'Ready',
-                                  '자막을 만들 영상이나 음성 파일을 선택하세요.' if not self._subtitle_files else
-                                  '준비됨 · [자막 만들기]를 누르세요.')
-            self.update_subtitle_destination()
-        def failed(exc):
-            if rerun_pending():
-                return
-            if not preserve_message:
-                self.subtitle_say('Failed', '엔진 상태 확인 실패: ' + friendly(exc))
-            else:
-                self.log('[자막] 엔진 상태 확인 실패: ' + friendly(exc), level='error')
-            if (getattr(self, '_subtitle_supported', False)
-                    and getattr(self, '_subtitle_access', {}).get('allowed')
-                    and not self._subtitle_management_busy()):
-                for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button):
-                    button.configure(state='normal')
-            self.update_subtitle_destination()
-        self.run_task('tools.subtitles.status', fetch, done, mutate=False, announce=False, error=failed)
-
-    def describe_subtitle_model(self):
-        selected = self.subtitle_model_table.selection()
-        if selected:
-            item = speech.model(selected[0])
-            self.subtitle_model_note.configure(text=item.label + ': ' + item.note)
+        shortcut = ('Models에서 받기 →', self.open_speech_models) if 'models' in self.spec.pages else None
+        if not status.builds:
+            self.subtitle_say('Failed', '음성 인식 엔진이 없습니다. Models → 음성 인식 (자막)에서 '
+                                        '[엔진 설치 / 복구]를 누르세요(관리자).', action=shortcut)
+        elif not status.models:
+            self.subtitle_say('Failed', '음성 인식 모델이 없습니다. Models → 음성 인식 (자막)에서 모델을 받으세요'
+                                        '(관리자, 권장: large-v3-turbo).', action=shortcut)
+        else:
+            self.subtitle_say('Waiting' if not self._subtitle_files else 'Ready',
+                              '자막을 만들 영상이나 음성 파일을 선택하세요.' if not self._subtitle_files else
+                              '준비됨 · [자막 만들기]를 누르세요.')
+        self.update_subtitle_destination()
 
     def refresh_subtitle_llms(self):
         def done(names):
@@ -345,85 +289,7 @@ class SubtitleController:
                       announce=False, error=lambda e: self.subtitle_say('Failed', '번역 모델 조회 실패: ' + str(e)))
 
     def _subtitle_management_busy(self):
-        return any(self.runner.busy(key) for key in ('tools.subtitles.engine', 'tools.subtitles.model'))
-
-    def _manage(self, key, work, message):
-        if self.runner.busy('tools.subtitles') or self._subtitle_management_busy():
-            self.subtitle_say('Working', '기존 자막 작업 또는 설치/복구가 끝난 뒤 다시 시도하세요.')
-            return
-        self._subtitle_manage_cancel = Event()
-        self.subtitle_cancel_button.configure(state='normal')
-        self.subtitle_say('Working', message, log=True)
-        for button in (self.subtitle_engine_button, self.subtitle_get_button, self.subtitle_remove_button,
-                       self.subtitle_start_button):
-            button.configure(state='disabled')
-
-        def done(value):
-            self.subtitle_cancel_button.configure(state='disabled')
-            self.subtitle_say('Ready', '완료했습니다.', log=True)
-            self.refresh_subtitle_status(preserve_message=True)
-
-        def failed(exc):
-            self.subtitle_cancel_button.configure(state='disabled')
-            if isinstance(exc, InterruptedError):
-                self.subtitle_say('Waiting', '중단했습니다. 다시 시작하면 받던 곳부터 이어서 받습니다.', log=True)
-            else:
-                self.subtitle_say('Failed', friendly(exc), log=True, level='error')
-            self.refresh_subtitle_status(preserve_message=True)
-        if not self.run_task(key, work, done, mutate=False, long=True, announce=False, error=failed):
-            failed(RuntimeError('설치 작업을 시작하지 못했습니다. 다시 시도하세요.'))
-
-    def _manage_cancelled(self):
-        flag = getattr(self, '_subtitle_manage_cancel', None)
-        return bool(flag is not None and flag.is_set()) or self.runner.cancel.is_set()
-
-    def install_subtitle_engine(self):
-        def log(text):
-            self.services.events.emit('runtime.progress', {'service': 'subtitles', 'message': text})
-        self._manage('tools.subtitles.engine',
-                     lambda: self._engine_result(self.services.subtitles.install_engine(
-                         log=log, cancelled=self._manage_cancelled)),
-                     '음성 인식 엔진(whisper.cpp · ffmpeg · VAD) 설치 중… GPU 빌드는 1GB 안팎입니다.')
-
-    @staticmethod
-    def _engine_result(ok):
-        if not ok:
-            raise RuntimeError('엔진 설치가 완료되지 않았습니다. 활동 기록에서 원인을 확인하세요.')
-        return ok
-
-    def _selected_model(self):
-        selected = self.subtitle_model_table.selection()
-        if not selected:
-            self.subtitle_say('Failed', '아래 표에서 모델을 먼저 고르세요.')
-            return None
-        return selected[0]
-
-    def download_subtitle_model(self):
-        key = self._selected_model()
-        if key is None:
-            return
-        item = speech.model(key)
-
-        def progress(done, total):
-            if total:
-                self.services.events.emit('runtime.progress', {
-                    'service': 'subtitles', 'fraction': done / total,
-                    'message': '%s 받는 중: %.0f / %.0f MB' % (item.key, done / 1048576, total / 1048576)})
-        self._manage('tools.subtitles.model',
-                     lambda: self.services.subtitles.install_model(key, progress=progress,
-                                                                  cancelled=self._manage_cancelled),
-                     '%s 받는 중(약 %d MB, 검증 후 저장)…' % (item.key, item.size_mib))
-
-    def remove_subtitle_model(self):
-        key = self._selected_model()
-        if key is None:
-            return
-        if not messagebox.askyesno('음성 인식 모델 삭제', speech.model(key).label +
-                                   ' 모델을 이 PC에서 삭제할까요? 모든 계정에서 사용할 수 없게 됩니다.',
-                                   parent=self.root):
-            return
-        self._manage('tools.subtitles.model', lambda: self.services.subtitles.remove_model(key),
-                     key + ' 삭제 중…')
+        return self._speech_management_busy()
 
     # ── 파일 ──
     def _subtitle_start_dir(self):
@@ -503,14 +369,18 @@ class SubtitleController:
                     '옆에 자막이 이미 있는 파일은 건너뜁니다.')
         else:
             first = files[0]
-            text = '→ 결과: "%s.%s"%s%s · 이미 자막이 있는 파일은 건너뜀' % (
-                first.stem, suffixes,
-                ' + 번역 "%s.<번역 언어>.%s"' % (first.stem, suffixes) if translate else '',
-                (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
+            if translate and self.subtitle_main_name.get():
+                names = '번역 "%s.%s" + 원어 "%s.<원어>.%s"' % (first.stem, suffixes, first.stem, suffixes)
+            elif translate:
+                names = '"%s.%s" + 번역 "%s.<번역 언어>.%s"' % (first.stem, suffixes, first.stem, suffixes)
+            else:
+                names = '"%s.%s"' % (first.stem, suffixes)
+            text = '→ 결과: %s%s · 이미 자막이 있는 파일은 건너뜀' % (
+                names, (' (파일 %d개 모두 각 원본 옆)' % len(files)) if len(files) > 1 else '')
         self.subtitle_destination.configure(text=text)
         if not self.runner.busy('tools.subtitles'):
-            ready = bool(files and self.subtitle_model.get() and getattr(self, '_subtitle_engine', None)
-                         and self._subtitle_engine.builds and not self._subtitle_management_busy()
+            ready = bool(files and self.subtitle_model.get() and getattr(self, '_speech_engine', None)
+                         and self._speech_engine.builds and not self._subtitle_management_busy()
                          and (not translate or self.subtitle_llm.get()))
             self.subtitle_start_button.configure(state='normal' if ready else 'disabled')
 
@@ -544,11 +414,6 @@ class SubtitleController:
             self.set_subtitle_progress(data['fraction'], data.get('eta', ''))
 
     def cancel_subtitles(self):
-        flag = getattr(self, '_subtitle_manage_cancel', None)
-        if flag is not None and (self.runner.busy('tools.subtitles.engine') or self.runner.busy('tools.subtitles.model')):
-            flag.set()
-            self.subtitle_say('Working', '중단 중…')
-            return
         if not self.runner.busy('tools.subtitles'):
             return
         self._subtitle_cancel.set()
@@ -570,7 +435,7 @@ class SubtitleController:
                 self.subtitle_say('Failed', '번역 모델을 먼저 고르세요.')
                 return
             translate = Translate(target=self.subtitle_target.get(), model=self.subtitle_llm.get(),
-                                  style=prefs['style'])
+                                  style=prefs['style'], main_name=self.subtitle_main_name.get())
         self.save_subtitle_preferences()
         self._subtitle_cancel = Event()
         self.subtitle_start_button.configure(state='disabled')
@@ -606,7 +471,8 @@ class SubtitleController:
             job = translate
             if job is not None:            # [파일 번역]의 고정 용어집을 자막 번역에도 쓴다
                 glossary = self.services.settings.translation_preferences().get('glossary', '')
-                job = Translate(target=job.target, model=job.model, style=job.style, glossary=glossary)
+                job = Translate(target=job.target, model=job.model, style=job.style, glossary=glossary,
+                                main_name=job.main_name)
             return self.services.subtitles.make_many(files, options, translate=job, progress=progress,
                                                      on_file=on_file, cancelled=stop, on_text=on_text)
 
@@ -634,9 +500,15 @@ class SubtitleController:
                     reports.append(skipped_text(batch))
                 set_text(self.subtitle_report_text, '\n\n'.join(reports))
                 review = sum(len(result.review) for _, result in batch.results)
-                self.subtitle_say('Ready' if not batch.failed else 'Failed',
-                                  '완료: 자막 %d개 파일%s%s%s · %s' % (
+                untranslated = sum(1 for _, result in batch.results if result.translation_error)
+                # 검증을 끝내 통과하지 못해 원문으로 남은 줄(예전 숫자 검사 문제)도 상태 줄에서 바로 보이게 한다.
+                source_left = sum(len(getattr(result.translated, 'kept_lines', ()) or ())
+                                  for _, result in batch.results)
+                self.subtitle_say('Ready' if not batch.failed and not untranslated else 'Failed',
+                                  '완료: 자막 %d개 파일%s%s%s%s%s · %s' % (
                                       len(batch.results), (' · 실패 %d개' % len(batch.failed)) if batch.failed else '',
+                                      (' · 번역 실패 %d개(다시 시작하면 번역만)' % untranslated) if untranslated else '',
+                                      (' · 원문으로 남은 줄 %d개(검토 탭)' % source_left) if source_left else '',
                                       (' · 이미 자막 있음 %d개 건너뜀' % len(batch.skipped)) if batch.skipped else '',
                                       (' · 확인하면 좋은 자막 %d개' % review) if review else '',
                                       self._subtitle_last_output), log=True)

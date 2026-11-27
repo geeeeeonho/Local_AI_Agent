@@ -59,6 +59,9 @@ class Translate:
     glossary: str = ''
     precise: bool = False
     keep_failed: bool = True
+    # True: 번역 자막을 원본 이름(영상.srt)으로, 원어 자막은 영상.<원어>.srt로(재생기가 번역 자막을 바로 불러옴).
+    # False: 원어 자막이 영상.srt, 번역 자막은 영상.<번역 언어>.srt.
+    main_name: bool = True
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ class Result:
     translated_outputs: tuple = ()
     translated_text: str = ''
     translation_skipped: str = ''
+    translation_error: str = ''     # 번역만 실패(원어 자막은 만들었음). 다시 실행하면 번역만 다시 한다.
 
 
 @dataclass(frozen=True)
@@ -394,14 +398,12 @@ class SubtitleService:
         retry_model = ('large-v3' if options.quality == 'best' and 'large-v3' in installed
                        else options.model)
         chosen = language_code(options.language)
-        decisions = []
+        retry = work / 'retry'
+        shutil.rmtree(retry, ignore_errors=True)
+        retry.mkdir(parents=True, exist_ok=True)
+        snippets, languages = [], []
         for index, item in enumerate(ranges):
-            if cancelled():
-                raise InterruptedError('Cancelled')
-            report('review', index / max(1, len(ranges)), '%d/%d' % (index + 1, len(ranges)))
-            folder = work / 'retry' / str(index)
-            folder.mkdir(parents=True, exist_ok=True)
-            snippet = folder / 'audio.wav'
+            snippet = retry / ('%d.wav' % index)
             first = min(params.nframes, item.start * params.framerate // 1000)
             source.setpos(first)
             piece = source.readframes(max(0, item.end * params.framerate // 1000 - first))
@@ -410,26 +412,26 @@ class SubtitleService:
                 handle.setsampwidth(2)
                 handle.setframerate(params.framerate)
                 handle.writeframes(piece)
+            snippets.append(snippet)
             # 다른 언어로 의심되는 구간과 건너뛴 말소리(대개 다른 언어)는 그 구간만 언어를 다시 감지한다.
-            language = ('auto' if item.reason in ('language mismatch', 'possible missing speech')
-                        or chosen == 'auto' and code == 'und'
-                        else chosen if chosen != 'auto' else speech.whisper_code(code))
+            languages.append('auto' if item.reason in ('language mismatch', 'possible missing speech')
+                             or chosen == 'auto' and code == 'und'
+                             else chosen if chosen != 'auto' else speech.whisper_code(code))
+        try:
+            answers = self._recognize_snippets(snippets, languages, retry_model, options, retry, report,
+                                               cancelled)
+        finally:
+            shutil.rmtree(retry, ignore_errors=True)
+        decisions = []
+        for item, answer in zip(ranges, answers):
             missing = item.reason == 'possible missing speech'
             original = [] if missing else [segment for segment in segments
                                            if segment.end > item.start and segment.start < item.end]
-            try:
-                again = self.engine.transcribe(snippet, retry_model, work=folder, language=language,
-                                               quality='best', vad=False, prompt=options.prompt,
-                                               gpu=options.gpu, cancelled=cancelled)
-            except InterruptedError:
-                raise
-            except (OSError, RuntimeError, ValueError) as exc:
+            if isinstance(answer, Exception):
                 decisions.append(asr_review.Decision(item, ' '.join(s.text for s in original), '', False,
-                                                     'retry failed: ' + str(exc)[:120]))
+                                                     'retry failed: ' + str(answer)[:120]))
                 continue
-            finally:
-                shutil.rmtree(folder, ignore_errors=True)
-            _, candidate = speech.parse_result(again.data, spaced=rules.spaced)
+            _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
             candidate = asr_review.shift(candidate, item.start)
             decision = asr_review.choose(item, original, candidate)
             decisions.append(decision)
@@ -443,13 +445,58 @@ class SubtitleService:
                                      'note': note}, ensure_ascii=False), encoding='utf-8')
         return segments, tuple(decisions), names, note
 
+    def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled):
+        """재인식 구간들을 언어별로 묶어 whisper-cli 한 번에 인식한다(모델을 구간마다 다시 올리지 않는다).
+        묶음이 실패하면 그 묶음만 구간별로 다시 시도해, 한 구간의 문제가 다른 구간을 막지 않게 한다.
+        구간 순서대로 Transcript 또는 그 구간의 예외."""
+        answers = [None] * len(snippets)
+        groups = {}
+        for index, language in enumerate(languages):
+            groups.setdefault(language, []).append(index)
+        finished = 0
+
+        def run(indexes, language):
+            done = finished
+
+            def progress(fraction):
+                report('review', (done + fraction * len(indexes)) / max(1, len(snippets)),
+                       '%d/%d' % (min(len(snippets), done + 1 + int(fraction * len(indexes))), len(snippets)))
+            return self.engine.transcribe_many([snippets[index] for index in indexes], model, work=work,
+                                               language=language, quality='best', vad=False,
+                                               prompt=options.prompt, gpu=options.gpu, progress=progress,
+                                               cancelled=cancelled)
+        for language, indexes in groups.items():
+            if cancelled():
+                raise InterruptedError('Cancelled')
+            try:
+                for index, answer in zip(indexes, run(indexes, language)):
+                    answers[index] = answer
+            except InterruptedError:
+                raise
+            except (OSError, RuntimeError, ValueError) as exc:
+                if len(indexes) == 1:
+                    answers[indexes[0]] = exc
+                else:
+                    for index in indexes:
+                        try:
+                            answers[index] = run([index], language)[0]
+                        except InterruptedError:
+                            raise
+                        except (OSError, RuntimeError, ValueError) as single:
+                            answers[index] = single
+            finished += len(indexes)
+        return answers
+
     # ── 만들기 ──
     def make(self, path, options: Options, *, translate: Translate | None = None,
              progress: Callable[[str, float, str], None] | None = None,
              cancelled: Callable[[], bool] | None = None,
-             on_text: Callable[[str], None] | None = None, output_dir=None) -> Result:
+             on_text: Callable[[str], None] | None = None, output_dir=None,
+             existing_original=None, naming: Translate | None = None) -> Result:
         """progress(단계, 0~1, 설명): 단계는 'audio'·'speech'·'review'·'write'·'translate'.
-        output_dir를 주면 원본 옆 대신 그 폴더에 자막을 쓴다(폴더 번역의 결과 폴더)."""
+        output_dir를 주면 원본 옆 대신 그 폴더에 자막을 쓴다(폴더 번역의 결과 폴더).
+        existing_original: 앞선 실행이 만든 원어 자막(번역만 실패했던 경우). 다시 쓰지 않고 번역만 한다.
+        naming: 번역은 다른 곳(폴더 번역)이 하지만 원어 자막 이름은 번역 이름 규칙을 따를 때."""
         self._abort.clear()
         user_cancelled = cancelled
         cancelled = lambda: self._abort.is_set() or bool(user_cancelled and user_cancelled())
@@ -501,14 +548,28 @@ class SubtitleService:
         review = tuple(sorted({(item.index, item.reason) for item in review}))
         if output_dir is not None:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
-        outputs = tuple(_write_new(original_path(media, fmt, output_dir), subtitles.render(cues, fmt))
-                        for fmt in formats)
+        probe = Result(media, (), code, label, tuple(cues), '')
+        # 번역 자막이 원본 이름을 쓰면 원어 자막은 영상.<원어>.srt로 비켜 준다(번역이 생략되면 그대로 영상.srt).
+        rule = translate or naming
+        translated_main = bool(rule and rule.main_name and not self.same_language(probe, rule.target))
+        if existing_original is not None:
+            outputs = (Path(existing_original),)
+        else:
+            outputs = tuple(_write_new(output_path(media, code, fmt, output_dir) if translated_main
+                                       else original_path(media, fmt, output_dir), subtitles.render(cues, fmt))
+                            for fmt in formats)
         result = Result(media, outputs, code, label, tuple(cues), subtitles.render(cues, formats[0]),
                         review, tuple(cleaned.removed), build, seconds, duration, reused,
                         decisions=decisions, names=names, review_note=review_note)
         if translate is None:
             return result
-        return self._translate(result, translate, formats, work, report, cancelled, output_dir)
+        try:
+            return self._translate(result, translate, formats, work, report, cancelled, output_dir)
+        except InterruptedError:
+            raise
+        except (OSError, ValueError, RuntimeError) as exc:
+            # 인식과 원어 자막은 끝났다. 번역 실패(예: Ollama가 막 켜지는 중) 때문에 그 결과를 버리지 않는다.
+            return replace(result, translation_error=str(exc) or exc.__class__.__name__)
 
     @staticmethod
     def same_language(result, target_label):
@@ -562,8 +623,10 @@ class SubtitleService:
             progress=lambda done, total: report('translate', done / total if total else 0.0,
                                                 '%d/%d' % (done, total)),
             cancelled=cancelled)
+        destination = (original_path if options.main_name else
+                       lambda media, fmt, folder: output_path(media, target, fmt, folder))
         outputs, text = self.finish_translation(
-            translated, options.target, {fmt: output_path(result.source, target, fmt, output_dir) for fmt in formats})
+            translated, options.target, {fmt: destination(result.source, fmt, output_dir) for fmt in formats})
         for item in (source, translated):
             item.unlink(missing_ok=True)
         return replace(result, translated=answer, translated_outputs=outputs, translated_text=text)
@@ -585,9 +648,34 @@ class SubtitleService:
             temporary.unlink(missing_ok=True)
         return replace(result, translated=answer, translated_outputs=outputs, translated_text=text)
 
-    def folder_media(self, options: Options):
-        """번역 도구의 폴더 번역이 영상·음성 파일에 쓰는 처리기(FolderMedia)."""
-        return FolderMedia(self, options)
+    def folder_media(self, options: Options, *, main_name=True):
+        """번역 도구의 폴더 번역이 영상·음성 파일에 쓰는 처리기(FolderMedia).
+        main_name이면 결과 폴더에서 번역 자막이 영상.srt, 원어 자막이 영상.<원어>.srt가 된다."""
+        return FolderMedia(self, options, main_name=main_name)
+
+    @staticmethod
+    def already_done(media, options, translate):
+        """(건너뛸 근거가 되는 자막 또는 None, 다시 쓸 원어 자막 또는 None).
+        번역도 만들 때는 번역 자막까지 있어야 끝난 것으로 본다. 원어 자막만 있으면(앞선 실행에서 번역만
+        실패) 인식 결과를 재사용해 번역만 한다."""
+        existing = existing_subtitles(media)
+        if not existing:
+            return None, None
+        if translate is None:
+            return existing[0], None
+        fmt = next((fmt for fmt in options.formats if fmt in subtitles.FORMATS), 'srt')
+        suffix = subtitles.FORMATS[fmt][0]
+        media = Path(media)
+        main = media.with_name(media.stem + suffix)
+        tagged = media.with_name('%s.%s%s' % (media.stem, language_code(translate.target), suffix))
+        if translate.main_name:
+            if main.exists():
+                return main, None
+            others = [path for path in existing if path.suffix.lower() == suffix and path != tagged]
+            return None, (others[0] if others else None)
+        if tagged.exists():
+            return tagged, None
+        return None, (main if main.exists() else None)
 
     def make_many(self, paths, options: Options, *, translate: Translate | None = None,
                   progress=None, on_file=None, cancelled=None, on_text=None, skip_existing=True) -> Batch:
@@ -598,16 +686,17 @@ class SubtitleService:
         for index, path in enumerate(paths, 1):
             if cancelled and cancelled():
                 break
+            reuse = None
             if skip_existing:
-                existing = existing_subtitles(path)
-                if existing:
-                    skipped.append((path, existing[0]))
+                done, reuse = self.already_done(path, options, translate)
+                if done is not None:
+                    skipped.append((path, done))
                     continue
             if on_file:
                 on_file(index, len(paths), path)
             try:
                 results.append((path, self.make(path, options, translate=translate, progress=progress,
-                                                cancelled=cancelled, on_text=on_text)))
+                                                cancelled=cancelled, on_text=on_text, existing_original=reuse)))
             except InterruptedError:
                 raise
             except (OSError, ValueError, RuntimeError) as exc:
@@ -636,20 +725,28 @@ class FolderMedia:
     """
     suffixes = speech.MEDIA
 
-    def __init__(self, service, options):
+    def __init__(self, service, options, *, main_name=True):
         self.service = service
         self.options = options
+        self.main_name = main_name
         self.formats = tuple(fmt for fmt in options.formats if fmt in subtitles.FORMATS) or ('srt',)
 
     def prepare(self, media, out_dir, target_label, *, cancelled=None, progress=None):
         media, out_dir = Path(media), Path(out_dir)
         code = language_code(target_label)
-        destinations = {fmt: out_dir / ('%s.%s%s' % (media.stem, code, subtitles.FORMATS[fmt][0]))
-                        for fmt in self.formats}
+        name = (lambda fmt: '%s%s' % (media.stem, subtitles.FORMATS[fmt][0])) if self.main_name else \
+            (lambda fmt: '%s.%s%s' % (media.stem, code, subtitles.FORMATS[fmt][0]))
+        destinations = {fmt: out_dir / name(fmt) for fmt in self.formats}
         if any(path.exists() for path in destinations.values()):
             return MediaJob(media, None, None, 'auto', destinations, target_label, 'already translated')
+        # 앞선 실행이 원어 자막만 남긴 경우(번역 실패): 다시 쓰지 않고 그 자막으로 번역만 한다.
+        mirror = out_dir / media.name
+        reuse = next((path for path in existing_subtitles(mirror) if path not in destinations.values()), None) \
+            if out_dir.is_dir() else None
+        translate = Translate(target=target_label, model='', main_name=self.main_name)
         result = self.service.make(media, self.options, output_dir=out_dir, cancelled=cancelled,
-                                   progress=progress)
+                                   progress=progress, existing_original=reuse,
+                                   naming=translate)
         if self.service.same_language(result, target_label):
             return MediaJob(media, result, None, result.language_label, destinations, target_label,
                             'already in the target language')

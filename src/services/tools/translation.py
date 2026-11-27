@@ -83,6 +83,7 @@ _ECHO = re.compile(r'^\s*["\']?(?:id|text|speaker|section)["\']?\s*[:=]|["\']?\b
 _LABEL_PREFIX = re.compile(r'^\s*[^\s:：「」"\']{1,24}(?:\s[^\s:：「」"\']{1,24})?\s*[:：]\s*')
 SINGLE_SCHEMA = {'type':'object','properties':{'translation':{'type':'string'}},'required':['translation']}
 TRANSPORT_RETRIES = 2
+READY_WAIT = 15.0      # Ollama가 막 켜졌을 때 모델 목록을 기다리는 최대 초
 
 _CLASSICAL_MARK = re.compile(r'[ゐゑ]|けり|けむ|らむ|なむ|べし|ざりき|たまふ|はべり|をかし|いと[^\s]')
 
@@ -125,6 +126,88 @@ def parse_glossary(text):
         raise ValueError('User glossary is limited to 500 entries')
     return terms
 LABEL = re.compile(r'^\s*(?:translation|translated text|output|answer|번역(?:문|본| 결과)?|訳文|翻訳|翻译|译文|traducci[oó]n)\s*[:：]\s*', re.I)
+
+# ── 모델이 번역 대신 내놓는 엉뚱한 응답 ──
+# 번역 거절·AI 자기소개. 원문 자체가 사과·거절 대사면(“미안, 못 도와줘”) 정상 번역이므로 원문도 함께 본다.
+REFUSAL = re.compile(
+    r"\bI(?:'m| am) (?:sorry|afraid|unable|not able)\b.{0,60}\b(?:can(?:not|'t)|unable|translat|help|assist|provid|comply)"
+    r"|\bI (?:can(?:not|'t)|won't|am unable to) (?:help|assist|translate|provide|comply|fulfil)"
+    r"|\bas an AI\b|\bAI (?:language )?model\b|\bcontent polic|\binappropriate content\b"
+    r"|(?:죄송|미안)(?:합니다|하지만|해요|하네요).{0,40}(?:번역|도와|도움|제공|응답|답변).{0,15}(?:수 없|어렵|못)"
+    r"|(?:번역|제공|응답)(?:해 드릴|을 해 드릴|할) 수 없습니다|AI(?: 언어)? 모델(?:로서|이기)|부적절한 (?:내용|표현)(?:이|을|은)"
+    r"|申し訳(?:ありません|ございません).{0,40}(?:翻訳|お手伝い|対応|提供).{0,15}(?:できません|いたしかねます)"
+    r"|AIとして|(?:很?抱歉|对不起|對不起).{0,40}(?:无法|不能|無法).{0,15}(?:翻译|翻譯|协助|協助|提供)|作为(?:一个)?AI",
+    re.I | re.S)
+# 원문에 없는 설명·역주·메모
+ADDED_NOTE = re.compile(
+    r"[(（\[]\s*(?:참고|역주|역자 ?주|주|설명|의미|note|notes|translator'?s note|t/?n|注|译注|譯註|訳注|注釈|补充)\s*[:：]"
+    r"|※|\btranslator'?s note\b|\bliterally\s*[:：]|\(lit\.", re.I)
+# 번역문 대신 들어간 자리표시
+PLACEHOLDER = re.compile(r'^\s*[\[(（【]?\s*(?:번역 ?(?:불가|안 ?됨|할 수 없음)|n/?a|untranslat\w*|no translation|翻訳不可|无法翻译)'
+                         r'\s*[\])）】]?\s*[.。]?\s*$', re.I)
+
+
+def _clean_answer(unit_text, answer):
+    """배치 응답의 한 항목에서 추론 블록(<think>…</think>)만 걷어 낸다. 'Translation:' 같은 라벨은
+    정상 번역('答：…' → 'Answer: …')일 수도 있어 잘라 내지 않고 _misbehaviour가 판단한다."""
+    return strip_reasoning(answer) if isinstance(answer, str) else answer
+
+
+_SOURCE_LABEL = re.compile(r'^\s*[^\s:：]{1,12}\s*[:：]')
+
+
+def _label_depth(text):
+    """글머리에 겹쳐 붙은 이름표('앨리스: ', '◆文章：') 수. 이름표 뒤에 글이 있어야 센다."""
+    depth = 0
+    for _ in range(3):
+        match = _LABEL_PREFIX.match(text)
+        if not match or len(text) <= match.end():
+            break
+        depth += 1
+        text = text[match.end():]
+    return depth
+
+
+def _misbehaviour(unit_text, answer):
+    """번역 대신 엉뚱한 것을 내놓았는가(거절, 덧붙인 설명, 반복 루프, 글자 없음). 사유 또는 ''."""
+    if REFUSAL.search(answer) and not REFUSAL.search(unit_text) and not _apology(unit_text):
+        return 'Model refused or talked about itself instead of translating'
+    if ADDED_NOTE.search(answer) and not ADDED_NOTE.search(unit_text):
+        return 'Model added a note or explanation that is not in the source'
+    if LABEL.match(answer) and not _SOURCE_LABEL.match(unit_text):
+        return "Model prefixed the translation with a label such as 'Translation:'"
+    # 화자가 없는 줄(제목·지문·설명)에 '화자: '·'Alice: ' 같은 이름표를 붙였다. 화자가 있는 대사 줄은
+    # _strip_added_label이 먼저 걷어 내므로 여기까지 남은 이름표는 원문에 없던 것이다.
+    # 원문이 이름표로 시작하는 줄('◆文章：…')에 이름표를 하나 더 붙인 경우('화자: ◆번역：…')도 같다.
+    if _label_depth(answer) > _label_depth(unit_text):
+        return 'Model added a speaker label that is not in the source'
+    if PLACEHOLDER.match(answer) and not PLACEHOLDER.match(unit_text):
+        return 'Model returned a placeholder instead of a translation'
+    letters_in = sum(char.isalpha() for char in _TOKEN.sub(' ', unit_text))
+    letters_out = sum(char.isalpha() for char in _TOKEN.sub(' ', answer))
+    if letters_in >= 3 and letters_out == 0:
+        return 'Translation has no text (only punctuation or symbols)'
+    # 생성 루프: 같은 구절이 원문의 구절 수보다 훨씬 많이 되풀이된다('Yes, I see.' → '알겠어.' × 8).
+    # 원문 구절마다 같은 말이 한 번씩 나오는 번역(목록·되풀이 대사)은 정상이므로 원문 구절 수와 비교한다.
+    from core.tools import speech
+    loop_out = speech.LOOP.search(speech.normalize(answer))
+    if loop_out and not speech.LOOP.search(speech.normalize(unit_text)):
+        repeats = (loop_out.end() - loop_out.start()) // max(1, len(loop_out.group(1)))
+        clauses = len([part for part in _CLAUSES.split(_TOKEN.sub(' ', unit_text)) if part.strip()])
+        if repeats > max(5, clauses * 2):
+            return 'Translation repeats itself (generation loop)'
+    return ''
+
+
+_CLAUSES = re.compile(r'[,.!?;:，。、！？；：…·\-—–\n「」『』“”‘’"()（）\[\]【】《》〈〉]+')
+_SORRY = re.compile(r"\b(?:sorry|apologi[sz]e|afraid)\b|미안|죄송|すみません|ごめん|申し訳|抱歉|对不起|對不起", re.I)
+_UNABLE = re.compile(r"\b(?:can(?:not|'t)|unable|won't)\b|수 없|못 |못해|できない|できません|不能|无法|無法", re.I)
+
+
+def _apology(text):
+    """원문이 사과하며 거절하는 대사인가(“미안, 못 도와줘”). 그 번역은 거절 문구처럼 보여도 정상이다.
+    사과와 '할 수 없음'이 둘 다 있어야 한다('I can't believe it!'만으로는 거절 검사를 건너뛰지 않는다)."""
+    return bool(_SORRY.search(text) and _UNABLE.search(text))
 
 
 def _units(document: Document, allow=(), cjk=False):
@@ -180,6 +263,11 @@ LeakError = ReviewError   # 의심 신호(재시도 후 남으면 '검토 필요
 def _validate(unit_text, answer, memory, tokens):
     if not isinstance(answer, str) or not answer.strip():
         raise ValueError('Empty translation')
+    # 거절·설명·반복·자리표시는 '검토 필요'로 받아들이지 않는다(ReviewError가 아닌 ValueError):
+    # 다시 번역시키고, 끝내 안 되면 [실패한 구간은 원문 유지]로 원문을 남기고 줄 번호를 알린다.
+    problem = _misbehaviour(unit_text, answer)
+    if problem:
+        raise ValueError(problem)
     if len(answer) > max(4000,len(unit_text)*6):
         raise ValueError('Unexpectedly long translation')
     if ('\r' in answer or '\n' in answer) and not ('\r' in unit_text or '\n' in unit_text):
@@ -419,13 +507,23 @@ def _audit(units,complete,memory,failures,skip=()):
     return issues
 
 
+def _consistency_terms(memory):
+    """표기를 맞춰야 하는 한중일 인명·용어(모델이 정한 것; 사용자 용어는 따로 강제한다)."""
+    return [(key,value) for key,value in memory.terms.items()
+            if len(key)>=2 and _CJK_TERM.search(key) and value and key not in memory.enforced]
+
+
+def _inconsistent_term(source,answer,memory):
+    """원문에 있는 정해진 이름을 번역문이 다르게 옮겼으면 (원문 표기, 정해진 번역), 아니면 None."""
+    return next(((key,value) for key,value in _consistency_terms(memory)
+                 if key in source and value not in answer), None)
+
+
 def _inconsistent_units(units,complete,memory,failures):
     """나중에 정해진 한중일 인명·용어와 다르게 옮겨진(정해지기 전에 번역된) 구간 번호."""
-    terms=[(key,value) for key,value in memory.terms.items()
-           if len(key)>=2 and _CJK_TERM.search(key) and value and key not in memory.enforced]
     return [index for index,unit in enumerate(units)
             if index in complete and index not in failures
-            and any(key in unit.text and value not in complete[index] for key,value in terms)]
+            and _inconsistent_term(unit.text,complete[index],memory)]
 
 
 def _learn_terms(memory,learned,items,values):
@@ -493,23 +591,48 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
     last = None
     transport = 0
     retry = 0
-    while retry < 2:
+    accepted = {}                 # 검증을 통과한 줄: 다시 번역하지 않는다
+    pending = list(items)
+    problems = dict(notes or {})  # 다시 물을 때 알려 줄 사유(최종 검수 사유 + 이번 검증 실패 사유)
+    structural = False
+    while retry < 2 and pending:
         stop_if_cancelled()
         try:
-            values,learned=_ask(client,model,items,memory,target,style,kind,recent,doc,strict=bool(retry),
-                                notes=notes)
-            values=[_strip_added_label(unit.text,_speaker(doc,unit),value)
-                    for (idx,unit),value in zip(items,values)]
-            for (idx,unit),value in zip(items,values):
-                _validate(unit.text,value,memory,tokens_for_segment[unit.segment_index])
-            _learn_terms(memory,learned,items,values)
-            return values
+            values,learned=_ask(client,model,pending,memory,target,style,kind,recent,doc,strict=structural,
+                                notes=problems)
+            values=[_strip_added_label(unit.text,_speaker(doc,unit),_clean_answer(unit.text,value))
+                    for (idx,unit),value in zip(pending,values)]
+            good,bad=[],[]
+            for item,value in zip(pending,values):
+                try:
+                    _validate(item[1].text,value,memory,tokens_for_segment[item[1].segment_index])
+                    good.append((item,value))
+                except ValueError as exc:
+                    bad.append(item)
+                    problems[item[0]]='Rejected: %s. Translate this line again, completely and faithfully.' % exc
+                    last=exc
+            # 용어는 반려된 줄에서도 배운다(반려 사유는 대개 기호·이름표 문제다). 다시 번역하는 줄도
+            # 같은 표기를 쓰게 되어, 한 배치 안에서 이름이 두 가지로 갈리지 않는다.
+            _learn_terms(memory,learned,pending,values)
+            # 같은 배치 안에서 이름이 갈렸다(한 줄은 정해진 표기, 다른 줄은 다른 표기): 다른 줄만 다시 묻는다.
+            for item,value in list(good):
+                term=_inconsistent_term(item[1].text,value,memory)
+                if term:
+                    good.remove((item,value))
+                    bad.append(item)
+                    problems[item[0]]='Use the established translation %s → %s for this name.' % term
+            accepted.update((item[0],value) for item,value in good)
+            # 한 줄이 틀렸다고 배치 전체를 다시 번역하지 않는다: 통과한 줄은 두고 틀린 줄만 다시 묻는다.
+            pending=bad
+            structural=False
+            retry+=1
         except (ValueError,TypeError,KeyError) as exc:
             last=exc
+            structural=True       # 형식(JSON·id) 오류: 형식 경고와 함께 같은 줄들을 다시 묻는다
             retry+=1
         except OSError as exc:
             stop_if_cancelled()
-            if isinstance(exc,TimeoutError) and len(items)>1:
+            if isinstance(exc,TimeoutError) and len(pending)>1:
                 last=exc
                 break
             transport+=1
@@ -519,12 +642,25 @@ def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_f
     def again(part):
         return _translate_batch(client,model,part,memory,target,style,kind,recent,
                                 tokens_for_segment,doc,cancelled=cancelled,failures=failures,
-                                review=review,notes=notes)
-    if len(items)>1:
-        middle=len(items)//2
-        return again(items[:middle])+again(items[middle:])
+                                review=review,notes={idx:problems[idx] for idx,_ in part if idx in problems})
+    if pending:
+        if len(pending)>1:
+            middle=len(pending)//2
+            rest=again(pending[:middle])+again(pending[middle:])
+        elif len(items)>1:
+            rest=again(pending)   # 남은 한 줄도 먼저 배치 형식(문맥·사유 포함)으로 다시 묻는다
+        else:
+            rest=_translate_single(client,model,pending[0],memory,target,doc,tokens_for_segment,last,
+                                   stop_if_cancelled,failures,review)
+        accepted.update((idx,value) for (idx,_),value in zip(pending,rest))
+    return [accepted[idx] for idx,_ in items]
+
+
+def _translate_single(client,model,item,memory,target,doc,tokens_for_segment,last,stop_if_cancelled,
+                      failures,review):
+    """배치로 끝내 통과하지 못한 한 줄을 단일 요청으로 번역한다."""
     # 일부 소형 모델은 단일 문장에서도 배열형 JSON 출력 계약을 지키지 못한다.
-    idx,unit=items[0]
+    idx,unit=item
     system=('Translate to '+LANGUAGES[target]+'. Return only JSON {"translation": "..."}. '
             +('Copy every __LOCALAI_KEEP_…__ placeholder exactly once. ' if '__LOCALAI_KEEP_' in unit.text else '')+
             'No explanations. '
@@ -669,6 +805,28 @@ class FolderResult:
     copied: int = 0             # 번역 대상이 아니어서 그대로 복사한 파일 수
     count: int = 0              # 번역한 구간 수 합계
     memory: object = None       # 폴더 맥락 공유 시 모든 파일이 함께 쓴 폴더 메모리
+
+
+def place_as_original(result, original):
+    """번역본을 원본 이름에 둔다: 원본은 '이름.<원문 언어>.확장자'(모르면 '이름.og.확장자')로 이름을 바꿔
+    보관하고, 번역본을 원본 이름으로 옮긴다. 바꾼 결과(Result, output=원본 이름)와 보관한 원본 경로를 돌려준다."""
+    original, translated = Path(original), Path(result.output)
+    state = result.revision or {}
+    name = getattr(state.get('memory'), 'source_language', '') if state else ''
+    found = LANGUAGE_BY_NAME.get(name)
+    code = found.code if found else 'og'
+    kept = original.with_name('%s.%s%s' % (original.stem, code, original.suffix))
+    number = 2
+    while kept.exists() and number < 1000:
+        kept = original.with_name('%s.%s (%d)%s' % (original.stem, code, number, original.suffix))
+        number += 1
+    os.replace(original, kept)
+    try:
+        os.replace(translated, original)
+    except OSError:
+        os.replace(kept, original)          # 번역본을 옮기지 못하면 원본을 되돌린다
+        raise
+    return replace(result, output=original), kept
 
 
 def folder_output(folder, target):
@@ -832,6 +990,13 @@ class TranslationService:
         endpoint=self.inference.ensure_ready()
         available=self.inference.local_models()
         names={str(x).lower() for x in (available or ())}
+        # 막 켠 Ollama는 잠깐 동안 모델 목록을 못 주거나 비어 있다. 그 순간 시작한 첫 파일만 '모델 없음'으로
+        # 실패하고 다음 파일부터 되던 문제가 있었다. 바로 실패하지 않고 잠시 다시 확인한다.
+        deadline=time.monotonic()+READY_WAIT
+        while (available is None or model.lower() not in names) and time.monotonic()<deadline:
+            time.sleep(1.0)
+            available=self.inference.local_models()
+            names={str(x).lower() for x in (available or ())}
         if available is None or model.lower() not in names:
             self._ready_cache=None
             raise RuntimeError('Selected model is not available locally')
