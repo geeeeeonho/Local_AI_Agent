@@ -206,3 +206,45 @@ def test_a_list_of_quoted_terms_is_not_mistaken_for_a_loop():
     """실측 오탐: 「」로 나뉜 구절마다 같은 말이 나오는 번역(모의 모델 출력)을 루프로 보았다."""
     source = '刻印は「製造二七年」だが、同じ番号の記録は図書館では「廃止二七年」となっている。'
     assert _validate(source, '번역「번역」번역、번역「번역」번역。', _memory('Japanese', 'Korean'), {})
+
+
+class OneBadLineModel:
+    """첫 답에서 한 줄만 거절 문구를 내놓는 모의 모델. 요청마다 받은 줄을 기록한다."""
+    good = {'Good morning.': '좋은 아침.', 'Get the hell out!': '당장 꺼져!', 'See you tomorrow.': '내일 봐.'}
+
+    def __init__(self):
+        self.requests = []
+
+    def chat(self, name, messages, **kwargs):
+        data = json.loads(messages[-1]['content'])
+        if 'items' not in data:
+            return '{}'
+        self.requests.append(data['items'])
+        first = len(self.requests) == 1
+        rows = [{'id': row['id'], 'text': '죄송하지만 이 내용은 번역해 드릴 수 없습니다.'
+                 if first and 'hell' in row['text'] else self.good[row['text']]} for row in data['items']]
+        return json.dumps({'translations': rows, 'new_terms': {}}, ensure_ascii=False)
+
+
+def test_only_the_rejected_line_is_asked_again_with_the_reason(tmp_path):
+    """한 줄이 검증에 실패해도 통과한 줄은 다시 번역하지 않는다(요청·생성량 절약). 다시 묻는 줄에는 반려 사유."""
+    from core.tools.subtitles import Cue, parse, to_srt
+    from services.tools.translation import TranslationService
+
+    class Inference:
+        def ensure_ready(self):
+            return 'http://127.0.0.1:11434'
+
+        def local_models(self):
+            return ['m:1']
+    source = tmp_path / 'scene.srt'
+    source.write_text(to_srt([Cue(i * 2000, i * 2000 + 1500, (text,)) for i, text in enumerate(OneBadLineModel.good)]),
+                      encoding='utf-8')
+    model = OneBadLineModel()
+    service = TranslationService(Inference(), lambda _: model, checkpoint_dir=tmp_path / 'cp', protector=None)
+    result = service.translate_file(source, model='m:1', target='한국어', kind='subtitle', keep_failed=True,
+                                    source_language='English')
+    assert [cue.text for cue in parse(result.output.read_text(encoding='utf-8-sig'))] == list(OneBadLineModel.good.values())
+    assert len(model.requests) == 2 and len(model.requests[0]) == 3
+    retry, = model.requests[1]
+    assert retry['text'] == 'Get the hell out!' and 'refused' in retry['previous_problem']
