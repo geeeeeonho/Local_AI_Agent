@@ -23,6 +23,9 @@ def _variables(w):
     root = w.root
     w.subtitle_path = tk.StringVar(master=root)
     w.subtitle_script = tk.StringVar(master=root)        # 대본 파일(선택, 파일 하나일 때만)
+    w.subtitle_resync_path = tk.StringVar(master=root)   # 다시 맞추거나 검수할 기존 자막
+    w.subtitle_resync_sync = tk.BooleanVar(master=root, value=True)
+    w.subtitle_resync_fix = tk.BooleanVar(master=root, value=True)
     w.subtitle_language = tk.StringVar(master=root, value='자동 감지')
     w.subtitle_format = tk.StringVar(master=root, value=tuple(FORMATS)[0])
     w.subtitle_model = tk.StringVar(master=root)
@@ -151,6 +154,24 @@ def build(parent, w, toolbar=None):
                                    '"영상.<언어>.srt"(모르면 .og)로 보관하고, 음성에서 찾지 못한 줄은 검토 목록에 알립니다.',
                       style='Muted.TLabel', justify='left', wraplength=400)
     label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(label, inset=10, minimum=200)
+
+    # 이미 시각이 있는 자막: 싱크 다시 맞추기 + 끊김·겹침 검수 교정
+    resync = folds.add(body, 'resync', '기존 자막 다시 맞추기 · 검수', expanded=False).body
+    row = ttk.Frame(resync); row.pack(fill='x')
+    ttk.Button(row, text='자막 파일…', command=w.choose_subtitle_resync_file).pack(side='left')
+    ttk.Entry(row, textvariable=w.subtitle_resync_path).pack(side='left', fill='x', expand=True, padx=(6, 6))
+    w.subtitle_resync_button = ttk.Button(row, text='다시 맞추기 · 검수 시작', style='Accent.TButton',
+                                          command=w.start_subtitle_resync)
+    w.subtitle_resync_button.pack(side='left')
+    _check(resync, '싱크 다시 맞추기', w.subtitle_resync_sync,
+           '왼쪽에서 고른 영상·음성과 인식 모델로 말소리를 찾아, 전체 밀림·중간에 바뀌는 밀림(광고·편집본)·속도 차이'
+           '(23.976↔25fps 등)를 고칩니다. 번역 자막에도 쓰고, 음성과 같은 언어면 글자까지 맞춰 줄마다 시각을 다듬습니다. '
+           '자막 이름과 같은 영상·음성이 옆에 있으면 자동으로 고릅니다.')
+    _check(resync, '끊김·겹침 검수 교정', w.subtitle_resync_fix,
+           '문장 중간에서 두세 낱말로 잘린 조각은 이웃과 합치고, 조사·관사·접속사 앞뒤의 어색한 경계는 자연스러운 곳으로 '
+           '옮기며, 긴 줄·겹침·너무 짧은 표시를 자막 규칙대로 고칩니다. 영상 없이도 됩니다.')
+    note(resync, '고친 자막이 원래 이름을 쓰고, 고치기 전 자막은 "이름.og.srt"로 보관합니다. 무엇을 고쳤는지는 '
+                 '[검토 · 정리 내역]에 적습니다.')
 
     # 번역 자막: 기존 번역 도구(로컬 LLM)를 그대로 쓴다.
     link = folds.add(body, 'translate', '번역 자막').body

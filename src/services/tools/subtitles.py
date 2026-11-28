@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from core.tools import asr_review, script_align, speech, subtitles
+from core.tools import asr_review, script_align, speech, subtitle_sync, subtitles
 from core.tools.translation import read_source
 from integrations.speech.engine import EngineMissing, SpeechEngine
 from services.tools.languages import LANGUAGES, detect_language
@@ -97,6 +97,21 @@ class Result:
     untranslated: tuple = ()        # 번역 자막에서 원문으로 남은 큐 ((큐 번호, 시작 ms, 원문), …)
     relistened: tuple = ()          # 대본 줄을 못 찾아 다시 들은 구간 ((시작, 끝, 반영 여부), …)
     unscripted: tuple = ()          # 대본에 없는 말을 인식 글로 채운 구간 ((시작, 끝), …)
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    """기존 자막 다시 맞추기·검수 결과."""
+    subtitle: Path                  # 고친 자막(원래 이름)
+    kept: Path | None               # 고치기 전 자막을 보관한 곳(이름.og.srt)
+    media: Path | None
+    cues: tuple
+    text: str
+    sync: object = None             # core.tools.subtitle_sync.Sync(다시 맞추지 않았으면 None)
+    fixes: tuple = ()               # (subtitle_sync.Fix, …)
+    language: str = ''              # 자막 글의 언어 이름(영어 이름, 모르면 '')
+    same_language: bool = False     # 자막이 음성과 같은 언어(글자까지 맞춤)
+    changed: bool = True
 
 
 @dataclass(frozen=True)
@@ -581,6 +596,76 @@ class SubtitleService:
                                      'decisions': [_decision_dict(item) for item in decisions],
                                      'note': note}, ensure_ascii=False), encoding='utf-8')
         return segments, tuple(decisions), names, note
+
+    def resync_file(self, subtitle, media=None, options: Options | None = None, *, sync=True, fix=True,
+                    progress=None, cancelled=None) -> SyncResult:
+        """이미 시각이 있는 자막을 다시 맞추고(media·options 필요) 끊김·겹침을 검수·교정한다.
+        고친 자막이 원래 이름을 쓰고, 고치기 전 자막은 '이름.og.확장자'로 보관한다. 바뀐 것이 없으면 쓰지 않는다."""
+        self._abort.clear()
+        user_cancelled = cancelled
+        cancelled = lambda: self._abort.is_set() or bool(user_cancelled and user_cancelled())
+        report = progress or (lambda stage, fraction, note: None)
+        subtitle = Path(subtitle)
+        if subtitle.suffix.lower() not in ('.srt', '.vtt'):
+            raise ValueError('Choose an .srt or .vtt subtitle file to resync')
+        original_text = read_source(subtitle)[0]
+        cues = subtitles.parse(original_text)
+        if not cues:
+            raise ValueError('The subtitle file has no timed lines')
+        joined = ' '.join(cue.text for cue in cues)
+        name = detect_language(joined)
+        found = next((item for item in LANGUAGES if item.name == name), None)
+        sub_code = found.code if found else 'und'
+        rules = subtitles.rules_for(sub_code, max_chars=getattr(options, 'max_chars', None),
+                                    max_lines=getattr(options, 'max_lines', None))
+        result_sync, same = None, False
+        if sync:
+            if media is None or options is None:
+                raise ValueError('Choose the video or audio file to resync against')
+            media = Path(media)
+            if options.model not in speech.BY_KEY:
+                raise ValueError('Unknown speech model: ' + options.model)
+            self.work_dir.mkdir(parents=True, exist_ok=True)
+            self._prune()
+            work = self.work_dir / self._key(media, options)
+            work.mkdir(parents=True, exist_ok=True)
+            duration = self.engine.duration_ms(media)
+            try:
+                data, _build, _seconds, _reused = self._recognize(media, options, work, duration, report,
+                                                                  cancelled, None)
+            finally:
+                for item in ('audio.wav',) + tuple('input' + suffix for suffix in sorted(speech.NATIVE_AUDIO)):
+                    (work / item).unlink(missing_ok=True)
+            if cancelled():
+                raise InterruptedError('Cancelled')
+            audio_code = speech.whisper_code(str(((data.get('result') or {}).get('language')) or ''))
+            chosen = language_code(options.language)
+            audio_code = chosen if chosen != 'auto' else audio_code
+            _, segments = speech.parse_result(data, spaced=rules.spaced)
+            words = speech.words_of(speech.clean(segments).segments)
+            voiced = [(int(item[0]), int(item[1])) for item in (data.get(speech.VAD_MAP_KEY) or ()) if len(item) >= 2]
+            voiced += [(word.start, word.end) for word in words]
+            same = bool(audio_code) and sub_code.split('-')[0] == audio_code.split('-')[0]
+            report('write', 0.0, '')
+            result_sync = subtitle_sync.resync(cues, voiced, words=words if same else (), same_language=same,
+                                               total_ms=duration)
+            cues = list(result_sync.cues)
+        fixes = ()
+        if fix:
+            cues, fixes = subtitle_sync.review(cues, rules)
+        fmt = _format_of(subtitle)
+        text = subtitles.render(cues, fmt)
+        changed = subtitles.parse(text) != subtitles.parse(original_text)
+        kept = None
+        if changed:
+            kept = set_aside(subtitle, 'og')
+            try:
+                _write_new(subtitle, text)
+            except OSError:
+                if not subtitle.exists():
+                    os.replace(kept, subtitle)      # 쓰지 못했으면 원래 자막을 되돌린다
+                raise
+        return SyncResult(subtitle, kept, media, tuple(cues), text, result_sync, tuple(fixes), name, same, changed)
 
     def _script_relisten(self, media, options, work, segments, script, code, rules, duration, voiced, report,
                          cancelled):

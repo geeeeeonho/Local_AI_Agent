@@ -141,6 +141,49 @@ def report_text(result):
     return '\n'.join(lines)
 
 
+_FIXES = {'merged a fragment cut mid-sentence': '문장 중간에서 잘린 조각을 앞 자막과 합침',
+          'moved an awkward break to a natural boundary': '어색한 끊김을 자연스러운 자리로 옮김',
+          'rewrapped lines': '줄 나눔을 다시 함(긴 줄·어색한 줄바꿈)',
+          'fixed an overlap': '다음 자막과 겹친 시간을 고침',
+          'lengthened a cue shown too briefly': '너무 짧게 보이던 자막을 늘림',
+          'merged a cue squeezed to nothing': '밀려 보이지 않던 자막을 이웃과 합침'}
+
+
+def media_for_subtitle(subtitle):
+    """자막과 이름이 같은 영상·음성(영상.srt·영상.ko.srt ↔ 영상.mp4). 없거나 여럿이면 None."""
+    subtitle = Path(subtitle)
+    stems = {subtitle.stem}
+    if '.' in subtitle.stem:
+        stems.add(subtitle.stem.rsplit('.', 1)[0])     # 영상.ko → 영상
+    found = [path for path in subtitle.parent.iterdir()
+             if path.is_file() and path.suffix.lower() in speech.MEDIA and path.stem in stems] \
+        if subtitle.parent.is_dir() else []
+    return found[0] if len(found) == 1 else None
+
+
+def resync_report(result):
+    """기존 자막 다시 맞추기·검수 결과(검토 · 정리 내역)."""
+    lines = ['자막: %s%s' % (result.subtitle, ' · 원래 자막 보관: %s' % result.kept if result.kept else '')]
+    sync = result.sync
+    if sync is not None:
+        lines += ['', '싱크 다시 맞추기 (말소리와 겹친 비율 %d%% → %d%%)' % (sync.before * 100, sync.after * 100)]
+        lines.append('  전체 밀림: %+.1f초' % (sync.offset_ms / 1000))
+        if sync.speed != 1.0:
+            lines.append('  속도 차이 보정: ×%.4f (프레임 수가 다른 영상용 자막)' % sync.speed)
+        for number, offset in sync.splits[:30]:
+            lines.append('  %d번 자막부터 밀림이 바뀜: %+.1f초 (광고·편집 차이)' % (number, offset / 1000))
+        if result.same_language:
+            lines.append('  음성과 같은 언어: 글자까지 맞춰 %d개 자막의 시각을 다듬음' % sync.refined)
+    if result.fixes or sync is None:
+        lines += ['', '끊김·겹침 검수 교정 (%d)' % len(result.fixes)]
+        lines += ['  %d번: %s' % (fix.number, _FIXES.get(fix.reason, fix.reason)) for fix in result.fixes[:200]]
+        if not result.fixes:
+            lines.append('  (고칠 곳 없음)')
+    if not result.changed:
+        lines += ['', '바뀐 것이 없어 자막 파일을 그대로 두었습니다.']
+    return '\n'.join(lines)
+
+
 def skipped_text(batch):
     parts = []
     if batch.skipped:
@@ -354,6 +397,88 @@ class SubtitleController:
         self.subtitle_mode_label.configure(
             text=self._SCRIPT_MODES.get(mode, '대본을 쓰지 않습니다(음성 인식 글로 자막을 만듭니다).'),
             style='Mode.TLabel' if mode else 'Muted.TLabel')
+
+    def choose_subtitle_resync_file(self):
+        value = filedialog.askopenfilename(parent=self.root, title='다시 맞추거나 검수할 자막',
+                                           initialdir=self._subtitle_start_dir(),
+                                           filetypes=[('자막', '*.srt *.vtt'), ('모든 파일', '*.*')])
+        if not value:
+            return
+        self.subtitle_resync_path.set(value)
+        files = list(getattr(self, '_subtitle_files', []))
+        media = media_for_subtitle(Path(value))
+        if media is not None and (len(files) != 1 or files[0] != media):
+            self.subtitle_path.set(str(media))       # 이름이 같은 영상·음성(영상.ko.srt ↔ 영상.mp4)
+            self._subtitle_files = [media]
+            self.analyze_subtitle_input(keep=True)
+
+    def start_subtitle_resync(self):
+        if self.runner.busy('tools.subtitles') or self._subtitle_management_busy():
+            return
+        path = Path(self.subtitle_resync_path.get().strip())
+        if not path.is_file() or path.suffix.lower() not in ('.srt', '.vtt'):
+            self.subtitle_say('Failed', '다시 맞추거나 검수할 자막(.srt·.vtt)을 먼저 고르세요.')
+            return
+        sync, fix = self.subtitle_resync_sync.get(), self.subtitle_resync_fix.get()
+        if not sync and not fix:
+            self.subtitle_say('Failed', '[싱크 다시 맞추기]나 [끊김·겹침 검수 교정] 가운데 하나는 켜세요.')
+            return
+        files = list(getattr(self, '_subtitle_files', []))
+        options = media = None
+        if sync:
+            if len(files) != 1:
+                self.subtitle_say('Failed', '싱크를 맞출 영상·음성 파일 하나를 왼쪽에서 고르세요.')
+                return
+            if not self.subtitle_model.get():
+                self.subtitle_say('Failed', '인식 모델을 먼저 고르세요.')
+                return
+            prefs = self.subtitle_preferences_now()
+            options = options_from(prefs, language=self.subtitle_language.get(), model=prefs['model'])
+            media = files[0]
+        self._subtitle_cancel = Event()
+        self.subtitle_start_button.configure(state='disabled')
+        self.subtitle_resync_button.configure(state='disabled')
+        self.subtitle_cancel_button.configure(state='normal' if sync else 'disabled')
+        self.set_subtitle_progress(0.0, '준비 중')
+        self.subtitle_say('Working', '기존 자막 %s 시작…' % ('다시 맞추기 · 검수' if sync and fix else
+                                                     '다시 맞추기' if sync else '검수'), log=True)
+        events = self.services.events
+
+        def progress(stage, fraction, note):
+            events.emit('runtime.progress', {'service': 'subtitles', 'fraction': overall(stage, fraction, False),
+                                             'message': '자막 다시 맞추기 · ' + STAGES.get(stage, stage)})
+        stop = lambda: self._subtitle_cancel.is_set() or self.runner.cancel.is_set()
+
+        def work():
+            return self.services.subtitles.resync_file(path, media, options, sync=sync, fix=fix,
+                                                       progress=progress, cancelled=stop)
+
+        def unlock():
+            self.subtitle_cancel_button.configure(state='disabled')
+            self.subtitle_resync_button.configure(state='normal')
+            self.root.after_idle(self.update_subtitle_destination)
+
+        def done(result):
+            unlock()
+            self.set_subtitle_progress(1.0, '')
+            set_text(self.subtitle_preview_text, result.text[:20000])
+            set_text(self.subtitle_report_text, resync_report(result))
+            self._subtitle_last_output = result.subtitle
+            self.subtitle_open_button.configure(state='normal')
+            self.subtitle_say('Ready', ('완료 · 고친 곳 %d · 원래 자막은 %s' % (len(result.fixes) + (
+                1 if result.sync is not None and (result.sync.offset_ms or result.sync.splits
+                                                  or result.sync.speed != 1.0) else 0), result.kept.name))
+                              if result.changed else '완료 · 고칠 곳이 없어 자막을 그대로 두었습니다.', log=True)
+            self.subtitle_tabs.select(2)
+
+        def failed(exc):
+            unlock()
+            if isinstance(exc, InterruptedError):
+                self.subtitle_say('Waiting', '중단했습니다. 자막은 바꾸지 않았습니다.', log=True)
+            else:
+                self.subtitle_say('Failed', '자막 다시 맞추기 실패: ' + friendly(exc), log=True, level='error')
+        if not self.run_task('tools.subtitles', work, done, mutate=False, long=True, announce=False, error=failed):
+            unlock()
 
     def choose_subtitle_script_folder(self):
         value = filedialog.askdirectory(parent=self.root, title='대본 폴더(영상·음성과 같은 이름의 대본)',
