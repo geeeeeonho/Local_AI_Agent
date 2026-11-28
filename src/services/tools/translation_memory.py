@@ -12,7 +12,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PLAN_VERSION = 2
+# 3: 비밀번호·코드형 낱말과 자막 시각을 보호하도록 바뀌어 예전 체크포인트의 구간 토큰과 맞지 않는다.
+PLAN_VERSION = 3
 MAX_GLOSSARY = 40         # 처음 계획에서 정하는 용어 수
 MAX_TERMS = 240           # 번역 중 배운 용어까지 포함한 저장 상한(프롬프트에는 해당 배치에 나오는 것만)
 MAX_SPEAKERS = 16

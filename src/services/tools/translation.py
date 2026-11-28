@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
-from core.tools.translation import (verify_codes, code_changes, IDENTIFIER, system_context, SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
+from core.tools.translation import (verify_codes, code_changes, keeps_clock_times, IDENTIFIER, system_context, SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
                                     render, restore, speaker_prefix, split_masked)
 from integrations.ollama.client import OllamaClient, local_model_name
 from collections import Counter
@@ -149,10 +149,29 @@ PLACEHOLDER = re.compile(r'^\s*[\[(（【]?\s*(?:번역 ?(?:불가|안 ?됨|할 
                          r'\s*[\])）】]?\s*[.。]?\s*$', re.I)
 
 
+_BREAK = re.compile(r'[ \t]*(?:\r\n|\r|\n)+[ \t]*')
+_NO_SPACE_SCRIPT = re.compile(r'[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]')
+
+
+def _join_added_breaks(unit_text, answer):
+    """원문 한 줄을 모델이 여러 줄로 나눠 답하면(실측: 'Map026 Event 001' → 'Event\n001') 그 줄바꿈을
+    낱말 사이 공백으로 되돌린다. 한 줄이 여러 줄이 되면 대본·자막 구조가 깨지므로 예전에는 거절하고
+    다시 물었는데, 같은 줄이 네 번까지 다시 요청돼 시간만 들었다. 일본어·중국어 글자 사이는 띄우지 않는다."""
+    if not isinstance(answer, str) or '\r' in unit_text or '\n' in unit_text or \
+            not ('\r' in answer or '\n' in answer):
+        return answer
+    text = answer.strip()
+    def glue(match):
+        left, right = text[match.start() - 1:match.start()], text[match.end():match.end() + 1]
+        return '' if _NO_SPACE_SCRIPT.match(left) or _NO_SPACE_SCRIPT.match(right) else ' '
+    return _BREAK.sub(glue, text)
+
+
 def _clean_answer(unit_text, answer):
-    """배치 응답의 한 항목에서 추론 블록(<think>…</think>)만 걷어 낸다. 'Translation:' 같은 라벨은
-    정상 번역('答：…' → 'Answer: …')일 수도 있어 잘라 내지 않고 _misbehaviour가 판단한다."""
-    return strip_reasoning(answer) if isinstance(answer, str) else answer
+    """배치 응답의 한 항목에서 추론 블록(<think>…</think>)을 걷어 내고, 모델이 덧붙인 줄바꿈을 되돌린다.
+    'Translation:' 같은 라벨은 정상 번역('答：…' → 'Answer: …')일 수도 있어 잘라 내지 않고
+    _misbehaviour가 판단한다."""
+    return _join_added_breaks(unit_text, strip_reasoning(answer)) if isinstance(answer, str) else answer
 
 
 _SOURCE_LABEL = re.compile(r'^\s*[^\s:：]{1,12}\s*[:：]')
@@ -217,7 +236,7 @@ def _units(document: Document, allow=(), cjk=False):
     prefixes = []
     maps = []
     for index, segment in enumerate(document.segments):
-        masked, tokens = protect(segment.text, allow, cjk)
+        masked, tokens = protect(segment.text, allow, cjk, keeps_clock_times(document))
         prefix, parts = split_masked(masked)
         if not parts:
             raise ValueError('A translation segment has no usable content')
@@ -573,7 +592,7 @@ def _clean_single(source, answer):
     try:
         value=json_object(text).get('translation')
         # JSON 객체로 답했는데 약속한 키가 없으면 그 JSON을 번역문으로 쓰지 않는다.
-        return value.strip() if isinstance(value,str) else ''
+        return _join_added_breaks(source,value.strip()) if isinstance(value,str) else ''
     except (ValueError,TypeError):
         pass
     if text.startswith('```'):
@@ -584,7 +603,7 @@ def _clean_single(source, answer):
         if len(text)>=2 and text.startswith(left) and text.endswith(right) and \
                 not source.strip().startswith(left):
             text=text[1:-1].strip()
-    return text
+    return _join_added_breaks(source,text)
 
 
 def _translate_batch(client,model,items,memory,target,style,kind,recent,tokens_for_segment,doc,
@@ -730,7 +749,7 @@ def _code_issues(doc,units,prefixes,maps,complete,allow,cjk):
         except ValueError as exc:
             reason=str(exc)
         else:
-            missing,extra=code_changes(doc.segments[segment_index].text,text,allow,cjk)
+            missing,extra=code_changes(doc.segments[segment_index].text,text,allow,cjk,keeps_clock_times(doc))
             if not (missing or extra):
                 continue
             reason=('Codes or identifiers changed (missing %s, extra %s): keep them exactly as in the source '
