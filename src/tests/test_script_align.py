@@ -250,3 +250,42 @@ def test_a_subtitle_next_to_its_video_is_not_taken_for_a_script(tmp_path):
     (tmp_path / 'b.srt').write_text('x', encoding='utf-8'); (tmp_path / 'b.txt').write_text('x', encoding='utf-8')
     found = match_scripts([tmp_path / 'a.wav', tmp_path / 'b.wav'], tmp_path, tmp_path)
     assert found == {tmp_path / 'a.wav': None, tmp_path / 'b.wav': tmp_path / 'b.txt'}
+
+
+# ── 쉼표마다 잘린 조각 큐 ──
+def _paused(text, pause=800, comma_only=True):
+    """쉼표 뒤마다 pause만큼 쉬는 낭독(한국어 낱말 하나 = 글자당 150ms)."""
+    words, t = [], 0
+    for word in text.split():
+        words.append(Word(t, t + len(word) * 150, ' ' + word))
+        t += len(word) * 150 + (pause if word.endswith(',') else 120)
+    return words
+
+
+LINE = '그래서 우리는, 아침 일찍, 역 앞에서 만나기로 했고, 그 다음에 같이 시장에 가서, 점심을 먹기로 했다.'
+
+
+def test_pauses_after_commas_no_longer_cut_cues_into_two_word_fragments():
+    rules = rules_for('ko')
+    cues = build_cues(_paused(LINE), rules)
+    assert [cue.lines for cue in cues] == [('그래서 우리는, 아침 일찍,', '역 앞에서 만나기로 했고,'),
+                                           ('그 다음에 같이 시장에 가서,', '점심을 먹기로 했다.')]
+    assert validate(cues, rules).ok and all(cue.end - cue.start >= 4000 for cue in cues)
+
+
+def test_a_script_broken_at_every_comma_is_merged_but_sentences_stay_apart():
+    rules = rules_for('ko')
+    script = LINE.replace(', ', ',\n') + '\n다음 날은 비가 왔다.'
+    words = _paused(LINE + ' 다음 날은 비가 왔다.')
+    placed = align(script, words)
+    cues = build_cues(placed.words, rules, boundaries=placed.boundaries)
+    assert len(cues) == 3 and cues[-1].text == '다음 날은 비가 왔다.'      # 문장이 끝난 줄은 새 큐
+
+
+def test_long_pauses_and_overfull_cues_are_not_merged():
+    rules = rules_for('ko')
+    apart = build_cues(_paused('오늘은 여기까지, 내일 또 만나요.', pause=2500), rules)
+    assert [cue.text for cue in apart] == ['오늘은 여기까지,', '내일 또 만나요.']     # 긴 쉼은 넘지 않는다
+    long = '가나다라마바사아자차 카타파하가나다라, 마바사아자차카타파하 가나다라마바사아, 자차카타파하가나다라 마바사.'
+    cues = build_cues(_paused(long, pause=300), rules)
+    assert len(cues) >= 2 and validate(cues, rules).ok                          # 두 줄을 넘기면 합치지 않는다

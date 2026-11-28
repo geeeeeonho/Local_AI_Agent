@@ -454,12 +454,44 @@ def _merge_short(groups, rules, starts=frozenset()):
     return out
 
 
+MERGE_GAP_MS = 1500        # 쉼표 뒤 쉼은 이보다 짧다. 더 길면 장면·화자가 바뀐 것으로 보고 합치지 않는다.
+SHORT_MS = 2500            # 이보다 짧게 보이거나 용량의 절반이 안 되면 조각난 큐로 본다
+
+
+def _merge_fragments(groups, rules, starts=frozenset()):
+    """쉼표·짧은 쉼에서 잘린 두세 낱말짜리 큐를 이웃 큐와 합쳐 보통 자막 길이로 만든다.
+
+    말이 0.7초만 끊겨도 큐를 닫으므로, 쉼표마다 쉬는 낭독이나 대본은 2초 안팎의 조각 큐가 이어졌다.
+    문장이 끝나지 않은 큐는 다음 큐와 합쳐도 두 줄·최대 표시 시간 안에 들고 사이 쉼이 길지 않으면
+    합친다(둘 중 하나는 짧아야 한다). 문장 끝·긴 쉼·반드시 끊을 자리(starts)는 넘지 않는다.
+    """
+    out = []
+    for group in groups:
+        previous = out[-1] if out else None
+        if previous is not None and id(group[0]) not in starts and not ends_sentence(previous[-1].text):
+            together = previous + group
+            gap = group[0].start - previous[-1].end
+            short = any(item[-1].end - item[0].start < SHORT_MS
+                        or display_length(_join(item)) < rules.capacity * 0.5 for item in (previous, group))
+            if short and gap <= MERGE_GAP_MS and fits(together, rules) \
+                    and together[-1].end - together[0].start <= rules.max_ms:
+                out[-1] = together
+                continue
+        out.append(group)
+    return out
+
+
 def build_cues(words, rules, *, boundaries=()):
     """인식된 단어를 규칙에 맞는 자막 큐로 만든다(줄 나눔·표시 시간 포함)."""
     cues = []
     kept = [word for word in words if word.text.strip()]       # group_words와 같은 위치 기준
     starts = frozenset(id(kept[index]) for index in boundaries if 0 <= index < len(kept))
-    for group in _merge_short(group_words(kept, rules, boundaries=boundaries), rules, starts):
+    # 반드시 끊을 자리라도 앞 줄이 문장 중간(쉼표 등)에서 끝났으면 조각 합치기는 허용한다
+    # (대본을 쉼표마다 줄을 바꿔 써도 큐가 두세 낱말로 쪼개지지 않게).
+    sentence_starts = frozenset(id(kept[index]) for index in boundaries
+                                if 0 < index < len(kept) and ends_sentence(kept[index - 1].text))
+    groups = _merge_short(group_words(kept, rules, boundaries=boundaries), rules, starts)
+    for group in _merge_fragments(groups, rules, sentence_starts):
         text = _join(group)
         if not text:
             continue
