@@ -87,3 +87,31 @@ def test_a_script_with_several_files_is_refused_before_starting(ui, tmp_path, fa
     w.subtitle_script.set(str(script))
     w.start_subtitles(); pump(w)
     assert '하나에만' in w.subtitle_status.get() and not w.runner.busy('tools.subtitles')
+
+
+def test_a_script_folder_works_with_a_media_folder(ui, tmp_path, fake_engine):
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
+    media = tmp_path / 'media'; media.mkdir()
+    _wav(media / 'ep1.wav'); _wav(media / 'ep2.wav')
+    scripts = tmp_path / 'scripts'; scripts.mkdir()
+    (scripts / 'ep1.txt').write_text('Hello and welcome to the show.\n', encoding='utf-8')
+    w.subtitle_path.set(str(media)); w.analyze_subtitle_input()
+    pump(w, lambda: str(w.subtitle_start_button['state']) == 'normal')
+    w.subtitle_script.set(str(scripts))
+    assert '대본 사용' in w.subtitle_destination.cget('text')
+    w.start_subtitles()
+    pump(w, lambda: not w.runner.busy('tools.subtitles') and (media / 'ep1.srt').exists(), timeout=15)
+    pump(w, lambda: '대본이 없어 건너뛴 파일 (1)' in w.subtitle_report_text.get('1.0', 'end'), timeout=5)
+    assert not (media / 'ep2.srt').exists()
+
+
+def test_the_name_option_is_remembered(ui, fake_engine):
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
+    w.subtitle_translate_name.set(True)
+    pump(w, lambda: svc.settings.subtitle_preferences().get('translate_name') is True, timeout=4)
