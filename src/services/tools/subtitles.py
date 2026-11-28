@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from core.tools import asr_review, script_align, speech, subtitles
+from core.tools import asr_review, script_align, speech, subtitle_sync, subtitles
 from core.tools.translation import read_source
 from integrations.speech.engine import EngineMissing, SpeechEngine
 from services.tools.languages import LANGUAGES, detect_language
@@ -97,6 +97,21 @@ class Result:
     untranslated: tuple = ()        # 번역 자막에서 원문으로 남은 큐 ((큐 번호, 시작 ms, 원문), …)
     relistened: tuple = ()          # 대본 줄을 못 찾아 다시 들은 구간 ((시작, 끝, 반영 여부), …)
     unscripted: tuple = ()          # 대본에 없는 말을 인식 글로 채운 구간 ((시작, 끝), …)
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    """기존 자막 다시 맞추기·검수 결과."""
+    subtitle: Path                  # 고친 자막(원래 이름)
+    kept: Path | None               # 고치기 전 자막을 보관한 곳(이름.og.srt)
+    media: Path | None
+    cues: tuple
+    text: str
+    sync: object = None             # core.tools.subtitle_sync.Sync(다시 맞추지 않았으면 None)
+    fixes: tuple = ()               # (subtitle_sync.Fix, …)
+    language: str = ''              # 자막 글의 언어 이름(영어 이름, 모르면 '')
+    same_language: bool = False     # 자막이 음성과 같은 언어(글자까지 맞춤)
+    changed: bool = True
 
 
 @dataclass(frozen=True)
@@ -194,6 +209,37 @@ def _closeness(lines, segments):
         return 0.0
     blocks = SequenceMatcher(None, want, got, autojunk=False).get_matching_blocks()
     return sum(block.size for block in blocks if block.size >= 3) / len(want)
+
+
+def relisten_batches(ranges, wanted, limit=None):
+    """다시 들을 구간을 힌트(그 구간의 못 찾은 대본 줄)가 한 프롬프트(limit 글자)에 드는 만큼 묶는다.
+    → [[(구간, 줄들), …], …]. 묶음마다 whisper를 한 번 띄운다(모델을 구간마다 다시 올리지 않게)."""
+    limit = limit or RELISTEN_PROMPT_CHARS
+    batches, current, size = [], [], 0
+    for item in ranges:
+        lines = [text for range_, text in wanted if range_.end > item.start and range_.start < item.end]
+        hint = len(' '.join(lines)) + 1
+        if current and size + hint > limit:
+            batches.append(current)
+            current, size = [], 0
+        current.append((item, lines))
+        size += hint
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _relistened_better(item, lines, answer, rules, segments):
+    """다시 들은 결과가 그 구간을 바꿀 만한가 → 바꿀 인식 구간들(구간 시간으로 옮김) 또는 None.
+    다시 들은 글이 못 찾은 줄을 절반 이상 담고, 원래 인식보다 분명히 가까울 때만 바꾼다
+    (우연히 겹친 몇 글자로 이웃 구간까지 바꾸지 않게)."""
+    if isinstance(answer, Exception) or answer is None:
+        return None
+    _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
+    candidate = asr_review.shift(candidate, item.start)
+    original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
+    score = _closeness(lines, candidate)
+    return candidate if score >= RELISTEN_ACCEPT and score > _closeness(lines, original) + 0.15 else None
 
 
 def _whole_segments(ranges, segments):
@@ -582,6 +628,76 @@ class SubtitleService:
                                      'note': note}, ensure_ascii=False), encoding='utf-8')
         return segments, tuple(decisions), names, note
 
+    def resync_file(self, subtitle, media=None, options: Options | None = None, *, sync=True, fix=True,
+                    progress=None, cancelled=None) -> SyncResult:
+        """이미 시각이 있는 자막을 다시 맞추고(media·options 필요) 끊김·겹침을 검수·교정한다.
+        고친 자막이 원래 이름을 쓰고, 고치기 전 자막은 '이름.og.확장자'로 보관한다. 바뀐 것이 없으면 쓰지 않는다."""
+        self._abort.clear()
+        user_cancelled = cancelled
+        cancelled = lambda: self._abort.is_set() or bool(user_cancelled and user_cancelled())
+        report = progress or (lambda stage, fraction, note: None)
+        subtitle = Path(subtitle)
+        if subtitle.suffix.lower() not in ('.srt', '.vtt'):
+            raise ValueError('Choose an .srt or .vtt subtitle file to resync')
+        original_text = read_source(subtitle)[0]
+        cues = subtitles.parse(original_text)
+        if not cues:
+            raise ValueError('The subtitle file has no timed lines')
+        joined = ' '.join(cue.text for cue in cues)
+        name = detect_language(joined)
+        found = next((item for item in LANGUAGES if item.name == name), None)
+        sub_code = found.code if found else 'und'
+        rules = subtitles.rules_for(sub_code, max_chars=getattr(options, 'max_chars', None),
+                                    max_lines=getattr(options, 'max_lines', None))
+        result_sync, same = None, False
+        if sync:
+            if media is None or options is None:
+                raise ValueError('Choose the video or audio file to resync against')
+            media = Path(media)
+            if options.model not in speech.BY_KEY:
+                raise ValueError('Unknown speech model: ' + options.model)
+            self.work_dir.mkdir(parents=True, exist_ok=True)
+            self._prune()
+            work = self.work_dir / self._key(media, options)
+            work.mkdir(parents=True, exist_ok=True)
+            duration = self.engine.duration_ms(media)
+            try:
+                data, _build, _seconds, _reused = self._recognize(media, options, work, duration, report,
+                                                                  cancelled, None)
+            finally:
+                for item in ('audio.wav',) + tuple('input' + suffix for suffix in sorted(speech.NATIVE_AUDIO)):
+                    (work / item).unlink(missing_ok=True)
+            if cancelled():
+                raise InterruptedError('Cancelled')
+            audio_code = speech.whisper_code(str(((data.get('result') or {}).get('language')) or ''))
+            chosen = language_code(options.language)
+            audio_code = chosen if chosen != 'auto' else audio_code
+            _, segments = speech.parse_result(data, spaced=rules.spaced)
+            words = speech.words_of(speech.clean(segments).segments)
+            voiced = [(int(item[0]), int(item[1])) for item in (data.get(speech.VAD_MAP_KEY) or ()) if len(item) >= 2]
+            voiced += [(word.start, word.end) for word in words]
+            same = bool(audio_code) and sub_code.split('-')[0] == audio_code.split('-')[0]
+            report('write', 0.0, '')
+            result_sync = subtitle_sync.resync(cues, voiced, words=words if same else (), same_language=same,
+                                               total_ms=duration)
+            cues = list(result_sync.cues)
+        fixes = ()
+        if fix:
+            cues, fixes = subtitle_sync.review(cues, rules)
+        fmt = _format_of(subtitle)
+        text = subtitles.render(cues, fmt)
+        changed = subtitles.parse(text) != subtitles.parse(original_text)
+        kept = None
+        if changed:
+            kept = set_aside(subtitle, 'og')
+            try:
+                _write_new(subtitle, text)
+            except OSError:
+                if not subtitle.exists():
+                    os.replace(kept, subtitle)      # 쓰지 못했으면 원래 자막을 되돌린다
+                raise
+        return SyncResult(subtitle, kept, media, tuple(cues), text, result_sync, tuple(fixes), name, same, changed)
+
     def _script_relisten(self, media, options, work, segments, script, code, rules, duration, voiced, report,
                          cancelled):
         """대본 줄을 음성에서 찾지 못한 구간만, 그 줄들의 글을 힌트(--prompt)로 다시 듣는다.
@@ -619,10 +735,13 @@ class SubtitleService:
             source = wave.open(str(audio), 'rb')
         except (wave.Error, EOFError, OSError):
             return segments, ()
-        installed = self.engine.status().models
-        model = 'large-v3' if options.quality == 'best' and 'large-v3' in installed else options.model
+        # 다시 듣기는 사용자가 고른 모델·품질 그대로(더 큰 모델은 느리고, 정확도는 대본 힌트가 맡는다).
+        model = options.model
         chosen = language_code(options.language)
         language = chosen if chosen != 'auto' else speech.whisper_code(code)
+        # 구간마다 whisper를 따로 띄우면 모델을 매번 다시 올린다. 힌트가 한 프롬프트에 드는 만큼 묶어
+        # 한 번에 듣는다(보통 한두 번).
+        batches = relisten_batches(ranges, wanted)
         folder = work / 'relisten'
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True, exist_ok=True)
@@ -632,35 +751,27 @@ class SubtitleService:
                 params = source.getparams()
                 if params.sampwidth != 2:
                     return segments, ()
-                for index, item in enumerate(ranges):
+                for number, batch in enumerate(batches):
                     if cancelled():
                         raise InterruptedError('Cancelled')
-                    lines = [text for range_, text in wanted if range_.end > item.start and range_.start < item.end]
-                    hint = ' '.join(lines)[:RELISTEN_PROMPT_CHARS]
-                    snippet = _cut(source, params, item, folder / ('%d.wav' % index))
-                    answer = self._recognize_snippets([snippet], [language], model,
-                                                      replace(options, prompt=(options.prompt + ' ' + hint).strip()),
-                                                      folder, report, cancelled)[0]
-                    if isinstance(answer, Exception):
-                        done.append((item.start, item.end, False))
-                        continue
-                    _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
-                    candidate = asr_review.shift(candidate, item.start)
-                    original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
-                    # 다시 들은 글이 못 찾은 줄을 절반 이상 담고, 원래 인식보다 분명히 가까울 때만 바꾼다
-                    # (우연히 겹친 몇 글자로 이웃 구간까지 바꾸지 않게).
-                    score = _closeness(lines, candidate)
-                    better = score >= RELISTEN_ACCEPT and score > _closeness(lines, original) + 0.15
-                    if better:
-                        segments = asr_review.replace_range(segments, item, candidate)
-                    done.append((item.start, item.end, better))
+                    hint = ' '.join(' '.join(lines) for _item, lines in batch)[:RELISTEN_PROMPT_CHARS]
+                    snippets = [_cut(source, params, item, folder / ('%d-%d.wav' % (number, index)))
+                                for index, (item, _lines) in enumerate(batch)]
+                    answers = self._recognize_snippets(snippets, [language] * len(snippets), model,
+                                                       replace(options, prompt=(options.prompt + ' ' + hint).strip()),
+                                                       folder, report, cancelled, quality=options.quality)
+                    for (item, lines), answer in zip(batch, answers):
+                        candidate = _relistened_better(item, lines, answer, rules, segments)
+                        if candidate is not None:
+                            segments = asr_review.replace_range(segments, item, candidate)
+                        done.append((item.start, item.end, candidate is not None))
         finally:
             shutil.rmtree(folder, ignore_errors=True)
         cache.write_text(json.dumps({'segments': [_segment_dict(item) for item in segments], 'ranges': done},
                                     ensure_ascii=False), encoding='utf-8')
         return segments, tuple(done)
 
-    def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled):
+    def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled, quality='best'):
         """재인식 구간들을 언어별로 묶어 whisper-cli 한 번에 인식한다(모델을 구간마다 다시 올리지 않는다).
         묶음이 실패하면 그 묶음만 구간별로 다시 시도해, 한 구간의 문제가 다른 구간을 막지 않게 한다.
         구간 순서대로 Transcript 또는 그 구간의 예외."""
@@ -677,7 +788,7 @@ class SubtitleService:
                 report('review', (done + fraction * len(indexes)) / max(1, len(snippets)),
                        '%d/%d' % (min(len(snippets), done + 1 + int(fraction * len(indexes))), len(snippets)))
             return self.engine.transcribe_many([snippets[index] for index in indexes], model, work=work,
-                                               language=language, quality='best', vad=False,
+                                               language=language, quality=quality, vad=False,
                                                prompt=options.prompt, gpu=options.gpu, progress=progress,
                                                cancelled=cancelled)
         for language, indexes in groups.items():

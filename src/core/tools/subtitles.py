@@ -555,12 +555,15 @@ def _unsqueeze(cues, rules):
             continue
         previous = out[-1] if out else None
         following = pending[index + 1] if index + 1 < len(pending) else None
-        lines = _joined(previous, cue, rules) if previous is not None else None
+        # 멀리 떨어진 앞 큐와는 합치지 않는다(겹침 때문에 밀린 큐가 몇 초 전 자막에 붙지 않게).
+        near = previous is not None and cue.start - previous.end <= MERGE_GAP_MS
+        lines = _joined(previous, cue, rules) if near else None
         if lines is not None and max(cue.end, previous.end) - previous.start <= rules.max_ms * 1.5:
             out[-1] = replace(previous, end=max(previous.end, cue.end), lines=lines,
                               confidence=min(previous.confidence, cue.confidence))
         else:
-            lines = _joined(cue, following, rules) if following is not None else None
+            near = following is not None and following.start - cue.end <= MERGE_GAP_MS
+            lines = _joined(cue, following, rules) if near else None
             if lines is not None:
                 pending[index + 1] = replace(following, start=min(cue.start, following.start), lines=lines,
                                              confidence=min(cue.confidence, following.confidence))

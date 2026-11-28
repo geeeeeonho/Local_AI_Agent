@@ -50,10 +50,11 @@ def test_subtitle_sections_fold_and_are_remembered(ui, fake_engine):
     w.navigate('tools'); w.open_tool('subtitles')
     pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
     folds = w.subtitle_folds
-    assert set(folds.sections) == {'source', 'script', 'translate', 'rules', 'hint', 'preview'}
+    assert set(folds.sections) == {'source', 'script', 'resync', 'translate', 'rules', 'hint', 'preview'}
     assert folds.sections['script'].expanded                     # 파일 구획 옆에 나란히 보인다
     folds.sections['translate'].toggle(); pump(w)
-    pump(w, lambda: svc.settings.subtitle_preferences().get('folded') == 'translate', timeout=4)
+    pump(w, lambda: set(svc.settings.subtitle_preferences().get('folded', '').split(',')) ==
+         {'resync', 'translate'}, timeout=4)                       # '기존 자막 다시 맞추기'는 처음에 접혀 있다
 
 
 def test_a_chosen_script_reaches_the_subtitle_service(ui, tmp_path, fake_engine):
@@ -192,3 +193,41 @@ def test_the_chosen_way_is_shown_on_its_own_button(ui, tmp_path, fake_engine, mo
     one = tmp_path / 'one.txt'; one.write_text('Hello.\n', encoding='utf-8')
     w.subtitle_script.set(str(one)); pump(w)
     assert styles()['file'] == 'Accent.TButton' and '파일 하나' in w.subtitle_mode_label.cget('text')
+
+
+def test_an_existing_subtitle_is_resynced_and_reviewed_from_the_screen(ui, tmp_path, fake_engine, monkeypatch):
+    from apps.shared import subtitle_controller
+    from core.tools.subtitles import Cue, parse, to_srt
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
+    media = _wav(tmp_path / 'show.wav')
+    path = tmp_path / 'show.en.srt'
+    path.write_text(to_srt([Cue(5000, 6980, ('Hello and welcome to the show.',)),
+                            Cue(6980, 9950, ('Today we talk about subtitles, and why rules matter.',))]),
+                    encoding='utf-8')
+    monkeypatch.setattr(subtitle_controller.filedialog, 'askopenfilename', lambda **_kw: str(path))
+    w.choose_subtitle_resync_file()
+    pump(w, lambda: w._subtitle_files == [media], timeout=5)        # 이름이 같은 영상·음성을 자동으로
+    w.start_subtitle_resync()
+    pump(w, lambda: not w.runner.busy('tools.subtitles') and (tmp_path / 'show.en.og.srt').exists(), timeout=15)
+    pump(w, lambda: '싱크 다시 맞추기' in w.subtitle_report_text.get('1.0', 'end'), timeout=5)
+    assert parse(path.read_text(encoding='utf-8-sig'))[0].start <= 200
+    assert str(w.subtitle_resync_button['state']) == 'normal'
+
+
+def test_review_only_runs_without_a_media_file(ui, tmp_path, fake_engine):
+    from core.tools.subtitles import Cue, parse, to_srt
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
+    path = tmp_path / 'notes.srt'
+    path.write_text(to_srt([Cue(0, 1200, ('So we went',)), Cue(1300, 2600, ('to the market.',))]), encoding='utf-8')
+    w.subtitle_resync_path.set(str(path)); w.subtitle_resync_sync.set(False)
+    w.start_subtitle_resync()
+    pump(w, lambda: not w.runner.busy('tools.subtitles') and '검수 교정' in w.subtitle_report_text.get('1.0', 'end'),
+         timeout=10)
+    assert parse(path.read_text(encoding='utf-8-sig'))[0].text == 'So we went to the market.'
+    assert '앞 자막과 합침' in w.subtitle_report_text.get('1.0', 'end')
