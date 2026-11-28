@@ -122,7 +122,8 @@ def build(parent, w, toolbar=None):
     ttk.Entry(row, textvariable=w.subtitle_script).pack(side='left', fill='x', expand=True)
     label = ttk.Label(script, text='대본(.txt·.srt·.vtt)을 고르면 자막 글은 대본 그대로 쓰고, 시각만 음성에서 '
                                    '찾아 맞춥니다. 대본 한 줄은 새 자막에서 시작하고, 긴 줄은 자막 규칙대로 나눕니다. '
-                                   '[괄호]만 있는 지문 줄은 뺍니다. 음성에서 찾지 못한 줄은 시각을 추정하고 '
+                                   '[괄호]만 있는 지문 줄은 뺍니다. 같은 이름의 자막이 이미 있으면 그 자막은 "영상.<언어>.srt"'
+                                   '(모르면 .og)로 이름을 바꿔 보관합니다. 음성에서 찾지 못한 줄은 시각을 추정하고 '
                                    '검토 목록에 알립니다. 파일 하나를 고른 경우에만 씁니다.',
                       style='Muted.TLabel', justify='left', wraplength=600)
     label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(label, inset=40)

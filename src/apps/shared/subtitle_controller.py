@@ -79,6 +79,8 @@ def report_text(result):
             Path(result.script).name, (' · 음성에서 찾지 못한 대본 줄 %d개(시각 추정): %s' % (
                 len(missed), ', '.join(map(str, missed[:30])) + (' …' if len(missed) > 30 else '')))
             if missed else ' · 모든 줄을 음성에서 찾음'))
+    for kept in getattr(result, 'set_aside', ()):
+        lines.append('기존 자막은 이름을 바꿔 보관: ' + str(kept))
     if result.translation_skipped:
         lines.append('번역 생략: 음성 언어와 번역 언어가 같습니다.')
     if getattr(result, 'translation_error', ''):

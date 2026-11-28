@@ -29,7 +29,7 @@ from core.tools import asr_review, script_align, speech, subtitles
 from core.tools.translation import read_source
 from integrations.speech.engine import EngineMissing, SpeechEngine
 from services.tools.languages import LANGUAGES, detect_language
-from services.tools.translation import natural_key
+from services.tools.translation import language_suffix, natural_key, set_aside
 
 AUTO = ('auto', '자동 감지', '')
 CACHE_DAYS = 14
@@ -90,6 +90,7 @@ class Result:
     translation_error: str = ''     # 번역만 실패(원어 자막은 만들었음). 다시 실행하면 번역만 다시 한다.
     script: str = ''                # 글을 가져온 대본 파일(없으면 인식한 글)
     script_missed: tuple = ()       # 음성에서 찾지 못해 시각을 추정한 대본 줄 번호(대본 기준, 1부터)
+    set_aside: tuple = ()           # 대본 자막에 이름을 내주고 '이름.<언어>.확장자'로 보관한 기존 자막
 
 
 @dataclass(frozen=True)
@@ -133,11 +134,43 @@ def numbered(path):
 SUBTITLE_SUFFIXES = ('.srt', '.vtt', '.ass', '.ssa', '.sub', '.smi')
 
 
+def subtitle_name(media, fmt, folder=None, code=None):
+    """번호를 붙이기 전 자막 이름: '영상.srt' 또는 '영상.<code>.srt'(원본 옆이나 folder 안)."""
+    media = Path(media)
+    name = media.stem + ('.' + code if code else '') + subtitles.FORMATS[fmt][0]
+    return (Path(folder) / name) if folder is not None else media.with_name(name)
+
+
 def original_path(media, fmt, folder=None):
     """원어 자막: 원본과 같은 이름(영상.mp4 → 영상.srt). 재생기가 자동으로 불러온다."""
-    media = Path(media)
-    name = media.stem + subtitles.FORMATS[fmt][0]
-    return numbered((Path(folder) / name) if folder is not None else media.with_name(name))
+    return numbered(subtitle_name(media, fmt, folder))
+
+
+def claim(path):
+    """대본으로 만든 자막이 이 이름을 쓴다. 이미 있는 자막은 파일 번역의 '원본 이름으로 저장'과 같은
+    규칙으로 '이름.<그 자막의 언어>.확장자'(모르면 .og)로 이름을 바꿔 보관한다. 보관한 경로(없으면 None)."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding='utf-8-sig', errors='replace')
+    except OSError:
+        text = ''
+    return set_aside(path, language_suffix(detect_language(text)))
+
+
+def _write_claimed(path, text, aside):
+    """claim한 이름에 새로 쓴다. 쓰지 못하면 보관한 자막을 제 이름으로 되돌린다."""
+    kept = claim(path)
+    try:
+        written = _write_new(path, text)
+    except OSError:
+        if kept is not None and not Path(path).exists():
+            os.replace(kept, path)
+        raise
+    if kept is not None:
+        aside.append(kept)
+    return written
 
 
 def existing_subtitles(media):
@@ -160,8 +193,7 @@ def glob_escape(text):
 def output_path(media, code, fmt, folder=None):
     """원본 옆(또는 folder 안)의 '이름.<언어>.srt'. 이미 있으면 번호를 붙인다."""
     media = Path(media)
-    name = '%s.%s%s' % (media.stem, code, subtitles.FORMATS[fmt][0])
-    return numbered((Path(folder) / name) if folder is not None else media.with_name(name))
+    return numbered(subtitle_name(media, fmt, folder, code))
 
 
 def _format_of(path):
@@ -569,8 +601,14 @@ class SubtitleService:
         # 번역 자막이 원본 이름을 쓰면 원어 자막은 영상.<원어>.srt로 비켜 준다(번역이 생략되면 그대로 영상.srt).
         rule = translate or naming
         translated_main = bool(rule and rule.main_name and not self.same_language(probe, rule.target))
+        aside = []
         if existing_original is not None:
             outputs = (Path(existing_original),)
+        elif placed is not None:
+            # 대본 자막은 정해진 이름을 그대로 쓰고, 그 이름의 기존 자막은 '이름.<언어>.확장자'로 보관한다.
+            outputs = tuple(_write_claimed(subtitle_name(media, fmt, output_dir, code if translated_main else None),
+                                           subtitles.render(cues, fmt), aside)
+                            for fmt in formats)
         else:
             outputs = tuple(_write_new(output_path(media, code, fmt, output_dir) if translated_main
                                        else original_path(media, fmt, output_dir), subtitles.render(cues, fmt))
@@ -580,7 +618,8 @@ class SubtitleService:
                         reused, decisions=decisions, names=names if placed is None else (),
                         review_note=review_note,
                         script=str(options.script) if placed is not None else '',
-                        script_missed=placed.missed if placed is not None else ())
+                        script_missed=placed.missed if placed is not None else (),
+                        set_aside=tuple(aside))
         if translate is None:
             return result
         try:
@@ -643,13 +682,29 @@ class SubtitleService:
             progress=lambda done, total: report('translate', done / total if total else 0.0,
                                                 '%d/%d' % (done, total)),
             cancelled=cancelled)
-        destination = (original_path if options.main_name else
-                       lambda media, fmt, folder: output_path(media, target, fmt, folder))
-        outputs, text = self.finish_translation(
-            translated, options.target, {fmt: destination(result.source, fmt, output_dir) for fmt in formats})
+        aside = list(result.set_aside)
+        if result.script:
+            # 대본 자막의 번역본도 같은 규칙: 정해진 이름을 쓰고 그 이름의 기존 자막은 보관한다.
+            destinations = {fmt: subtitle_name(result.source, fmt, output_dir, None if options.main_name else target)
+                            for fmt in formats}
+            claimed = {path: claim(path) for path in destinations.values()}
+        else:
+            destination = (original_path if options.main_name else
+                           lambda media, fmt, folder: output_path(media, target, fmt, folder))
+            destinations = {fmt: destination(result.source, fmt, output_dir) for fmt in formats}
+            claimed = {}
+        try:
+            outputs, text = self.finish_translation(translated, options.target, destinations)
+        except Exception:
+            for path, kept in claimed.items():
+                if kept is not None and not path.exists():
+                    os.replace(kept, path)          # 쓰지 못했으면 보관한 자막을 되돌린다
+            raise
+        aside += [kept for kept in claimed.values() if kept is not None]
         for item in (source, translated):
             item.unlink(missing_ok=True)
-        return replace(result, translated=answer, translated_outputs=outputs, translated_text=text)
+        return replace(result, translated=answer, translated_outputs=outputs, translated_text=text,
+                       set_aside=tuple(aside))
 
     def revise_terms(self, result, changes, *, progress=None, cancelled=None):
         """번역 자막의 용어를 고친다: 그 용어가 든 큐만 다시 번역하고 번역 자막 파일을 고쳐 쓴다."""

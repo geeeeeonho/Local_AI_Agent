@@ -102,7 +102,8 @@ def test_cue_merging_still_works_without_a_script():
 def test_the_subtitle_service_uses_the_script_text_with_recognized_times(tmp_path, fake_engine):
     from services.tools.subtitles import Options
     media = _wav(tmp_path / 'show.wav')
-    (tmp_path / 'show.srt').write_text('1\n00:00:00,000 --> 00:00:01,000\nold\n', encoding='utf-8')
+    old = '1\n00:00:00,000 --> 00:00:01,000\nこんにちは、番組へようこそ。\n'
+    (tmp_path / 'show.srt').write_text(old, encoding='utf-8')
     script = tmp_path / 'script.txt'
     script.write_text('[Music]\nHello, and WELCOME to the show!\nToday we talk about subtitles.\n'
                       'And why rules matter.\nThis line is never said.\n', encoding='utf-8')
@@ -111,12 +112,44 @@ def test_the_subtitle_service_uses_the_script_text_with_recognized_times(tmp_pat
     assert not batch.skipped                          # 옆에 인식 자막이 있어도 대본으로 새로 만든다
     result = batch.results[0][1]
     cues = parse(result.outputs[0].read_text(encoding='utf-8-sig'))
-    assert result.outputs[0].name == 'show (2).srt'   # 있던 자막은 덮어쓰지 않는다
+    # 대본 자막이 원래 이름을 쓰고, 있던 자막은 '원본 이름으로 저장'과 같은 규칙으로 보관한다
+    assert result.outputs[0].name == 'show.srt' and not (tmp_path / 'show (2).srt').exists()
+    assert result.set_aside == (tmp_path / 'show.ja.srt',)
+    assert (tmp_path / 'show.ja.srt').read_text(encoding='utf-8') == old
     assert [cue.text for cue in cues][:3] == ['Hello, and WELCOME to the show!', 'Today we talk about subtitles.',
                                              'And why rules matter.']
     assert cues[1].start >= 1900 and validate(cues, rules_for('en')).ok
     assert result.script_missed == (4,) and any(reason == 'script line not heard' for _n, reason in result.review)
     assert result.removed == ()
+
+
+def test_an_existing_subtitle_of_unknown_language_is_kept_as_og_and_numbers_are_added(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    media = _wav(tmp_path / 'show.wav')
+    for name in ('show.srt', 'show.og.srt'):
+        (tmp_path / name).write_text('1\n00:00:00,000 --> 00:00:01,000\n12345\n', encoding='utf-8')
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\n', encoding='utf-8')
+    result = _service(tmp_path, fake_engine).make(media, Options(model='large-v3-turbo', script=str(script)))
+    assert result.outputs == (tmp_path / 'show.srt',)
+    assert result.set_aside == (tmp_path / 'show.og (2).srt',)
+    assert 'Hello and welcome' in (tmp_path / 'show.srt').read_text(encoding='utf-8-sig')
+
+
+def test_with_translation_the_translated_subtitle_takes_the_name_by_the_same_rule(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, Translate
+    media = _wav(tmp_path / 'show.wav')
+    old = '1\n00:00:00,000 --> 00:00:01,000\n안녕하세요, 방송에 오신 것을 환영합니다.\n'
+    (tmp_path / 'show.srt').write_text(old, encoding='utf-8')
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\nToday we talk about subtitles.\n', encoding='utf-8')
+    result = _service(tmp_path, fake_engine).make(
+        media, Options(model='large-v3-turbo', script=str(script)),
+        translate=Translate(target='한국어', model='m:1', main_name=True))
+    assert result.outputs == (tmp_path / 'show.en.srt',)          # 대본(원어) 자막
+    assert result.translated_outputs == (tmp_path / 'show.srt',)  # 번역 자막이 원래 이름
+    assert result.set_aside == (tmp_path / 'show.ko.srt',)        # 있던 한국어 자막은 보관
+    assert (tmp_path / 'show.ko.srt').read_text(encoding='utf-8') == old
 
 
 def test_a_script_is_checked_before_the_long_recognition_starts(tmp_path, fake_engine):
