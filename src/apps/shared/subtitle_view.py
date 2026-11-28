@@ -123,23 +123,32 @@ def build(parent, w, toolbar=None):
     script_section = folds.add(side.frame, 'script', '대본으로 시간 맞추기 (선택)', place=False)
     side.add(script_section.frame)
     script = script_section.body
-    row = ttk.Frame(script); row.pack(fill='x')
-    ttk.Button(row, text='대본·영상 폴더…', style='Accent.TButton',
-               command=w.choose_subtitle_script_home).pack(side='left')
-    ttk.Button(row, text='대본 폴더…', command=w.choose_subtitle_script_folder).pack(side='left', padx=(6, 0))
-    ttk.Button(row, text='대본 파일…', command=w.choose_subtitle_script).pack(side='left', padx=(6, 0))
-    row = ttk.Frame(script); row.pack(fill='x', pady=(6, 0))
+    # 진행 방식 두 가지를 서로 다른 단추로: 번호·이름·한 줄 설명이 다르고, 고른 방식은 채운 단추로 바뀐다.
+    w.subtitle_mode_buttons = {}
+    for key, name, hint, command in (
+            ('home', '① 한 폴더 — 대본과 영상이 함께', '대본 폴더 안의 영상·음성과 짝지어 바로 준비합니다.',
+             w.choose_subtitle_script_home),
+            ('split', '② 따로 — 대본 폴더만 고르기', '영상·음성 폴더는 왼쪽 [폴더 선택…]에서 따로 고릅니다.',
+             w.choose_subtitle_script_folder)):
+        way = ttk.Frame(script); way.pack(fill='x', pady=(0, 6))
+        button = ttk.Button(way, text=name + ' …', style='Mode.TButton', command=command)
+        button.pack(fill='x')
+        hint_label = ttk.Label(way, text=hint, style='Muted.TLabel', justify='left', wraplength=400)
+        hint_label.pack(anchor='w', padx=(4, 0), pady=(2, 0)); wrap_to_parent(hint_label, inset=10, minimum=200)
+        w.subtitle_mode_buttons[key] = button
+    row = ttk.Frame(script); row.pack(fill='x', pady=(2, 0))
     ttk.Entry(row, textvariable=w.subtitle_script).pack(side='left', fill='x', expand=True)
+    w.subtitle_mode_buttons['file'] = ttk.Button(row, text='대본 파일 하나…', command=w.choose_subtitle_script)
+    w.subtitle_mode_buttons['file'].pack(side='left', padx=(6, 0))
     ttk.Button(row, text='지우기', command=lambda: w.subtitle_script.set('')).pack(side='left', padx=(6, 0))
+    w.subtitle_mode_label = ttk.Label(script, text='', style='Mode.TLabel')
+    w.subtitle_mode_label.pack(anchor='w', pady=(6, 0))
     w.subtitle_script_summary = ttk.Label(script, text='', justify='left', wraplength=400)
     w.subtitle_script_summary.pack(anchor='w', fill='x', pady=(6, 0))
     wrap_to_parent(w.subtitle_script_summary, inset=10, minimum=200)
-    label = ttk.Label(script, text='• 대본과 영상이 한 폴더에: [대본·영상 폴더…]만 고르면 같은 이름끼리(1화.mp4 ↔ 1화.txt) '
-                                   '짝지어 바로 준비합니다. 폴더에 영상·음성이 없으면 영상·음성 폴더를 묻습니다.\n'
-                                   '• 영상·음성이 다른 폴더에: [대본 폴더…]를 고르고, 왼쪽에서 영상·음성 폴더를 고릅니다.\n'
-                                   '• 자막 글은 대본 그대로, 시각만 음성에서 맞춥니다. 대본 한 줄은 새 자막에서 시작하고 '
-                                   '[괄호] 지문 줄은 뺍니다. 같은 이름의 자막은 "영상.<언어>.srt"(모르면 .og)로 보관하고, '
-                                   '음성에서 찾지 못한 줄은 검토 목록에 알립니다.',
+    label = ttk.Label(script, text='자막 글은 대본 그대로, 시각만 음성에서 맞춥니다. 같은 이름끼리 짝짓고(1화.mp4 ↔ '
+                                   '1화.txt) 대본 한 줄은 새 자막에서 시작하며 [괄호] 지문 줄은 뺍니다. 같은 이름의 자막은 '
+                                   '"영상.<언어>.srt"(모르면 .og)로 보관하고, 음성에서 찾지 못한 줄은 검토 목록에 알립니다.',
                       style='Muted.TLabel', justify='left', wraplength=400)
     label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(label, inset=10, minimum=200)
 

@@ -169,3 +169,26 @@ def test_media_and_script_sections_sit_side_by_side_and_stack_when_narrow(ui, fa
     assert abs(source.winfo_width() - script.winfo_width()) <= 2              # 반씩
     w.root.wm_geometry('900x900')
     pump(w, lambda: script.winfo_y() > source.winfo_y() + source.winfo_height() - 2, timeout=5)  # 위아래로
+
+
+def test_the_chosen_way_is_shown_on_its_own_button(ui, tmp_path, fake_engine, monkeypatch):
+    w, svc, _ = ui
+    svc.subtitles.engine = fake_engine
+    w.navigate('tools'); w.open_tool('subtitles')
+    pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
+    styles = lambda: {key: str(button.cget('style')) for key, button in w.subtitle_mode_buttons.items()}
+    assert styles() == {'home': 'Mode.TButton', 'split': 'Mode.TButton', 'file': 'TButton'}
+    assert '쓰지 않습니다' in w.subtitle_mode_label.cget('text')
+    home = tmp_path / 'season'; home.mkdir()
+    _wav(home / 'ep1.wav'); (home / 'ep1.txt').write_text('Hello.\n', encoding='utf-8')
+    _answers(monkeypatch, home)
+    w.choose_subtitle_script_home()
+    pump(w, lambda: styles()['home'] == 'Mode.Selected.TButton', timeout=5)
+    assert styles()['split'] == 'Mode.TButton' and '① 한 폴더' in w.subtitle_mode_label.cget('text')
+    other = tmp_path / 'scripts'; other.mkdir()
+    w.subtitle_script.set(str(other)); pump(w)                  # 대본 폴더만 다른 곳 → ②
+    assert styles()['split'] == 'Mode.Selected.TButton' and styles()['home'] == 'Mode.TButton'
+    assert '② 따로' in w.subtitle_mode_label.cget('text')
+    one = tmp_path / 'one.txt'; one.write_text('Hello.\n', encoding='utf-8')
+    w.subtitle_script.set(str(one)); pump(w)
+    assert styles()['file'] == 'Accent.TButton' and '파일 하나' in w.subtitle_mode_label.cget('text')

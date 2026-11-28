@@ -265,6 +265,17 @@ class ThemeController:
         style.map('Accent.TButton', background=[('disabled', p.surface), ('active', p.chat_soft)],
                   foreground=[('disabled', p.muted), ('active', p.chat)])
         style.configure('Danger.TButton', foreground=p.danger)
+        # 진행 방식 고르기(대본 맞추기 ①·②): 고르기 전에는 테두리 단추, 고른 방식은 채운 단추.
+        style.configure('Mode.TButton', background=p.bg, foreground=p.fg, anchor='w', padding=(12, 8),
+                        borderwidth=1, relief='solid', bordercolor=p.border, lightcolor=p.bg, darkcolor=p.bg,
+                        font=('Segoe UI', 10, 'bold'))
+        style.map('Mode.TButton', background=[('active', p.hover), ('focus', p.hover)],
+                  bordercolor=[('active', p.chat), ('focus', p.chat)])
+        style.configure('Mode.Selected.TButton', background=p.chat, foreground=p.solid_ink, anchor='w',
+                        padding=(12, 8), borderwidth=1, relief='solid', bordercolor=p.chat, lightcolor=p.chat,
+                        darkcolor=p.chat, font=('Segoe UI', 10, 'bold'))
+        style.map('Mode.Selected.TButton', background=[('active', p.chat_soft)], foreground=[('active', p.chat)])
+        style.configure('Mode.TLabel', foreground=p.chat, font=('Segoe UI', 10, 'bold'))
         style.configure('TEntry', fieldbackground=p.input, foreground=p.fg,
                         insertcolor=p.fg, padding=7)
         style.configure('TCombobox', fieldbackground=p.input, background=p.surface, foreground=p.fg, padding=7)
