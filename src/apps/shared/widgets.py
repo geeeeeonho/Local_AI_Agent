@@ -70,6 +70,12 @@ def status_line(parent, variable, *, side='top'):
     return label
 
 
+def finished_level(state, level='info'):
+    """상태 줄을 'Ready'로 바꾸며 기록에도 남기는 말은 사용자가 시작한 작업이 끝났다는 뜻이다.
+    오류·경고로 지정한 줄은 그대로 두고, 나머지는 기록에서 성공색('success')으로 보이게 한다."""
+    return 'success' if state == 'Ready' and level == 'info' else level
+
+
 def set_status(label, state, text, action=None):
     """Recolour the line, set its words, and offer the way out it names.
 

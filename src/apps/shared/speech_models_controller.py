@@ -9,7 +9,7 @@ from tkinter import messagebox
 
 from core.tools import speech
 from .subtitle_controller import friendly
-from .widgets import set_status
+from .widgets import set_status, finished_level
 
 ENGINE_KEY, MODEL_KEY = 'tools.subtitles.engine', 'tools.subtitles.model'
 
@@ -35,7 +35,7 @@ class SpeechModelsController:
         if hasattr(self, 'speech_status_label'):
             set_status(self.speech_status_label, state, text)
         if log:
-            self.log('[음성 인식 모델] ' + text, level=level)
+            self.log('[음성 인식 모델] ' + text, level=finished_level(state, level))
 
     def open_speech_models(self):
         """자막 화면의 바로가기: Models → 음성 인식 (자막) 탭을 연다."""
