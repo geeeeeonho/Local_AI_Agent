@@ -47,6 +47,7 @@ class Alignment:
     lines: tuple            # 자막에 쓴 대본 줄
     coverage: tuple         # 줄마다 음성에서 찾은 글자 비율(0~1)
     line_starts: tuple      # 줄마다 첫 단어 위치
+    unscripted: tuple = ()  # 대본에 없는 말(애드리브 등)로 보이는 인식 단어 묶음 ((Word, …), …)
 
     @property
     def missed(self):
@@ -187,8 +188,9 @@ def _rate(timed):
     return max(40, min(600, sum(span for span, _ in spans) // total)) if total else DEFAULT_MS_PER_CHAR
 
 
-def align(text, words, *, spaced=True):
-    """대본 글과 인식 단어 → Alignment. 대본이 음성과 전혀 맞지 않으면 ValueError."""
+def align(text, words, *, spaced=True, speech=()):
+    """대본 글과 인식 단어 → Alignment. 대본이 음성과 전혀 맞지 않으면 ValueError.
+    speech: 말소리 구간 [(시작 ms, 끝 ms)](VAD). 인식이 놓친 대본 줄을 무음이 아니라 말소리에 놓는 데 쓴다."""
     lines = script_lines(text)
     if not lines:
         raise ValueError('The script has no lines to place')
@@ -212,7 +214,11 @@ def align(text, words, *, spaced=True):
             offset += len(keys)
         coverage.append(matched / len(line_keys[line_index]) if line_keys[line_index] else 1.0)
     rate = _rate([(span[0], span[1], size) for _line, _text, span, size, hit in items if hit])
-    _fill(items, rate)
+    # 말소리가 있던 시간: VAD 구간 + 대본과 맞지 않은 인식 단어(인식은 했지만 글이 틀린 곳)
+    used = set(found.values())
+    voiced = list(speech or ()) + [(start, end) for index, (_char, start, end) in enumerate(heard)
+                                   if index not in used]
+    _fill(items, rate, _merge_spans(voiced))
 
     out, starts, previous = [], [], None
     for line_index, text_, span, _size, hit in items:
@@ -221,12 +227,111 @@ def align(text, words, *, spaced=True):
             previous = line_index
         start, end = span
         out.append(Word(start, max(end, start + 1), text_, 1.0 if hit else GUESSED_PROB))
-    return Alignment(tuple(out), tuple(starts[1:]), tuple(lines), tuple(coverage), tuple(starts))
+    return Alignment(tuple(out), tuple(starts[1:]), tuple(lines), tuple(coverage), tuple(starts),
+                     _unscripted(words, used, out))
 
 
-def _fill(items, rate):
-    """시각을 모르는 낱말을 앞뒤 맞은 낱말 사이에 글자 수대로 놓는다. 시각은 앞에서 뒤로 늘어난다.
-    사이가 말하는 속도보다 훨씬 길면(대본에 없는 말이 끼었다) 앞 낱말 바로 뒤에 말하는 속도로 놓는다."""
+UNSCRIPTED_MIN_MS = 700    # 이보다 짧은 대본 밖 말(맞장구 한 마디·잡음)은 자막으로 만들지 않는다
+UNSCRIPTED_MIN_PROB = 0.5
+
+
+def _unscripted(words, used, placed, join=600):
+    """대본과 한 글자도 맞지 않은 인식 단어 가운데, 대본 글을 놓은 시간과 겹치지 않는 것(대본에 없는 말).
+    가까운 단어끼리 묶고, 너무 짧거나 확신도가 낮은 묶음(잡음·환각)은 뺀다."""
+    taken = _merge_spans([(word.start, word.end) for word in placed], join=0)
+    runs, index, cursor = [], 0, 0
+    for word in words:
+        size = len(_key(word.text))
+        hit = any(position in used for position in range(index, index + size))
+        index += size
+        if not size or hit or not word.text.strip() or word.prob < UNSCRIPTED_MIN_PROB:
+            continue
+        while cursor < len(taken) and taken[cursor][1] <= word.start:
+            cursor += 1
+        if cursor < len(taken) and taken[cursor][0] < word.end:
+            continue                                   # 대본 글이 이미 이 시간을 덮는다
+        if runs and word.start - runs[-1][-1].end <= join:
+            runs[-1].append(word)
+        else:
+            runs.append([word])
+    keep = []
+    for run in runs:
+        prob = sum(word.prob for word in run) / len(run)
+        if run[-1].end - run[0].start >= UNSCRIPTED_MIN_MS and prob >= UNSCRIPTED_MIN_PROB:
+            keep.append(tuple(run))
+    return tuple(keep)
+
+
+def with_unscripted(placed):
+    """대본 낱말과 대본에 없는 말(인식 글)을 시간 순으로 합친다 →
+    (단어, 끊을 위치, 언제나 지킬 경계(대본 글 ↔ 인식 글), 대본 밖 묶음의 시간 구간).
+    대본 밖 묶음과 대본 줄은 서로 다른 큐에서 시작하고 한 큐로 합치지 않는다."""
+    items = [(word.start, 0, index, word) for index, word in enumerate(placed.words)]
+    line_start = set(placed.line_starts)
+    for number, run in enumerate(placed.unscripted):
+        items += [(word.start, 1, (number, position), word) for position, word in enumerate(run)]
+    items.sort(key=lambda item: (item[0], item[1]))
+    words, boundaries, strict, previous_kind = [], [], [], None
+    for _start, kind, key, word in items:
+        switched = previous_kind is not None and kind != previous_kind
+        opens = (kind == 0 and key in line_start) or (kind == 1 and key[1] == 0) or switched
+        if words and opens:
+            boundaries.append(len(words))
+            if switched or kind == 1:
+                strict.append(len(words))
+        words.append(word)
+        previous_kind = kind
+    spans = tuple((run[0].start, run[-1].end) for run in placed.unscripted)
+    return words, tuple(sorted(set(boundaries))), tuple(sorted(set(strict))), spans
+
+
+def _merge_spans(spans, join=250):
+    """겹치거나 join ms보다 가까운 구간을 합쳐 시간 순으로."""
+    out = []
+    for start, end in sorted((int(s), int(e)) for s, e in spans if e > s):
+        if out and start <= out[-1][1] + join:
+            out[-1][1] = max(out[-1][1], end)
+        else:
+            out.append([start, end])
+    return [tuple(span) for span in out]
+
+
+def _voiced_between(voiced, low, high, least=150):
+    """[low, high] 안의 말소리 구간(너무 짧은 조각은 뺀다)."""
+    spans = [(max(start, low), min(end, high)) for start, end in voiced if end > low and start < high]
+    return [(start, end) for start, end in spans if end - start >= least]
+
+
+def _along(spans, sizes, offset=0.0, length=None):
+    """구간들을 이어 붙인 시간선의 [offset, offset+length]에 낱말을 글자 수대로 놓는다 → [(시작, 끝)]."""
+    total = sum(end - start for start, end in spans)
+    length = total - offset if length is None else length
+
+    def at(position):
+        position = min(max(position, 0.0), total)
+        for start, end in spans:
+            if position <= end - start:
+                return int(start + position)
+            position -= end - start
+        return int(spans[-1][1])
+
+    out, cursor, weight = [], offset, sum(sizes)
+    for size in sizes:
+        step = length * size / weight
+        start = at(cursor)
+        out.append((start, max(at(cursor + step), start + 1)))
+        cursor += step
+    return out
+
+
+def _fill(items, rate, voiced=()):
+    """시각을 모르는 낱말(인식이 놓쳤거나 틀린 곳)을 앞뒤 맞은 낱말 사이에 놓는다.
+
+    사이에 말소리(VAD·맞지 않은 인식 단어)가 있으면 그 말소리 시간에만 글자 수대로 놓는다. 예전에는
+    사이가 길면 앞 낱말 바로 뒤에 몰아 놓아, 긴 무음·음악 뒤에 시작한 줄이 무음 동안 보이고 실제로
+    말할 때는 자막이 비었다. 말소리가 놓을 글보다 훨씬 길면(대본에 없는 말이 섞였다) 줄 첫머리는
+    다음 맞은 낱말 바로 앞, 그 밖에는 앞 낱말 바로 뒤의 말소리를 쓴다.
+    말소리를 모르면 사이에 고르게, 사이가 너무 길면 같은 규칙으로 말하는 속도만큼만 놓는다."""
     index = 0
     previous_end = None
     while index < len(items):
@@ -244,24 +349,29 @@ def _fill(items, rate):
         sizes = [items[i][3] for i in range(index, stop)]
         need = sum(sizes) * rate
         following = items[stop][2][0] if stop < len(items) else None
-        if previous_end is None:                       # 앞에 맞은 낱말이 없다: 다음 낱말 앞으로
-            begin = max(0, (following if following is not None else need) - need)
-            room = (following if following is not None else begin + need) - begin
-        elif following is None or following - previous_end > need * 3:
-            # 사이가 너무 멀다(대본에 없는 말·긴 쉼). 새 줄 첫머리부터 못 들었으면 그 줄의 다음 맞은
-            # 낱말 바로 앞에(줄은 쉼 뒤에 시작한다), 아니면 앞 낱말 바로 뒤에 말하는 속도로 놓는다.
-            opens_line = items[index][0] != items[index - 1][0]
-            if following is not None and opens_line and items[stop][0] == items[index][0]:
-                begin, room = following - need, need
+        opens_line = index == 0 or items[index][0] != items[index - 1][0]
+        before_next = following is not None and opens_line and items[stop][0] == items[index][0]
+        low = previous_end if previous_end is not None else max(0, (following or need) - need * 4)
+        high = following if following is not None else low + need * 4
+        spans = _voiced_between(voiced, low, high)
+        heard = sum(end - start for start, end in spans)
+        if spans and heard >= need * 0.25:
+            if heard <= need * 3:
+                placed = _along(spans, sizes)
+            elif before_next or previous_end is None:
+                placed = _along(spans, sizes, offset=heard - need, length=need)
             else:
-                begin, room = previous_end, need
+                placed = _along(spans, sizes, offset=0.0, length=need)
         else:
-            begin, room = previous_end, max(0, following - previous_end)
-        cursor = float(begin)
-        for i, size in zip(range(index, stop), sizes):
-            length = room * size / sum(sizes)
-            start = int(cursor)
-            items[i][2] = (start, max(int(cursor + length), start + 1))
-            cursor += length
+            if previous_end is None:                   # 앞에 맞은 낱말이 없다: 다음 낱말 앞으로
+                begin = max(0, (following if following is not None else need) - need)
+                room = (following if following is not None else begin + need) - begin
+            elif following is None or following - previous_end > need * 3:
+                begin, room = (following - need, need) if before_next else (previous_end, need)
+            else:
+                begin, room = previous_end, max(0, following - previous_end)
+            placed = _along([(begin, begin + max(1, room))], sizes)
+        for i, span in zip(range(index, stop), placed):
+            items[i][2] = span
         previous_end = items[stop - 1][2][1]
         index = stop

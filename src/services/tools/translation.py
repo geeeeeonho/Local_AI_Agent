@@ -209,7 +209,8 @@ def _misbehaviour(unit_text, answer):
         return 'Model returned a placeholder instead of a translation'
     letters_in = sum(char.isalpha() for char in _TOKEN.sub(' ', unit_text))
     letters_out = sum(char.isalpha() for char in _TOKEN.sub(' ', answer))
-    if letters_in >= 3 and letters_out == 0:
+    # 자막의 짧은 감탄사('はい'·'えっ' 두 글자)를 '…'로만 옮기면 그 시간대 자막이 사라진 것과 같다.
+    if letters_in >= 2 and letters_out == 0:
         return 'Translation has no text (only punctuation or symbols)'
     # 생성 루프: 같은 구절이 원문의 구절 수보다 훨씬 많이 되풀이된다('Yes, I see.' → '알겠어.' × 8).
     # 원문 구절마다 같은 말이 한 번씩 나오는 번역(목록·되풀이 대사)은 정상이므로 원문 구절 수와 비교한다.

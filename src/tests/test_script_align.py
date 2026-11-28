@@ -289,3 +289,138 @@ def test_long_pauses_and_overfull_cues_are_not_merged():
     long = '가나다라마바사아자차 카타파하가나다라, 마바사아자차카타파하 가나다라마바사아, 자차카타파하가나다라 마바사.'
     cues = build_cues(_paused(long, pause=300), rules)
     assert len(cues) >= 2 and validate(cues, rules).ok                          # 두 줄을 넘기면 합치지 않는다
+
+
+# ── 인식이 놓친 줄을 무음이 아닌 말소리에 ──
+def test_a_line_missed_after_a_long_silence_is_shown_when_it_is_spoken_not_during_the_silence():
+    heard, end = _spoken('one two three four')
+    later, _ = _spoken('seven eight nine ten', start=end + 9000)            # 9초 무음(음악) 뒤
+    script = 'one two three four.\nfive six.\nseven eight nine ten.'
+    spoken_at = (end + 7000, end + 8800)                                    # 'five six'를 실제로 말한 때(VAD)
+    placed = align(script, heard + later, speech=[(0, end), spoken_at, (end + 9000, end + 10600)])
+    five = placed.words[placed.line_starts[1]]
+    assert spoken_at[0] <= five.start < spoken_at[1]
+    # VAD가 없어도, 인식은 했지만 글이 틀린 단어가 그 자리에 있으면 그곳에 놓는다
+    misheard = [Word(end + 7000, end + 7800, ' fife'), Word(end + 7900, end + 8800, ' sicks')]
+    placed = align(script, heard + misheard + later)
+    assert end + 6900 <= placed.words[placed.line_starts[1]].start < end + 8800
+
+
+def test_mid_sentence_pauses_keep_the_subtitle_on_screen_but_sentence_ends_do_not():
+    from core.tools.subtitles import Cue, retime
+    rules = rules_for('ko')
+    cues = retime([Cue(0, 2000, ('그래서 우리는 아침 일찍,',)), Cue(3200, 5000, ('역 앞에서 만났다.',)),
+                   Cue(6200, 8000, ('다음 날은 비가 왔다.',))], rules)
+    assert cues[0].end == 3200 - rules.gap_ms          # 쉼표 뒤 1.2초 쉼: 다음 자막까지 이어 보인다
+    assert cues[1].end < 6200 - rules.gap_ms           # 문장이 끝나면 쉼 동안 비운다
+
+
+@pytest.mark.parametrize('seed', [0, 1, 2])
+def test_simulated_recognition_errors_leave_little_speech_without_subtitles(seed):
+    """whisper처럼 틀리는 인식(건너뜀 7%·앞부분만 8%·글자 오류 10%·무음 환각·애드리브)으로 150줄을 맞춘다."""
+    from script_simulation import evaluate
+    uncovered, misplaced, lines = evaluate(seed)
+    assert uncovered < 0.08 and misplaced <= 3
+    heavy, misplaced, _ = evaluate(seed, err=0.35, p_drop=0.15, p_partial=0.15)   # 한자·가나 차이 같은 큰 불일치
+    assert heavy < 0.11 and misplaced <= 5
+
+
+def test_the_service_gives_the_vad_speech_regions_to_the_script_alignment(tmp_path, fake_engine, monkeypatch):
+    from core.tools import script_align
+    from services.tools.subtitles import Options
+    monkeypatch.setenv('FAKE_VAD_LOG', '1')
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    seen = {}
+    real = script_align.align
+
+    def spy(text, words, **options):
+        seen.update(options)
+        return real(text, words, **options)
+
+    monkeypatch.setattr(script_align, 'align', spy)
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\n', encoding='utf-8')
+    _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
+                                         Options(model='large-v3-turbo', script=str(script)))
+    assert seen['speech'] == ((500, 3000), (4000, 6000))           # 가짜 엔진이 알린 VAD 구간(원래 시간)
+
+
+# ── 대본 줄을 못 찾은 구간만 대본 글을 힌트로 다시 듣기 ──
+def _answer(sentences, step=300):
+    """whisper-cli JSON 모양의 인식 결과(구간 안 시각)."""
+    segments, t = [], 0
+    for sentence in sentences:
+        tokens = []
+        for word in sentence.split():
+            tokens.append({'text': ' ' + word, 'offsets': {'from': t, 'to': t + step - 30}, 'p': 0.9, 't_dtw': -1})
+            t += step
+        segments.append({'offsets': {'from': tokens[0]['offsets']['from'], 'to': t}, 'text': ' ' + sentence,
+                         'tokens': tokens})
+    return type('Transcript', (), {'data': {'result': {'language': 'en'}, 'transcription': segments}})()
+
+
+def test_a_missed_line_is_listened_to_again_with_the_script_as_a_hint(tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options, SubtitleService
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\nThe weather is nice today.\n'
+                      'Today we talk about subtitles, and why rules matter.\n', encoding='utf-8')
+    hints = []
+    original = SubtitleService._recognize_snippets
+
+    def relisten(self, snippets, languages, model, options, work, report, cancelled):
+        if work.name != 'relisten':                      # 일반 재확인은 그대로
+            return original(self, snippets, languages, model, options, work, report, cancelled)
+        hints.append(options.prompt)
+        heard = ['Hello and welcome to the show.', 'The weather is nice today.',
+                 'Today we talk about subtitles, and why rules matter.']
+        return [_answer(heard if 'weather' in options.prompt else heard[:1] + heard[2:])]
+
+    monkeypatch.setattr(SubtitleService, '_recognize_snippets', relisten)
+    result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
+                                                  Options(model='large-v3-turbo', script=str(script)))
+    assert hints and 'The weather is nice today.' in hints[0]          # 못 찾은 줄의 글을 힌트로
+    assert result.relistened and result.relistened[0][2] is True       # 다시 들은 글이 더 가까워 반영
+    assert result.script_missed == ()                                  # 이제 모든 줄을 음성에서 찾았다
+    cues = {cue.text.replace('\n', ' '): cue for cue in result.cues}
+    assert 'The weather is nice today.' in cues
+    assert cues['The weather is nice today.'].end - cues['The weather is nice today.'].start >= 833
+
+
+def test_relistening_that_does_not_help_changes_nothing(tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options, SubtitleService
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\nThis line was cut in editing.\n'
+                      'Today we talk about subtitles, and why rules matter.\n', encoding='utf-8')
+    original = SubtitleService._recognize_snippets
+
+    def relisten(self, snippets, languages, model, options, work, report, cancelled):
+        if work.name != 'relisten':
+            return original(self, snippets, languages, model, options, work, report, cancelled)
+        return [_answer(['Hello and welcome to the show.', 'Today we talk about subtitles, and why rules matter.'])]
+
+    monkeypatch.setattr(SubtitleService, '_recognize_snippets', relisten)
+    result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
+                                                  Options(model='large-v3-turbo', script=str(script)))
+    assert result.relistened and result.relistened[0][2] is False and result.script_missed == (2,)
+    # 빠른 품질은 다시 듣지 않는다
+    fast = _service(tmp_path / 'f', fake_engine).make(_wav(tmp_path / 'show2.wav'),
+                                                      Options(model='large-v3-turbo', script=str(script),
+                                                              quality='fast'))
+    assert fast.relistened == ()
+
+
+def test_speech_that_is_not_in_the_script_is_filled_with_the_recognized_text():
+    from core.tools.script_align import with_unscripted
+    heard, end = _spoken('one two three four')
+    adlib, end2 = _spoken('wow that was really great', start=end + 600)
+    later, _ = _spoken('seven eight nine ten', start=end2 + 600)
+    noise = [Word(end2 + 50, end2 + 300, ' uh', 0.3)]                   # 짧고 확신도 낮은 소리는 빼고
+    placed = align('one two three four.\nseven eight nine ten.', heard + adlib + noise + later)
+    assert [tuple(w.text.strip() for w in run) for run in placed.unscripted] == [
+        ('wow', 'that', 'was', 'really', 'great')]
+    words, boundaries, strict, spans = with_unscripted(placed)
+    cues = build_cues(words, rules_for('en'), boundaries=boundaries, strict=strict)
+    assert [cue.text for cue in cues] == ['one two three four.', 'wow that was really great',
+                                          'seven eight nine ten.']
+    assert spans == ((adlib[0].start, adlib[-1].end),)
