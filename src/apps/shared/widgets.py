@@ -206,6 +206,80 @@ class Disclosure:
         self.set_expanded(not self.expanded)
 
 
+class FoldSection:
+    """접을 수 있는 구획. 모양은 기존 LabelFrame 그대로이고, 제목 자리에 ▼/▶ 단추를 둔다.
+
+    내용은 body에 넣는다. 접으면 body만 pack_forget으로 숨기므로 입력값·변수·바인딩은 그대로다.
+    단추는 키보드로도 누를 수 있다(Tab → Space).
+    """
+    def __init__(self, parent, title, *, key='', expanded=True, padding=12, on_change=None, pady=(0, 8)):
+        self.title, self.key = title, key
+        self._on_change = on_change
+        self._pad = padding
+        self.button = ttk.Button(parent, style='Fold.TButton', command=self.toggle, takefocus=True)
+        self.frame = ttk.LabelFrame(parent, labelwidget=self.button, padding=self._padding(True))
+        self.frame.pack(fill='x', pady=pady)
+        self.body = ttk.Frame(self.frame)
+        # 내용을 모두 빼면 Tk는 틀의 크기를 다시 계산하지 않는다(펼쳤을 때 크기로 남거나, 처음부터
+        # 접힌 틀은 제목까지 잘린다). 접힌 동안에는 1픽셀짜리 자리 표시를 넣어 크기를 다시 맞추게 한다.
+        self._stub = ttk.Frame(self.frame, height=1)
+        self.expanded = not expanded
+        self.set_expanded(expanded, notify=False)
+
+    def set_expanded(self, expanded, *, notify=True):
+        expanded = bool(expanded)
+        changed = expanded != self.expanded
+        if changed:
+            if expanded:
+                self._stub.pack_forget()
+                self.body.pack(fill='both', expand=True)
+            else:
+                self.body.pack_forget()
+                self._stub.pack(fill='x')
+            self.frame.configure(padding=self._padding(expanded))
+        self.expanded = expanded
+        self.button.configure(text=('▼ ' if expanded else '▶ ') + self.title)
+        if changed and notify and self._on_change:
+            self._on_change(self)
+
+    def _padding(self, expanded):
+        # 접힌 구획은 제목 한 줄 높이만 차지한다.
+        pad = self._pad
+        return (pad, 4, pad, pad) if expanded else (pad, 0, pad, 2)
+
+    def toggle(self):
+        self.set_expanded(not self.expanded)
+
+
+class FoldGroup:
+    """한 화면의 접는 구획들. 접힌 구획 이름을 'a,b' 글로 저장하고 다시 적용한다."""
+    def __init__(self, on_change=None):
+        self.sections = {}
+        self._on_change = on_change
+
+    def add(self, parent, key, title, **options):
+        section = FoldSection(parent, title, key=key, on_change=self._changed, **options)
+        self.sections[key] = section
+        return section
+
+    def _changed(self, _section):
+        if self._on_change:
+            self._on_change()
+
+    def folded_text(self):
+        return ','.join(key for key, section in self.sections.items() if not section.expanded)
+
+    def apply(self, text):
+        folded = {part.strip() for part in str(text or '').split(',') if part.strip()}
+        for key, section in self.sections.items():
+            section.set_expanded(key not in folded, notify=False)
+
+    def set_all(self, expanded):
+        for section in self.sections.values():
+            section.set_expanded(expanded, notify=False)
+        self._changed(None)
+
+
 class ScrollArea:
     """Keep static forms/actions reachable on small screens and high-DPI text.
 

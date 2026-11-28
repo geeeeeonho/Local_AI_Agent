@@ -210,6 +210,10 @@ class ThemeController:
                         padding=(12, 9), borderwidth=0, focuscolor=p.manage)
         style.map('Manage.Accordion.TButton',
                   background=[('active', p.hover), ('focus', p.hover)])
+        # 접는 구획의 제목(LabelFrame 테두리 위): 배경과 같은 색, 굵은 글자, 누르면 접힘/펼침.
+        style.configure('Fold.TButton', anchor='w', background=p.bg, foreground=p.fg,
+                        font=('Segoe UI', 10, 'bold'), padding=(4, 1), borderwidth=0, focuscolor=p.chat)
+        style.map('Fold.TButton', background=[('active', p.hover), ('focus', p.hover)])
         style.configure('Manage.AccordionSmall.TButton', anchor='w',
                         background=p.surface, foreground=p.fg,
                         padding=(10, 6), borderwidth=0, focuscolor=p.manage)

@@ -8,7 +8,7 @@ from tkinter import ttk
 from services.tools.languages import SOURCE_LABELS, TARGET_LABELS, LANGUAGES as _ALL
 
 CODES={item.label:item.code for item in _ALL if item.target}
-from .widgets import note, text_box, set_text, status_line, ScrollArea, wrap_to_parent
+from .widgets import FoldGroup, note, text_box, set_text, status_line, ScrollArea, wrap_to_parent
 from .glossary_editor import GlossaryEditor
 
 KINDS={'자동 감지':'auto','일반 문서':'general','소설':'novel','대본 / 대사':'script',
@@ -81,7 +81,9 @@ def build(parent,w,toolbar=None):
         return frame
 
     # 기본: 고르기만 하면 된다. 결과는 원본 옆에 자동으로 만든다.
-    basic=ttk.LabelFrame(body,text='번역할 파일 또는 폴더',padding=12);basic.pack(fill='x',pady=(0,8))
+    # 구획마다 접을 수 있고, 접은 상태는 다음에도 기억한다(실행 단추·진행률은 위에 늘 보인다).
+    folds=w.translation_folds=FoldGroup(on_change=w.translation_folds_changed)
+    basic=folds.add(body,'source','번역할 파일 또는 폴더').body
     pick=ttk.Frame(basic);pick.pack(fill='x')
     ttk.Button(pick,text='파일 선택…',style='Accent.TButton',command=w.choose_translation_file).pack(side='left')
     ttk.Button(pick,text='폴더 선택…',command=w.choose_translation_folder).pack(side='left',padx=(6,8))
@@ -104,7 +106,7 @@ def build(parent,w,toolbar=None):
     w.translation_advanced_button=ttk.Button(body,text='고급 설정 ▸',command=w.toggle_translation_advanced)
     w.translation_advanced_button.pack(anchor='w',pady=(0,6))
     advanced=ttk.Frame(body);w.translation_advanced=advanced
-    options=ttk.LabelFrame(advanced,text='번역 방식',padding=12);options.pack(fill='x',pady=(0,8))
+    options=folds.add(advanced,'method','번역 방식').body
     for label,variable,values in (('원문 언어',w.translation_source_language,SOURCE_LABELS),
                                   ('콘텐츠 유형',w.translation_kind,tuple(KINDS)),
                                   ('번역 목적',w.translation_style,tuple(STYLES))):
@@ -131,12 +133,13 @@ def build(parent,w,toolbar=None):
            '끝까지 검증을 통과하지 못한 줄만 원문으로 두고 계속합니다. 완료 후 줄 번호를 알려 줍니다.')
     _check(options,'정밀 모드 (느림)',w.translation_precise,'추론(thinking)을 지원하는 모델에서 관용구·뉘앙스를 더 검토합니다.')
     _check(options,'[지문]도 번역',w.translation_stage,'대본의 [괄호 지문] 줄도 번역합니다.')
-    glossary=ttk.LabelFrame(advanced,text='고정 용어집',padding=12);glossary.pack(fill='x',pady=(0,8))
+    glossary=folds.add(advanced,'glossary','고정 용어집').body
     note(glossary,'한 줄에 "원문 = 번역". 인명·핵심 용어는 반드시 이 번역을 씁니다. 예: 佐藤 = 사토')
     w.translation_glossary_text=text_box(glossary,height=3,expand=False)
     w.translation_glossary_text.configure(state='normal')   # 사용자가 입력하는 칸
 
-    notebook=ttk.Notebook(body);notebook.pack(fill='x',pady=(0,6))
+    preview=folds.add(body,'preview','미리보기 · 검토',padding=6,pady=(0,6))
+    notebook=ttk.Notebook(preview.body);notebook.pack(fill='x')
     original=ttk.Frame(notebook);translated=ttk.Frame(notebook);memory=ttk.Frame(notebook)
     notebook.add(original,text='원본');notebook.add(translated,text='번역본')
     notebook.add(memory,text='문서 메모리 · 검토')
@@ -146,7 +149,7 @@ def build(parent,w,toolbar=None):
     w.translation_result_text=text_box(translated,height=12)
     w.translation_memory_text=text_box(memory,height=12)
     w.translation_tabs=notebook
-    w.translation_tabs_widget=notebook
+    w.translation_tabs_widget=preview.frame      # 고급 설정은 이 구획 앞에 펼친다
     set_text(w.translation_source_text,'선택한 파일의 앞부분(폴더는 파일 목록)이 표시됩니다.')
     set_text(w.translation_result_text,'번역 결과가 표시됩니다.')
     set_text(w.translation_memory_text,'번역을 완료하면 요약·문체·용어집과 검토가 필요한 줄을 보여 줍니다.')

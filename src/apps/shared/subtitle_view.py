@@ -9,7 +9,7 @@ from tkinter import ttk
 from core.tools import speech
 from services.tools.languages import SOURCE_LABELS, TARGET_LABELS
 from .translation_view import STYLES
-from .widgets import ScrollArea, note, set_text, status_line, text_box, wrap_to_parent
+from .widgets import FoldGroup, ScrollArea, note, set_text, status_line, text_box, wrap_to_parent
 from .glossary_editor import GlossaryEditor
 
 FORMATS = {'SRT (가장 널리 쓰임)': ('srt',), 'WebVTT (웹·유튜브)': ('vtt',), 'SRT + WebVTT': ('srt', 'vtt')}
@@ -22,6 +22,7 @@ MEDIA_PATTERN = ' '.join('*' + suffix for suffix in sorted(speech.MEDIA))
 def _variables(w):
     root = w.root
     w.subtitle_path = tk.StringVar(master=root)
+    w.subtitle_script = tk.StringVar(master=root)        # 대본 파일(선택, 파일 하나일 때만)
     w.subtitle_language = tk.StringVar(master=root, value='자동 감지')
     w.subtitle_format = tk.StringVar(master=root, value=tuple(FORMATS)[0])
     w.subtitle_model = tk.StringVar(master=root)
@@ -83,7 +84,9 @@ def build(parent, w, toolbar=None):
         ttk.Label(frame, text=label, width=width).pack(side='left')
         return frame
 
-    basic = ttk.LabelFrame(body, text='영상 · 음성 파일', padding=12); basic.pack(fill='x', pady=(0, 8))
+    # 구획마다 접을 수 있고, 접은 상태는 다음에도 기억한다(실행 단추·진행률은 위에 늘 보인다).
+    folds = w.subtitle_folds = FoldGroup(on_change=w.subtitle_folds_changed)
+    basic = folds.add(body, 'source', '영상 · 음성 파일').body
     pick = ttk.Frame(basic); pick.pack(fill='x')
     ttk.Button(pick, text='파일 선택…', style='Accent.TButton',
                command=w.choose_subtitle_files).pack(side='left')
@@ -111,8 +114,21 @@ def build(parent, w, toolbar=None):
                              justify='left', wraplength=600)
     engine_label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(engine_label, inset=40)
 
+    # 대본이 이미 있으면: 글은 대본 그대로, 시각만 음성 인식으로 맞춘다.
+    script = folds.add(body, 'script', '대본으로 시간 맞추기 (선택)', expanded=False).body
+    row = ttk.Frame(script); row.pack(fill='x')
+    ttk.Button(row, text='대본 선택…', command=w.choose_subtitle_script).pack(side='left')
+    ttk.Button(row, text='지우기', command=lambda: w.subtitle_script.set('')).pack(side='left', padx=(6, 8))
+    ttk.Entry(row, textvariable=w.subtitle_script).pack(side='left', fill='x', expand=True)
+    label = ttk.Label(script, text='대본(.txt·.srt·.vtt)을 고르면 자막 글은 대본 그대로 쓰고, 시각만 음성에서 '
+                                   '찾아 맞춥니다. 대본 한 줄은 새 자막에서 시작하고, 긴 줄은 자막 규칙대로 나눕니다. '
+                                   '[괄호]만 있는 지문 줄은 뺍니다. 음성에서 찾지 못한 줄은 시각을 추정하고 '
+                                   '검토 목록에 알립니다. 파일 하나를 고른 경우에만 씁니다.',
+                      style='Muted.TLabel', justify='left', wraplength=600)
+    label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(label, inset=40)
+
     # 번역 자막: 기존 번역 도구(로컬 LLM)를 그대로 쓴다.
-    link = ttk.LabelFrame(body, text='번역 자막', padding=12); link.pack(fill='x', pady=(0, 8))
+    link = folds.add(body, 'translate', '번역 자막').body
     _check(link, '번역 자막도 함께 만들기', w.subtitle_translate,
            '원어 자막을 만든 뒤 [파일 번역] 도구로 번역하고, 번역 언어의 줄 길이 규칙으로 다시 나눕니다. '
            '원어 자막과 번역 자막을 모두 원본 옆에 저장합니다.')
@@ -137,7 +153,7 @@ def build(parent, w, toolbar=None):
     w.subtitle_advanced_button = ttk.Button(body, text='고급 설정 ▸', command=w.toggle_subtitle_advanced)
     w.subtitle_advanced_button.pack(anchor='w', pady=(0, 6))
     advanced = ttk.Frame(body); w.subtitle_advanced = advanced
-    options = ttk.LabelFrame(advanced, text='인식 · 자막 규칙', padding=12); options.pack(fill='x', pady=(0, 8))
+    options = folds.add(advanced, 'rules', '인식 · 자막 규칙').body
     for label, variable, values in (('인식 품질', w.subtitle_quality, tuple(QUALITIES)),
                                     ('최대 줄 수', w.subtitle_lines, tuple(LINES))):
         row = line(options, label)
@@ -157,13 +173,14 @@ def build(parent, w, toolbar=None):
            '[음악] (박수) ♪ 같은 소리 묘사를 자막에 남깁니다(청각 장애인용 자막). 끄면 대사만 남깁니다.')
     _check(options, 'GPU 사용', w.subtitle_gpu,
            'NVIDIA GPU 빌드가 있으면 사용하고, 실패하면 자동으로 CPU로 다시 실행합니다.')
-    hint = ttk.LabelFrame(advanced, text='용어 힌트', padding=12); hint.pack(fill='x', pady=(0, 8))
+    hint = folds.add(advanced, 'hint', '용어 힌트').body
     note(hint, '등장인물·고유명사·전문 용어를 적으면 그 철자로 받아 적을 확률이 높아집니다. '
                '예: 사토 유키, LocalAI, 쿠버네티스')
     w.subtitle_prompt_text = text_box(hint, height=2, expand=False)
     w.subtitle_prompt_text.configure(state='normal')
 
-    notebook = ttk.Notebook(body); notebook.pack(fill='x', pady=(0, 6))
+    preview_section = folds.add(body, 'preview', '미리보기 · 검토', padding=6, pady=(0, 6))
+    notebook = ttk.Notebook(preview_section.body); notebook.pack(fill='x')
     preview, translated, report = ttk.Frame(notebook), ttk.Frame(notebook), ttk.Frame(notebook)
     notebook.add(preview, text='자막'); notebook.add(translated, text='번역 자막')
     notebook.add(report, text='검토 · 정리 내역')
@@ -179,7 +196,7 @@ def build(parent, w, toolbar=None):
     set_text(w.subtitle_translated_text, '[번역 자막도 함께 만들기]를 켜면 번역 자막이 표시됩니다.')
     set_text(w.subtitle_report_text, '확인이 필요한 자막(인식 확신도 낮음, 읽기 속도 빠름)과 '
                                      '자동으로 지운 반복·환각 문장을 보여 줍니다.')
-    for variable in (w.subtitle_path, w.subtitle_model, w.subtitle_translate, w.subtitle_llm, w.subtitle_main_name,
+    for variable in (w.subtitle_path, w.subtitle_script, w.subtitle_model, w.subtitle_translate, w.subtitle_llm, w.subtitle_main_name,
                      w.subtitle_target, w.subtitle_format, w.subtitle_language):
         variable.trace_add('write', lambda *_: w.update_subtitle_destination())
     w.toggle_subtitle_translation()

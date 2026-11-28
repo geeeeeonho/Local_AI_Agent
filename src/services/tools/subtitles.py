@@ -25,7 +25,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from core.tools import asr_review, speech, subtitles
+from core.tools import asr_review, script_align, speech, subtitles
+from core.tools.translation import read_source
 from integrations.speech.engine import EngineMissing, SpeechEngine
 from services.tools.languages import LANGUAGES, detect_language
 from services.tools.translation import natural_key
@@ -49,6 +50,7 @@ class Options:
     max_lines: int | None = None
     gpu: bool = True
     sensitive_vad: bool = False     # 작은 목소리 우선(누락 줄이기). 깨끗한 녹음은 오히려 나빠질 수 있다.
+    script: str = ''                # 대본 파일(선택). 주면 자막 글은 대본 그대로, 시각만 인식에서 가져온다.
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,8 @@ class Result:
     translated_text: str = ''
     translation_skipped: str = ''
     translation_error: str = ''     # 번역만 실패(원어 자막은 만들었음). 다시 실행하면 번역만 다시 한다.
+    script: str = ''                # 글을 가져온 대본 파일(없으면 인식한 글)
+    script_missed: tuple = ()       # 음성에서 찾지 못해 시각을 추정한 대본 줄 번호(대본 기준, 1부터)
 
 
 @dataclass(frozen=True)
@@ -509,6 +513,10 @@ class SubtitleService:
         if options.model not in speech.BY_KEY:
             raise ValueError('Unknown speech model: ' + options.model)
         formats = tuple(fmt for fmt in options.formats if fmt in subtitles.FORMATS) or ('srt',)
+        # 대본은 긴 인식을 시작하기 전에 읽어 본다(없는 파일·빈 대본이면 바로 알린다).
+        script = read_source(Path(options.script))[0] if options.script else None
+        if script is not None and not script_align.script_lines(script):
+            raise ValueError('The script has no lines to place')
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self._prune()
         work = self.work_dir / self._key(media, options)
@@ -534,7 +542,13 @@ class SubtitleService:
                 (work / name).unlink(missing_ok=True)       # 큰 임시 오디오는 끝나면 지운다
         report('write', 0.0, '')
         cleaned = speech.clean(segments, keep_sounds=options.keep_sounds)
-        cues = subtitles.build_cues(speech.words_of(cleaned.segments), rules)
+        placed = None
+        if script is not None:
+            # 대본이 있으면 글은 대본 그대로, 시각만 인식 결과에서. 대본 한 줄은 새 큐에서 시작한다.
+            placed = script_align.align(script, speech.words_of(cleaned.segments), spaced=rules.spaced)
+            cues = subtitles.build_cues(placed.words, rules, boundaries=placed.boundaries)
+        else:
+            cues = subtitles.build_cues(speech.words_of(cleaned.segments), rules)
         if not cues:
             raise ValueError('No speech was recognized in the file')
         joined = ' '.join(cue.text for cue in cues)
@@ -542,7 +556,10 @@ class SubtitleService:
         if code == 'zh' and label == '繁體中文':
             code = 'zh-Hant'
         review = list(subtitles.review(cues, rules))
-        for start, text, reason in cleaned.flagged:
+        # 대본을 쓰면 인식 글의 문제(환각·반복)는 자막에 없다. 대신 시각을 추정한 대본 줄을 알린다.
+        flagged = (tuple((placed.words[placed.line_starts[line - 1]].start, '', 'script line not heard')
+                         for line in placed.missed) if placed is not None else cleaned.flagged)
+        for start, text, reason in flagged:
             number = next((i for i, cue in enumerate(cues, 1) if cue.end > start), len(cues))
             review.append(subtitles.Review(number, reason))
         review = tuple(sorted({(item.index, item.reason) for item in review}))
@@ -559,8 +576,11 @@ class SubtitleService:
                                        else original_path(media, fmt, output_dir), subtitles.render(cues, fmt))
                             for fmt in formats)
         result = Result(media, outputs, code, label, tuple(cues), subtitles.render(cues, formats[0]),
-                        review, tuple(cleaned.removed), build, seconds, duration, reused,
-                        decisions=decisions, names=names, review_note=review_note)
+                        review, tuple(cleaned.removed) if placed is None else (), build, seconds, duration,
+                        reused, decisions=decisions, names=names if placed is None else (),
+                        review_note=review_note,
+                        script=str(options.script) if placed is not None else '',
+                        script_missed=placed.missed if placed is not None else ())
         if translate is None:
             return result
         try:
@@ -683,6 +703,11 @@ class SubtitleService:
         skip_existing이면 옆에 자막이 이미 있는 파일은 인식하지 않고 건너뛴다(폴더를 다시 돌려도 새 파일만)."""
         results, failed, skipped = [], [], []
         paths = [Path(path) for path in paths]
+        if options.script:
+            # 대본은 한 영상의 것이다. 옆에 자막이 이미 있어도(인식 자막) 대본으로 새로 만든다.
+            if len(paths) > 1:
+                raise ValueError('A script can be placed on one media file at a time')
+            skip_existing = False
         for index, path in enumerate(paths, 1):
             if cancelled and cancelled():
                 break
