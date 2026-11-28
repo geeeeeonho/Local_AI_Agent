@@ -97,3 +97,27 @@ def test_ready_status_lines_count_as_finished_but_errors_stay_errors():
     assert finished_level('Ready', 'error') == 'error'
     assert finished_level('Working') == 'info'
     assert finished_level('Failed', 'error') == 'error'
+
+
+def test_cards_are_three_lines_and_the_note_moves_under_the_size_when_narrow(ui):
+    w, _, _ = ui
+    w.root.wm_geometry('1500x1000')
+    open_models(w)
+    w.model_tabs.select(w.model_pages['choose'])
+    pump(w)
+    tag = 'devstral-small-2:24b'
+    note = next(m['note'] for m in w._catalog['models'] if m['tag'] == tag)
+    card = next(c for c in w.choice_cards[tag] if c.winfo_ismapped())
+    # 이름·GPU / 체크·배지 / 크기·메모·설명: 카드 안에 줄(frame)이 세 개뿐이다
+    rows = [child for child in card.pack_slaves() if child.winfo_class() == 'TFrame']
+    assert len(rows) == 3
+    label = next(child for child in card.winfo_children()
+                 if child.winfo_class() == 'TLabel' and child.cget('text') == note)
+    assert str(label.pack_info()['in']) == str(rows[2])          # 넓으면 크기 옆
+    w.root.wm_geometry('1180x740')
+    pump(w)
+    for _ in range(20):
+        w.root.update()
+    if label.winfo_reqwidth() + sum(s.winfo_reqwidth() for s in rows[2].pack_slaves() if s is not label) \
+            > rows[2].winfo_width():
+        assert str(label.pack_info()['in']) == str(card)           # 좁으면 다음 줄
