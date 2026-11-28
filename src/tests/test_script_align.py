@@ -163,3 +163,81 @@ def test_a_script_is_checked_before_the_long_recognition_starts(tmp_path, fake_e
     assert not list((tmp_path / 'user_data').rglob('*.calls'))      # 인식은 시작하지 않았다
     with pytest.raises(ValueError, match='one media file'):
         service.make_many([media, media], Options(model='large-v3-turbo', script=str(empty)))
+
+
+# ── 여러 파일: 대본 폴더 ──
+def test_scripts_are_matched_by_relative_path_then_by_a_unique_name(tmp_path):
+    from services.tools.subtitles import match_scripts
+    media_root, scripts = tmp_path / 'media', tmp_path / 'scripts'
+    for name in ('1장/1화.mp4', '1장/2화.mp4', '3화.wav', '4화.wav', '5화.wav'):
+        (media_root / name).parent.mkdir(parents=True, exist_ok=True); (media_root / name).write_bytes(b'')
+    for name in ('1장/1화.srt', '1장/1화.txt', '2화.txt', 'x/4화.txt', 'y/4화.txt', '.숨김/5화.txt'):
+        (scripts / name).parent.mkdir(parents=True, exist_ok=True); (scripts / name).write_text('a', encoding='utf-8')
+    found = match_scripts(sorted(media_root.rglob('*.*')), scripts, media_root)
+    named = {path.name: (value.relative_to(scripts).as_posix() if value else None) for path, value in found.items()}
+    assert named == {'1화.mp4': '1장/1화.txt',      # 같은 상대 경로, .txt가 .srt보다 먼저
+                     '2화.mp4': '2화.txt',          # 상대 경로는 다르지만 이름이 하나뿐
+                     '3화.wav': None,               # 대본 없음
+                     '4화.wav': None,               # 같은 이름이 두 곳: 어느 것인지 모른다
+                     '5화.wav': None}               # 숨김 폴더는 보지 않는다
+
+
+def test_a_folder_of_media_uses_each_files_script_and_skips_the_rest(tmp_path, fake_engine):
+    from services.tools.subtitles import Options
+    media = tmp_path / 'media'; media.mkdir()
+    first, second, third = (_wav(media / name) for name in ('ep1.wav', 'ep2.wav', 'ep3.wav'))
+    (media / 'ep3.srt').write_text('1\n00:00:00,000 --> 00:00:01,000\nmade before\n', encoding='utf-8')
+    extra = _wav(media / 'ep4.wav')
+    scripts = tmp_path / 'scripts'; scripts.mkdir()
+    (scripts / 'ep1.txt').write_text('Hello and welcome to the show.\n', encoding='utf-8')
+    (scripts / 'ep2.txt').write_text('Today we talk about subtitles.\nAnd why rules matter.\n', encoding='utf-8')
+    batch = _service(tmp_path, fake_engine).make_many([first, second, third, extra],
+                                                      Options(model='large-v3-turbo', script=str(scripts)))
+    assert [path.name for path, _ in batch.results] == ['ep1.wav', 'ep2.wav']
+    assert [result.script for _, result in batch.results] == [str(scripts / 'ep1.txt'), str(scripts / 'ep2.txt')]
+    assert 'Today we talk about subtitles.' in (media / 'ep2.srt').read_text(encoding='utf-8-sig')
+    assert [path.name for path, _ in batch.skipped] == ['ep3.wav']     # 지난번에 만든 자막이 있음
+    assert [path.name for path in batch.unmatched] == ['ep4.wav']      # 대본 없음
+
+
+# ── 영상·음성 이름 번역 ──
+class NamingTranslator:
+    """FakeTranslator + 이름 번역(파일 번역 도구의 translated_names 계약)."""
+    def __init__(self, names):
+        from test_subtitles import FakeTranslator
+        self.inner, self.names, self.asked = FakeTranslator(), names, []
+
+    def translate_file(self, *args, **kwargs):
+        return self.inner.translate_file(*args, **kwargs)
+
+    def translated_names(self, paths, model, target, *, terms=None, cancelled=None):
+        self.asked += [path.name for path in paths]
+        return {path: self.names.get(path.stem) for path in paths}
+
+    def abort(self):
+        pass
+
+
+def test_the_media_file_takes_the_translated_name_and_its_subtitles_follow(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, Translate
+    media = _wav(tmp_path / 'the show.wav')
+    translator = NamingTranslator({'the show': '그 방송'})
+    result = _service(tmp_path, fake_engine, translator).make(
+        media, Options(model='large-v3-turbo'),
+        translate=Translate(target='한국어', model='m:1', main_name=True, translate_name=True))
+    assert not media.exists() and (tmp_path / '그 방송.wav').exists()
+    assert result.source == tmp_path / '그 방송.wav' and result.renamed_from == media
+    assert [path.name for path in result.outputs + result.translated_outputs] == ['그 방송.en.srt', '그 방송.srt']
+
+
+def test_names_already_in_the_target_language_or_untranslatable_stay(tmp_path, fake_engine):
+    from services.tools.subtitles import Options, Translate
+    korean, code = _wav(tmp_path / '오늘의 방송.wav'), _wav(tmp_path / 'clip.wav')
+    translator = NamingTranslator({})                    # 'clip'은 옮기지 못한다
+    service = _service(tmp_path, fake_engine, translator)
+    job = Translate(target='한국어', model='m:1', main_name=True, translate_name=True)
+    first = service.make(korean, Options(model='large-v3-turbo'), translate=job)
+    second = service.make(code, Options(model='large-v3-turbo'), translate=job)
+    assert translator.asked == ['clip.wav']              # 이미 한국어인 이름은 묻지도 않는다
+    assert first.renamed_from is None and second.renamed_from is None
+    assert korean.exists() and code.exists() and (tmp_path / 'clip.srt').exists()

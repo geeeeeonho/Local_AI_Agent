@@ -29,7 +29,7 @@ from core.tools import asr_review, script_align, speech, subtitles
 from core.tools.translation import read_source
 from integrations.speech.engine import EngineMissing, SpeechEngine
 from services.tools.languages import LANGUAGES, detect_language
-from services.tools.translation import language_suffix, natural_key, set_aside
+from services.tools.translation import language_suffix, natural_key, parse_glossary, set_aside, unique_path
 
 AUTO = ('auto', '자동 감지', '')
 CACHE_DAYS = 14
@@ -64,6 +64,8 @@ class Translate:
     # True: 번역 자막을 원본 이름(영상.srt)으로, 원어 자막은 영상.<원어>.srt로(재생기가 번역 자막을 바로 불러옴).
     # False: 원어 자막이 영상.srt, 번역 자막은 영상.<번역 언어>.srt.
     main_name: bool = True
+    # True: 영상·음성 파일 이름을 번역 이름으로 바꾸고 자막도 그 이름을 쓴다(이미 번역 언어인 이름은 그대로).
+    translate_name: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ class Result:
     script: str = ''                # 글을 가져온 대본 파일(없으면 인식한 글)
     script_missed: tuple = ()       # 음성에서 찾지 못해 시각을 추정한 대본 줄 번호(대본 기준, 1부터)
     set_aside: tuple = ()           # 대본 자막에 이름을 내주고 '이름.<언어>.확장자'로 보관한 기존 자막
+    renamed_from: Path | None = None    # 영상·음성 이름을 번역 이름으로 바꿨으면 원래 경로(source가 새 경로)
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ class Batch:
     results: tuple = ()             # ((파일, Result), …)
     failed: tuple = ()              # ((파일, 오류), …)
     skipped: tuple = ()             # ((파일, 이미 있는 자막), …) — 다시 인식하지 않음
+    unmatched: tuple = ()           # 대본 폴더에 같은 이름의 대본이 없어 건너뛴 파일
 
 
 def language_label(code, text=''):
@@ -157,6 +161,42 @@ def claim(path):
     except OSError:
         text = ''
     return set_aside(path, language_suffix(detect_language(text)))
+
+
+SCRIPT_SUFFIXES = ('.txt', '.md', '.srt', '.vtt')     # 같은 이름이 여럿이면 이 순서로 고른다
+
+
+def match_scripts(media, script_folder, media_root=None):
+    """대본 폴더에서 영상·음성마다 같은 이름의 대본을 찾는다 {영상: 대본 또는 None}.
+    media_root 기준 상대 경로가 같은 대본(장1/영상 ↔ 장1/영상.txt)을 먼저, 없으면 이름만 같은 대본이
+    폴더 전체에 하나뿐일 때 그것을 쓴다(같은 이름이 여러 곳에 있으면 어느 것인지 모르므로 쓰지 않는다)."""
+    folder = Path(script_folder)
+    by_path, by_stem = {}, {}
+    rank = {suffix: index for index, suffix in enumerate(SCRIPT_SUFFIXES)}
+    for root, dirs, names in os.walk(folder):
+        here = Path(root)
+        dirs[:] = sorted(name for name in dirs if not name.startswith('.'))
+        for name in sorted(names):
+            path = here / name
+            if name.startswith('.') or path.suffix.lower() not in rank or not path.is_file():
+                continue
+            key = str(path.relative_to(folder).with_suffix('')).casefold()
+            if key not in by_path or rank[path.suffix.lower()] < rank[by_path[key].suffix.lower()]:
+                by_path[key] = path
+    for key, path in by_path.items():
+        by_stem.setdefault(Path(key).name, []).append(path)
+    found = {}
+    for item in media:
+        item = Path(item)
+        relative = None
+        if media_root is not None:
+            try:
+                relative = str(item.relative_to(media_root).with_suffix('')).casefold()
+            except ValueError:
+                relative = None
+        same = by_stem.get(item.stem.casefold(), [])
+        found[item] = by_path.get(relative) if relative in by_path else (same[0] if len(same) == 1 else None)
+    return found
 
 
 def _write_claimed(path, text, aside):
@@ -602,24 +642,35 @@ class SubtitleService:
         rule = translate or naming
         translated_main = bool(rule and rule.main_name and not self.same_language(probe, rule.target))
         aside = []
-        if existing_original is not None:
-            outputs = (Path(existing_original),)
-        elif placed is not None:
-            # 대본 자막은 정해진 이름을 그대로 쓰고, 그 이름의 기존 자막은 '이름.<언어>.확장자'로 보관한다.
-            outputs = tuple(_write_claimed(subtitle_name(media, fmt, output_dir, code if translated_main else None),
-                                           subtitles.render(cues, fmt), aside)
-                            for fmt in formats)
-        else:
-            outputs = tuple(_write_new(output_path(media, code, fmt, output_dir) if translated_main
-                                       else original_path(media, fmt, output_dir), subtitles.render(cues, fmt))
-                            for fmt in formats)
-        result = Result(media, outputs, code, label, tuple(cues), subtitles.render(cues, formats[0]),
+        # 이름 번역: 영상·음성 이름을 먼저 바꾸고(실패하면 그대로 둔다) 자막은 새 이름을 쓴다.
+        renamed = None
+        if translate is not None and translate.translate_name and existing_original is None and output_dir is None:
+            renamed = self._rename_media(media, translate, cancelled)
+        source = renamed or media
+        try:
+            if existing_original is not None:
+                outputs = (Path(existing_original),)
+            elif placed is not None:
+                # 대본 자막은 정해진 이름을 그대로 쓰고, 그 이름의 기존 자막은 '이름.<언어>.확장자'로 보관한다.
+                outputs = tuple(_write_claimed(subtitle_name(source, fmt, output_dir,
+                                                             code if translated_main else None),
+                                               subtitles.render(cues, fmt), aside)
+                                for fmt in formats)
+            else:
+                outputs = tuple(_write_new(output_path(source, code, fmt, output_dir) if translated_main
+                                           else original_path(source, fmt, output_dir), subtitles.render(cues, fmt))
+                                for fmt in formats)
+        except OSError:
+            if renamed is not None and not media.exists():
+                os.replace(renamed, media)          # 자막을 쓰지 못했으면 이름도 되돌린다
+            raise
+        result = Result(source, outputs, code, label, tuple(cues), subtitles.render(cues, formats[0]),
                         review, tuple(cleaned.removed) if placed is None else (), build, seconds, duration,
                         reused, decisions=decisions, names=names if placed is None else (),
                         review_note=review_note,
                         script=str(options.script) if placed is not None else '',
                         script_missed=placed.missed if placed is not None else (),
-                        set_aside=tuple(aside))
+                        set_aside=tuple(aside), renamed_from=media if renamed is not None else None)
         if translate is None:
             return result
         try:
@@ -629,6 +680,31 @@ class SubtitleService:
         except (OSError, ValueError, RuntimeError) as exc:
             # 인식과 원어 자막은 끝났다. 번역 실패(예: Ollama가 막 켜지는 중) 때문에 그 결과를 버리지 않는다.
             return replace(result, translation_error=str(exc) or exc.__class__.__name__)
+
+    def _rename_media(self, media, translate, cancelled):
+        """영상·음성 이름을 번역 이름으로 바꾼다(파일 번역의 이름 번역 규칙). 새 경로, 바꾸지 않았으면 None.
+        이미 번역 언어인 이름, 번역할 낱말이 없는 이름(코드·번호), 번역하지 못한 이름은 그대로 둔다."""
+        target = next((item for item in LANGUAGES if item.label == translate.target), None)
+        if target is not None and detect_language(media.stem) == target.name:
+            return None
+        names = getattr(self.translator, 'translated_names', None)
+        if names is None:
+            return None
+        try:
+            stem = names([media], translate.model, translate.target, terms=parse_glossary(translate.glossary),
+                         cancelled=cancelled).get(media)
+        except InterruptedError:
+            raise
+        except (OSError, ValueError, RuntimeError):
+            return None                             # 이름은 못 옮겨도 자막은 만든다
+        if not stem:
+            return None
+        renamed = unique_path(media.with_name(stem + media.suffix), avoid=(media,))
+        try:
+            os.replace(media, renamed)
+        except OSError:
+            return None
+        return renamed
 
     @staticmethod
     def same_language(result, target_label):
@@ -758,14 +834,32 @@ class SubtitleService:
         skip_existing이면 옆에 자막이 이미 있는 파일은 인식하지 않고 건너뛴다(폴더를 다시 돌려도 새 파일만)."""
         results, failed, skipped = [], [], []
         paths = [Path(path) for path in paths]
+        scripts, unmatched = {}, []
+        if options.script and Path(options.script).is_dir():
+            # 대본 폴더: 영상·음성마다 같은 이름의 대본을 쓴다. 대본이 없는 파일은 건너뛴다
+            # (이미 자막이 있으면 지난 실행에서 만든 것으로 보고 '이미 있음'으로 알린다).
+            try:
+                root = Path(os.path.commonpath([str(path.parent) for path in paths])) if paths else None
+            except ValueError:          # 다른 드라이브에 흩어진 파일: 이름만으로 찾는다
+                root = None
+            scripts = match_scripts(paths, options.script, root)
+        elif options.script and len(paths) > 1:
+            raise ValueError('A script file can be placed on one media file at a time; choose a script folder')
         if options.script:
-            # 대본은 한 영상의 것이다. 옆에 자막이 이미 있어도(인식 자막) 대본으로 새로 만든다.
-            if len(paths) > 1:
-                raise ValueError('A script can be placed on one media file at a time')
-            skip_existing = False
+            skip_existing = False       # 옆에 인식 자막이 있어도 대본으로 새로 만든다
         for index, path in enumerate(paths, 1):
             if cancelled and cancelled():
                 break
+            file_options = options
+            if scripts:
+                if scripts.get(path) is None:
+                    done = existing_subtitles(path)
+                    if done:
+                        skipped.append((path, done[0]))
+                    else:
+                        unmatched.append(path)
+                    continue
+                file_options = replace(options, script=str(scripts[path]))
             reuse = None
             if skip_existing:
                 done, reuse = self.already_done(path, options, translate)
@@ -775,13 +869,13 @@ class SubtitleService:
             if on_file:
                 on_file(index, len(paths), path)
             try:
-                results.append((path, self.make(path, options, translate=translate, progress=progress,
+                results.append((path, self.make(path, file_options, translate=translate, progress=progress,
                                                 cancelled=cancelled, on_text=on_text, existing_original=reuse)))
             except InterruptedError:
                 raise
             except (OSError, ValueError, RuntimeError) as exc:
                 failed.append((path, exc))
-        return Batch(tuple(results), tuple(failed), tuple(skipped))
+        return Batch(tuple(results), tuple(failed), tuple(skipped), tuple(unmatched))
 
 
 @dataclass

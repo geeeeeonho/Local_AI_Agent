@@ -28,6 +28,7 @@ def _variables(w):
     w.subtitle_model = tk.StringVar(master=root)
     w.subtitle_translate = tk.BooleanVar(master=root, value=False)
     w.subtitle_main_name = tk.BooleanVar(master=root, value=True)
+    w.subtitle_translate_name = tk.BooleanVar(master=root, value=False)
     w.subtitle_target = tk.StringVar(master=root, value='한국어')
     w.subtitle_llm = tk.StringVar(master=root)
     w.subtitle_style = tk.StringVar(master=root, value='자연스러운 번역')
@@ -117,14 +118,17 @@ def build(parent, w, toolbar=None):
     # 대본이 이미 있으면: 글은 대본 그대로, 시각만 음성 인식으로 맞춘다.
     script = folds.add(body, 'script', '대본으로 시간 맞추기 (선택)', expanded=False).body
     row = ttk.Frame(script); row.pack(fill='x')
-    ttk.Button(row, text='대본 선택…', command=w.choose_subtitle_script).pack(side='left')
+    ttk.Button(row, text='대본 파일…', command=w.choose_subtitle_script).pack(side='left')
+    ttk.Button(row, text='대본 폴더…', command=w.choose_subtitle_script_folder).pack(side='left', padx=(6, 0))
     ttk.Button(row, text='지우기', command=lambda: w.subtitle_script.set('')).pack(side='left', padx=(6, 8))
     ttk.Entry(row, textvariable=w.subtitle_script).pack(side='left', fill='x', expand=True)
     label = ttk.Label(script, text='대본(.txt·.srt·.vtt)을 고르면 자막 글은 대본 그대로 쓰고, 시각만 음성에서 '
                                    '찾아 맞춥니다. 대본 한 줄은 새 자막에서 시작하고, 긴 줄은 자막 규칙대로 나눕니다. '
                                    '[괄호]만 있는 지문 줄은 뺍니다. 같은 이름의 자막이 이미 있으면 그 자막은 "영상.<언어>.srt"'
                                    '(모르면 .og)로 이름을 바꿔 보관합니다. 음성에서 찾지 못한 줄은 시각을 추정하고 '
-                                   '검토 목록에 알립니다. 파일 하나를 고른 경우에만 씁니다.',
+                                   '검토 목록에 알립니다. 대본 파일은 영상·음성 하나에, 대본 폴더는 여러 파일(폴더)에 씁니다: '
+                                   '영상·음성마다 대본 폴더에서 같은 이름의 대본(예: 1화.mp4 ↔ 1화.txt)을 찾고, '
+                                   '없는 파일은 건너뜁니다.',
                       style='Muted.TLabel', justify='left', wraplength=600)
     label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(label, inset=40)
 
@@ -149,6 +153,9 @@ def build(parent, w, toolbar=None):
     _check(w.subtitle_translate_options, '번역 자막을 원본 이름으로 저장', w.subtitle_main_name,
            '번역 자막이 "영상.srt"가 되어 재생기가 바로 불러오고, 원어 자막은 "영상.<원어>.srt"(예: 영상.ja.srt)로 '
            '저장합니다. 끄면 원어 자막이 "영상.srt", 번역 자막이 "영상.<번역 언어>.srt"입니다.')
+    _check(w.subtitle_translate_options, '영상·음성 파일 이름도 번역', w.subtitle_translate_name,
+           '영상·음성 파일 이름을 번역 언어로 바꾸고 자막도 그 이름을 씁니다(재생기가 자막을 그대로 불러옴). '
+           '이름 속 번호·코드는 그대로 두고, 이미 번역 언어인 이름은 바꾸지 않습니다. 바꾼 이름은 검토 내역에 적습니다.')
     w.subtitle_translate.trace_add('write', lambda *_: w.toggle_subtitle_translation())
 
     w.subtitle_advanced_button = ttk.Button(body, text='고급 설정 ▸', command=w.toggle_subtitle_advanced)
@@ -197,7 +204,7 @@ def build(parent, w, toolbar=None):
     set_text(w.subtitle_translated_text, '[번역 자막도 함께 만들기]를 켜면 번역 자막이 표시됩니다.')
     set_text(w.subtitle_report_text, '확인이 필요한 자막(인식 확신도 낮음, 읽기 속도 빠름)과 '
                                      '자동으로 지운 반복·환각 문장을 보여 줍니다.')
-    for variable in (w.subtitle_path, w.subtitle_script, w.subtitle_model, w.subtitle_translate, w.subtitle_llm, w.subtitle_main_name,
+    for variable in (w.subtitle_path, w.subtitle_script, w.subtitle_translate_name, w.subtitle_model, w.subtitle_translate, w.subtitle_llm, w.subtitle_main_name,
                      w.subtitle_target, w.subtitle_format, w.subtitle_language):
         variable.trace_add('write', lambda *_: w.update_subtitle_destination())
     w.toggle_subtitle_translation()

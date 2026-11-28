@@ -87,7 +87,7 @@ class SettingsStore:
     SUBTITLE_KEYS = {'model': str, 'language': str, 'format': str, 'quality': str, 'vad': bool,
                      'keep_sounds': bool, 'gpu': bool, 'sensitive_vad': bool, 'max_chars': int, 'max_lines': int,
                      'prompt': str, 'translate': bool, 'target': str, 'llm': str, 'style': str, 'main_name': bool,
-                     'advanced': bool, 'last_dir': str, 'folded': str}
+                     'advanced': bool, 'last_dir': str, 'folded': str, 'translate_name': bool}
     SUBTITLE_LIMITS = {'last_dir': 2000, 'prompt': 2000}
 
     @staticmethod
