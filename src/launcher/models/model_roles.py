@@ -206,10 +206,12 @@ TIERS = {
     "uncensored": [
         {"need": 15.0, "primary": "prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S",
          "alts": []},
-        # Gemma stays primary for Korean translation quality; the Qwen3-VL
-        # abliteration covers the 7-13GB band below the 12.7GB Q8_0.
-        {"need": 12.7, "primary": "hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
-         "alts": ["huihui_ai/qwen3-vl-abliterated:8b"]},
+        # Gemma stays primary for Korean translation quality: abliterix won the
+        # structured/bulk translation comparison, TrevorJS is the same-size
+        # option, and the Qwen3-VL abliteration covers the band below 12.7GB.
+        {"need": 12.7, "primary": "hf.co/mradermacher/gemma-4-12B-it-abliterix-GGUF:Q8_0",
+         "alts": ["hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0",
+                  "huihui_ai/qwen3-vl-abliterated:8b"]},
         {"need": 5.0, "primary": "huihui_ai/qwen3-abliterated:8b", "alts": []},
     ],
     "office": [

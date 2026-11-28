@@ -44,7 +44,8 @@ PROTECT = re.compile(
     r'(?<![A-Za-z0-9_-])[A-Z]{1,6}-\d+[A-Z0-9-]*(?![A-Za-z0-9_-])|'
     # 설정·시스템 값: archive_session=MK-04, status=PENDING_REVIEW, mode="fast"
     # 값은 ASCII 식별자 문자까지만(전각 쉼표·한중일 글자가 이어져도 삼키지 않는다)
-    r'(?<![A-Za-z0-9_.-])[A-Za-z_][A-Za-z0-9_.-]*=(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[A-Za-z0-9_.:/@+%-]+)|'
+    # 문장 끝의 마침표·쌍점은 값에 넣지 않는다(번역문이 'LW-19。'를 'LW-19.'로 끝맺어도 같은 값).
+    r'(?<![A-Za-z0-9_.-])[A-Za-z_][A-Za-z0-9_.-]*=(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[A-Za-z0-9_.:/@+%-]*[A-Za-z0-9_/@+%-])|'
     # 치환 토큰과 RPG Maker 인자: %%TOKEN%%  %1 %2  printf %0.3f %-5d
     r'%%[A-Za-z_]\w*%%|(?<![A-Za-z0-9%])%\d+(?![\d$.A-Za-z])|'
     r'`[^`\r\n]+`|'
@@ -56,14 +57,15 @@ PROTECT = re.compile(
     r'(?<![\w:/@.]):[A-Za-z_]\w*(?!:)|</?\d+\s*/?>|'
     # Markdown 링크/이미지 대상: [글자](대상 "제목") 과 참조형 [글자][id]
     r'(?<=\])\((?:[^()\s]|\([^()\s]*\))+(?:\s+"[^"\r\n]*")?\)|(?<=\])\[[^\[\]\r\n]{1,60}\]|'
-    r'https?://[^\s<>\])]+|'
+    # 끝의 문장부호와 바로 붙은 한글(번역문 조사: '…/help에')은 주소가 아니다.
+    r'https?://[^\s<>\])가-힣]*[^\s<>\]).,;:!?。、，；：！？가-힣]|'
     # 자막 서식 태그 {\an8} {\i1}
     r'\{\\[^{}\r\n]*\}|'
     r'\{\{[^{}\r\n]+\}\}|\$\{[^{}\r\n]+\}|(?<!\{)\{[\w.:-]+\}(?!\})|'
     r'%\([\w.:-]+\)[sdif]|(?<!%)%(?:\d+\$)?[-+ #0]*\d*(?:\.\d+)?[sdifeEgGxXu](?![A-Za-z])|'
     r'<\/?[A-Za-z][^<>\r\n]*>|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|'
     r'&(?:[A-Za-z][\w]+|#(?:\d+|x[\da-fA-F]+));|'
-    r'(?:[A-Za-z]:\\|\.\.?/)[\w.\\/\-]+', re.UNICODE)
+    r'(?:[A-Za-z]:\\|\.\.?/)(?:(?![가-힣])[\w.\\/\-])*(?:(?![가-힣])[\w\\/\-])', re.UNICODE)
 # ICU MessageFormat({n, plural, one {...} other {...}}): 뼈대(머리·선택자·닫는 괄호·#)만 보호하고
 # 안쪽 문장은 번역한다. 선택자(one/other/male…)를 번역하면 메시지가 깨진다.
 ICU_HEADER = re.compile(r'\{\s*\w+\s*,\s*(?:plural|select|selectordinal)\s*,')
@@ -699,15 +701,10 @@ def _strings(value):
             yield from _strings(item)
 
 
-def verify_codes(doc: Document, output: str, allow=(), cjk=False):
-    """저장 직전 문서 전체 검사: 원문과 번역문의 제어 코드·태그·변수·식별자 목록이 같아야 한다.
-    (구간 검증을 통과했더라도 조립·인코딩 과정의 실수까지 막는 마지막 안전장치)"""
+def code_changes(before: str, after: str, allow=(), cjk=False):
+    """원문과 번역문의 제어 코드·태그·변수·식별자 목록 차이: (빠진 것, 늘어난 것) Counter.
+    저장 직전 문서 전체 검사와 줄 단위 검사가 같은 기준을 쓰도록 한곳에 둔다."""
     from collections import Counter
-    if doc.suffix == '.json':
-        before = '\n'.join(_strings(json.loads(doc.source)))
-        after = '\n'.join(_strings(json.loads(output)))
-    else:
-        before, after = doc.source, output
     def codes(text):
         found = Counter(match.group() for match in PROTECT.finditer(text) if match.group() not in allow)
         found.update(match.group() for match in re.finditer(r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\])?', text))
@@ -715,8 +712,19 @@ def verify_codes(doc: Document, output: str, allow=(), cjk=False):
             found.update(match.group() for match in CJK_LATIN.finditer(text) if match.group() not in allow)
         return found
     old, new = codes(before), codes(after)
-    if old != new:
-        missing = list((old - new).elements())[:5]
-        extra = list((new - old).elements())[:5]
+    return old - new, new - old
+
+
+def verify_codes(doc: Document, output: str, allow=(), cjk=False):
+    """저장 직전 문서 전체 검사: 원문과 번역문의 제어 코드·태그·변수·식별자 목록이 같아야 한다.
+    (구간 검증을 통과했더라도 조립·인코딩 과정의 실수까지 막는 마지막 안전장치)"""
+    if doc.suffix == '.json':
+        before = '\n'.join(_strings(json.loads(doc.source)))
+        after = '\n'.join(_strings(json.loads(output)))
+    else:
+        before, after = doc.source, output
+    missing, extra = code_changes(before, after, allow, cjk)
+    if missing or extra:
+        missing, extra = list(missing.elements())[:5], list(extra.elements())[:5]
         raise ValueError('Control codes/tags changed during translation; not saved (missing %s, extra %s)'
                          % (missing, extra))

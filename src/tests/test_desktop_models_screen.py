@@ -474,9 +474,10 @@ def test_each_role_and_its_subsections_expand_independently(ui):
     assert not w.catalog_groups['role:uncensored:tier:2'].expanded
 
 
-def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
+def test_uncensored_mid_has_abliterix_recommended_and_trevor_previous_as_options(ui):
     w, _, _ = ui
     open_models(w)
+    primary='hf.co/mradermacher/gemma-4-12B-it-abliterix-GGUF:Q8_0'
     trevor='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0'
     trevor_q4='hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M'
     previous='huihui_ai/qwen3-vl-abliterated:8b'
@@ -488,7 +489,8 @@ def test_uncensored_mid_has_trevor_recommended_and_previous_as_option(ui):
     mid=w.catalog_groups['role:uncensored:tier:2'].body
     options=w.catalog_groups['role:uncensored:options'].body
     highest=w.catalog_groups['role:uncensored:tier:1'].body
-    assert any(inside(box,mid) for box in w.choice_checkbuttons[trevor])
+    assert any(inside(box,mid) for box in w.choice_checkbuttons[primary])
+    assert any(inside(box,options) for box in w.choice_checkbuttons[trevor])
     assert any(inside(box,options) for box in w.choice_checkbuttons[previous])
     assert trevor_q4 not in w.choice_checkbuttons
     assert any(inside(box,highest) for box in w.choice_checkbuttons[high])

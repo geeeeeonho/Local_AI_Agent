@@ -133,9 +133,11 @@ def fetch_hf_gguf_size(tag: str, *, opener=None, timeout: float = 15) -> tuple[f
         return None, "unreadable file listing: %s" % exc
     if not isinstance(listing, list):
         return None, "file listing is not an array"
-    ending = "-" + quant.lower() + ".gguf"
+    # Repositories name the quantization with "-", "." or "_" before it
+    # (TrevorJS "-Q8_0.gguf", mradermacher ".Q8_0.gguf"); Ollama accepts all.
+    endings = tuple(sep + quant.lower() + ".gguf" for sep in "-._")
     for item in listing:
-        if isinstance(item, dict) and str(item.get("path", "")).lower().endswith(ending):
+        if isinstance(item, dict) and str(item.get("path", "")).lower().endswith(endings):
             size = item.get("size")
             if not isinstance(size, int):
                 lfs = item.get("lfs") or {}

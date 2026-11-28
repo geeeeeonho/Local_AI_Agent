@@ -50,7 +50,9 @@ class RoleCatalogGroupingTests(unittest.TestCase):
             'prutser/gemma-4-26B-A4B-it-ara-abliterated:Q4_K_S')
         self.assertEqual(
             role['tiers'][1]['recommended']['tag'],
-            'hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0')
+            'hf.co/mradermacher/gemma-4-12B-it-abliterix-GGUF:Q8_0')
+        self.assertIn('hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0',
+                      [x['tag'] for x in role['tiers'][1]['options']])
         self.assertNotIn('hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q4_K_M',
                          [x['tag'] for x in role['tiers'][1]['options']])
         self.assertIn('huihui_ai/qwen3-vl-abliterated:8b',
@@ -95,7 +97,9 @@ class RoleCatalogGroupingTests(unittest.TestCase):
         removed = {'qwen3-vl:8b', 'qwen3.8:27b', 'gemma4:e4b',
                    'qwen3:8b', 'ministral-3:3b'} | PRUNED_V8
         self.assertFalse(removed & catalog.catalog_tags())
-        self.assertEqual(len(catalog.catalog_tags()), 15)
+        # 15 curated tags + the same-size TrevorJS option beside the abliterix
+        # middle-tier uncensored recommendation.
+        self.assertEqual(len(catalog.catalog_tags()), 16)
         for role, tiers in model_roles.TIERS.items():
             self.assertEqual(len(tiers), 3, role)
             for i, tier in enumerate(tiers):

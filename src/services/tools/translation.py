@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
-from core.tools.translation import (verify_codes, IDENTIFIER, system_context, SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
+from core.tools.translation import (verify_codes, code_changes, IDENTIFIER, system_context, SUPPORTED, Document, Piece, PROTECTED_TOKEN as _TOKEN, STRUCTURE_MARKS, prepare, protect, read_source,
                                     render, restore, speaker_prefix, split_masked)
 from integrations.ollama.client import OllamaClient, local_model_name
 from collections import Counter
@@ -80,7 +80,9 @@ MAX_LEARNED_TERMS = 240
 # 모델이 요청 형식을 번역문 안에 흉내 낸 흔적: 'id: 0, text: …', '"text": "…"', 'text: …'로 시작
 _ECHO = re.compile(r'^\s*["\']?(?:id|text|speaker|section)["\']?\s*[:=]|["\']?\bid["\']?\s*[:=]\s*\d+\s*,|"(?:text|id|speaker)"\s*:', re.I)
 # 화자 이름표가 번역문 앞에 붙은 경우('앨리스: …')
-_LABEL_PREFIX = re.compile(r'^\s*[^\s:：「」"\']{1,24}(?:\s[^\s:：「」"\']{1,24})?\s*[:：]\s*')
+# 괄호 설명이 붙은 화자도 이름표다: 'MAN (on radio): …' → '남자(무전): …'
+_LABEL_PREFIX = re.compile(r'^\s*[^\s:：「」"\'()（）]{1,24}(?:\s[^\s:：「」"\'()（）]{1,24})?'
+                           r'(?:\s*[(（][^()（）:：\r\n]{1,24}[)）])?\s*[:：]\s*')
 SINGLE_SCHEMA = {'type':'object','properties':{'translation':{'type':'string'}},'required':['translation']}
 TRANSPORT_RETRIES = 2
 READY_WAIT = 15.0      # Ollama가 막 켜졌을 때 모델 목록을 기다리는 최대 초
@@ -283,6 +285,9 @@ def _validate(unit_text, answer, memory, tokens):
     for key in expected_tokens:
         if answer.count(key) != 1:
             raise ValueError('Translation changed a protected token')
+        # 실측: 토큰 끝에 '_'를 하나 더 붙여('…_0000___') 복원 뒤 'LW-19_'처럼 값이 바뀌었다.
+        if any(answer.count(glued) > unit_text.count(glued) for glued in ('_'+key,key+'_')):
+            raise ValueError('Translation changed a protected token (extra underscore)')
     # 요청 형식(id/text 필드)을 번역문 안에 흉내 낸 응답은 결과를 오염시키므로 절대 받지 않는다.
     if _ECHO.search(answer) and not _ECHO.search(unit_text):
         raise ValueError('Model echoed request metadata into the translation')
@@ -435,7 +440,15 @@ def _foreign_names(doc,target):
 
 def _translate_names(client,model,names,memory,target):
     """화자 이름표를 한 번에 번역한다(문서당 요청 1회, 같은 이름은 항상 같은 번역). 실패한 이름은 원문 유지."""
-    known={name:memory.terms[name] for name in names if memory.terms.get(name)}
+    def usable(name,value):
+        try:
+            check_output(name,value,getattr(memory,'source_language',''),getattr(memory,'target',''))
+        except ReviewError:
+            return False
+        return True
+    # 기억된 용어도 같은 기준으로 거른다. 실측: 모델이 '林见微 → Lin Jianwei'처럼 용어를 영어로 익히면
+    # 줄 검수는 그 용어를 거부하는데도 이름표에는 그대로 들어가 저장 직전 검사에서 파일 전체가 막혔다.
+    known={name:memory.terms[name] for name in names if memory.terms.get(name) and usable(name,memory.terms[name])}
     missing=[name for name in names if name not in known]
     if missing:
         system=('Translate these speaker names (person names or roles) into '+LANGUAGES[target]+'. '
@@ -453,13 +466,11 @@ def _translate_names(client,model,names,memory,target):
             value=values.get(name)
             if not isinstance(value,str) or not value.strip() or len(value)>40 or '\n' in value:
                 continue
-            try:
-                check_output(name,value.strip(),getattr(memory,'source_language',''),getattr(memory,'target',''))
-            except ReviewError:
+            if not usable(name,value.strip()):
                 continue
             known[name]=value.strip()
-            if len(memory.terms)<MAX_LEARNED_TERMS:
-                memory.terms.setdefault(name,value.strip())
+            if name in memory.terms or len(memory.terms)<MAX_LEARNED_TERMS:
+                memory.terms[name]=value.strip()     # 거른 기존 용어는 쓸 수 있는 번역으로 바꾼다
     return known
 
 
@@ -700,6 +711,33 @@ def _translate_single(client,model,item,memory,target,doc,tokens_for_segment,las
             return [unit.text]
         raise ValueError('Translation unit %d failed validation: %s (batch error: %s)' %
                          (idx+1,exc,last)) from exc
+
+
+def _code_issues(doc,units,prefixes,maps,complete,allow,cjk):
+    """저장 직전 검사(verify_codes)와 같은 기준을 구간마다 적용한다: 복원한 번역문의 제어 코드·식별자가
+    원문 구간과 다른 단위 번호와 사유. 줄 단위 검증은 보호 토큰 상태로 보므로, 복원 뒤 이웃 글자와
+    붙어 달라진 토큰(LW-19 + '.')이나 한중일 원문에 없던 라틴 단어(SF)는 여기서만 드러난다."""
+    by_segment={}
+    for index,unit in enumerate(units):
+        by_segment.setdefault(unit.segment_index,[]).append(index)
+    issues={}
+    for segment_index,indexes in by_segment.items():
+        if not all(i in complete for i in indexes):
+            continue
+        try:
+            text=restore(prefixes[segment_index]+''.join(complete[i]+units[i].after for i in indexes),
+                         maps[segment_index])
+        except ValueError as exc:
+            reason=str(exc)
+        else:
+            missing,extra=code_changes(doc.segments[segment_index].text,text,allow,cjk)
+            if not (missing or extra):
+                continue
+            reason=('Codes or identifiers changed (missing %s, extra %s): keep them exactly as in the source '
+                    'and do not add Latin words' % (list(missing.elements())[:3],list(extra.elements())[:3]))
+        for index in indexes:
+            issues[index]=reason
+    return issues
 
 
 def _assemble(doc,units,prefixes,maps,saved,names=None):
@@ -1186,6 +1224,32 @@ class TranslationService:
                         fixed+=1
                 checkpoint.save_units([(idx,complete[idx]) for idx in pending])
             share(force=True)
+            # 저장 직전 검사에 걸릴 구간은 미리 찾아 사유와 함께 한 번 더 번역시키고, 그래도 안 되면
+            # (원문 유지 옵션일 때) 그 구간만 원문으로 남긴다. 한 줄 때문에 파일 전체가 저장되지 않는 일을 막는다.
+            broken=_code_issues(doc,units,prefixes,maps,complete,allow,cjk)
+            ask=[idx for idx in broken if idx not in alias and idx not in failures]
+            for group in _batch_ranges([units[i] for i in ask]):
+                if cancelled and cancelled():
+                    raise InterruptedError('Translation cancelled; progress is saved')
+                pending=[ask[i] for i in group]
+                try:
+                    translated=_translate_batch(client,model,[(idx,units[idx]) for idx in pending],memory,target,
+                                                style,doc.selected,_recent(units,complete,pending[0]),maps,doc,
+                                                cancelled=cancelled,failures=None,review=set(),
+                                                notes={idx:broken[idx] for idx in pending})
+                except ValueError:
+                    continue
+                complete.update(zip(pending,translated))
+                checkpoint.save_units(list(zip(pending,translated)))
+            if broken:
+                share(force=True)
+                broken=_code_issues(doc,units,prefixes,maps,complete,allow,cjk)
+                if broken and keep_failed:
+                    for idx in broken:
+                        complete[idx]=units[idx].text
+                        failures.add(idx)
+                    checkpoint.save_units([(idx,complete[idx]) for idx in broken])
+                    checkpoint.save_failed(failures)
             remaining=_audit(units,complete,memory,failures,skip=alias) if memory.target else {}
             for copy,origin in alias.items():
                 if origin in remaining:

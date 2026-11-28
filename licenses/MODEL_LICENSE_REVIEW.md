@@ -1,6 +1,6 @@
 # 모델 라이선스 확인 목록
 
-2026-11-26 `src/launcher/models/model_catalog.py`에 등록된 Ollama 후보 **15개**의 식별자입니다. 이것은 다운로드/설치 여부와 무관한 **카탈로그**이며, 아래 모델의 라이선스를 일괄 확정한 목록이 아닙니다.
+2026-11-26 `src/launcher/models/model_catalog.py`에 등록된 Ollama 후보 **16개**의 식별자입니다. 이것은 다운로드/설치 여부와 무관한 **카탈로그**이며, 아래 모델의 라이선스를 일괄 확정한 목록이 아닙니다.
 
 각 모델에 대해 실제 Ollama 모델 페이지 또는 Hugging Face 리포지터리의 **정확한 태그/리비전**, 기본 모델 라이선스, 재가공 모델의 배포 조건과 NOTICE를 확인해야 합니다. 특히 제3자 `abliterated`/`uncensored`/`GGUF` 모델은 상위 모델 및 파생본의 양쪽 조건을 확인하세요.
 
@@ -11,6 +11,7 @@
 | `qwen2.5-coder:7b` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
 | `huihui_ai/qwen3-abliterated:8b` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
 | `gemma4:26b-a4b-it-qat` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
+| `hf.co/mradermacher/gemma-4-12B-it-abliterix-GGUF:Q8_0` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
 | `hf.co/TrevorJS/gemma-4-12B-it-uncensored-GGUF:Q8_0` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
 | `huihui_ai/qwen3-vl-abliterated:8b` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
 | `devstral-small-2:24b` | 미확인 — 정확한 배포 리비전의 라이선스 확인 필요 |
