@@ -117,18 +117,38 @@ def build(parent, w, toolbar=None):
 
     # 대본이 이미 있으면: 글은 대본 그대로, 시각만 음성 인식으로 맞춘다.
     script = folds.add(body, 'script', '대본으로 시간 맞추기 (선택)', expanded=False).body
-    row = ttk.Frame(script); row.pack(fill='x')
-    ttk.Button(row, text='대본 파일…', command=w.choose_subtitle_script).pack(side='left')
-    ttk.Button(row, text='대본 폴더…', command=w.choose_subtitle_script_folder).pack(side='left', padx=(6, 0))
-    ttk.Button(row, text='지우기', command=lambda: w.subtitle_script.set('')).pack(side='left', padx=(6, 8))
-    ttk.Entry(row, textvariable=w.subtitle_script).pack(side='left', fill='x', expand=True)
-    label = ttk.Label(script, text='대본(.txt·.srt·.vtt)을 고르면 자막 글은 대본 그대로 쓰고, 시각만 음성에서 '
-                                   '찾아 맞춥니다. 대본 한 줄은 새 자막에서 시작하고, 긴 줄은 자막 규칙대로 나눕니다. '
-                                   '[괄호]만 있는 지문 줄은 뺍니다. 같은 이름의 자막이 이미 있으면 그 자막은 "영상.<언어>.srt"'
-                                   '(모르면 .og)로 이름을 바꿔 보관합니다. 음성에서 찾지 못한 줄은 시각을 추정하고 '
-                                   '검토 목록에 알립니다. 대본 파일은 영상·음성 하나에, 대본 폴더는 여러 파일(폴더)에 씁니다: '
-                                   '영상·음성마다 대본 폴더에서 같은 이름의 대본(예: 1화.mp4 ↔ 1화.txt)을 찾고, '
-                                   '없는 파일은 건너뜁니다.',
+    # 두 가지 길을 나란히: ① 대본과 영상이 한 폴더에 있으면 그 폴더만 고르면 바로 준비된다.
+    # ② 영상·음성이 다른 폴더에 있으면 대본 폴더와 영상·음성 폴더를 따로 고른다.
+    ways = ttk.Frame(script); ways.pack(fill='x')
+    ways.columnconfigure((0, 1), weight=1, uniform='ways')
+    for column, (title, text, buttons) in enumerate((
+            ('① 대본과 영상이 한 폴더에',
+             '폴더 안의 영상·음성과 같은 이름의 대본(1화.mp4 ↔ 1화.txt)을 짝지어 바로 준비합니다. '
+             '폴더에 영상·음성이 없으면 ②처럼 영상·음성 폴더를 묻습니다.',
+             (('대본·영상 폴더 선택…', w.choose_subtitle_script_home, 'Accent.TButton'),)),
+            ('② 영상·음성이 다른 폴더에',
+             '대본 폴더와 영상·음성 폴더를 따로 고릅니다. 같은 상대 경로, 없으면 이름이 같은 대본을 찾습니다.',
+             (('대본 폴더…', w.choose_subtitle_script_folder, 'TButton'),
+              ('영상·음성 폴더…', w.choose_subtitle_folder, 'TButton'))))):
+        card = ttk.LabelFrame(ways, text=title, padding=10)
+        card.grid(row=0, column=column, sticky='nsew', padx=(0, 6) if column == 0 else (6, 0))
+        label = ttk.Label(card, text=text, style='Muted.TLabel', justify='left', wraplength=260)
+        label.pack(anchor='w', fill='x'); wrap_to_parent(label, inset=30, minimum=160)
+        buttons_row = ttk.Frame(card); buttons_row.pack(anchor='w', pady=(8, 0))
+        for index, (name, command, style) in enumerate(buttons):
+            ttk.Button(buttons_row, text=name, command=command, style=style).pack(
+                side='left', padx=(0 if index == 0 else 6, 0))
+    row = ttk.Frame(script); row.pack(fill='x', pady=(8, 0))
+    ttk.Label(row, text='대본').pack(side='left')
+    ttk.Entry(row, textvariable=w.subtitle_script).pack(side='left', fill='x', expand=True, padx=(6, 6))
+    ttk.Button(row, text='대본 파일 하나…', command=w.choose_subtitle_script).pack(side='left')
+    ttk.Button(row, text='지우기', command=lambda: w.subtitle_script.set('')).pack(side='left', padx=(6, 0))
+    w.subtitle_script_summary = ttk.Label(script, text='', justify='left', wraplength=600)
+    w.subtitle_script_summary.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(w.subtitle_script_summary, inset=40)
+    label = ttk.Label(script, text='자막 글은 대본(.txt·.md·.srt·.vtt) 그대로, 시각만 음성에서 찾아 맞춥니다. 대본 한 줄은 '
+                                   '새 자막에서 시작하고 [괄호]만 있는 지문 줄은 뺍니다. 같은 이름의 자막이 이미 있으면 '
+                                   '"영상.<언어>.srt"(모르면 .og)로 보관합니다. 음성에서 찾지 못한 줄은 시각을 추정하고 '
+                                   '검토 목록에 알립니다. 대본 파일 하나는 영상·음성 하나에만 씁니다.',
                       style='Muted.TLabel', justify='left', wraplength=600)
     label.pack(anchor='w', fill='x', pady=(6, 0)); wrap_to_parent(label, inset=40)
 

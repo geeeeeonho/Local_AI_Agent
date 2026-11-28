@@ -195,7 +195,11 @@ def match_scripts(media, script_folder, media_root=None):
             except ValueError:
                 relative = None
         same = by_stem.get(item.stem.casefold(), [])
-        found[item] = by_path.get(relative) if relative in by_path else (same[0] if len(same) == 1 else None)
+        script = by_path.get(relative) if relative in by_path else (same[0] if len(same) == 1 else None)
+        # 대본과 영상이 한 폴더에 있으면 영상 옆 '영상.srt'는 그 영상의 기존 자막이지 대본이 아니다.
+        if script is not None and script.parent == item.parent and script.suffix.lower() in ('.srt', '.vtt'):
+            script = None
+        found[item] = script
     return found
 
 
