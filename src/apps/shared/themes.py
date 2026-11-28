@@ -163,6 +163,13 @@ class ThemeController:
                 if tag in tags:
                     widget.tag_configure(tag, foreground=getattr(self.palette, tags[tag]))
 
+    def tag_colors(self, widget, **roles):
+        """Text 위젯의 글자 태그 색을 팔레트 역할로 정한다(테마를 바꾸면 함께 바뀐다).
+        예: tag_colors(log, alert='danger', success='success')"""
+        self._tags.setdefault(widget, {}).update(roles)
+        for tag, role in roles.items():
+            widget.tag_configure(tag, foreground=getattr(self.palette, role))
+
     def refresh(self, widget=None):
         """Restyle existing/new panels on Tk's thread without touching contents."""
         widget = self.root if widget is None else widget
@@ -270,11 +277,22 @@ class ThemeController:
         # Failures need to be legible as failures, not one more muted line.
         # Installation state is independent of the desired checkbox state.
         # The four labels retain their meaning in both light and dark themes.
+        # The state sits beside the checkbox as a filled badge, and a card whose
+        # model is on disk or about to change gets a border in the same colour:
+        # a faint line of coloured text above the name was easy to miss, and
+        # "installed and kept" looked the same as "installed, about to go".
         for state, ink in (('Installed', p.success), ('Missing', p.muted),
                            ('Install', p.info), ('Remove', p.danger)):
+            filled = state != 'Missing'
             style.configure('Model.State' + state + '.TLabel',
-                            background=p.manage_soft, foreground=ink,
-                            font=('Segoe UI', 9, 'bold'))
+                            background=ink if filled else p.manage_soft,
+                            foreground=p.solid_ink if filled else ink,
+                            font=('Segoe UI', 9, 'bold'), padding=(6, 1))
+            style.configure('Model.Card' + state + '.TFrame', background=p.manage_soft,
+                            bordercolor=ink if filled else p.border,
+                            lightcolor=ink if filled else p.border,
+                            darkcolor=ink if filled else p.border,
+                            borderwidth=2 if filled else 1, relief='solid')
         style.configure('Model.SummaryRemove.TLabel', background=p.bg,
                         foreground=p.danger, font=('Segoe UI', 12, 'bold'))
         style.configure('Manage.Details.TButton', anchor='w',
@@ -283,6 +301,7 @@ class ThemeController:
         style.map('Manage.Details.TButton',
                   background=[('active',p.hover)],foreground=[('active',p.fg)])
         style.configure('Alert.TLabel', foreground=p.danger)
+        style.configure('Success.TLabel', foreground=p.success, font=('Segoe UI', 9, 'bold'))
         # A readiness line has three states and they have to be told apart at a
         # glance; "the button is no longer greyed out" is not a signal anyone
         # notices while looking at a log.

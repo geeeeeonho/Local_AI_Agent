@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, font as tkfont
 from types import SimpleNamespace
 import webbrowser
 from core.projects.model import Project
@@ -16,6 +16,7 @@ from core.window_size import ACTIVITY_LINES, activity_lines
 from .widgets import (opening_geometry, set_text, set_status, theme,
                       wrap_to_parent)
 from .themes import themed
+from .attention import request_attention
 from . import views
 from .translation_controller import TranslationController
 from .subtitle_controller import SubtitleController
@@ -178,7 +179,9 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                               font=('Consolas',9),padx=14,pady=8,state='disabled',wrap='word'),
                               background='surface',foreground='muted',highlightbackground='border',highlightcolor='chat',
                               selectbackground='selected',selectforeground='fg')
-        self.activity.tag_configure('alert',foreground=self.theme.palette.danger)
+        # 끝난 작업은 진행 줄들 사이에서 바로 찾을 수 있게 굵은 성공색으로 남긴다.
+        self.activity.tag_configure('success',font=('Consolas',9,'bold'))
+        self.theme.tag_colors(self.activity,alert='danger',success='success')
         try:self._activity_visible=self.services.settings.activity_visible()
         except (OSError,ValueError):self._activity_visible=False
         self._apply_activity_visibility()
@@ -295,17 +298,24 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
             except queue.Full:pass
 
     def log(self,text,*,level='info'):
-        # A failure used to look exactly like progress on the same muted line.
+        # A failure used to look exactly like progress on the same muted line,
+        # and so did a finished job: level='success' marks the end of something
+        # the user started, in the log, on the status line, and - when the
+        # window is behind another one - on the taskbar.
         text=str(text)
+        if level=='success':text='✔ '+text
         self.message.set(text[:90] + ('…' if len(text)>90 else ''))
-        self.message_label.configure(style='Alert.TLabel' if level=='error' else 'Muted.TLabel')
+        self.message_label.configure(style={'error':'Alert.TLabel','success':'Success.TLabel'}
+                                     .get(level,'Muted.TLabel'))
         self.activity.configure(state='normal')
         start=self.activity.index('end-1c')
         self.activity.insert('end',text+'\n')
         if level=='error':self.activity.tag_add('alert',start,'end-1c')
+        elif level=='success':self.activity.tag_add('success',start,'end-1c')
         if int(self.activity.index('end-1c').split('.')[0])>400:
             self.activity.delete('1.0','101.0')
         self.activity.see('end');self.activity.configure(state='disabled')
+        if level=='success':request_attention(self.root)
 
     def _handle_event(self,event):
         data=event.payload
@@ -410,7 +420,9 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
         if self.closing:return False
         def finish(value):
             if done and not self.closing:done(value)
-            if announce:self.log(key+' completed')
+            # Changes the user asked for end in the success colour; background
+            # reads (mutate=False) keep the quiet line.
+            if announce:self.log(key+' completed',level='success' if mutate else 'info')
         def failed(exc):
             self.log(key+': '+str(exc),level='error')
             if error is not None and not self.closing:error(exc)
@@ -1148,6 +1160,7 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
         self.choice_checkbuttons={}
         self.choice_statuses={}
         self.choice_status_labels={}
+        self.choice_cards={}
         self.catalog_detail_widgets={}
         self.catalog_groups={}
         groups=group_catalog(catalog)
@@ -1316,14 +1329,11 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                 value=getattr(self,'_previous_catalog_choices',{}).get(tag,checked))
             self.choice_vars[tag]=var
             self._catalog_choice_defaults[tag]=checked
-        card=ttk.Frame(parent,style='Manage.Card.TFrame',padding=7)
+        card=ttk.Frame(parent,style='Model.CardMissing.TFrame',padding=7)
         card.pack(fill='x',pady=3)
+        self.choice_cards.setdefault(tag,[]).append(card)
         state_text=tk.StringVar(master=self.root)
         self.choice_statuses.setdefault(tag,[]).append(state_text)
-        label=ttk.Label(card,textvariable=state_text,style='Model.StateMissing.TLabel',
-                        anchor='w')
-        label.pack(anchor='w',fill='x',pady=(0,3))
-        self.choice_status_labels.setdefault(tag,[]).append(label)
         visible_name=model_display_name(tag) if model.get('desc') else tag
         # Put the inspector beside the title instead of adding a fourth row
         # of controls to every compact model card.
@@ -1339,11 +1349,36 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                        side='right',padx=(3,0))
         # The checkbox's meaning depends on what is actually on disk.
         # "selected" is a future intent, never proof that the file exists.
-        choice_label='이 모델 유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
+        choice_label='유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
+        # The disk/plan badge sits on the checkbox line, where the decision is made.
+        choice_row=ttk.Frame(card,style='Manage.CardBody.TFrame')
+        choice_row.pack(fill='x',pady=(3,0))
+        # Both stay children of the card (callers find the card as box.master)
+        # and are only placed in the row.
+        label=ttk.Label(card,textvariable=state_text,style='Model.StateMissing.TLabel',
+                        justify='center')
+        label.pack(in_=choice_row,side='right',padx=(6,0))
         box=ttk.Checkbutton(card,text=choice_label,variable=var,
                             command=self.update_choice_summary,
                             style='Card.TCheckbutton')
-        box.pack(anchor='w',fill='x')
+        box.pack(in_=choice_row,side='left')
+        self.choice_status_labels.setdefault(tag,[]).append(label)
+        # In the narrow four-column grid the badge would be cut off beside the
+        # checkbox text; there it wraps onto two lines instead.
+        def fit_badge(_event=None,row=choice_row,badge=label,check=box,text=state_text):
+            # Compare with the text's own width, not the label's: the label
+            # shrinks once it wraps, which would undo the wrap and loop.
+            try:font=tkfont.nametofont(ttk.Style(badge).lookup(badge.cget('style'),'font') or 'TkDefaultFont')
+            except tk.TclError:font=tkfont.Font(root=badge,font=ttk.Style(badge).lookup(badge.cget('style'),'font'))
+            natural=font.measure(text.get())+16
+            room=row.winfo_width()-check.winfo_reqwidth()-12
+            # Two fixed states (one line / about half width): following the room
+            # pixel by pixel resized the row, which changed the room again.
+            wanted=0 if room<=0 or room>=natural else max(64,int(natural*.6))
+            if str(badge.cget('wraplength'))!=str(wanted):
+                badge.configure(wraplength=wanted)
+        state_text.trace_add('write',lambda *_:fit_badge())
+        choice_row.bind('<Configure>',fit_badge,add='+')
         # A short status/size line is easier to scan in a four-column grid.
         details=[status] if status else []
         if model.get('size_gb'):
@@ -1433,6 +1468,8 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                 variable.set(state)
             for label in self.choice_status_labels.get(tag,()):
                 label.configure(style=style)
+            for card in getattr(self,'choice_cards',{}).get(tag,()):
+                card.configure(style=style.replace('.State','.Card').replace('.TLabel','.TFrame'))
 
         try:plan=self.services.models.plan_changes(self.selected_tags(),installed=installed)
         except Exception as exc:
@@ -1596,7 +1633,7 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                 self.log(kind+' 실패 '+tag+': '+error,level='error')
             self.log(f"설치 {len(done['install'])}개 · 삭제 {len(done['remove'])}개 완료"
                      + (f" · 실패 {len(done['failed'])}개" if done['failed'] else ''),
-                     level='error' if done['failed'] else 'info')
+                     level='error' if done['failed'] else 'success')
             self.load_catalog();self.refresh_stack();self.refresh_installed_summary()
             if 'models' in self.pages:self.refresh_models()
 
@@ -1749,7 +1786,7 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
             self._setup_cancel.clear()
             if hasattr(self,'setup_status'):
                 self.setup_status.set('완료 · 설치 / 복구가 끝났습니다. 상태를 다시 확인합니다.')
-            self.log('설치 / 복구 완료 · 상태를 다시 확인합니다.')
+            self.log('설치 / 복구 완료 · 상태를 다시 확인합니다.',level='success')
             self.refresh_health(fresh=True)
 
         def failed(exc):

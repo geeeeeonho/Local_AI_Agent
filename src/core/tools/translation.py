@@ -65,7 +65,20 @@ PROTECT = re.compile(
     r'%\([\w.:-]+\)[sdif]|(?<!%)%(?:\d+\$)?[-+ #0]*\d*(?:\.\d+)?[sdifeEgGxXu](?![A-Za-z])|'
     r'<\/?[A-Za-z][^<>\r\n]*>|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|'
     r'&(?:[A-Za-z][\w]+|#(?:\d+|x[\da-fA-F]+));|'
-    r'(?:[A-Za-z]:\\|\.\.?/)(?:(?![가-힣])[\w.\\/\-])*(?:(?![가-힣])[\w\\/\-])', re.UNICODE)
+    r'(?:[A-Za-z]:\\|\.\.?/)(?:(?![가-힣])[\w.\\/\-])*(?:(?![가-힣])[\w\\/\-])|'
+    # 비밀번호·코드명·좌석/게이트 번호처럼 글자 뒤에 숫자가 붙은 낱말: X7-Delta R2-D2 hunter2 B12 PS5
+    # (음역하면 'X7-델타'처럼 값이 바뀐다). 서수 1st·단위 5km·Q3·A4처럼 숫자로 시작하거나 두 글자인
+    # 말은 번역될 수 있으므로 넣지 않는다. 경계는 ASCII로 판단해 'X7-Deltaを'도 잡는다.
+    r'(?<![A-Za-z0-9_@./\\-])(?=[A-Za-z0-9-]{3})[A-Za-z]+\d[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*'
+    r'(?![A-Za-z0-9_@\\-]|\.[A-Za-z0-9])', re.UNICODE)
+# 자막의 시각 표기(6:45, 18:30, 1:02:03)는 원문 그대로 둔다: 자막 줄이 짧게 유지되고 '오후 6시'처럼
+# 원문에 없는 오전·오후를 지어내는 일이 없다. 큐 시간 줄(00:00:01,000 -->)은 애초에 번역 대상이 아니다.
+CLOCK_TIME = re.compile(r'(?<![\d:.,])\d{1,2}:\d{2}(?::\d{2})?(?![\d:]|[.,]\d)')
+
+
+def keeps_clock_times(doc) -> bool:
+    """자막 문서인가(시각 표기를 원문 그대로 보호할 대상)."""
+    return doc.suffix in ('.srt', '.vtt') or doc.selected == 'subtitle'
 # ICU MessageFormat({n, plural, one {...} other {...}}): 뼈대(머리·선택자·닫는 괄호·#)만 보호하고
 # 안쪽 문장은 번역한다. 선택자(one/other/male…)를 번역하면 메시지가 깨진다.
 ICU_HEADER = re.compile(r'\{\s*\w+\s*,\s*(?:plural|select|selectordinal)\s*,')
@@ -530,7 +543,7 @@ def prepare(source: str, suffix: str, *, kind='auto', stage=False) -> Document:
     return Document(source, suffix, detected, selected, tuple(segments))
 
 
-def protect(text: str, allow=(), cjk=False):
+def protect(text: str, allow=(), cjk=False, times=False):
     """보호할 부분을 토큰으로 바꾼다. allow(사용자 고정 용어집의 원문)에 있는 말은 식별자 모양이어도
     번역하라는 뜻이므로 보호하지 않는다."""
     mapping = {}
@@ -546,9 +559,13 @@ def protect(text: str, allow=(), cjk=False):
         mapping[token] = match.group()
         return token
     pattern = ICU_PROTECT if ICU_HEADER.search(text) else PROTECT
-    if cjk:
-        pattern = re.compile(pattern.pattern + '|' + CJK_LATIN.pattern, re.UNICODE)
-    return pattern.sub(replace, text), mapping
+    return _pattern(pattern, cjk, times).sub(replace, text), mapping
+
+
+def _pattern(base, cjk=False, times=False):
+    """보호 규칙에 한중일 원문의 라틴 토큰·자막 시각 규칙을 더한다(protect와 code_changes가 같은 기준)."""
+    extra = ([CLOCK_TIME.pattern] if times else []) + ([CJK_LATIN.pattern] if cjk else [])
+    return re.compile('|'.join([base.pattern] + extra), re.UNICODE) if extra else base
 
 
 def restore(text: str, mapping: dict):
@@ -701,13 +718,15 @@ def _strings(value):
             yield from _strings(item)
 
 
-def code_changes(before: str, after: str, allow=(), cjk=False):
+def code_changes(before: str, after: str, allow=(), cjk=False, times=False):
     """원문과 번역문의 제어 코드·태그·변수·식별자 목록 차이: (빠진 것, 늘어난 것) Counter.
     저장 직전 문서 전체 검사와 줄 단위 검사가 같은 기준을 쓰도록 한곳에 둔다."""
     from collections import Counter
     def codes(text):
         found = Counter(match.group() for match in PROTECT.finditer(text) if match.group() not in allow)
         found.update(match.group() for match in re.finditer(r'\\[A-Za-z]{1,8}(?:\[[^\]\r\n]*\])?', text))
+        if times:
+            found.update(match.group() for match in CLOCK_TIME.finditer(text))
         if cjk:
             found.update(match.group() for match in CJK_LATIN.finditer(text) if match.group() not in allow)
         return found
@@ -723,7 +742,7 @@ def verify_codes(doc: Document, output: str, allow=(), cjk=False):
         after = '\n'.join(_strings(json.loads(output)))
     else:
         before, after = doc.source, output
-    missing, extra = code_changes(before, after, allow, cjk)
+    missing, extra = code_changes(before, after, allow, cjk, keeps_clock_times(doc))
     if missing or extra:
         missing, extra = list(missing.elements())[:5], list(extra.elements())[:5]
         raise ValueError('Control codes/tags changed during translation; not saved (missing %s, extra %s)'

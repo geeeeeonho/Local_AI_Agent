@@ -325,6 +325,29 @@ def _number_kept(digits, value, answer, kept_digits, kept_values):
     return False
 
 
+# 24시간제 시각을 12시간제로 옮기는 것은 정상이다(18:30 → 오후 6시 30분). 오후·밤 같은 표시가 함께 있을 때만
+# 시(18)를 12를 뺀 값(6)으로 인정한다. 표시 없이 '6:30'만 쓰면 오전으로 읽히므로 값이 바뀐 것이다.
+_CLOCK = re.compile(r'(?<![\d:.,])(\d{1,2}):\d{2}(?::\d{2})?(?![\d:]|[.,]\d)')
+_AFTERNOON = re.compile(r'오후|저녁|밤|午後|夜|下午|晚上|傍晚|\bp\.?\s?m\b|\bin the (?:evening|afternoon)\b|'
+                        r'\bat night\b|de la (?:tarde|noche)|du soir|de l\'après-midi|abends|nachmittags', re.I)
+_MIDNIGHT = re.compile(r'오전|자정|새벽|午前|深夜|凌晨|半夜|\ba\.?\s?m\b|midnight|medianoche|minuit|mitternacht', re.I)
+# 앞자리 0이 있는 수(PIN 0451, 코드 007, 내선 0199)는 값이 같아도 글자가 달라지면 다른 번호다.
+# 시각·날짜·소수의 일부(6:05, 03/05, 0.5, 2026-03-05)는 '6시 5분'·'3월 5일'처럼 0을 빼고 써도 된다.
+_LEADING_ZERO = re.compile(r'(?<![\d:/.,\-])0\d+(?![\d:/\-]|[.,]\d)')
+
+
+def _clock_alternates(source_text, answer):
+    """원문 시각의 '시' 숫자 → 번역문에서 대신 써도 되는 12시간제 값."""
+    alternates = {}
+    for match in _CLOCK.finditer(source_text):
+        hour = int(match.group(1))
+        if 13 <= hour <= 23 and _AFTERNOON.search(answer):
+            alternates[match.group(1)] = hour - 12
+        elif hour == 0 and _MIDNIGHT.search(answer):
+            alternates[match.group(1)] = 12
+    return alternates
+
+
 def _letters(text):
     return re.sub(r'[\W\d_]+', '', unicodedata.normalize('NFKC', text).lower())
 
@@ -425,8 +448,15 @@ def check_output(source_text, answer, source_name, target_name, allowed=''):
     # 6) 원문의 수는 번역문에도 같은 값으로 있어야 한다. 쓰는 방식은 바뀔 수 있다
     #    (1,000 ↔ 1000 ↔ 1천, 300,000 ↔ 30만 ↔ 30万, 2 ↔ 두, 1st ↔ 처음). 단위 환산·값 변경·누락은 거절.
     kept = quantities(answer)
-    kept_digits = ''.join(_numbers(answer))
+    answer_groups = _numbers(answer)
+    kept_digits = ''.join(answer_groups)
     kept_values = [value for _digits, value in kept]
+    for code in _LEADING_ZERO.findall(unicodedata.normalize('NFKC', source_plain)):
+        if code not in answer_groups:
+            raise ReviewError('Number changed or dropped (leading zero): ' + code)
+    alternates = _clock_alternates(unicodedata.normalize('NFKC', source_plain), answer)
     for digits, value in quantities(_NUMBER_IDIOMS.sub(' ', source_text)):
+        if digits in alternates and any(_same_value(alternates[digits], other) for other in kept_values):
+            continue
         if digits and not _number_kept(digits, value, answer, kept_digits, kept_values):
             raise ReviewError('Number changed or dropped: ' + digits)

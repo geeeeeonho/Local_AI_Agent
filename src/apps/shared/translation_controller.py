@@ -6,7 +6,7 @@ from threading import Event
 from tkinter import filedialog
 from .translation_view import KINDS, STYLES, LANGUAGES as TARGETS
 from services.tools.languages import SOURCE_LABELS as SOURCES
-from .widgets import set_text, set_status
+from .widgets import set_text, set_status, finished_level
 from core.tools.speech import MEDIA
 from services.tools.subtitles import Translate, scan as scan_media
 from services.tools.translation import place_as_original
@@ -22,7 +22,7 @@ class TranslationController:
         다른 화면에 있거나 창이 작아도 결과를 놓치지 않게 한다."""
         set_status(self.translation_status_label,state,text)
         if log:
-            self.log('[번역] '+text,level=level)
+            self.log('[번역] '+text,level=finished_level(state,level))
 
     # 화면 값 ↔ 저장된 기본값
     def _translation_fields(self):

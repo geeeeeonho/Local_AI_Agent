@@ -12,7 +12,7 @@ from core.tools import speech
 from services.tools.subtitles import Options, Translate
 from .subtitle_view import FORMATS, LINES, MEDIA_PATTERN, MODEL_LABELS, QUALITIES
 from .translation_view import STYLES
-from .widgets import set_status, set_text
+from .widgets import set_status, set_text, finished_level
 
 KEY_LABELS = {key: label for label, key in MODEL_LABELS.items()}
 # 저장값('srt'·'vtt'·'both') ↔ 화면 이름
@@ -147,7 +147,7 @@ class SubtitleController:
     def subtitle_say(self, state, text, *, log=False, level='info', action=None):
         set_status(self.subtitle_status_label, state, text, action)
         if log:
-            self.log('[자막] ' + text, level=level)
+            self.log('[자막] ' + text, level=finished_level(state, level))
 
     # ── 기본값 ──
     def _subtitle_fields(self):
