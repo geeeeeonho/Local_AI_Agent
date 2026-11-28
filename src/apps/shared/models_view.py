@@ -154,9 +154,9 @@ class OptionsRow:
         self.body = self.frame = body
         self._expanded = None
         self._on_change = on_change
-        self.button = ttk.Button(toggle_parent, style='Manage.AccordionSmall.TButton',
+        self.button = ttk.Button(toggle_parent, style='Manage.Toggle.TButton',
                                  command=self.toggle)
-        self.button.pack(anchor='w', fill='x', pady=(6, 0))
+        self.button.pack(anchor='w', fill='x', pady=(3, 0))
         self.set_expanded(expanded, notify=False)
 
     @property
@@ -190,7 +190,7 @@ class CatalogMatrix:
     """
 
     TIERS = 3
-    ROLE_WIDTH = 150
+    ROLE_WIDTH = 170
 
     def __init__(self, parent, headers):
         self.frame = ttk.Frame(parent)
@@ -210,13 +210,15 @@ class CatalogMatrix:
         """Rows for one role: separator, its tier cells, and a hidden options row.
         Returns (label cell, {tier number: MatrixCell}, options body)."""
         ttk.Separator(self.frame, orient='horizontal').grid(
-            row=self._row, column=0, columnspan=self.TIERS + 1, sticky='ew', pady=(4, 4))
+            row=self._row, column=0, columnspan=self.TIERS + 1, sticky='ew', pady=(2, 2))
         row = self._row + 1
-        label = ttk.Frame(self.frame, padding=(4, 2, 8, 2))
+        label = ttk.Frame(self.frame, padding=(4, 1, 8, 1))
         label.grid(row=row, column=0, sticky='nw')
-        ttk.Label(label, text=title, style='Section.TLabel').pack(anchor='w')
+        heading = ttk.Frame(label)
+        heading.pack(anchor='w', fill='x')
+        ttk.Label(heading, text=title, style='Section.TLabel').pack(side='left')
         if detail:
-            ttk.Label(label, text=detail, style='Muted.TLabel').pack(anchor='w')
+            ttk.Label(heading, text=detail, style='Muted.TLabel').pack(side='left', padx=(6, 0))
         if description:
             text = ttk.Label(label, text=description, style='Muted.TLabel',
                              wraplength=self.ROLE_WIDTH - 12, justify='left')
@@ -623,7 +625,7 @@ def _choose(parent, w):
     layout = Stack(parent)
     layout.fixed(lambda box: _selection_toolbar(box,w),pad=(0,3))
     layout.fixed(lambda box: _note(box,
-        '체크 = 설치 또는 유지 · GPU 보기는 모델 실행 예상량만 확인합니다.'),
+        '체크 = 설치 또는 유지 · GPU 버튼은 모델 실행 예상량만 확인합니다.'),
         pad=(0,3))
     # Two lines that each said one short thing, stacked above the list. On a
     # laptop that list had ninety-nine pixels to show twenty-five models in,

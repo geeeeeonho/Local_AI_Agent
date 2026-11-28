@@ -213,6 +213,13 @@ class ThemeController:
         style.configure('Manage.AccordionSmall.TButton', anchor='w',
                         background=p.surface, foreground=p.fg,
                         padding=(10, 6), borderwidth=0, focuscolor=p.manage)
+        # A role's options toggle: a small inline control, not a section bar.
+        style.configure('Manage.Toggle.TButton', anchor='w',
+                        background=p.manage_soft, foreground=p.fg,
+                        font=('Segoe UI', 9), padding=(6, 2), borderwidth=0,
+                        focuscolor=p.manage)
+        style.map('Manage.Toggle.TButton',
+                  background=[('active', p.hover), ('focus', p.hover)])
         style.map('Manage.AccordionSmall.TButton',
                   background=[('active', p.hover), ('focus', p.hover)])
         style.configure('Nav.TButton', anchor='w', background=p.sidebar, padding=(12, 6),

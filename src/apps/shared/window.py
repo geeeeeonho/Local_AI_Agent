@@ -1327,8 +1327,9 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                 value=getattr(self,'_previous_catalog_choices',{}).get(tag,checked))
             self.choice_vars[tag]=var
             self._catalog_choice_defaults[tag]=checked
-        card=ttk.Frame(parent,style='Model.CardMissing.TFrame',padding=7)
-        card.pack(fill='x',pady=3)
+        # Compact card, three lines: name · GPU / checkbox · badge / size · note · details.
+        card=ttk.Frame(parent,style='Model.CardMissing.TFrame',padding=(6,4))
+        card.pack(fill='x',pady=2)
         self.choice_cards.setdefault(tag,[]).append(card)
         state_text=tk.StringVar(master=self.root)
         self.choice_statuses.setdefault(tag,[]).append(state_text)
@@ -1341,8 +1342,8 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                              style='Manage.Card.TLabel',wraplength=140,
                              justify='left')
         name_label.pack(side='left',fill='x',expand=True)
-        wrap_to_parent(name_label,inset=94,minimum=110)
-        ttk.Button(heading,text='GPU 보기',style='Manage.Details.TButton',
+        wrap_to_parent(name_label,inset=60,minimum=110)
+        ttk.Button(heading,text='GPU',style='Manage.Details.TButton',
                    command=lambda t=tag:self.inspect_model(t)).pack(
                        side='right',padx=(3,0))
         # The checkbox's meaning depends on what is actually on disk.
@@ -1350,7 +1351,7 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
         choice_label='유지 (해제=삭제)' if model['installed'] else '이 모델 설치'
         # The disk/plan badge sits on the checkbox line, where the decision is made.
         choice_row=ttk.Frame(card,style='Manage.CardBody.TFrame')
-        choice_row.pack(fill='x',pady=(3,0))
+        choice_row.pack(fill='x',pady=(1,0))
         # Both stay children of the card (callers find the card as box.master)
         # and are only placed in the row.
         label=ttk.Label(card,textvariable=state_text,style='Model.StateMissing.TLabel',
@@ -1377,28 +1378,24 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                 badge.configure(wraplength=wanted)
         state_text.trace_add('write',lambda *_:fit_badge())
         choice_row.bind('<Configure>',fit_badge,add='+')
-        # A short status/size line is easier to scan in a four-column grid.
+        self.choice_checkbuttons.setdefault(tag,[]).append(box)
+        # Size, note and the details toggle share one line under the checkbox.
+        # The labels stay children of the card and are only placed in the row.
+        meta=ttk.Frame(card,style='Manage.CardBody.TFrame')
+        meta.pack(fill='x',padx=(20,0))
         details=[status] if status else []
         if model.get('size_gb'):
             details.append(f"~{model['size_gb']:.1f} GB")
         if show_role and model.get('role'):
             details.append(model['role'])
+        size_label=None
         if details:
-            details_label=ttk.Label(card,text=' · '.join(details),
-                                    style='Manage.CardMuted.TLabel',
-                                    wraplength=150,justify='left')
-            details_label.pack(anchor='w',fill='x',padx=(20,0))
-            wrap_to_parent(details_label,inset=38,minimum=110)
-        self.choice_checkbuttons.setdefault(tag,[]).append(box)
-        if model.get('note'):
-            note_label=ttk.Label(card,text=model['note'],style='Manage.CardMuted.TLabel',
-                                 wraplength=150,justify='left')
-            note_label.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
-            wrap_to_parent(note_label,inset=38,minimum=110)
+            size_label=ttk.Label(card,text=' · '.join(details),style='Manage.CardMuted.TLabel')
+            size_label.pack(in_=meta,side='left')
         if model.get('desc'):
             # Full descriptions are valuable, but repeating them for every
-            # recommended tier made the four-column comparison impractically
-            # tall. Display details only when requested, per shared model tag.
+            # recommended tier made the comparison impractically tall.
+            # Display details only when requested, per shared model tag.
             desc=ttk.Label(card,text='전체 태그: '+tag+'\n'+model['desc'],
                            style='Manage.CardMuted.TLabel',
                            wraplength=150,justify='left')
@@ -1408,10 +1405,31 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
                 card,text='설명 접기 ▲' if opened else '설명 보기 ▼',
                 style='Manage.Details.TButton',
                 command=lambda model_tag=tag:self.toggle_catalog_detail(model_tag))
-            detail_button.pack(anchor='w',padx=(16,0),pady=(2,0))
+            detail_button.pack(in_=meta,side='right')
             if opened:
                 desc.pack(anchor='w',fill='x',padx=(20,0),pady=(3,0))
             self.catalog_detail_widgets.setdefault(tag,[]).append((desc,detail_button))
+        if model.get('note'):
+            # Beside the size when it fits; on its own line under it when the
+            # card is narrow. Decided from the text's own width (two fixed
+            # states), so re-placing the label cannot feed back into the check.
+            note_label=ttk.Label(card,text=model['note'],style='Manage.CardMuted.TLabel',
+                                 justify='left')
+            def place_note(_event=None,label=note_label,row=meta,size=size_label):
+                font=tkfont.nametofont('TkDefaultFont')
+                try:font=tkfont.Font(root=label,font=ttk.Style(label).lookup(label.cget('style'),'font'))
+                except tk.TclError:pass
+                used=sum(widget.winfo_reqwidth()+8 for widget in row.pack_slaves() if widget is not label)
+                inline=row.winfo_width()-used>=font.measure(model['note'])+12
+                where=str(label.pack_info().get('in')) if label.winfo_manager() else ''
+                if inline and where!=str(row):
+                    label.pack_forget()
+                    label.pack(in_=row,side='left',padx=(8,0))
+                elif not inline and where!=str(card):
+                    label.pack_forget()
+                    label.pack(in_=card,after=row,anchor='w',padx=(20,0))
+            note_label.pack(in_=meta,side='left',padx=(8,0))
+            meta.bind('<Configure>',place_note,add='+')
 
     def toggle_catalog_detail(self,tag):
         if not hasattr(self,'_catalog_detail_state'):
