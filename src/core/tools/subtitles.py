@@ -523,7 +523,62 @@ def retime(cues, rules):
         if end <= start:
             end = start + 1
         out.append(replace(cue, start=start, end=end))
+    return _unsqueeze(out, rules)
+
+
+SQUEEZED_MS = 400          # 이웃 큐에 밀려 이보다 짧아진 큐는 읽을 수 없다(화면에서 사라진 것과 같다)
+
+
+def _joined(first, second, rules):
+    text = (' ' if rules.spaced else '').join(line.strip() for line in first.lines + second.lines)
+    return wrap(text, rules)
+
+
+def _unsqueeze(cues, rules):
+    """시작이 겹치거나 틈 없이 몰린 큐는 앞 큐 끝에 밀려 1ms짜리가 되기도 했다(글은 있는데 보이지 않음).
+    그런 큐는 글을 앞 큐(안 되면 뒤 큐)에 합쳐, 그 시간대 자막이 비지 않게 한다. 합칠 수 없으면 그대로 둔다."""
+    out = []
+    pending = list(cues)
+    index = 0
+    while index < len(pending):
+        cue = pending[index]
+        if cue.end - cue.start >= SQUEEZED_MS:
+            out.append(cue)
+            index += 1
+            continue
+        previous = out[-1] if out else None
+        following = pending[index + 1] if index + 1 < len(pending) else None
+        lines = _joined(previous, cue, rules) if previous is not None else None
+        if lines is not None and max(cue.end, previous.end) - previous.start <= rules.max_ms * 1.5:
+            out[-1] = replace(previous, end=max(previous.end, cue.end), lines=lines,
+                              confidence=min(previous.confidence, cue.confidence))
+        else:
+            lines = _joined(cue, following, rules) if following is not None else None
+            if lines is not None:
+                pending[index + 1] = replace(following, start=min(cue.start, following.start), lines=lines,
+                                             confidence=min(cue.confidence, following.confidence))
+            else:
+                out.append(_borrow_time(cue, out, pending, index, rules))
+        index += 1
     return out
+
+
+def _borrow_time(cue, out, pending, index, rules):
+    """합칠 수 없는 짧은 큐: 시간이 넉넉한 이웃 큐(뒤 → 앞)에서 최소 표시 시간만큼 빌린다."""
+    need, gap = rules.min_ms, rules.gap_ms
+    following = pending[index + 1] if index + 1 < len(pending) else None
+    previous = out[-1] if out else None
+    if following is not None and following.end - cue.start >= need + gap + rules.min_ms:
+        cue = replace(cue, end=cue.start + need)
+        pending[index + 1] = replace(following, start=max(following.start, cue.end + gap))
+    elif previous is not None and cue.start - previous.start >= need + gap + rules.min_ms:
+        start = max(previous.start + rules.min_ms + gap, cue.start - need)
+        out[-1] = replace(previous, end=min(previous.end, start - gap))
+        end = max(cue.end, start + need)
+        if following is not None:
+            end = min(end, following.start - gap)
+        cue = replace(cue, start=start, end=max(end, start + 1))
+    return cue
 
 
 # ── 검토 ──

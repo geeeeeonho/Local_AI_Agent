@@ -94,6 +94,7 @@ class Result:
     script_missed: tuple = ()       # 음성에서 찾지 못해 시각을 추정한 대본 줄 번호(대본 기준, 1부터)
     set_aside: tuple = ()           # 대본 자막에 이름을 내주고 '이름.<언어>.확장자'로 보관한 기존 자막
     renamed_from: Path | None = None    # 영상·음성 이름을 번역 이름으로 바꿨으면 원래 경로(source가 새 경로)
+    untranslated: tuple = ()        # 번역 자막에서 원문으로 남은 큐 ((큐 번호, 시작 ms, 원문), …)
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,23 @@ def match_scripts(media, script_folder, media_root=None):
             script = None
         found[item] = script
     return found
+
+
+def kept_cues(source_srt, kept_lines):
+    """번역 도구가 원문으로 남긴 줄 번호(자막 파일의 줄) → ((큐 번호, 시작 ms, 원문), …).
+    번역 도구는 파일 줄 번호로 알려 주므로, 사람이 찾을 수 있게 자막 번호와 시각으로 바꾼다."""
+    kept = set(kept_lines or ())
+    if not kept:
+        return ()
+    found, number, start = [], 0, 0
+    for line_number, line in enumerate(Path(source_srt).read_text(encoding='utf-8-sig').splitlines(), 1):
+        match = subtitles._CUE_TIME.match(line)
+        if match:
+            number += 1
+            start = subtitles._ms(*match.groups()[:4])
+        elif line_number in kept and line.strip() and number:
+            found.append((number, start, line.strip()))
+    return tuple(found)
 
 
 def _write_claimed(path, text, aside):
@@ -781,10 +799,14 @@ class SubtitleService:
                     os.replace(kept, path)          # 쓰지 못했으면 보관한 자막을 되돌린다
             raise
         aside += [kept for kept in claimed.values() if kept is not None]
+        # 원문으로 남은 큐: 검토 목록(원어 자막 번호)에 넣어 어디인지 바로 찾게 한다.
+        untranslated = kept_cues(source, getattr(answer, 'kept_lines', ()))
+        review = tuple(sorted(set(result.review) | {(number, 'kept in source language')
+                                                    for number, _start, _text in untranslated}))
         for item in (source, translated):
             item.unlink(missing_ok=True)
         return replace(result, translated=answer, translated_outputs=outputs, translated_text=text,
-                       set_aside=tuple(aside))
+                       set_aside=tuple(aside), untranslated=untranslated, review=review)
 
     def revise_terms(self, result, changes, *, progress=None, cancelled=None):
         """번역 자막의 용어를 고친다: 그 용어가 든 큐만 다시 번역하고 번역 자막 파일을 고쳐 쓴다."""
