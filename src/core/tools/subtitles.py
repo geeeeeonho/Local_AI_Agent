@@ -520,12 +520,17 @@ def retime(cues, rules):
                 end = max(limit, start + 1)
             elif 0 < nxt - end < rules.chain_ms:
                 end = limit
+            elif 0 < nxt - end <= CONTINUE_MS and not ends_sentence(cue.lines[-1]) \
+                    and limit - start <= rules.max_ms:
+                # 문장 중간의 쉼(쉼표 뒤 등): 다음 큐까지 계속 보여 준다(말하는 중에 자막이 비지 않게).
+                end = limit
         if end <= start:
             end = start + 1
         out.append(replace(cue, start=start, end=end))
     return _unsqueeze(out, rules)
 
 
+CONTINUE_MS = 1500         # 문장이 끝나지 않은 큐는 이만큼 쉬어도 다음 큐까지 이어 보여 준다
 SQUEEZED_MS = 400          # 이웃 큐에 밀려 이보다 짧아진 큐는 읽을 수 없다(화면에서 사라진 것과 같다)
 
 

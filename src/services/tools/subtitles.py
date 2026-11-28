@@ -639,7 +639,11 @@ class SubtitleService:
         placed = None
         if script is not None:
             # 대본이 있으면 글은 대본 그대로, 시각만 인식 결과에서. 대본 한 줄은 새 큐에서 시작한다.
-            placed = script_align.align(script, speech.words_of(cleaned.segments), spaced=rules.spaced)
+            # VAD가 찾은 말소리 구간(원래 시간)을 함께 넘겨, 인식이 놓친 줄을 무음이 아닌 말소리에 놓는다.
+            voiced = tuple((int(item[0]), int(item[1])) for item in (data.get(speech.VAD_MAP_KEY) or ())
+                           if len(item) >= 2)
+            placed = script_align.align(script, speech.words_of(cleaned.segments), spaced=rules.spaced,
+                                        speech=voiced)
             cues = subtitles.build_cues(placed.words, rules, boundaries=placed.boundaries)
         else:
             cues = subtitles.build_cues(speech.words_of(cleaned.segments), rules)

@@ -289,3 +289,58 @@ def test_long_pauses_and_overfull_cues_are_not_merged():
     long = '가나다라마바사아자차 카타파하가나다라, 마바사아자차카타파하 가나다라마바사아, 자차카타파하가나다라 마바사.'
     cues = build_cues(_paused(long, pause=300), rules)
     assert len(cues) >= 2 and validate(cues, rules).ok                          # 두 줄을 넘기면 합치지 않는다
+
+
+# ── 인식이 놓친 줄을 무음이 아닌 말소리에 ──
+def test_a_line_missed_after_a_long_silence_is_shown_when_it_is_spoken_not_during_the_silence():
+    heard, end = _spoken('one two three four')
+    later, _ = _spoken('seven eight nine ten', start=end + 9000)            # 9초 무음(음악) 뒤
+    script = 'one two three four.\nfive six.\nseven eight nine ten.'
+    spoken_at = (end + 7000, end + 8800)                                    # 'five six'를 실제로 말한 때(VAD)
+    placed = align(script, heard + later, speech=[(0, end), spoken_at, (end + 9000, end + 10600)])
+    five = placed.words[placed.line_starts[1]]
+    assert spoken_at[0] <= five.start < spoken_at[1]
+    # VAD가 없어도, 인식은 했지만 글이 틀린 단어가 그 자리에 있으면 그곳에 놓는다
+    misheard = [Word(end + 7000, end + 7800, ' fife'), Word(end + 7900, end + 8800, ' sicks')]
+    placed = align(script, heard + misheard + later)
+    assert end + 6900 <= placed.words[placed.line_starts[1]].start < end + 8800
+
+
+def test_mid_sentence_pauses_keep_the_subtitle_on_screen_but_sentence_ends_do_not():
+    from core.tools.subtitles import Cue, retime
+    rules = rules_for('ko')
+    cues = retime([Cue(0, 2000, ('그래서 우리는 아침 일찍,',)), Cue(3200, 5000, ('역 앞에서 만났다.',)),
+                   Cue(6200, 8000, ('다음 날은 비가 왔다.',))], rules)
+    assert cues[0].end == 3200 - rules.gap_ms          # 쉼표 뒤 1.2초 쉼: 다음 자막까지 이어 보인다
+    assert cues[1].end < 6200 - rules.gap_ms           # 문장이 끝나면 쉼 동안 비운다
+
+
+@pytest.mark.parametrize('seed', [0, 1, 2])
+def test_simulated_recognition_errors_leave_little_speech_without_subtitles(seed):
+    """whisper처럼 틀리는 인식(건너뜀 7%·앞부분만 8%·글자 오류 10%·무음 환각·애드리브)으로 150줄을 맞춘다."""
+    from script_simulation import evaluate
+    uncovered, misplaced, lines = evaluate(seed)
+    assert uncovered < 0.08 and misplaced <= 3
+    heavy, misplaced, _ = evaluate(seed, err=0.35, p_drop=0.15, p_partial=0.15)   # 한자·가나 차이 같은 큰 불일치
+    assert heavy < 0.11 and misplaced <= 5
+
+
+def test_the_service_gives_the_vad_speech_regions_to_the_script_alignment(tmp_path, fake_engine, monkeypatch):
+    from core.tools import script_align
+    from services.tools.subtitles import Options
+    monkeypatch.setenv('FAKE_VAD_LOG', '1')
+    fake_engine.vad_model().parent.mkdir(parents=True, exist_ok=True)
+    fake_engine.vad_model().write_bytes(b'vad')
+    seen = {}
+    real = script_align.align
+
+    def spy(text, words, **options):
+        seen.update(options)
+        return real(text, words, **options)
+
+    monkeypatch.setattr(script_align, 'align', spy)
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\n', encoding='utf-8')
+    _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
+                                         Options(model='large-v3-turbo', script=str(script)))
+    assert seen['speech'] == ((500, 3000), (4000, 6000))           # 가짜 엔진이 알린 VAD 구간(원래 시간)
