@@ -44,17 +44,16 @@ def test_advanced_settings_still_open_before_the_preview(ui):
     assert order.index(w.translation_advanced) < order.index(w.translation_folds.sections['preview'].frame)
 
 
-def test_subtitle_sections_fold_and_the_script_section_starts_folded(ui, fake_engine):
+def test_subtitle_sections_fold_and_are_remembered(ui, fake_engine):
     w, svc, _ = ui
     svc.subtitles.engine = fake_engine
     w.navigate('tools'); w.open_tool('subtitles')
     pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
     folds = w.subtitle_folds
     assert set(folds.sections) == {'source', 'script', 'translate', 'rules', 'hint', 'preview'}
-    assert not folds.sections['script'].expanded                 # 선택 기능은 접어 둔다
+    assert folds.sections['script'].expanded                     # 파일 구획 옆에 나란히 보인다
     folds.sections['translate'].toggle(); pump(w)
-    pump(w, lambda: set(svc.settings.subtitle_preferences().get('folded', '').split(',')) ==
-         {'script', 'translate'}, timeout=4)
+    pump(w, lambda: svc.settings.subtitle_preferences().get('folded') == 'translate', timeout=4)
 
 
 def test_a_chosen_script_reaches_the_subtitle_service(ui, tmp_path, fake_engine):
@@ -158,15 +157,15 @@ def test_without_videos_in_the_script_folder_the_media_folder_is_asked_for(ui, t
     pump(w, lambda: '짝지은 영상·음성 1개 / 1개' in w.subtitle_script_summary.cget('text'), timeout=5)
 
 
-def test_both_ways_are_shown_side_by_side(ui, fake_engine):
+def test_media_and_script_sections_sit_side_by_side_and_stack_when_narrow(ui, fake_engine):
     w, svc, _ = ui
     svc.subtitles.engine = fake_engine
     w.root.wm_geometry('1300x900')
     w.navigate('tools'); w.open_tool('subtitles')
     pump(w, lambda: w.subtitle_model.get() != '', timeout=5)
-    w.subtitle_folds.sections['script'].set_expanded(True); pump(w)
-    body = w.subtitle_folds.sections['script'].body
-    ways = body.pack_slaves()[0]
-    cards = sorted(ways.grid_slaves(), key=lambda card: int(card.grid_info()['column']))
-    assert [card.cget('text') for card in cards] == ['① 대본과 영상이 한 폴더에', '② 영상·음성이 다른 폴더에']
-    assert cards[0].winfo_y() == cards[1].winfo_y() and cards[0].winfo_x() < cards[1].winfo_x()
+    source, script = (w.subtitle_folds.sections[key].frame for key in ('source', 'script'))
+    pump(w, lambda: source.winfo_width() > 1 and source.winfo_y() == script.winfo_y(), timeout=5)
+    assert source.winfo_x() + source.winfo_width() <= script.winfo_x()        # 겹치지 않고 좌우로
+    assert abs(source.winfo_width() - script.winfo_width()) <= 2              # 반씩
+    w.root.wm_geometry('900x900')
+    pump(w, lambda: script.winfo_y() > source.winfo_y() + source.winfo_height() - 2, timeout=5)  # 위아래로
