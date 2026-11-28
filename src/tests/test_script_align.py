@@ -365,21 +365,25 @@ def test_a_missed_line_is_listened_to_again_with_the_script_as_a_hint(tmp_path, 
     script = tmp_path / 'script.txt'
     script.write_text('Hello and welcome to the show.\nThe weather is nice today.\n'
                       'Today we talk about subtitles, and why rules matter.\n', encoding='utf-8')
-    hints = []
+    hints, calls = [], []
     original = SubtitleService._recognize_snippets
 
-    def relisten(self, snippets, languages, model, options, work, report, cancelled):
+    def relisten(self, snippets, languages, model, options, work, report, cancelled, **kwargs):
         if work.name != 'relisten':                      # 일반 재확인은 그대로
-            return original(self, snippets, languages, model, options, work, report, cancelled)
+            return original(self, snippets, languages, model, options, work, report, cancelled, **kwargs)
         hints.append(options.prompt)
+        calls.append((len(snippets), model, kwargs.get('quality')))
         heard = ['Hello and welcome to the show.', 'The weather is nice today.',
                  'Today we talk about subtitles, and why rules matter.']
-        return [_answer(heard if 'weather' in options.prompt else heard[:1] + heard[2:])]
+        return [_answer(heard if 'weather' in options.prompt else heard[:1] + heard[2:]) for _ in snippets]
 
     monkeypatch.setattr(SubtitleService, '_recognize_snippets', relisten)
     result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
                                                   Options(model='large-v3-turbo', script=str(script)))
     assert hints and 'The weather is nice today.' in hints[0]          # 못 찾은 줄의 글을 힌트로
+    # 구간을 묶어 한 번에 듣는다(모델을 구간마다 다시 올리지 않음). 사용자가 고른 모델·품질 그대로.
+    assert len(calls) == 1 and calls[0][0] == len(result.relistened)
+    assert calls[0][1] == 'large-v3-turbo' and calls[0][2] == 'best'
     assert result.relistened and result.relistened[0][2] is True       # 다시 들은 글이 더 가까워 반영
     assert result.script_missed == ()                                  # 이제 모든 줄을 음성에서 찾았다
     cues = {cue.text.replace('\n', ' '): cue for cue in result.cues}
@@ -394,10 +398,11 @@ def test_relistening_that_does_not_help_changes_nothing(tmp_path, fake_engine, m
                       'Today we talk about subtitles, and why rules matter.\n', encoding='utf-8')
     original = SubtitleService._recognize_snippets
 
-    def relisten(self, snippets, languages, model, options, work, report, cancelled):
+    def relisten(self, snippets, languages, model, options, work, report, cancelled, **kwargs):
         if work.name != 'relisten':
-            return original(self, snippets, languages, model, options, work, report, cancelled)
-        return [_answer(['Hello and welcome to the show.', 'Today we talk about subtitles, and why rules matter.'])]
+            return original(self, snippets, languages, model, options, work, report, cancelled, **kwargs)
+        return [_answer(['Hello and welcome to the show.', 'Today we talk about subtitles, and why rules matter.'])
+                for _ in snippets]
 
     monkeypatch.setattr(SubtitleService, '_recognize_snippets', relisten)
     result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
@@ -424,3 +429,16 @@ def test_speech_that_is_not_in_the_script_is_filled_with_the_recognized_text():
     assert [cue.text for cue in cues] == ['one two three four.', 'wow that was really great',
                                           'seven eight nine ten.']
     assert spans == ((adlib[0].start, adlib[-1].end),)
+
+
+def test_many_missed_ranges_are_heard_in_a_few_batches():
+    """구간 수만큼 whisper를 띄우지 않는다: 힌트가 한 프롬프트에 드는 만큼 묶는다."""
+    from core.tools import asr_review
+    from services.tools.subtitles import RELISTEN_PROMPT_CHARS, relisten_batches
+    ranges = [asr_review.Range(i * 10_000, i * 10_000 + 3000, 'script line not heard') for i in range(20)]
+    wanted = [(item, 'line number %d of the script' % i) for i, item in enumerate(ranges)]
+    batches = relisten_batches(ranges, wanted)
+    assert [item for batch in batches for item, _lines in batch] == ranges          # 빠짐·순서 바뀜 없음
+    assert len(batches) <= 2 < len(ranges)                                          # 20곳 → 두 번
+    assert all(len(' '.join(' '.join(lines) for _i, lines in batch)) <= RELISTEN_PROMPT_CHARS for batch in batches)
+    assert [lines for batch in batches for _i, lines in batch][3] == ['line number 3 of the script']

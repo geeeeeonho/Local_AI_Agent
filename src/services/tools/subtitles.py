@@ -211,6 +211,37 @@ def _closeness(lines, segments):
     return sum(block.size for block in blocks if block.size >= 3) / len(want)
 
 
+def relisten_batches(ranges, wanted, limit=None):
+    """다시 들을 구간을 힌트(그 구간의 못 찾은 대본 줄)가 한 프롬프트(limit 글자)에 드는 만큼 묶는다.
+    → [[(구간, 줄들), …], …]. 묶음마다 whisper를 한 번 띄운다(모델을 구간마다 다시 올리지 않게)."""
+    limit = limit or RELISTEN_PROMPT_CHARS
+    batches, current, size = [], [], 0
+    for item in ranges:
+        lines = [text for range_, text in wanted if range_.end > item.start and range_.start < item.end]
+        hint = len(' '.join(lines)) + 1
+        if current and size + hint > limit:
+            batches.append(current)
+            current, size = [], 0
+        current.append((item, lines))
+        size += hint
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _relistened_better(item, lines, answer, rules, segments):
+    """다시 들은 결과가 그 구간을 바꿀 만한가 → 바꿀 인식 구간들(구간 시간으로 옮김) 또는 None.
+    다시 들은 글이 못 찾은 줄을 절반 이상 담고, 원래 인식보다 분명히 가까울 때만 바꾼다
+    (우연히 겹친 몇 글자로 이웃 구간까지 바꾸지 않게)."""
+    if isinstance(answer, Exception) or answer is None:
+        return None
+    _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
+    candidate = asr_review.shift(candidate, item.start)
+    original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
+    score = _closeness(lines, candidate)
+    return candidate if score >= RELISTEN_ACCEPT and score > _closeness(lines, original) + 0.15 else None
+
+
 def _whole_segments(ranges, segments):
     """다시 들을 구간이 인식 구간의 중간을 자르지 않게 걸친 구간 전체로 넓힌다(바꿀 때 구간 밖 낱말을
     잃지 않게). 넓혀서 겹치면 합친다."""
@@ -704,10 +735,13 @@ class SubtitleService:
             source = wave.open(str(audio), 'rb')
         except (wave.Error, EOFError, OSError):
             return segments, ()
-        installed = self.engine.status().models
-        model = 'large-v3' if options.quality == 'best' and 'large-v3' in installed else options.model
+        # 다시 듣기는 사용자가 고른 모델·품질 그대로(더 큰 모델은 느리고, 정확도는 대본 힌트가 맡는다).
+        model = options.model
         chosen = language_code(options.language)
         language = chosen if chosen != 'auto' else speech.whisper_code(code)
+        # 구간마다 whisper를 따로 띄우면 모델을 매번 다시 올린다. 힌트가 한 프롬프트에 드는 만큼 묶어
+        # 한 번에 듣는다(보통 한두 번).
+        batches = relisten_batches(ranges, wanted)
         folder = work / 'relisten'
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True, exist_ok=True)
@@ -717,35 +751,27 @@ class SubtitleService:
                 params = source.getparams()
                 if params.sampwidth != 2:
                     return segments, ()
-                for index, item in enumerate(ranges):
+                for number, batch in enumerate(batches):
                     if cancelled():
                         raise InterruptedError('Cancelled')
-                    lines = [text for range_, text in wanted if range_.end > item.start and range_.start < item.end]
-                    hint = ' '.join(lines)[:RELISTEN_PROMPT_CHARS]
-                    snippet = _cut(source, params, item, folder / ('%d.wav' % index))
-                    answer = self._recognize_snippets([snippet], [language], model,
-                                                      replace(options, prompt=(options.prompt + ' ' + hint).strip()),
-                                                      folder, report, cancelled)[0]
-                    if isinstance(answer, Exception):
-                        done.append((item.start, item.end, False))
-                        continue
-                    _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
-                    candidate = asr_review.shift(candidate, item.start)
-                    original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
-                    # 다시 들은 글이 못 찾은 줄을 절반 이상 담고, 원래 인식보다 분명히 가까울 때만 바꾼다
-                    # (우연히 겹친 몇 글자로 이웃 구간까지 바꾸지 않게).
-                    score = _closeness(lines, candidate)
-                    better = score >= RELISTEN_ACCEPT and score > _closeness(lines, original) + 0.15
-                    if better:
-                        segments = asr_review.replace_range(segments, item, candidate)
-                    done.append((item.start, item.end, better))
+                    hint = ' '.join(' '.join(lines) for _item, lines in batch)[:RELISTEN_PROMPT_CHARS]
+                    snippets = [_cut(source, params, item, folder / ('%d-%d.wav' % (number, index)))
+                                for index, (item, _lines) in enumerate(batch)]
+                    answers = self._recognize_snippets(snippets, [language] * len(snippets), model,
+                                                       replace(options, prompt=(options.prompt + ' ' + hint).strip()),
+                                                       folder, report, cancelled, quality=options.quality)
+                    for (item, lines), answer in zip(batch, answers):
+                        candidate = _relistened_better(item, lines, answer, rules, segments)
+                        if candidate is not None:
+                            segments = asr_review.replace_range(segments, item, candidate)
+                        done.append((item.start, item.end, candidate is not None))
         finally:
             shutil.rmtree(folder, ignore_errors=True)
         cache.write_text(json.dumps({'segments': [_segment_dict(item) for item in segments], 'ranges': done},
                                     ensure_ascii=False), encoding='utf-8')
         return segments, tuple(done)
 
-    def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled):
+    def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled, quality='best'):
         """재인식 구간들을 언어별로 묶어 whisper-cli 한 번에 인식한다(모델을 구간마다 다시 올리지 않는다).
         묶음이 실패하면 그 묶음만 구간별로 다시 시도해, 한 구간의 문제가 다른 구간을 막지 않게 한다.
         구간 순서대로 Transcript 또는 그 구간의 예외."""
@@ -762,7 +788,7 @@ class SubtitleService:
                 report('review', (done + fraction * len(indexes)) / max(1, len(snippets)),
                        '%d/%d' % (min(len(snippets), done + 1 + int(fraction * len(indexes))), len(snippets)))
             return self.engine.transcribe_many([snippets[index] for index in indexes], model, work=work,
-                                               language=language, quality='best', vad=False,
+                                               language=language, quality=quality, vad=False,
                                                prompt=options.prompt, gpu=options.gpu, progress=progress,
                                                cancelled=cancelled)
         for language, indexes in groups.items():
