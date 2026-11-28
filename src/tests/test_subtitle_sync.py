@@ -110,3 +110,24 @@ def test_review_only_needs_no_media_and_nothing_is_written_when_nothing_changes(
     bad.write_text(to_srt([Cue(0, 1200, ('So we went',)), Cue(1300, 2600, ('to the market.',))]), encoding='utf-8')
     result = service.resync_file(bad, sync=False)
     assert result.changed and parse(bad.read_text(encoding='utf-8-sig'))[0].text == 'So we went to the market.'
+
+
+def test_cues_over_a_long_silence_stay_put_and_the_rest_is_unaffected():
+    truth, speech, subtitle = _talk(seed=4)
+    cues = subtitle(shift=2000)
+    cut = truth[200][0]
+    quiet = [span for span in speech if not cut <= span[0] <= cut + 600_000]     # 10분 동안 말소리 없음(음악)
+    result = resync(cues, quiet)
+    inside = [(a, b) for a, b in zip(cues, result.cues) if cut <= a.start + 2000 <= cut + 600_000]
+    assert inside and all(abs(b.start - (a.start + 2000)) <= 1000 for a, b in inside)   # 끌려가지 않는다
+    assert all(a.end <= b.start + 300 for a, b in zip(result.cues, result.cues[1:]))      # 순서가 꼬이지 않는다
+    errors = _errors([c for c in result.cues if c.start > cut + 650_000], truth)
+    assert errors[len(errors) // 2] <= 100
+
+
+@pytest.mark.parametrize('late', [8000, 30000])
+def test_a_later_part_that_is_late_is_pulled_back(late):
+    truth, speech, subtitle = _talk(seed=5)
+    result = resync(subtitle(shift=1000, split_at=200, split_shift=-late, drop=0.1), speech)
+    errors = _errors(result.cues, truth)
+    assert len(result.splits) == 1 and errors[int(len(errors) * 0.95)] <= 200

@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from difflib import SequenceMatcher
+from difflib import Match, SequenceMatcher
 
 from core.tools import subtitles
 from core.tools.subtitles import Word
@@ -29,6 +29,8 @@ WINDOW_EXTRA = 400
 WIDE_FACTOR = 20           # 가까운 곳에서 못 찾았을 때 한 번 더 볼 넓이
 WIDE_EXTRA = 4000
 WIDE_BLOCK = 4
+FAR_BLOCK = 6              # 남은 음성 전체를 훑을 때 증거로 쓰는 조각 길이
+FAR_ACCEPT = 0.4
 JUMP_BLOCK = 4             # 크게 건너뛴 자리에서 이보다 짧게 맞은 조각은 우연으로 본다
 JUMP_SLACK = 12
 MIN_BLOCK = 2              # 이보다 짧게 맞은 조각은 우연으로 보고 쓰지 않는다
@@ -151,7 +153,21 @@ def _blocks(text, keys, position):
         if sum(block.size for block in blocks) >= len(text) * ACCEPT:
             return blocks
         if len(window) < len(text) * factor + extra:
-            break                        # 이미 끝까지 봤다
+            return []                    # 이미 끝까지 봤다: 이 묶음은 음성에 없다
+    # 넓게 봐도 없으면 남은 음성 전체를 구간별로 훑는다(대본에 없는 말이 30분 넘게 이어진 뒤에도 다시
+    # 찾도록). 멀리서 찾는 만큼 긴 조각(FAR_BLOCK 글자 이상)이 FAR_ACCEPT 넘게 맞아야 쓴다 — 우연히 겹친
+    # 몇 글자로 앞을 건너뛰면 그 뒤 대본 전체가 밀린다.
+    span = len(text) * WIDE_FACTOR + WIDE_EXTRA
+    step = span // 2
+    for offset in range(step, max(step, len(keys) - position), step):
+        window = keys[position + offset:position + offset + span]
+        if len(window) < len(text):
+            break
+        blocks = _plausible(block for block in
+                            SequenceMatcher(None, text, window, autojunk=False).get_matching_blocks()
+                            if block.size >= FAR_BLOCK)
+        if sum(block.size for block in blocks) >= len(text) * FAR_ACCEPT:
+            return [Match(block.a, block.b + offset, block.size) for block in blocks]
     return []                            # 이 묶음은 음성에 없다(우연히 겹친 두세 글자로 건너뛰지 않는다)
 
 

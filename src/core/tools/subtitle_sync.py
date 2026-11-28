@@ -26,6 +26,8 @@ SEARCH_MS = 120_000            # 전체 밀림을 찾는 범위(앞뒤)
 COARSE_MS = 1000               # 넓게 찾을 때의 칸
 SPLIT_SEARCH_MS = 60_000       # 중간 밀림은 전체 밀림에서 이만큼 안에서 찾는다
 SPLIT_PENALTY = 0.6            # 중간에 밀림을 바꿀 때의 벌점(큐 하나가 완전히 겹칠 때 1)
+DRIFT = 0.3                    # 전체 밀림에서 SPLIT_SEARCH_MS만큼 떨어질 때 큐마다 빼는 이득
+ORDER_SLACK_MS = 300           # 순서를 지킬 때 허용하는 겹침(원래 자막의 작은 겹침)
 SPEEDS = (1.0, 25 / 23.976, 23.976 / 25, 24 / 25, 25 / 24, 23.976 / 24, 24 / 23.976,
           30 / 25, 25 / 30, 29.97 / 25, 25 / 29.97, 30 / 23.976, 23.976 / 30)
 SPEED_GAIN = 0.03              # 속도를 바꾸려면 겹침이 이만큼(비율) 더 좋아야 한다
@@ -93,26 +95,41 @@ def _best_offset(cues, prefix, speed, center=0):
 
 
 def _piecewise(cues, prefix, speed, base):
-    """큐마다 밀림(동적 계획법). 바꿀 때마다 SPLIT_PENALTY. → 큐마다 밀림 ms."""
+    """큐마다 밀림(동적 계획법). 바꿀 때마다 SPLIT_PENALTY. → 큐마다 밀림 ms.
+    자막 순서는 뒤바뀌지 않는다: 밀림을 앞으로 당길 때는 앞 큐와의 틈(+약간)만큼만 당길 수 있다.
+    그렇지 않으면 말소리가 없는 구간(음악·긴 무음)의 가장자리 큐들이 앞뒤 말소리(이미 다른 큐가 덮은)에
+    끌려가 순서가 꼬였다."""
     offsets = list(range(base - SPLIT_SEARCH_MS, base + SPLIT_SEARCH_MS + 1, STEP_MS))
-    lengths = [max(1, (int(c.end * speed) - int(c.start * speed)) // STEP_MS) for c in cues]
-    score = [0.0] * len(offsets)
+    size = len(offsets)
+    score = [0.0] * size
     back = []
-    for cue, length in zip(cues, lengths):
+    previous_end = None
+    for cue in cues:
         start, end = int(cue.start * speed), int(cue.end * speed)
-        gain = [_overlap(prefix, start + o, end + o) / length for o in offsets]
-        top = max(range(len(offsets)), key=score.__getitem__)
-        jump = score[top] - SPLIT_PENALTY
-        choice = []
-        new = []
-        for index, value in enumerate(score):
-            if jump > value:
-                new.append(jump + gain[index]); choice.append(top)
+        length = max(1, (end - start) // STEP_MS)
+        # 겹침 이득에서 전체 밀림에서 멀어진 만큼 조금 뺀다(증거가 없는 곳은 전체 밀림으로 돌아오게).
+        gain = [_overlap(prefix, start + o, end + o) / length - DRIFT * abs(o - base) / SPLIT_SEARCH_MS
+                for o in offsets]
+        # 앞 큐 밀림 j에서 이번 밀림 k로: offsets[k] >= offsets[j] - (틈 + 여유) → j <= k + reach
+        reach = size if previous_end is None else max(0, (start - previous_end + ORDER_SLACK_MS) // STEP_MS)
+        best_value, best_index = [0.0] * size, [0] * size
+        top_value, top_index = float('-inf'), 0
+        for j in range(size):
+            if score[j] > top_value:
+                top_value, top_index = score[j], j
+            best_value[j], best_index[j] = top_value, top_index
+        new, choice = [0.0] * size, [0] * size
+        for k in range(size):
+            limit = min(size - 1, k + reach)
+            jump = best_value[limit] - SPLIT_PENALTY
+            if jump > score[k]:
+                new[k], choice[k] = jump + gain[k], best_index[limit]
             else:
-                new.append(value + gain[index]); choice.append(index)
+                new[k], choice[k] = score[k] + gain[k], k
         score = new
         back.append(choice)
-    index = max(range(len(offsets)), key=score.__getitem__)
+        previous_end = end
+    index = max(range(size), key=score.__getitem__)
     path = []
     for choice in reversed(back):
         path.append(offsets[index])

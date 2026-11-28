@@ -416,11 +416,23 @@ def clean(segments, *, keep_sounds=False):
     return result
 
 
+MAX_WORD_MS = 2500         # 단어 하나가 이보다(또는 글자당 400ms보다) 길면 시각이 깨진 것으로 본다
+
+
 def words_of(segments):
-    """정리된 구간들의 단어를 시간 순서로 이어 붙인다."""
+    """정리된 구간들의 단어를 시간 순서로 이어 붙인다.
+    겹치면 뒤 단어를 앞 단어 끝으로 미는데, 끝 시각이 깨진 단어(수 분짜리) 하나가 그 뒤 모든 단어를
+    밀지 않게 단어 길이를 먼저 그럴듯한 길이로 자른다."""
     words = []
     for segment in segments:
-        for word in segment.words:
+        for index, word in enumerate(segment.words):
+            longest = max(MAX_WORD_MS, len(word.text.strip()) * 400)
+            following = segment.words[index + 1].start if index + 1 < len(segment.words) else None
+            end = min(word.end, word.start + longest)
+            if following is not None and word.start < following < end:
+                end = following                 # 같은 구간의 다음 단어 앞에서 끝난다
+            if end != word.end:
+                word = Word(word.start, max(end, word.start + 1), word.text, word.prob)
             if words and word.start < words[-1].end:
                 word = Word(max(word.start, words[-1].end), max(word.end, words[-1].end + 1),
                             word.text, word.prob)
