@@ -241,3 +241,12 @@ def test_names_already_in_the_target_language_or_untranslatable_stay(tmp_path, f
     assert translator.asked == ['clip.wav']              # 이미 한국어인 이름은 묻지도 않는다
     assert first.renamed_from is None and second.renamed_from is None
     assert korean.exists() and code.exists() and (tmp_path / 'clip.srt').exists()
+
+
+def test_a_subtitle_next_to_its_video_is_not_taken_for_a_script(tmp_path):
+    from services.tools.subtitles import match_scripts
+    (tmp_path / 'a.wav').write_bytes(b''); (tmp_path / 'b.wav').write_bytes(b'')
+    (tmp_path / 'a.srt').write_text('x', encoding='utf-8')               # a의 기존 자막
+    (tmp_path / 'b.srt').write_text('x', encoding='utf-8'); (tmp_path / 'b.txt').write_text('x', encoding='utf-8')
+    found = match_scripts([tmp_path / 'a.wav', tmp_path / 'b.wav'], tmp_path, tmp_path)
+    assert found == {tmp_path / 'a.wav': None, tmp_path / 'b.wav': tmp_path / 'b.txt'}

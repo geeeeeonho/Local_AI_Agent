@@ -212,13 +212,15 @@ class FoldSection:
     내용은 body에 넣는다. 접으면 body만 pack_forget으로 숨기므로 입력값·변수·바인딩은 그대로다.
     단추는 키보드로도 누를 수 있다(Tab → Space).
     """
-    def __init__(self, parent, title, *, key='', expanded=True, padding=12, on_change=None, pady=(0, 8)):
+    def __init__(self, parent, title, *, key='', expanded=True, padding=12, on_change=None, pady=(0, 8),
+                 place=True):
         self.title, self.key = title, key
         self._on_change = on_change
         self._pad = padding
         self.button = ttk.Button(parent, style='Fold.TButton', command=self.toggle, takefocus=True)
         self.frame = ttk.LabelFrame(parent, labelwidget=self.button, padding=self._padding(True))
-        self.frame.pack(fill='x', pady=pady)
+        if place:                   # place=False: 부르는 쪽이 배치한다(SideBySide 등)
+            self.frame.pack(fill='x', pady=pady)
         self.body = ttk.Frame(self.frame)
         # 내용을 모두 빼면 Tk는 틀의 크기를 다시 계산하지 않는다(펼쳤을 때 크기로 남거나, 처음부터
         # 접힌 틀은 제목까지 잘린다). 접힌 동안에는 1픽셀짜리 자리 표시를 넣어 크기를 다시 맞추게 한다.
@@ -278,6 +280,51 @@ class FoldGroup:
         for section in self.sections.values():
             section.set_expanded(expanded, notify=False)
         self._changed(None)
+
+
+class SideBySide:
+    """구획 두 개를 좌우로 반씩 나란히. 폭이 min_width보다 좁아지면 위아래로 쌓는다(위젯은 다시 만들지 않는다).
+
+    grid로 나란히 두면, 줄바꿈 글(wrap_to_parent)이 받은 폭에 맞춰 원하는 폭이 커지고 그 폭이 다시
+    칸을 넓혀 서로 겹쳤다. 넓을 때는 폭을 정확히 반으로 정해 두고(place) 높이만 더 큰 쪽에 맞춘다.
+    """
+    def __init__(self, parent, *, min_width=900, gap=12, pady=(0, 8)):
+        self.frame = ttk.Frame(parent, height=1)
+        self.frame.pack(fill='x', pady=pady)
+        self.frame.columnconfigure(0, weight=1)
+        self.min_width, self.gap = min_width, gap
+        self.items, self.wide = [], None
+        self.frame.bind('<Configure>', lambda event: self.layout(event.width), add='+')
+
+    def add(self, widget):
+        self.items.append(widget)
+        widget.bind('<Configure>', lambda _event: self._fit_height(), add='+')
+        self.layout(self.frame.winfo_width(), force=True)
+        return widget
+
+    def _fit_height(self):
+        if self.wide:
+            height = max((widget.winfo_reqheight() for widget in self.items), default=1)
+            if int(self.frame.cget('height') or 0) != height:
+                self.frame.configure(height=height)
+
+    def layout(self, width, force=False):
+        wide = width >= self.min_width
+        if wide == self.wide and not force:
+            return
+        self.wide = wide
+        half = self.gap // 2
+        for index, widget in enumerate(self.items):
+            if wide:
+                widget.grid_forget()
+                widget.place(in_=self.frame, relx=0.5 * index, x=half if index else 0, y=0,
+                             relwidth=1.0 / len(self.items), width=-half)
+            else:
+                widget.place_forget()
+                widget.grid(row=index, column=0, sticky='new',
+                            pady=(0, self.gap) if index + 1 < len(self.items) else 0)
+        if wide:
+            self._fit_height()
 
 
 class ScrollArea:

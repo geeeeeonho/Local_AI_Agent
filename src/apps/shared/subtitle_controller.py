@@ -247,6 +247,63 @@ class SubtitleController:
         if getattr(self, '_subtitle_prefs_loaded', False):
             self.schedule_subtitle_save()
 
+    def choose_subtitle_script_home(self):
+        """① 대본과 영상이 한 폴더에: 대본 폴더 안에 영상·음성이 있으면 그것들로 바로 준비한다.
+        없으면 짝이 되는 영상·음성이 있는 폴더를 따로 묻는다(②)."""
+        value = filedialog.askdirectory(parent=self.root, title='대본과 영상·음성이 함께 있는 폴더',
+                                        mustexist=True, initialdir=self._subtitle_start_dir())
+        if not value:
+            return
+        self._remember_subtitle_dir(Path(value).parent)
+        self.subtitle_script.set(value)
+        from services.tools.subtitles import scan
+
+        def found(media):
+            if media:
+                self.subtitle_path.set(value)
+                self._subtitle_files = list(media)
+                self.analyze_subtitle_input(keep=True)
+                return
+            self.subtitle_say('Working', '대본 폴더에 영상·음성 파일이 없습니다. 짝이 되는 영상·음성이 있는 폴더를 고르세요.')
+            self.choose_subtitle_folder()
+
+        self.run_task('tools.subtitles.inspect', lambda: scan(Path(value)), found, mutate=False, announce=False,
+                      error=lambda exc: self.subtitle_say('Failed', friendly(exc)))
+
+    def update_subtitle_script_summary(self):
+        """대본 폴더와 고른 영상·음성이 몇 개 짝지어지는지 미리 보여 준다(시작 전에 확인)."""
+        label = getattr(self, 'subtitle_script_summary', None)
+        if label is None:
+            return
+        script = self.subtitle_script.get().strip()
+        files = list(getattr(self, '_subtitle_files', []))
+        text, warn = '', False
+        if script and Path(script).is_dir():
+            if not files:
+                text = '대본 폴더를 골랐습니다. 짝이 되는 영상·음성(파일이나 폴더)을 고르세요.'
+            else:
+                key = (script, tuple(files))
+                if getattr(self, '_subtitle_pairs_key', None) != key:
+                    from services.tools.subtitles import match_scripts
+                    root = Path(self.subtitle_path.get().strip())
+                    try:
+                        pairs = match_scripts(files, script, root if root.is_dir() else None)
+                    except OSError:
+                        pairs = {}
+                    self._subtitle_pairs_key, self._subtitle_pairs = key, pairs
+                matched = sum(1 for value in self._subtitle_pairs.values() if value)
+                warn = not matched
+                text = ('대본과 짝지은 영상·음성 %d개 / %d개' % (matched, len(files))
+                        + (' · 대본이 없는 %d개는 건너뜁니다' % (len(files) - matched) if matched < len(files) else '')
+                        + ('' if matched else ' · 이름이 같은 대본이 없습니다. 대본 폴더나 영상·음성 폴더를 확인하세요.'))
+        elif script and Path(script).is_file():
+            warn = len(files) > 1
+            text = ('대본 파일 하나는 영상·음성 하나에만 씁니다. 여러 파일은 대본 폴더를 고르세요.' if warn else
+                    '대본 파일 하나: 영상·음성 하나에만 씁니다.')
+        elif script:
+            text, warn = '대본 파일이나 폴더를 찾지 못했습니다.', True
+        label.configure(text=text, style='Alert.TLabel' if warn else 'TLabel')
+
     def choose_subtitle_script_folder(self):
         value = filedialog.askdirectory(parent=self.root, title='대본 폴더(영상·음성과 같은 이름의 대본)',
                                         mustexist=True, initialdir=self._subtitle_start_dir())
@@ -432,6 +489,7 @@ class SubtitleController:
                 ' · 영상·음성 이름도 번역(이미 번역 언어면 그대로)' if translate and self.subtitle_translate_name.get()
                 else '')
         self.subtitle_destination.configure(text=text)
+        self.update_subtitle_script_summary()
         if not self.runner.busy('tools.subtitles'):
             ready = bool(files and self.subtitle_model.get() and getattr(self, '_speech_engine', None)
                          and self._speech_engine.builds and not self._subtitle_management_busy()
