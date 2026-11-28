@@ -33,7 +33,7 @@ class Model:
             self.name_requests.append(data)
             rows = [{'id': item['id'],
                      'name': 'x' if self.broken else _rename(item['name'], self.names)}
-                    for item in data['items']]
+                    for item in data['files']]
             return json.dumps({'names': rows}, ensure_ascii=False)
         if not isinstance(data, dict) or 'items' not in data:
             return '{}'
@@ -68,9 +68,9 @@ def test_codes_and_numbers_in_a_name_are_kept_and_bad_answers_are_dropped():
     assert names['v2_01'] is None                      # 코드·번호뿐인 이름은 묻지도 않는다
     assert names['Items_港の収集品'].endswith('항구의 수집품')
     sent = model.name_requests[0]
-    assert len(sent['items']) == 2                     # 한 요청에 묶어 보낸다
+    assert len(sent['files']) == 2                     # 한 요청에 묶어 보낸다
     assert sent['terminology'] == {'港の収集品': '항구의 수집품'}
-    assert 'Map014' not in json.dumps(sent['items'], ensure_ascii=False)   # 코드는 보호 토큰으로 보낸다
+    assert 'Map014' not in json.dumps(sent['files'], ensure_ascii=False)   # 코드는 보호 토큰으로 보낸다
     # 보호 토큰을 잃은 답은 쓰지 않는다
     assert translate_file_names(Model(broken=True), 'm:1', ['Map014_霧の旧市街'], '한국어') == {
         'Map014_霧の旧市街': None}
