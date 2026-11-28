@@ -303,6 +303,43 @@ class SubtitleController:
         elif script:
             text, warn = '대본 파일이나 폴더를 찾지 못했습니다.', True
         label.configure(text=text, style='Alert.TLabel' if warn else 'TLabel')
+        self._show_subtitle_script_mode(script)
+
+    def subtitle_script_mode(self, script=None):
+        """지금 쓰는 대본 맞추기 방식: 'home'(① 대본과 영상이 한 폴더), 'split'(② 대본 폴더와 영상·음성 폴더를
+        따로), 'file'(대본 파일 하나), ''(대본 없음). 고른 단추가 아니라 실제 경로로 정한다(직접 입력해도 맞다)."""
+        script = (self.subtitle_script.get() if script is None else script).strip()
+        if not script:
+            return ''
+        path = Path(script)
+        if path.is_file():
+            return 'file'
+        if not path.is_dir():
+            return ''
+        media = self.subtitle_path.get().strip()
+        try:
+            same = bool(media) and Path(media).resolve() == path.resolve()
+        except OSError:
+            same = False
+        return 'home' if same else 'split'
+
+    _SCRIPT_MODES = {'home': '선택한 방식: ① 한 폴더 — 대본과 영상이 함께',
+                     'split': '선택한 방식: ② 따로 — 대본 폴더 + 왼쪽의 영상·음성',
+                     'file': '선택한 방식: 대본 파일 하나 — 영상·음성 하나에'}
+
+    def _show_subtitle_script_mode(self, script):
+        buttons = getattr(self, 'subtitle_mode_buttons', None)
+        if not buttons:
+            return
+        mode = self.subtitle_script_mode(script)
+        for key, button in buttons.items():
+            if key == 'file':
+                button.configure(style='Accent.TButton' if mode == 'file' else 'TButton')
+            else:
+                button.configure(style='Mode.Selected.TButton' if mode == key else 'Mode.TButton')
+        self.subtitle_mode_label.configure(
+            text=self._SCRIPT_MODES.get(mode, '대본을 쓰지 않습니다(음성 인식 글로 자막을 만듭니다).'),
+            style='Mode.TLabel' if mode else 'Muted.TLabel')
 
     def choose_subtitle_script_folder(self):
         value = filedialog.askdirectory(parent=self.root, title='대본 폴더(영상·음성과 같은 이름의 대본)',
