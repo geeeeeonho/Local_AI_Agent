@@ -52,6 +52,9 @@ class TranslationController:
                 self.translation_glossary_text.delete('1.0','end')
                 self.translation_glossary_text.insert('1.0',prefs['glossary'])
             self.toggle_translation_advanced(prefs.get('advanced',False),save=False)
+            if 'folded' in prefs:
+                self.translation_folds.apply(prefs['folded'])
+                self._translation_rebind()
             self._translation_loading=False
             # 이후 바꾸는 값은 바로(0.8초 모아서) 저장한다: 모델·언어·고급 설정·용어집
             for variable in self._translation_fields().values():
@@ -77,6 +80,7 @@ class TranslationController:
         if saved and is_media(self.translation_path.get()):
             values['kind'],values['style']=saved
         values['advanced']=bool(getattr(self,'_translation_advanced_open',False))
+        values['folded']=self.translation_folds.folded_text()
         values['last_dir']=getattr(self,'_translation_last_dir','') or ''
         values['glossary']=self.translation_glossary_text.get('1.0','end').strip()[:20000]
         if not values['model']:
@@ -84,6 +88,17 @@ class TranslationController:
         self.runner.submit('tools.prefs.save',
             lambda:self.services.settings.set_translation_preferences(values),
             lambda _:None,lambda exc:self.log('번역 기본값 저장 실패: '+str(exc),level='error'),mutate=False)
+
+    def _translation_rebind(self):
+        scroller=self.page_scrolls.get('tools.translate')
+        if scroller is not None:
+            scroller.bind_content()
+
+    def translation_folds_changed(self):
+        """구획을 접거나 펼쳤다: 스크롤 영역을 다시 맞추고, 접은 상태를 기억한다."""
+        self._translation_rebind()
+        if getattr(self,'_translation_prefs_loaded',False):
+            self.schedule_translation_save()
 
     def toggle_translation_advanced(self,show=None,*,save=True):
         visible=bool(getattr(self,'_translation_advanced_open',False))

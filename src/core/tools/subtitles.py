@@ -432,8 +432,9 @@ def _confidence(words):
     return sum(word.prob for word in words) / len(words) if words else 1.0
 
 
-def _merge_short(groups, rules):
-    """최소 표시 시간을 채울 수 없는 짧은 큐(다음 큐가 바로 이어짐)는 앞이나 뒤 큐에 합친다."""
+def _merge_short(groups, rules, starts=frozenset()):
+    """최소 표시 시간을 채울 수 없는 짧은 큐(다음 큐가 바로 이어짐)는 앞이나 뒤 큐에 합친다.
+    starts: 반드시 큐 첫머리여야 하는 단어(id) — 그 앞에서는 합치지 않는다(대본 줄 경계 등)."""
     out = []
     for index, group in enumerate(groups):
         nxt = groups[index + 1] if index + 1 < len(groups) else None
@@ -442,10 +443,10 @@ def _merge_short(groups, rules):
             out.append(group)
             continue
         previous = out[-1] if out else None
-        if previous and group[0].start - previous[-1].end < rules.pause_ms \
+        if previous and id(group[0]) not in starts and group[0].start - previous[-1].end < rules.pause_ms \
                 and fits(previous + group, rules) and group[-1].end - previous[0].start <= rules.max_ms:
             out[-1] = previous + group
-        elif nxt and nxt[0].start - group[-1].end < rules.pause_ms \
+        elif nxt and id(nxt[0]) not in starts and nxt[0].start - group[-1].end < rules.pause_ms \
                 and fits(group + nxt, rules) and nxt[-1].end - group[0].start <= rules.max_ms:
             groups[index + 1] = group + nxt
         else:
@@ -456,7 +457,9 @@ def _merge_short(groups, rules):
 def build_cues(words, rules, *, boundaries=()):
     """인식된 단어를 규칙에 맞는 자막 큐로 만든다(줄 나눔·표시 시간 포함)."""
     cues = []
-    for group in _merge_short(group_words(words, rules, boundaries=boundaries), rules):
+    kept = [word for word in words if word.text.strip()]       # group_words와 같은 위치 기준
+    starts = frozenset(id(kept[index]) for index in boundaries if 0 <= index < len(kept))
+    for group in _merge_short(group_words(kept, rules, boundaries=boundaries), rules, starts):
         text = _join(group)
         if not text:
             continue

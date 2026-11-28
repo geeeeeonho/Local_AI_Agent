@@ -79,7 +79,7 @@ class SettingsStore:
     TRANSLATION_KEYS = {'target': str, 'model': str, 'source': str, 'kind': str, 'style': str,
                         'shared': bool, 'resume': bool, 'keep_failed': bool, 'precise': bool,
                         'stage': bool, 'translate_name': bool, 'advanced': bool, 'last_dir': str,
-                        'glossary': str}
+                        'glossary': str, 'folded': str}
     # 문자열 길이 상한(기본 300자). 폴더 경로와 용어집은 더 길 수 있다.
     TRANSLATION_LIMITS = {'last_dir': 2000, 'glossary': 20000}
 
@@ -87,7 +87,7 @@ class SettingsStore:
     SUBTITLE_KEYS = {'model': str, 'language': str, 'format': str, 'quality': str, 'vad': bool,
                      'keep_sounds': bool, 'gpu': bool, 'sensitive_vad': bool, 'max_chars': int, 'max_lines': int,
                      'prompt': str, 'translate': bool, 'target': str, 'llm': str, 'style': str, 'main_name': bool,
-                     'advanced': bool, 'last_dir': str}
+                     'advanced': bool, 'last_dir': str, 'folded': str}
     SUBTITLE_LIMITS = {'last_dir': 2000, 'prompt': 2000}
 
     @staticmethod

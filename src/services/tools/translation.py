@@ -966,20 +966,32 @@ class FolderResult:
     memory: object = None       # 폴더 맥락 공유 시 모든 파일이 함께 쓴 폴더 메모리
 
 
+def language_suffix(name):
+    """언어 이름(영어) → 파일 이름에 붙일 언어 코드. 모르면 'og'(원본)."""
+    found = LANGUAGE_BY_NAME.get(name or '')
+    return found.code if found else 'og'
+
+
+def set_aside(path, code):
+    """기존 파일을 '이름.<code>.확장자'로 이름을 바꿔 보관한다(이미 있으면 '이름.<code> (2).확장자' …).
+    보관한 경로를 돌려준다. 새 결과가 원래 이름을 쓰게 할 때 쓴다."""
+    path = Path(path)
+    kept = path.with_name('%s.%s%s' % (path.stem, code, path.suffix))
+    number = 2
+    while kept.exists() and number < 1000:
+        kept = path.with_name('%s.%s (%d)%s' % (path.stem, code, number, path.suffix))
+        number += 1
+    os.replace(path, kept)
+    return kept
+
+
 def place_as_original(result, original):
     """번역본을 원본 이름에 둔다: 원본은 '이름.<원문 언어>.확장자'(모르면 '이름.og.확장자')로 이름을 바꿔
     보관하고, 번역본을 원본 이름으로 옮긴다. 바꾼 결과(Result, output=원본 이름)와 보관한 원본 경로를 돌려준다."""
     original, translated = Path(original), Path(result.output)
     state = result.revision or {}
     name = getattr(state.get('memory'), 'source_language', '') if state else ''
-    found = LANGUAGE_BY_NAME.get(name)
-    code = found.code if found else 'og'
-    kept = original.with_name('%s.%s%s' % (original.stem, code, original.suffix))
-    number = 2
-    while kept.exists() and number < 1000:
-        kept = original.with_name('%s.%s (%d)%s' % (original.stem, code, number, original.suffix))
-        number += 1
-    os.replace(original, kept)
+    kept = set_aside(original, language_suffix(name))
     try:
         os.replace(translated, original)
     except OSError:

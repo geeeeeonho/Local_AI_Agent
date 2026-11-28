@@ -4,6 +4,7 @@
 같은 자막 서비스를 부른다. 두 화면이 서로 다른 규칙을 갖지 않게 하기 위해서다.
 """
 import time
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from tkinter import filedialog
@@ -54,7 +55,8 @@ _REASONS = {'low confidence': '인식 확신도 낮음', 'fast reading speed': '
             'sound description': '소리 표기', 'repeated': '같은 문장 반복(다른 근거와 겹침)',
             'repetition kept': '반복이 있으나 실제 발화일 수 있어 유지', 'high compression ratio': '같은 말이 과하게 반복됨',
             'implausible speech rate': '사람이 낼 수 없는 발화 속도', 'repetition loop': '반복 루프',
-            'language mismatch': '다른 언어로 인식된 듯함', 'possible missing speech': '말소리가 있는데 자막 없음'}
+            'language mismatch': '다른 언어로 인식된 듯함', 'possible missing speech': '말소리가 있는데 자막 없음',
+            'script line not heard': '대본 줄을 음성에서 찾지 못해 시각을 추정함'}
 _WHY = {'recovered missing speech': '누락된 발언을 찾아 넣음', 'clearly higher confidence': '확신도가 명확히 높아 교체',
         'same text': '다시 인식해도 같음', 'not clearly better; kept original': '명확히 낫지 않아 원래 결과 유지',
         'no candidate text': '다시 인식해도 말소리 없음', 'candidate confidence too low': '확신도가 낮아 넣지 않음'}
@@ -71,6 +73,14 @@ def report_text(result):
         ' · 보관한 인식 결과 재사용' if result.reused else
         (' · 인식 %.0f초' % result.seconds if result.seconds else ''))]
     lines += ['저장: ' + str(path) for path in result.outputs + tuple(result.translated_outputs)]
+    if getattr(result, 'script', ''):
+        missed = result.script_missed
+        lines.append('대본: %s · 글은 대본 그대로, 시각은 음성에서%s' % (
+            Path(result.script).name, (' · 음성에서 찾지 못한 대본 줄 %d개(시각 추정): %s' % (
+                len(missed), ', '.join(map(str, missed[:30])) + (' …' if len(missed) > 30 else '')))
+            if missed else ' · 모든 줄을 음성에서 찾음'))
+    for kept in getattr(result, 'set_aside', ()):
+        lines.append('기존 자막은 이름을 바꿔 보관: ' + str(kept))
     if result.translation_skipped:
         lines.append('번역 생략: 음성 언어와 번역 언어가 같습니다.')
     if getattr(result, 'translation_error', ''):
@@ -130,6 +140,9 @@ _FRIENDLY = (
     ('checksum mismatch', '받은 파일의 검증값이 맞지 않아 지웠습니다. 다시 시도하세요.'),
     ('unsupported media', '지원하지 않는 형식입니다.'),
     ('too many media', '폴더의 영상·음성 파일이 너무 많습니다(최대 500개).'),
+    ('script does not match', '대본이 이 파일의 음성과 맞지 않습니다. 음성 언어와 대본 파일을 확인하세요.'),
+    ('script has no lines', '대본에 자막으로 쓸 줄이 없습니다(빈 줄·[지문]만 있음).'),
+    ('one media file at a time', '대본은 영상·음성 파일 하나에만 쓸 수 있습니다.'),
     ('urlopen error', '내려받기 서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요.'),
 )
 
@@ -184,6 +197,9 @@ class SubtitleController:
                 self.subtitle_prompt_text.delete('1.0', 'end')
                 self.subtitle_prompt_text.insert('1.0', prefs['prompt'])
             self.toggle_subtitle_advanced(prefs.get('advanced', False), save=False)
+            if 'folded' in prefs:
+                self.subtitle_folds.apply(prefs['folded'])
+                self._subtitle_rebind()
             self._subtitle_loading = False
             for variable in list(fields.values()) + [self.subtitle_lines, self.subtitle_chars]:
                 variable.trace_add('write', lambda *_: self.schedule_subtitle_save())
@@ -207,8 +223,27 @@ class SubtitleController:
         values['max_chars'] = int(chars) if chars.isdigit() else 0
         values['prompt'] = self.subtitle_prompt_text.get('1.0', 'end').strip()[:2000]
         values['advanced'] = bool(getattr(self, '_subtitle_advanced_open', False))
+        values['folded'] = self.subtitle_folds.folded_text()
         values['last_dir'] = self._subtitle_last.get('last_dir', '')
         return values
+
+    def _subtitle_rebind(self):
+        scroller = self.page_scrolls.get('tools.subtitles')
+        if scroller is not None:
+            scroller.bind_content()
+
+    def subtitle_folds_changed(self):
+        """구획을 접거나 펼쳤다: 스크롤 영역을 다시 맞추고, 접은 상태를 기억한다."""
+        self._subtitle_rebind()
+        if getattr(self, '_subtitle_prefs_loaded', False):
+            self.schedule_subtitle_save()
+
+    def choose_subtitle_script(self):
+        value = filedialog.askopenfilename(parent=self.root, title='시간을 맞출 대본',
+                                           initialdir=self._subtitle_start_dir(),
+                                           filetypes=[('대본', '*.txt *.srt *.vtt *.md'), ('모든 파일', '*.*')])
+        if value:
+            self.subtitle_script.set(value)
 
     def schedule_subtitle_save(self):
         if getattr(self, '_subtitle_loading', False) or self.closing:
@@ -429,6 +464,15 @@ class SubtitleController:
             return
         prefs = self.subtitle_preferences_now()
         options = options_from(prefs, language=self.subtitle_language.get(), model=prefs['model'])
+        script = self.subtitle_script.get().strip()
+        if script:
+            if len(files) > 1:
+                self.subtitle_say('Failed', '대본은 영상·음성 파일 하나에만 쓸 수 있습니다. 파일 하나를 고르거나 대본을 지우세요.')
+                return
+            if not Path(script).is_file():
+                self.subtitle_say('Failed', '대본 파일을 찾지 못했습니다: ' + script)
+                return
+            options = replace(options, script=script)
         translate = None
         if self.subtitle_translate.get():
             if not self.subtitle_llm.get():
