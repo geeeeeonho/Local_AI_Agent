@@ -413,7 +413,7 @@ def test_the_screen_says_whether_other_accounts_share_the_store(ui, monkeypatch)
     assert '이 계정 전용' in w.choice_storage.get()
 
 
-# ── role-based accordion catalogue ─────────────────────────────────────
+# ── role x tier catalogue table ────────────────────────────────────────
 def test_role_groups_contain_three_recommendations_and_optional_choices(ui):
     w, _, _ = ui
     open_models(w)
@@ -425,12 +425,17 @@ def test_role_groups_contain_three_recommendations_and_optional_choices(ui):
               for role in group_catalog(w._catalog)['roles']}
     assert any(optional.values())
 
+    def inside(widget, container):
+        return str(widget).startswith(str(container) + '.')
+
     for name in expected:
         for number in (1,2,3):
-            assert f'role:{name}:tier:{number}' in w.catalog_groups
-            assert '(권장)' in w.catalog_groups[
-                f'role:{name}:tier:{number}'].button.cget('text')
-        # A role whose levels have no alternative gets no empty options fold.
+            cell = w.catalog_groups[f'role:{name}:tier:{number}']
+            # Every tier recommendation is visible in its cell without folding.
+            assert cell.expanded
+            assert any(inside(box, cell.body) for boxes in w.choice_checkbuttons.values()
+                       for box in boxes)
+        # A role whose levels have no alternative gets no empty options row.
         if optional[name]:
             assert f'role:{name}:options' in w.catalog_groups
             assert not w.catalog_groups[f'role:{name}:options'].expanded
@@ -441,38 +446,28 @@ def test_role_groups_contain_three_recommendations_and_optional_choices(ui):
     tags={model['tag'] for model in w._catalog['models']}
     assert set(w.choice_vars) == tags | set(w._catalog['extra_installed'])
 
-
-def test_each_role_and_its_subsections_expand_independently(ui):
+def test_each_role_options_row_opens_independently_and_survives_refresh(ui):
     w, _, _ = ui
     open_models(w)
-    coding=w.catalog_groups['role:coding']
-    uncensored=w.catalog_groups['role:uncensored']
-    options=w.catalog_groups['role:uncensored:options']
+    coding=w.catalog_groups['role:coding:options']
+    uncensored=w.catalog_groups['role:uncensored:options']
     middle=w.catalog_groups['role:uncensored:tier:2']
 
-    assert coding.expanded and uncensored.expanded
-    coding.button.invoke()
-    assert not coding.expanded
-    coding.button.invoke()
-    assert uncensored.expanded and coding.expanded
-    assert not options.expanded and middle.expanded
-    options.button.invoke()
-    middle.button.invoke()
-    assert options.expanded and not middle.expanded
-
+    assert not coding.expanded and not uncensored.expanded
     before=w.selected_tags()
     uncensored.button.invoke()
-    assert not uncensored.expanded
-    assert before == w.selected_tags()
-    uncensored.button.invoke()
-    assert options.expanded and not middle.expanded
+    assert uncensored.expanded and not coding.expanded
+    assert uncensored.body.winfo_manager() == 'grid'
+    coding.button.invoke()
+    coding.button.invoke()
+    assert not coding.expanded and uncensored.expanded
+    assert middle.expanded                       # tier cards never fold
+    assert before == w.selected_tags()            # folding never changes choices
 
     # Refresh retains user-controlled fold state (but still loads the catalog).
     w.build_catalog_rows(w._catalog)
-    assert w.catalog_groups['role:uncensored'].expanded
     assert w.catalog_groups['role:uncensored:options'].expanded
-    assert not w.catalog_groups['role:uncensored:tier:2'].expanded
-
+    assert not w.catalog_groups['role:coding:options'].expanded
 
 def test_uncensored_mid_has_abliterix_recommended_and_trevor_previous_as_options(ui):
     w, _, _ = ui
@@ -555,23 +550,31 @@ def test_shared_models_use_one_checkbox_variable_and_one_install_item(ui):
     assert plan['install'].count(shared) <= 1
 
 
-def test_catalog_has_responsive_four_column_roles(ui):
+def test_catalog_lines_up_each_tier_in_one_column(ui):
     w, _, _ = ui
     open_models(w)
     from apps.shared.models_view import CatalogColumns
+    # The sections below the table keep their responsive columns.
     assert CatalogColumns.columns_for_width(1100) == 4
     assert CatalogColumns.columns_for_width(650) == 2
-    assert CatalogColumns.columns_for_width(820) == 2
     assert CatalogColumns.columns_for_width(200) == 1
-    assert len(w.catalog_columns.slots) >= 5
-    w.catalog_columns.reflow(1100)
-    assert w.catalog_columns.columns == 4
-    roles = [w.catalog_groups['role:' + key].frame.master
-             for key in ('coding', 'agent', 'uncensored', 'office', 'balanced')]
-    assert [int(frame.grid_info()['column']) for frame in roles] == [0, 1, 2, 3, 0]
-    w.catalog_columns.reflow(650)
-    assert [int(frame.grid_info()['column']) for frame in roles] == [0, 1, 0, 1, 0]
-
+    roles = ('coding', 'agent', 'uncensored', 'office', 'balanced')
+    rows = []
+    for number in (1, 2, 3):
+        cells = [w.catalog_groups[f'role:{key}:tier:{number}'].frame for key in roles]
+        # One tier of every role sits in the same grid column.
+        assert {int(cell.grid_info()['column']) for cell in cells} == {number}
+        rows.append([int(cell.grid_info()['row']) for cell in cells])
+    # ...and the three tiers of a role share its row, in role order.
+    assert rows[0] == rows[1] == rows[2] == sorted(rows[0])
+    labels = [w.catalog_groups['role:' + key].frame for key in roles]
+    assert [int(label.grid_info()['column']) for label in labels] == [0] * 5
+    # An options row spans exactly the tier columns, directly under its role.
+    options = w.catalog_groups['role:coding:options']
+    options.set_expanded(True)
+    info = options.body.grid_info()
+    assert (int(info['column']), int(info['columnspan'])) == (1, 3)
+    assert int(info['row']) == rows[0][0] + 1
 
 def test_catalog_state_label_distinguishes_disk_from_choice(ui):
     w, svc, _ = ui
@@ -638,23 +641,21 @@ def test_catalog_preserves_model_notes_when_rendering_compact_cards(ui):
     assert note_model['note'] in notes
 
 
-def test_collapse_all_does_not_collapse_tiers_or_change_selections(ui):
+def test_open_all_options_never_folds_tiers_or_changes_selections(ui):
     w, _, _ = ui
     open_models(w)
     before = w.selected_tags()
     extras = [section for key, section in w.catalog_groups.items()
               if key.startswith('extra:') and key.count(':') == 1]
-    assert extras
-    w.fold_catalog_roles(False)
-    assert not w.catalog_groups['role:coding'].expanded
-    assert all(not section.expanded for section in extras)
-    assert w.catalog_groups['role:coding:tier:2'].expanded
+    options = [section for key, section in w.catalog_groups.items() if key.endswith(':options')]
+    assert extras and options
     w.fold_catalog_roles(True)
-    assert w.catalog_groups['role:coding'].expanded
-    assert all(section.expanded for section in extras)
+    assert all(section.expanded for section in extras + options)
+    assert w.catalog_groups['role:coding:tier:2'].expanded
+    w.fold_catalog_roles(False)
+    assert not any(section.expanded for section in extras + options)
     assert w.catalog_groups['role:coding:tier:2'].expanded
     assert w.selected_tags() == before
-
 
 def test_fold_controls_remain_visible_at_minimum_window_size(ui):
     w, _, _ = ui

@@ -22,7 +22,8 @@ from .translation_controller import TranslationController
 from .subtitle_controller import SubtitleController
 from .speech_models_controller import SpeechModelsController
 from .tools_view import ToolsController
-from .models_view import ModelAccordion, CatalogColumns, model_display_name
+from .models_view import (ModelAccordion, CatalogColumns, CatalogMatrix, MatrixCell, OptionsRow,
+                          model_display_name)
 from .model_groups import group_catalog
 from .widgets import ScrollArea
 
@@ -1174,91 +1175,84 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
             self.catalog_install_count=tk.StringVar(master=self.root,value='')
         ttk.Label(tools,textvariable=self.catalog_install_count,
                   style='Muted.TLabel').pack(side='left',padx=(12,0))
-        self._roles_all_expanded=True
+        self._roles_all_expanded=False
         def toggle_all_roles():
             self._roles_all_expanded=not self._roles_all_expanded
             self.fold_catalog_roles(self._roles_all_expanded)
-            all_roles.configure(text='전체 접기' if self._roles_all_expanded
-                                else '전체 펼치기')
-        all_roles=ttk.Button(tools,text='전체 접기',command=toggle_all_roles)
+            all_roles.configure(text='옵션 모두 접기' if self._roles_all_expanded
+                                else '옵션 모두 펼치기')
+        all_roles=ttk.Button(tools,text='옵션 모두 펼치기',command=toggle_all_roles)
         all_roles.pack(side='right')
-        columns=CatalogColumns(self.choice_body)
-        self.catalog_columns=columns
+        # Roles are rows and 상/중/하 are columns: one tier of every role lines
+        # up under one heading, and every tier card is visible without folding.
+        levels=[tier['level_label'] for tier in (groups['roles'][0]['tiers'] if groups['roles'] else ())]
+        matrix=CatalogMatrix(self.choice_body,[label+' 단계' for label in levels] or ['상 단계','중 단계','하 단계'])
+        self.catalog_matrix=matrix
+        states=self._catalog_states()
 
         for role in groups['roles']:
             key='role:'+role['key']
             installed_count=len({entry['tag'] for tier in role['tiers']
                                  for entry in ([tier['recommended']] + tier['options'])
                                  if entry is not None and entry['installed']})
-            # Full names remain in the explanatory body; short card headings
-            # are essential so four columns fit even on a laptop.
             short_title=role['title'].split(' (',1)[0]
-            section=self.add_catalog_group(
-                columns.add(),key,
-                f"{short_title} · 설치 {installed_count}개",
-                expanded=True)
-            if role['desc']:
-                desc=ttk.Label(section.body,text=role['desc'],
-                               style='Muted.TLabel',wraplength=175,justify='left')
-                desc.pack(anchor='w',fill='x',pady=(4,6))
-                wrap_to_parent(desc,inset=12,minimum=140)
+            label_cell,cells,options_body=matrix.add_role(
+                short_title,f'설치 {installed_count}개',role['desc'])
+            self.catalog_groups[key]=MatrixCell(label_cell)
             for tier in role['tiers']:
                 primary=tier['recommended']
                 label=tier['level_label']
+                cell=cells.get(tier['number'])
+                if cell is None:
+                    continue
+                self.catalog_groups[key+':tier:'+str(tier['number'])]=cell
                 if primary is None:
-                    ttk.Label(section.body,text=label+' 단계 · 권장 모델 정보 없음',
+                    ttk.Label(cell.body,text=label+' 단계 · 권장 모델 정보 없음',
                               style='Muted.TLabel').pack(anchor='w')
                     continue
-                primary_section=self.add_catalog_group(
-                    section.body,key+':tier:'+str(tier['number']),
-                    f"{label} 단계 (권장) · {'설치됨' if primary['installed'] else '미설치'}",
-                    expanded=bool(primary['installed'] or primary['recommended']
-                                  or (not catalog['recommended'] and tier['number']==3)),
-                    compact=True)
                 self.add_catalog_row(
-                    primary_section.body,primary,
-                    checked=primary['installed'] or primary['recommended'],
-                    status=f'{label} 단계 권장')
+                    cell.body,primary,
+                    checked=primary['installed'] or primary['recommended'])
                 featured=tier.get('featured',())
                 if featured:
-                    ttk.Separator(primary_section.body,orient='horizontal').pack(
-                        fill='x',pady=(8,5))
                     hint=ttk.Label(
-                        primary_section.body,
+                        cell.body,
                         text='이미지/OCR 특화 추천 · 기본 자동 설치에는 포함되지 않습니다',
-                        style='Manage.CardMuted.TLabel',
-                        wraplength=175,justify='left')
-                    hint.pack(anchor='w',fill='x',pady=(0,3))
+                        style='Muted.TLabel',wraplength=175,justify='left')
+                    hint.pack(anchor='w',fill='x',pady=(4,0))
                     wrap_to_parent(hint,inset=12,minimum=120)
                     for model in featured:
                         self.add_catalog_row(
-                            primary_section.body,model,
-                            checked=model['installed'] or model['recommended'],
-                            status=f"{label} 단계 · {model['note']}")
+                            cell.body,model,
+                            checked=model['installed'] or model['recommended'])
             if role['optional_count']:
-                options_section=self.add_catalog_group(
-                    section.body,key+':options',
-                    f"추가 옵션 ({role['optional_count']}개)",
-                    expanded=False,compact=True)
+                options_key=key+':options'
+                options=OptionsRow(
+                    label_cell,options_body,f"추가 옵션 {role['optional_count']}개",
+                    expanded=states.get(options_key,False),
+                    on_change=lambda opened,k=options_key: states.__setitem__(k,opened))
+                self.catalog_groups[options_key]=options
                 for tier in role['tiers']:
-                    # Featured choices have their own visible card beside the
-                    # tier primary. Do not render a duplicate checkbox in the
-                    # collapsed extra-options list.
+                    # Featured choices already have a card in the tier cell.
                     featured_tags={model['tag'] for model in tier.get('featured',())}
                     extra_models=[model for model in tier['options']
                                   if model['tag'] not in featured_tags]
                     if not extra_models:
                         continue
-                    ttk.Label(options_section.body,
-                              text=tier['level_label']+' 단계 선택 모델',
-                              style='Section.TLabel').pack(
-                                  anchor='w',pady=(12,2))
+                    cell=matrix.option_cell(options_body,tier['number'])
+                    ttk.Label(cell,text=tier['level_label']+' 단계 선택지',
+                              style='Muted.TLabel').pack(anchor='w',pady=(2,0))
                     for model in extra_models:
                         self.add_catalog_row(
-                            options_section.body,model,
-                            checked=model['installed'] or model['recommended'],
-                            status=tier['level_label']+' 단계 선택')
+                            cell,model,
+                            checked=model['installed'] or model['recommended'])
+            else:
+                options_body.grid_remove()
 
+        # Models outside the role table (RAG embedders, other picks) stay in
+        # folded sections below it, side by side when there is room.
+        columns=CatalogColumns(self.choice_body)
+        self.catalog_columns=columns
         extra=groups['extra']
         other=[model for model in extra if model.get('kind')!='embed']
         embeddings=[model for model in extra if model.get('kind')=='embed']
@@ -1309,11 +1303,15 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
         self.choice_scroller.bind_content()
         self.uncatalogued_panel.bind_content()
 
-    def add_catalog_group(self,parent,key,title,*,expanded=False,compact=False):
+    def _catalog_states(self):
+        """Fold state the user chose, kept across catalogue refreshes."""
         states=getattr(self,'_catalog_group_state',None)
         if states is None:
-            states={}
-            self._catalog_group_state=states
+            states=self._catalog_group_state={}
+        return states
+
+    def add_catalog_group(self,parent,key,title,*,expanded=False,compact=False):
+        states=self._catalog_states()
         section=ModelAccordion(
             parent,title,expanded=states.get(key,expanded),compact=compact,
             on_change=lambda opened,k=key: states.__setitem__(k,opened))
@@ -1428,9 +1426,10 @@ class DesktopWindow(TranslationController, SubtitleController, SpeechModelsContr
             button.configure(text='설명 접기 ▲' if opened else '설명 보기 ▼')
 
     def fold_catalog_roles(self, expanded):
-        """Fold top-level role and extra groups, preserving nested tier states."""
+        """Open or close every foldable part: each role's options row and the
+        sections below the table. Tier cards are always visible."""
         for key, section in getattr(self, 'catalog_groups', {}).items():
-            if key.count(':') == 1 and key.startswith(('role:', 'extra:')):
+            if key.endswith(':options') or (key.startswith('extra:') and key.count(':') == 1):
                 section.set_expanded(expanded)
 
     def selected_tags(self):

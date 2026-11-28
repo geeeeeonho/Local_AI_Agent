@@ -130,6 +130,123 @@ class CatalogColumns:
                       sticky='nsew', padx=2, pady=2)
 
 
+class MatrixCell:
+    """One role x tier cell of the catalogue table. Always shown."""
+
+    expanded = True
+
+    def __init__(self, frame):
+        self.frame = self.body = frame
+
+    def set_expanded(self, expanded, *, notify=True):
+        """Tier cells do not fold; kept so every catalogue group has the same interface."""
+
+
+class OptionsRow:
+    """A role's alternative models, in a row under it and in the same tier columns.
+
+    The toggle sits in the role's label cell, so opening it never shifts any
+    other role's cards sideways; it only adds a row below that role.
+    """
+
+    def __init__(self, toggle_parent, body, title, *, expanded=False, on_change=None):
+        self.title = title
+        self.body = self.frame = body
+        self._expanded = None
+        self._on_change = on_change
+        self.button = ttk.Button(toggle_parent, style='Manage.AccordionSmall.TButton',
+                                 command=self.toggle)
+        self.button.pack(anchor='w', fill='x', pady=(6, 0))
+        self.set_expanded(expanded, notify=False)
+
+    @property
+    def expanded(self):
+        return bool(self._expanded)
+
+    def set_expanded(self, expanded, *, notify=True):
+        expanded = bool(expanded)
+        changed = expanded != self._expanded
+        if expanded:
+            self.body.grid()
+        else:
+            self.body.grid_remove()
+        self._expanded = expanded
+        self.button.configure(text=('▼  ' if expanded else '▶  ') + self.title)
+        if changed and notify and self._on_change:
+            self._on_change(expanded)
+
+    def toggle(self):
+        self.set_expanded(not self._expanded)
+
+
+class CatalogMatrix:
+    """Roles as rows and 상/중/하 tiers as columns.
+
+    The previous picker nested role > tier > options in accordions laid out as
+    uneven masonry columns, so the same tier of two roles never lined up and
+    about thirty fold buttons stood between the user and a comparison. Here
+    every tier card is always visible in its column; the only folds left are
+    each role's optional alternatives, which open as a row in the same columns.
+    """
+
+    TIERS = 3
+    ROLE_WIDTH = 150
+
+    def __init__(self, parent, headers):
+        self.frame = ttk.Frame(parent)
+        self.frame.pack(fill='x')
+        self.frame.columnconfigure(0, weight=0, minsize=self.ROLE_WIDTH)
+        for column in range(1, self.TIERS + 1):
+            self.frame.columnconfigure(column, weight=1, uniform='tier')
+        ttk.Label(self.frame, text='역할', style='Muted.TLabel').grid(
+            row=0, column=0, sticky='w', padx=(4, 6), pady=(0, 4))
+        for column, text in enumerate(headers[:self.TIERS], start=1):
+            ttk.Label(self.frame, text=text, style='Section.TLabel').grid(
+                row=0, column=column, sticky='w', padx=6, pady=(0, 4))
+        self._row = 1
+        self.roles = []
+
+    def add_role(self, title, detail='', description=''):
+        """Rows for one role: separator, its tier cells, and a hidden options row.
+        Returns (label cell, {tier number: MatrixCell}, options body)."""
+        ttk.Separator(self.frame, orient='horizontal').grid(
+            row=self._row, column=0, columnspan=self.TIERS + 1, sticky='ew', pady=(4, 4))
+        row = self._row + 1
+        label = ttk.Frame(self.frame, padding=(4, 2, 8, 2))
+        label.grid(row=row, column=0, sticky='nw')
+        ttk.Label(label, text=title, style='Section.TLabel').pack(anchor='w')
+        if detail:
+            ttk.Label(label, text=detail, style='Muted.TLabel').pack(anchor='w')
+        if description:
+            text = ttk.Label(label, text=description, style='Muted.TLabel',
+                             wraplength=self.ROLE_WIDTH - 12, justify='left')
+            text.pack(anchor='w', pady=(3, 0))
+        cells = {}
+        for number in range(1, self.TIERS + 1):
+            frame = ttk.Frame(self.frame, padding=(3, 0))
+            frame.grid(row=row, column=number, sticky='nsew')
+            cells[number] = MatrixCell(frame)
+        options = ttk.Frame(self.frame)
+        options.grid(row=row + 1, column=1, columnspan=self.TIERS, sticky='ew', pady=(2, 0))
+        for column in range(self.TIERS):
+            options.columnconfigure(column, weight=1, uniform='option')
+        self._row += 3
+        self.roles.append(cells)
+        return label, cells, options
+
+    @staticmethod
+    def option_cell(options, number):
+        """The options-row cell under tier ``number`` (created on first use)."""
+        cells = getattr(options, '_cells', None)
+        if cells is None:
+            cells = options._cells = {}
+        if number not in cells:
+            cell = ttk.Frame(options, padding=(3, 0))
+            cell.grid(row=0, column=number - 1, sticky='nsew')
+            cells[number] = cell
+        return cells[number]
+
+
 class Stack:
     """Rows stacked top to bottom, where exactly one of them takes the slack.
 
