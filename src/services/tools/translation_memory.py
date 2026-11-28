@@ -285,6 +285,14 @@ class Checkpoint:
         self.connection.execute('INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)',(key,value))
         self.connection.commit()
 
+    def get_secret(self,key):
+        """값을 넣을 때처럼 (Windows에서는 계정 전용으로) 암호화해 둔 문자열을 읽는다."""
+        value=self.get(key)
+        return None if value is None else self._open(value)
+
+    def set_secret(self,key,value):
+        self.set(key,self._seal(value))
+
     def memory(self):
         value=self.get('memory')
         return TranslationMemory.from_json(self._open(value)) if value else None

@@ -352,6 +352,75 @@ def _letters(text):
     return re.sub(r'[\W\d_]+', '', unicodedata.normalize('NFKC', text).lower())
 
 
+def _code_words(source_plain):
+    """명령·파일명·도메인처럼 코드로 보이는 원문 토큰(config.yaml, example.com, max_tokens)과
+    기술 용어 바로 뒤에 이어지는 소문자 단어(docker compose up): 번역하지 않아도 정상이다."""
+    code_words = set()
+    follow = 0                      # 기술 용어 뒤 최대 두 낱말까지를 명령의 일부로 본다
+    for token in source_plain.split():
+        parts = _WORD.findall(token.lower())
+        tech = bool(parts) and parts[0] in TECH_WORDS
+        is_code = bool(re.search(r'[._/:=\\]\w|\d', token)) or tech or (follow > 0 and token.islower())
+        if is_code:
+            code_words.update(re.findall(r'[a-z]+', token.lower()))
+        follow = 2 if tech else (follow - 1 if follow > 0 and token.islower() else 0)
+    return code_words
+
+
+def leftover_fragments(source_text, answer, source_name, target_name, allowed=''):
+    """번역문에 남은 '옮기지 않은 조각' 목록 [(사유, 조각)]. 순서는 번역문에 나온 순서.
+
+    - 사유 'script': 번역 언어가 쓰지 않는 문자 체계(가나·한자·키릴…)가 남은 조각
+    - 사유 'foreign': 라틴 문자를 안 쓰는 번역 언어인데 원문에 없던 라틴 단어(다른 언어 환각)
+    - 사유 'source': 원문에 있던 소문자 일반어가 그대로 남은 조각(미번역)
+    check_output과 조각 단위 복구가 같은 기준을 쓰도록 한곳에 둔다."""
+    target = BY_NAME.get(target_name)
+    if target is None:
+        return []
+    source = BY_NAME.get(source_name)
+    plain = _TOKEN.sub(' ', answer)
+    allowed_lower = allowed.lower()
+    found = []
+    for script, pattern in _SCRIPT_RE.items():
+        if script == 'latin' or script in target.scripts:
+            continue
+        for match in pattern.finditer(plain):
+            run = match.group()
+            # 원문에 그대로 있는 그리스 문자는 수식·단위 기호(α, Δg, σ)라 잔류가 아니다.
+            if script == 'greek' and run in source_text:
+                continue
+            if run.lower() not in allowed_lower:
+                found.append((match.start(), 'script', script, run))
+    # 글자 종류가 섞인 한 조각('霧の街' = 한자+가나)은 붙어 있으면 하나로 묶는다.
+    found.sort()
+    merged = []
+    for item in found:
+        if merged and merged[-1][1] == 'script' and \
+                merged[-1][0] + len(merged[-1][3]) == item[0]:
+            start, kind, script, run = merged[-1]
+            merged[-1] = (start, kind, script, run + item[3])
+        else:
+            merged.append(item)
+    found = merged
+    if 'latin' not in target.scripts:
+        source_plain = _TOKEN.sub(' ', source_text)
+        source_lower = source_plain.lower()
+        code_words = _code_words(source_plain)
+        latin_source = bool(source and 'latin' in source.scripts) or (
+            source is None and len(_WORD.findall(source_lower)) >= 3)
+        for match in re.finditer(r'[A-Za-z\u00c0-\u024f\u1e00-\u1eff]{3,}', plain):
+            word = match.group()
+            low = word.lower()
+            if low in allowed_lower or low in TECH_WORDS or low in code_words:
+                continue
+            if low not in source_lower:
+                found.append((match.start(), 'foreign', '', word))
+            # 원문에 있던 단어: 이름·상표(대문자 시작)는 그대로 둘 수 있지만 소문자 일반어는 미번역
+            elif latin_source and word.islower() and len(word) >= 4:
+                found.append((match.start(), 'source', '', word))
+    return [(kind, fragment, script) for _start, kind, script, fragment in sorted(found)]
+
+
 def check_output(source_text, answer, source_name, target_name, allowed=''):
     """번역문 한 구간을 검사한다. 의심되면 ReviewError."""
     target = BY_NAME.get(target_name)
@@ -360,17 +429,12 @@ def check_output(source_text, answer, source_name, target_name, allowed=''):
     source = BY_NAME.get(source_name)
     plain = _TOKEN.sub(' ', answer)
     allowed_lower = allowed.lower()
+    leftovers = leftover_fragments(source_text, answer, source_name, target_name, allowed)
 
     # 1) 번역 언어가 쓰지 않는 문자 체계가 남았는가 (가나·한자·키릴·태국 문자 등)
-    for script, pattern in _SCRIPT_RE.items():
-        if script == 'latin' or script in target.scripts:
-            continue
-        for run in pattern.findall(plain):
-            # 원문에 그대로 있는 그리스 문자는 수식·단위 기호(α, Δg, σ)라 잔류가 아니다.
-            if script == 'greek' and run in source_text:
-                continue
-            if run.lower() not in allowed_lower:
-                raise ReviewError('%s text left in %s output: %s' % (script, target_name, run[:20]))
+    for kind, fragment, script in leftovers:
+        if kind == 'script':
+            raise ReviewError('%s text left in %s output: %s' % (script, target_name, fragment[:20]))
 
     # 2) 간체/번체 혼동
     if target_name in ('Simplified Chinese', 'Traditional Chinese'):
@@ -385,31 +449,16 @@ def check_output(source_text, answer, source_name, target_name, allowed=''):
     source_plain = _TOKEN.sub(' ', source_text)
     source_lower = source_plain.lower()
     source_words = set(_WORD.findall(source_lower))
-    # 명령·파일명·도메인처럼 코드로 보이는 원문 토큰(config.yaml, example.com, max_tokens)과
-    # 기술 용어 바로 뒤에 이어지는 소문자 단어(docker compose up)는 번역하지 않아도 정상이다.
-    code_words = set()
-    follow = 0                      # 기술 용어 뒤 최대 두 낱말까지를 명령의 일부로 본다
-    for token in source_plain.split():
-        parts = _WORD.findall(token.lower())
-        tech = bool(parts) and parts[0] in TECH_WORDS
-        is_code = bool(re.search(r'[._/:=\\]\w|\d', token)) or tech or (follow > 0 and token.islower())
-        if is_code:
-            code_words.update(re.findall(r'[a-z]+', token.lower()))
-        follow = 2 if tech else (follow - 1 if follow > 0 and token.islower() else 0)
+    code_words = _code_words(source_plain)
     latin_source = bool(source and 'latin' in source.scripts) or (
         source is None and len(_WORD.findall(source_lower)) >= 3)
 
     # 3) 라틴 문자를 안 쓰는 언어(한·중·일·러·태)로 번역했는데 라틴 단어가 남은 경우
-    if 'latin' not in target.scripts:
-        for word in re.findall(r'[A-Za-z\u00c0-\u024f\u1e00-\u1eff]{3,}', plain):
-            low = word.lower()
-            if low in allowed_lower or low in TECH_WORDS or low in code_words:
-                continue
-            if low not in source_lower:
-                raise ReviewError('Word from another language in %s output: %s' % (target_name, word))
-            # 원문에 있던 단어: 이름·상표(대문자 시작)는 그대로 둘 수 있지만 소문자 일반어는 미번역
-            if latin_source and word.islower() and len(word) >= 4:
-                raise ReviewError('Source word left untranslated: ' + word)
+    for kind, fragment, _script in leftovers:
+        if kind == 'foreign':
+            raise ReviewError('Word from another language in %s output: %s' % (target_name, fragment))
+        if kind == 'source':
+            raise ReviewError('Source word left untranslated: ' + fragment)
 
     # 4) 라틴 문자끼리(영→스페인어 등): 원문 언어 기능어·원문 단어가 그대로 남았는지 점수로 판단
     if latin_source and 'latin' in target.scripts:

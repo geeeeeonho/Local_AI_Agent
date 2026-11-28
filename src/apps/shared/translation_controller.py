@@ -30,7 +30,8 @@ class TranslationController:
                 'source':self.translation_source_language,'kind':self.translation_kind,
                 'style':self.translation_style,'shared':self.translation_shared,
                 'resume':self.translation_resume,'keep_failed':self.translation_keep_failed,
-                'precise':self.translation_precise,'stage':self.translation_stage}
+                'precise':self.translation_precise,'stage':self.translation_stage,
+                'translate_name':self.translation_translate_name}
 
     def translation_opened(self):
         """처음 열 때 지난번 선택(언어·모델·고급 설정)을 불러오고 모델 목록을 채운다."""
@@ -116,8 +117,14 @@ class TranslationController:
             elif is_media(path):
                 text=('→ 결과: 원본 옆 "%s.srt"(원어 자막, 원본과 같은 이름)와 "%s.%s.srt"(번역 자막). '
                       '음성 인식 설정은 [자막 만들기] 도구의 값을 씁니다.'%(path.stem,path.stem,code))
+            elif path.is_dir() and self.translation_translate_name.get():
+                text=('→ 결과: 원본 옆 "%s.%s" 폴더 (같은 구조, 파일 이름은 번역 · 하위 폴더 이름은 그대로, '
+                      '다른 파일은 복사)'%(path.name,code))
             elif path.is_dir():
                 text='→ 결과: 원본 옆 "%s.%s" 폴더 (같은 구조·같은 파일 이름, 다른 파일은 복사)'%(path.name,code)
+            elif path.suffix and self.translation_translate_name.get():
+                text=('→ 결과: 원본 옆 "<번역된 이름>%s" (이름은 번역을 시작하면 정해지고, 같은 이름이 있으면 '
+                      '번호를 붙입니다. 원본은 그대로 둡니다)'%path.suffix)
             elif path.suffix and self.translation_main_name.get():
                 text=('→ 결과: "%s"에 번역본을 쓰고, 원본은 "%s.<원문 언어>%s"로 이름을 바꿔 보관합니다'
                       %(path.name,path.stem,path.suffix))
@@ -270,7 +277,8 @@ class TranslationController:
                  'precise':self.translation_precise.get(),
                  'source_language':self.translation_source_language.get(),
                  'glossary':self.translation_glossary_text.get('1.0','end'),
-                 'output_path':self.translation_output.get().strip() or None}
+                 'output_path':self.translation_output.get().strip() or None,
+                 'translate_name':self.translation_translate_name.get()}
         if is_media(path):
             return self.start_media_translation(options)
         self.save_translation_preferences()
@@ -312,7 +320,8 @@ class TranslationController:
                     media=self._folder_media(options['source_language'],main_name),
                     **folder_options)
             result=self.services.translator.translate_file(**options,progress=progress,cancelled=stop)
-            if main_name and not options['output_path']:
+            # 이름을 번역하면 결과는 새 이름으로 원본 옆에 두고, 원본 이름은 바꾸지 않는다.
+            if main_name and not options['output_path'] and not options['translate_name']:
                 result,kept=place_as_original(result,path)
                 self._translation_kept_original=kept
             return result

@@ -78,7 +78,8 @@ class SettingsStore:
     # 번역 도구에서 지난번에 고른 값(언어·모델·고급 설정). 다음에 열 때 그대로 채워 선택을 줄인다.
     TRANSLATION_KEYS = {'target': str, 'model': str, 'source': str, 'kind': str, 'style': str,
                         'shared': bool, 'resume': bool, 'keep_failed': bool, 'precise': bool,
-                        'stage': bool, 'advanced': bool, 'last_dir': str, 'glossary': str}
+                        'stage': bool, 'translate_name': bool, 'advanced': bool, 'last_dir': str,
+                        'glossary': str}
     # 문자열 길이 상한(기본 300자). 폴더 경로와 용어집은 더 길 수 있다.
     TRANSLATION_LIMITS = {'last_dir': 2000, 'glossary': 20000}
 

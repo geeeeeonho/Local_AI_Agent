@@ -30,6 +30,7 @@ def _variables(w):
     w.translation_keep_failed=tk.BooleanVar(master=w.root,value=True)
     w.translation_precise=tk.BooleanVar(master=w.root,value=False)
     w.translation_shared=tk.BooleanVar(master=w.root,value=True)
+    w.translation_translate_name=tk.BooleanVar(master=w.root,value=False)
     # 파일을 고를 때마다 정한다: 자막·영상·음성·폴더는 켬, 일반 문서는 끔(저장하지 않는 파일별 선택)
     w.translation_main_name=tk.BooleanVar(master=w.root,value=True)
     w.translation_progress=tk.DoubleVar(master=w.root,value=0)
@@ -121,6 +122,10 @@ def build(parent,w,toolbar=None):
            '번역본이 원본 파일 이름을 쓰고, 원본은 "이름.<원문 언어>.확장자"(모르면 .og)로 이름을 바꿔 보관합니다. '
            '영상·음성은 번역 자막이 "영상.srt", 원어 자막이 "영상.<원어>.srt"가 됩니다. '
            '자막·영상·음성 파일과 폴더를 고르면 켜지고 일반 문서는 꺼집니다.')
+    _check(options,'파일 이름도 번역',w.translation_translate_name,
+           '결과 파일 이름을 번역합니다(예: 霧の旧市街.json → 안개의 구시가지.json). 이름 속 번호·코드는 그대로 두고, '
+           '폴더는 파일 이름만 바꿉니다(하위 폴더 이름은 그대로). 켜면 "번역본을 원본 이름으로 저장"은 '
+           '일반 파일에 쓰지 않고 원본은 그대로 둡니다.')
     _check(options,'중단한 번역 이어하기',w.translation_resume,'같은 파일·설정이면 완료한 부분부터 다시 시작합니다.')
     _check(options,'실패한 구간은 원문 유지',w.translation_keep_failed,
            '끝까지 검증을 통과하지 못한 줄만 원문으로 두고 계속합니다. 완료 후 줄 번호를 알려 줍니다.')
@@ -146,7 +151,7 @@ def build(parent,w,toolbar=None):
     set_text(w.translation_result_text,'번역 결과가 표시됩니다.')
     set_text(w.translation_memory_text,'번역을 완료하면 요약·문체·용어집과 검토가 필요한 줄을 보여 줍니다.')
     for variable in (w.translation_path,w.translation_language,w.translation_output,w.translation_model,
-                     w.translation_main_name):
+                     w.translation_main_name,w.translation_translate_name):
         variable.trace_add('write',lambda *_:w.update_translation_destination())
     w.update_translation_destination()
     scroller.bind_content()
