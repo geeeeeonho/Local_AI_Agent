@@ -481,15 +481,17 @@ def _merge_fragments(groups, rules, starts=frozenset()):
     return out
 
 
-def build_cues(words, rules, *, boundaries=()):
+def build_cues(words, rules, *, boundaries=(), strict=()):
     """인식된 단어를 규칙에 맞는 자막 큐로 만든다(줄 나눔·표시 시간 포함)."""
     cues = []
     kept = [word for word in words if word.text.strip()]       # group_words와 같은 위치 기준
     starts = frozenset(id(kept[index]) for index in boundaries if 0 <= index < len(kept))
     # 반드시 끊을 자리라도 앞 줄이 문장 중간(쉼표 등)에서 끝났으면 조각 합치기는 허용한다
     # (대본을 쉼표마다 줄을 바꿔 써도 큐가 두세 낱말로 쪼개지지 않게).
+    # strict: 문장 중간이라도 언제나 지키는 경계(대본 글과 인식 글 사이 등).
     sentence_starts = frozenset(id(kept[index]) for index in boundaries
-                                if 0 < index < len(kept) and ends_sentence(kept[index - 1].text))
+                                if 0 < index < len(kept) and ends_sentence(kept[index - 1].text)) \
+        | frozenset(id(kept[index]) for index in strict if 0 <= index < len(kept))
     groups = _merge_short(group_words(kept, rules, boundaries=boundaries), rules, starts)
     for group in _merge_fragments(groups, rules, sentence_starts):
         text = _join(group)

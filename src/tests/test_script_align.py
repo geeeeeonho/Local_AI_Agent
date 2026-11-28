@@ -344,3 +344,83 @@ def test_the_service_gives_the_vad_speech_regions_to_the_script_alignment(tmp_pa
     _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
                                          Options(model='large-v3-turbo', script=str(script)))
     assert seen['speech'] == ((500, 3000), (4000, 6000))           # 가짜 엔진이 알린 VAD 구간(원래 시간)
+
+
+# ── 대본 줄을 못 찾은 구간만 대본 글을 힌트로 다시 듣기 ──
+def _answer(sentences, step=300):
+    """whisper-cli JSON 모양의 인식 결과(구간 안 시각)."""
+    segments, t = [], 0
+    for sentence in sentences:
+        tokens = []
+        for word in sentence.split():
+            tokens.append({'text': ' ' + word, 'offsets': {'from': t, 'to': t + step - 30}, 'p': 0.9, 't_dtw': -1})
+            t += step
+        segments.append({'offsets': {'from': tokens[0]['offsets']['from'], 'to': t}, 'text': ' ' + sentence,
+                         'tokens': tokens})
+    return type('Transcript', (), {'data': {'result': {'language': 'en'}, 'transcription': segments}})()
+
+
+def test_a_missed_line_is_listened_to_again_with_the_script_as_a_hint(tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options, SubtitleService
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\nThe weather is nice today.\n'
+                      'Today we talk about subtitles, and why rules matter.\n', encoding='utf-8')
+    hints = []
+    original = SubtitleService._recognize_snippets
+
+    def relisten(self, snippets, languages, model, options, work, report, cancelled):
+        if work.name != 'relisten':                      # 일반 재확인은 그대로
+            return original(self, snippets, languages, model, options, work, report, cancelled)
+        hints.append(options.prompt)
+        heard = ['Hello and welcome to the show.', 'The weather is nice today.',
+                 'Today we talk about subtitles, and why rules matter.']
+        return [_answer(heard if 'weather' in options.prompt else heard[:1] + heard[2:])]
+
+    monkeypatch.setattr(SubtitleService, '_recognize_snippets', relisten)
+    result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
+                                                  Options(model='large-v3-turbo', script=str(script)))
+    assert hints and 'The weather is nice today.' in hints[0]          # 못 찾은 줄의 글을 힌트로
+    assert result.relistened and result.relistened[0][2] is True       # 다시 들은 글이 더 가까워 반영
+    assert result.script_missed == ()                                  # 이제 모든 줄을 음성에서 찾았다
+    cues = {cue.text.replace('\n', ' '): cue for cue in result.cues}
+    assert 'The weather is nice today.' in cues
+    assert cues['The weather is nice today.'].end - cues['The weather is nice today.'].start >= 833
+
+
+def test_relistening_that_does_not_help_changes_nothing(tmp_path, fake_engine, monkeypatch):
+    from services.tools.subtitles import Options, SubtitleService
+    script = tmp_path / 'script.txt'
+    script.write_text('Hello and welcome to the show.\nThis line was cut in editing.\n'
+                      'Today we talk about subtitles, and why rules matter.\n', encoding='utf-8')
+    original = SubtitleService._recognize_snippets
+
+    def relisten(self, snippets, languages, model, options, work, report, cancelled):
+        if work.name != 'relisten':
+            return original(self, snippets, languages, model, options, work, report, cancelled)
+        return [_answer(['Hello and welcome to the show.', 'Today we talk about subtitles, and why rules matter.'])]
+
+    monkeypatch.setattr(SubtitleService, '_recognize_snippets', relisten)
+    result = _service(tmp_path, fake_engine).make(_wav(tmp_path / 'show.wav'),
+                                                  Options(model='large-v3-turbo', script=str(script)))
+    assert result.relistened and result.relistened[0][2] is False and result.script_missed == (2,)
+    # 빠른 품질은 다시 듣지 않는다
+    fast = _service(tmp_path / 'f', fake_engine).make(_wav(tmp_path / 'show2.wav'),
+                                                      Options(model='large-v3-turbo', script=str(script),
+                                                              quality='fast'))
+    assert fast.relistened == ()
+
+
+def test_speech_that_is_not_in_the_script_is_filled_with_the_recognized_text():
+    from core.tools.script_align import with_unscripted
+    heard, end = _spoken('one two three four')
+    adlib, end2 = _spoken('wow that was really great', start=end + 600)
+    later, _ = _spoken('seven eight nine ten', start=end2 + 600)
+    noise = [Word(end2 + 50, end2 + 300, ' uh', 0.3)]                   # 짧고 확신도 낮은 소리는 빼고
+    placed = align('one two three four.\nseven eight nine ten.', heard + adlib + noise + later)
+    assert [tuple(w.text.strip() for w in run) for run in placed.unscripted] == [
+        ('wow', 'that', 'was', 'really', 'great')]
+    words, boundaries, strict, spans = with_unscripted(placed)
+    cues = build_cues(words, rules_for('en'), boundaries=boundaries, strict=strict)
+    assert [cue.text for cue in cues] == ['one two three four.', 'wow that was really great',
+                                          'seven eight nine ten.']
+    assert spans == ((adlib[0].start, adlib[-1].end),)

@@ -57,7 +57,8 @@ _REASONS = {'low confidence': '인식 확신도 낮음', 'fast reading speed': '
             'implausible speech rate': '사람이 낼 수 없는 발화 속도', 'repetition loop': '반복 루프',
             'language mismatch': '다른 언어로 인식된 듯함', 'possible missing speech': '말소리가 있는데 자막 없음',
             'script line not heard': '대본 줄을 음성에서 찾지 못해 시각을 추정함',
-            'kept in source language': '번역 자막에 원문이 남음(번역 실패)'}
+            'kept in source language': '번역 자막에 원문이 남음(번역 실패)',
+            'not in script': '대본에 없는 말 — 인식한 글로 채움'}
 _WHY = {'recovered missing speech': '누락된 발언을 찾아 넣음', 'clearly higher confidence': '확신도가 명확히 높아 교체',
         'same text': '다시 인식해도 같음', 'not clearly better; kept original': '명확히 낫지 않아 원래 결과 유지',
         'no candidate text': '다시 인식해도 말소리 없음', 'candidate confidence too low': '확신도가 낮아 넣지 않음'}
@@ -80,6 +81,14 @@ def report_text(result):
             Path(result.script).name, (' · 음성에서 찾지 못한 대본 줄 %d개(시각 추정): %s' % (
                 len(missed), ', '.join(map(str, missed[:30])) + (' …' if len(missed) > 30 else '')))
             if missed else ' · 모든 줄을 음성에서 찾음'))
+        relistened = getattr(result, 'relistened', ())
+        if relistened:
+            used = sum(1 for _start, _end, accepted in relistened if accepted)
+            lines.append('대본 줄을 못 찾은 구간 %d곳을 대본 글을 힌트로 다시 들음 · 반영 %d곳' % (len(relistened), used))
+        unscripted = getattr(result, 'unscripted', ())
+        if unscripted:
+            lines.append('대본에 없는 말 %d곳은 인식한 글로 채움: %s' % (
+                len(unscripted), ', '.join(_clock(start) for start, _end in unscripted[:20])))
     if getattr(result, 'renamed_from', None):
         lines.append('파일 이름 번역: %s → %s' % (result.renamed_from.name, result.source.name))
     for kept in getattr(result, 'set_aside', ()):

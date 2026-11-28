@@ -47,6 +47,7 @@ class Alignment:
     lines: tuple            # 자막에 쓴 대본 줄
     coverage: tuple         # 줄마다 음성에서 찾은 글자 비율(0~1)
     line_starts: tuple      # 줄마다 첫 단어 위치
+    unscripted: tuple = ()  # 대본에 없는 말(애드리브 등)로 보이는 인식 단어 묶음 ((Word, …), …)
 
     @property
     def missed(self):
@@ -226,7 +227,62 @@ def align(text, words, *, spaced=True, speech=()):
             previous = line_index
         start, end = span
         out.append(Word(start, max(end, start + 1), text_, 1.0 if hit else GUESSED_PROB))
-    return Alignment(tuple(out), tuple(starts[1:]), tuple(lines), tuple(coverage), tuple(starts))
+    return Alignment(tuple(out), tuple(starts[1:]), tuple(lines), tuple(coverage), tuple(starts),
+                     _unscripted(words, used, out))
+
+
+UNSCRIPTED_MIN_MS = 700    # 이보다 짧은 대본 밖 말(맞장구 한 마디·잡음)은 자막으로 만들지 않는다
+UNSCRIPTED_MIN_PROB = 0.5
+
+
+def _unscripted(words, used, placed, join=600):
+    """대본과 한 글자도 맞지 않은 인식 단어 가운데, 대본 글을 놓은 시간과 겹치지 않는 것(대본에 없는 말).
+    가까운 단어끼리 묶고, 너무 짧거나 확신도가 낮은 묶음(잡음·환각)은 뺀다."""
+    taken = _merge_spans([(word.start, word.end) for word in placed], join=0)
+    runs, index, cursor = [], 0, 0
+    for word in words:
+        size = len(_key(word.text))
+        hit = any(position in used for position in range(index, index + size))
+        index += size
+        if not size or hit or not word.text.strip() or word.prob < UNSCRIPTED_MIN_PROB:
+            continue
+        while cursor < len(taken) and taken[cursor][1] <= word.start:
+            cursor += 1
+        if cursor < len(taken) and taken[cursor][0] < word.end:
+            continue                                   # 대본 글이 이미 이 시간을 덮는다
+        if runs and word.start - runs[-1][-1].end <= join:
+            runs[-1].append(word)
+        else:
+            runs.append([word])
+    keep = []
+    for run in runs:
+        prob = sum(word.prob for word in run) / len(run)
+        if run[-1].end - run[0].start >= UNSCRIPTED_MIN_MS and prob >= UNSCRIPTED_MIN_PROB:
+            keep.append(tuple(run))
+    return tuple(keep)
+
+
+def with_unscripted(placed):
+    """대본 낱말과 대본에 없는 말(인식 글)을 시간 순으로 합친다 →
+    (단어, 끊을 위치, 언제나 지킬 경계(대본 글 ↔ 인식 글), 대본 밖 묶음의 시간 구간).
+    대본 밖 묶음과 대본 줄은 서로 다른 큐에서 시작하고 한 큐로 합치지 않는다."""
+    items = [(word.start, 0, index, word) for index, word in enumerate(placed.words)]
+    line_start = set(placed.line_starts)
+    for number, run in enumerate(placed.unscripted):
+        items += [(word.start, 1, (number, position), word) for position, word in enumerate(run)]
+    items.sort(key=lambda item: (item[0], item[1]))
+    words, boundaries, strict, previous_kind = [], [], [], None
+    for _start, kind, key, word in items:
+        switched = previous_kind is not None and kind != previous_kind
+        opens = (kind == 0 and key in line_start) or (kind == 1 and key[1] == 0) or switched
+        if words and opens:
+            boundaries.append(len(words))
+            if switched or kind == 1:
+                strict.append(len(words))
+        words.append(word)
+        previous_kind = kind
+    spans = tuple((run[0].start, run[-1].end) for run in placed.unscripted)
+    return words, tuple(sorted(set(boundaries))), tuple(sorted(set(strict))), spans
 
 
 def _merge_spans(spans, join=250):

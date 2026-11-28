@@ -95,6 +95,8 @@ class Result:
     set_aside: tuple = ()           # 대본 자막에 이름을 내주고 '이름.<언어>.확장자'로 보관한 기존 자막
     renamed_from: Path | None = None    # 영상·음성 이름을 번역 이름으로 바꿨으면 원래 경로(source가 새 경로)
     untranslated: tuple = ()        # 번역 자막에서 원문으로 남은 큐 ((큐 번호, 시작 ms, 원문), …)
+    relistened: tuple = ()          # 대본 줄을 못 찾아 다시 들은 구간 ((시작, 끝, 반영 여부), …)
+    unscripted: tuple = ()          # 대본에 없는 말을 인식 글로 채운 구간 ((시작, 끝), …)
 
 
 @dataclass(frozen=True)
@@ -162,6 +164,52 @@ def claim(path):
     except OSError:
         text = ''
     return set_aside(path, language_suffix(detect_language(text)))
+
+
+RELISTEN_LIMIT = {'best': 24, 'balanced': 12}      # 대본 줄을 못 찾아 다시 들을 구간 수(품질별)
+RELISTEN_ACCEPT = 0.5                              # 다시 들은 글이 못 찾은 줄을 이만큼 담아야 반영
+RELISTEN_PROMPT_CHARS = 400                        # 힌트로 넘길 대본 글 길이(whisper 프롬프트 한도 안)
+
+
+def _cut(source, params, item, path):
+    """WAV에서 item 구간만 잘라 새 파일로."""
+    first = min(params.nframes, item.start * params.framerate // 1000)
+    source.setpos(first)
+    piece = source.readframes(max(0, item.end * params.framerate // 1000 - first))
+    with wave.open(str(path), 'wb') as handle:
+        handle.setnchannels(params.nchannels)
+        handle.setsampwidth(2)
+        handle.setframerate(params.framerate)
+        handle.writeframes(piece)
+    return path
+
+
+def _closeness(lines, segments):
+    """대본 줄들의 글자 가운데 인식 구간 글에서 순서대로 찾은 비율(0~1). 구간에 이웃 줄의 글이 함께
+    들어 있어도 찾으려는 줄을 얼마나 들었는지만 본다."""
+    from difflib import SequenceMatcher
+    want = ''.join(char for line in lines for char in script_align._key(line))
+    got = ''.join(char for segment in segments for char in script_align._key(segment.text))
+    if not want or not got:
+        return 0.0
+    blocks = SequenceMatcher(None, want, got, autojunk=False).get_matching_blocks()
+    return sum(block.size for block in blocks if block.size >= 3) / len(want)
+
+
+def _whole_segments(ranges, segments):
+    """다시 들을 구간이 인식 구간의 중간을 자르지 않게 걸친 구간 전체로 넓힌다(바꿀 때 구간 밖 낱말을
+    잃지 않게). 넓혀서 겹치면 합친다."""
+    out = []
+    for item in ranges:
+        start, end = item.start, item.end
+        for segment in segments:
+            if segment.end > start and segment.start < end:
+                start, end = min(start, segment.start), max(end, segment.end)
+        if out and start <= out[-1].end:
+            out[-1] = asr_review.Range(out[-1].start, max(out[-1].end, end), out[-1].reason)
+        else:
+            out.append(asr_review.Range(start, end, item.reason))
+    return out
 
 
 SCRIPT_SUFFIXES = ('.txt', '.md', '.srt', '.vtt')     # 같은 이름이 여럿이면 이 순서로 고른다
@@ -501,16 +549,7 @@ class SubtitleService:
         retry.mkdir(parents=True, exist_ok=True)
         snippets, languages = [], []
         for index, item in enumerate(ranges):
-            snippet = retry / ('%d.wav' % index)
-            first = min(params.nframes, item.start * params.framerate // 1000)
-            source.setpos(first)
-            piece = source.readframes(max(0, item.end * params.framerate // 1000 - first))
-            with wave.open(str(snippet), 'wb') as handle:
-                handle.setnchannels(params.nchannels)
-                handle.setsampwidth(2)
-                handle.setframerate(params.framerate)
-                handle.writeframes(piece)
-            snippets.append(snippet)
+            snippets.append(_cut(source, params, item, retry / ('%d.wav' % index)))
             # 다른 언어로 의심되는 구간과 건너뛴 말소리(대개 다른 언어)는 그 구간만 언어를 다시 감지한다.
             languages.append('auto' if item.reason in ('language mismatch', 'possible missing speech')
                              or chosen == 'auto' and code == 'und'
@@ -542,6 +581,84 @@ class SubtitleService:
                                      'decisions': [_decision_dict(item) for item in decisions],
                                      'note': note}, ensure_ascii=False), encoding='utf-8')
         return segments, tuple(decisions), names, note
+
+    def _script_relisten(self, media, options, work, segments, script, code, rules, duration, voiced, report,
+                         cancelled):
+        """대본 줄을 음성에서 찾지 못한 구간만, 그 줄들의 글을 힌트(--prompt)로 다시 듣는다.
+        whisper는 들을 말을 미리 알면 훨씬 잘 받아 적는다. 다시 들은 글이 그 대본 줄과 더 비슷할 때만
+        그 구간의 인식 결과를 바꾼다. (구간들, ((시작, 끝, 반영 여부), …)). 결과는 작업 폴더에 보관한다."""
+        if options.quality == 'fast':
+            return segments, ()
+        cleaned = speech.clean(segments, keep_sounds=options.keep_sounds)
+        try:
+            placed = script_align.align(script, speech.words_of(cleaned.segments), spaced=rules.spaced,
+                                        speech=voiced)
+        except ValueError:
+            return segments, ()
+        if not placed.missed:
+            return segments, ()
+        key = hashlib.sha256(('%s|%s|%s' % (script, options.quality, options.prompt)).encode('utf-8')).hexdigest()
+        cache = work / ('script-relisten-%s.json' % key[:16])
+        if cache.is_file():
+            try:
+                saved = json.loads(cache.read_text(encoding='utf-8'))
+                return _segments_from(saved['segments']), tuple(tuple(item) for item in saved['ranges'])
+            except (OSError, ValueError, KeyError, TypeError):
+                cache.unlink(missing_ok=True)
+        starts = list(placed.line_starts) + [len(placed.words)]
+        wanted = []
+        for line in placed.missed:
+            line_words = placed.words[starts[line - 1]:starts[line]]
+            wanted.append((asr_review.Range(line_words[0].start, line_words[-1].end, 'script line not heard'),
+                           placed.lines[line - 1]))
+        limit = RELISTEN_LIMIT.get(options.quality, 6)
+        ranges = _whole_segments(asr_review.merge_ranges([item for item, _text in wanted], pad=700, limit=limit,
+                                                         total=duration or None), segments)
+        audio = self._prepared_audio(media, work, duration, report, cancelled)
+        try:
+            source = wave.open(str(audio), 'rb')
+        except (wave.Error, EOFError, OSError):
+            return segments, ()
+        installed = self.engine.status().models
+        model = 'large-v3' if options.quality == 'best' and 'large-v3' in installed else options.model
+        chosen = language_code(options.language)
+        language = chosen if chosen != 'auto' else speech.whisper_code(code)
+        folder = work / 'relisten'
+        shutil.rmtree(folder, ignore_errors=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        done = []
+        try:
+            with source:
+                params = source.getparams()
+                if params.sampwidth != 2:
+                    return segments, ()
+                for index, item in enumerate(ranges):
+                    if cancelled():
+                        raise InterruptedError('Cancelled')
+                    lines = [text for range_, text in wanted if range_.end > item.start and range_.start < item.end]
+                    hint = ' '.join(lines)[:RELISTEN_PROMPT_CHARS]
+                    snippet = _cut(source, params, item, folder / ('%d.wav' % index))
+                    answer = self._recognize_snippets([snippet], [language], model,
+                                                      replace(options, prompt=(options.prompt + ' ' + hint).strip()),
+                                                      folder, report, cancelled)[0]
+                    if isinstance(answer, Exception):
+                        done.append((item.start, item.end, False))
+                        continue
+                    _, candidate = speech.parse_result(answer.data, spaced=rules.spaced)
+                    candidate = asr_review.shift(candidate, item.start)
+                    original = [segment for segment in segments if segment.end > item.start and segment.start < item.end]
+                    # 다시 들은 글이 못 찾은 줄을 절반 이상 담고, 원래 인식보다 분명히 가까울 때만 바꾼다
+                    # (우연히 겹친 몇 글자로 이웃 구간까지 바꾸지 않게).
+                    score = _closeness(lines, candidate)
+                    better = score >= RELISTEN_ACCEPT and score > _closeness(lines, original) + 0.15
+                    if better:
+                        segments = asr_review.replace_range(segments, item, candidate)
+                    done.append((item.start, item.end, better))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        cache.write_text(json.dumps({'segments': [_segment_dict(item) for item in segments], 'ranges': done},
+                                    ensure_ascii=False), encoding='utf-8')
+        return segments, tuple(done)
 
     def _recognize_snippets(self, snippets, languages, model, options, work, report, cancelled):
         """재인식 구간들을 언어별로 묶어 whisper-cli 한 번에 인식한다(모델을 구간마다 다시 올리지 않는다).
@@ -627,24 +744,31 @@ class SubtitleService:
         code = chosen if chosen != 'auto' else (detected if detected not in ('', 'auto') else 'und')
         rules = subtitles.rules_for(code, max_chars=options.max_chars, max_lines=options.max_lines)
         _, segments = speech.parse_result(data, spaced=rules.spaced)
+        voiced = tuple((int(item[0]), int(item[1])) for item in (data.get(speech.VAD_MAP_KEY) or ())
+                       if len(item) >= 2)
+        relistened = ()
         try:
             segments, decisions, names, review_note = self._review(
                 media, options, work, segments, code, rules, duration, report, cancelled,
                 data.get(speech.VAD_MAP_KEY) or ())
+            if script is not None:
+                # 대본 줄을 음성에서 찾지 못한 구간만, 그 줄 글을 힌트로 다시 듣는다(오디오가 남아 있을 때).
+                segments, relistened = self._script_relisten(media, options, work, segments, script, code,
+                                                             rules, duration, voiced, report, cancelled)
         finally:
             for name in ('audio.wav',) + tuple('input' + suffix for suffix in sorted(speech.NATIVE_AUDIO)):
                 (work / name).unlink(missing_ok=True)       # 큰 임시 오디오는 끝나면 지운다
         report('write', 0.0, '')
         cleaned = speech.clean(segments, keep_sounds=options.keep_sounds)
-        placed = None
+        placed, unscripted = None, ()
         if script is not None:
             # 대본이 있으면 글은 대본 그대로, 시각만 인식 결과에서. 대본 한 줄은 새 큐에서 시작한다.
             # VAD가 찾은 말소리 구간(원래 시간)을 함께 넘겨, 인식이 놓친 줄을 무음이 아닌 말소리에 놓는다.
-            voiced = tuple((int(item[0]), int(item[1])) for item in (data.get(speech.VAD_MAP_KEY) or ())
-                           if len(item) >= 2)
             placed = script_align.align(script, speech.words_of(cleaned.segments), spaced=rules.spaced,
                                         speech=voiced)
-            cues = subtitles.build_cues(placed.words, rules, boundaries=placed.boundaries)
+            # 대본에 없는 말(애드리브 등)은 인식한 글로 채운다(검토 목록에 알린다).
+            merged, boundaries, strict, unscripted = script_align.with_unscripted(placed)
+            cues = subtitles.build_cues(merged, rules, boundaries=boundaries, strict=strict)
         else:
             cues = subtitles.build_cues(speech.words_of(cleaned.segments), rules)
         if not cues:
@@ -656,7 +780,9 @@ class SubtitleService:
         review = list(subtitles.review(cues, rules))
         # 대본을 쓰면 인식 글의 문제(환각·반복)는 자막에 없다. 대신 시각을 추정한 대본 줄을 알린다.
         flagged = (tuple((placed.words[placed.line_starts[line - 1]].start, '', 'script line not heard')
-                         for line in placed.missed) if placed is not None else cleaned.flagged)
+                         for line in placed.missed)
+                   + tuple((start, '', 'not in script') for start, _end in unscripted)
+                   if placed is not None else cleaned.flagged)
         for start, text, reason in flagged:
             number = next((i for i, cue in enumerate(cues, 1) if cue.end > start), len(cues))
             review.append(subtitles.Review(number, reason))
@@ -696,7 +822,8 @@ class SubtitleService:
                         review_note=review_note,
                         script=str(options.script) if placed is not None else '',
                         script_missed=placed.missed if placed is not None else (),
-                        set_aside=tuple(aside), renamed_from=media if renamed is not None else None)
+                        set_aside=tuple(aside), renamed_from=media if renamed is not None else None,
+                        relistened=relistened, unscripted=unscripted if placed is not None else ())
         if translate is None:
             return result
         try:
